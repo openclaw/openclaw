@@ -5,7 +5,13 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  BtwEvent,
+  ChatEvent,
+  SessionChangedEvent,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -138,6 +144,25 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
   };
 
+  const clearTrackedRunState = () => {
+    finalizedRuns.clear();
+    finalizedRunsWithDisplay.clear();
+    completedRuns.clear();
+    sessionRuns.clear();
+    postFinalizingRuns.clear();
+    streamAssembler = new TuiStreamAssembler();
+    pendingHistoryRefresh = false;
+    state.pendingOptimisticUserMessage = false;
+    state.pendingChatRunId = null;
+    state.pendingSubmitDraft = null;
+    reconnectPendingRunId = null;
+    clearLocalRunIds?.();
+    clearLocalBtwRunIds?.();
+    clearPendingTerminalLifecycleErrors();
+    btw.clear();
+    clearStreamingWatchdog();
+  };
+
   const armStreamingWatchdog = (runId: string) => {
     if (streamingWatchdogMs <= 0) {
       return;
@@ -202,21 +227,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage) {
       return;
     }
-    finalizedRuns.clear();
-    finalizedRunsWithDisplay.clear();
-    completedRuns.clear();
-    sessionRuns.clear();
-    postFinalizingRuns.clear();
-    streamAssembler = new TuiStreamAssembler();
-    pendingHistoryRefresh = false;
-    state.pendingOptimisticUserMessage = false;
-    state.pendingChatRunId = null;
-    reconnectPendingRunId = null;
-    clearLocalRunIds?.();
-    clearLocalBtwRunIds?.();
-    clearPendingTerminalLifecycleErrors();
-    btw.clear();
-    clearStreamingWatchdog();
+    clearTrackedRunState();
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
@@ -720,6 +731,40 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const handleSessionsChangedEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as SessionChangedEvent;
+    syncSessionKey();
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
+      return;
+    }
+    if (evt.reason !== "new" && evt.reason !== "reset") {
+      return;
+    }
+
+    clearTrackedRunState();
+    state.activeChatRunId = null;
+    state.activityStatus = "idle";
+    setActivityStatus("idle");
+    if (typeof evt.sessionId === "string") {
+      state.currentSessionId = evt.sessionId;
+    }
+    if (typeof evt.updatedAt === "number" || evt.updatedAt === null) {
+      state.sessionInfo.updatedAt = evt.updatedAt;
+    }
+    if (loadHistory) {
+      void loadHistory();
+    } else {
+      void refreshSessionInfo?.();
+    }
+    tui.requestRender();
+  };
+
   const handleAgentEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -927,6 +972,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
+    handleSessionsChangedEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,

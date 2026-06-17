@@ -3,7 +3,10 @@ import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { RawData, WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -254,6 +257,33 @@ export type WsOriginCheckMetrics = {
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function resolvePairedAccessScopes(
+  device: { approvedScopes?: unknown; scopes?: unknown } | null | undefined,
+): string[] {
+  const scopes = Array.isArray(device?.approvedScopes)
+    ? device.approvedScopes
+    : Array.isArray(device?.scopes)
+      ? device.scopes
+      : [];
+  return normalizeSortedUniqueTrimmedStringList(scopes);
+}
+
+function isSetupCodeMobileBootstrapClient(client: {
+  id?: string;
+  platform?: string;
+  deviceFamily?: string;
+}): boolean {
+  const platform = normalizeDeviceMetadataForAuth(client.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
+  if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
+    return /^android(?:\s|$)/.test(platform) && deviceFamily === "android";
+  }
+  if (client.id === GATEWAY_CLIENT_IDS.IOS_APP) {
+    return /^(?:ios|ipados)(?:\s|$)/.test(platform) && /^(?:iphone|ipad|ios)$/.test(deviceFamily);
+  }
+  return false;
 }
 
 function resolveTrustedProxyControlUiScopes(params: {
@@ -1171,20 +1201,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         let hasServerApprovedDeviceTokenBaseline = false;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
-            if (!items || items.length === 0) {
-              return "<none>";
-            }
-            const out = new Set<string>();
-            for (const item of items) {
-              const trimmed = item.trim();
-              if (trimmed) {
-                out.add(trimmed);
-              }
-            }
-            if (out.size === 0) {
-              return "<none>";
-            }
-            return [...out].toSorted().join(",");
+            const normalized = normalizeSortedUniqueTrimmedStringList(items);
+            return normalized.length > 0 ? normalized.join(",") : "<none>";
           };
           const logUpgradeAudit = (
             reason: "role-upgrade" | "scope-upgrade",
@@ -1227,11 +1245,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               if (scopes.length === 0) {
                 return true;
               }
-              const pairedScopes = Array.isArray(pairedCandidate.approvedScopes)
-                ? pairedCandidate.approvedScopes
-                : Array.isArray(pairedCandidate.scopes)
-                  ? pairedCandidate.scopes
-                  : [];
+              const pairedScopes = resolvePairedAccessScopes(pairedCandidate);
               if (pairedScopes.length === 0) {
                 return false;
               }
@@ -1285,20 +1299,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     publicKey: devicePublicKey,
                   })
                 : null;
-            const allowSilentBootstrapPairing =
+            const allowSetupCodeMobileBootstrapPairing =
               boundBootstrapProfile !== null &&
-              isPairingSetupBootstrapProfile(boundBootstrapProfile);
+              isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
+              isSetupCodeMobileBootstrapClient(connectParams.client);
             // This is the native QR/setup-code onboarding seam. Mobile clients
-            // connect as node with bootstrap auth, then clear bootstrap auth and
-            // start their operator loop only if hello-ok includes the bounded
-            // operator token below. Keep this limited to the exact current
-            // setup-code profile; admin/pairing scopes still require an explicit
-            // owner flow.
-            const bootstrapPairingRoles = allowSilentBootstrapPairing
+            // must prove their canonical client id and platform/family metadata
+            // agree before the Gateway can skip owner approval and hand off the
+            // bounded operator token below. Admin/pairing scopes still require
+            // an explicit owner flow.
+            const bootstrapPairingRoles = allowSetupCodeMobileBootstrapPairing
               ? uniqueStrings([role, ...boundBootstrapProfile.roles])
               : undefined;
             const bootstrapPairingScopes =
-              allowSilentBootstrapPairing && bootstrapPairingRoles
+              allowSetupCodeMobileBootstrapPairing && bootstrapPairingRoles
                 ? resolveBootstrapProfileScopesForRoles(
                     bootstrapPairingRoles,
                     boundBootstrapProfile.scopes,
@@ -1319,7 +1333,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? false
                   : allowSilentLocalPairing ||
                     allowSilentTrustedCidrsNodePairing ||
-                    allowSilentBootstrapPairing,
+                    allowSetupCodeMobileBootstrapPairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -1341,7 +1355,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             };
             if (pairing.request.silent === true) {
               approved =
-                allowSilentBootstrapPairing && boundBootstrapProfile
+                allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile
                   ? await approveBootstrapDevicePairing(
                       pairing.request.requestId,
                       boundBootstrapProfile,
@@ -1352,7 +1366,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                       accessMetadata: clientAccessMetadata,
                     });
               if (approved?.status === "approved") {
-                if (allowSilentBootstrapPairing && boundBootstrapProfile) {
+                if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
                   handoffBootstrapProfile = boundBootstrapProfile;
                 }
                 logGateway.info(
@@ -1397,11 +1411,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 ? listApprovedPairedDeviceRoles(existingPairedDevice)
                 : [];
               const approvedScopes = exposeApprovedAccess
-                ? Array.isArray(existingPairedDevice.approvedScopes)
-                  ? existingPairedDevice.approvedScopes
-                  : Array.isArray(existingPairedDevice.scopes)
-                    ? existingPairedDevice.scopes
-                    : []
+                ? resolvePairedAccessScopes(existingPairedDevice)
                 : [];
               const retryAfterBootstrapPairingApproval =
                 authMethod === "bootstrap-token" &&
@@ -1511,11 +1521,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               }
             }
             const pairedRoles = listEffectivePairedDeviceRoles(paired);
-            const pairedScopes = Array.isArray(paired.approvedScopes)
-              ? paired.approvedScopes
-              : Array.isArray(paired.scopes)
-                ? paired.scopes
-                : [];
+            const pairedScopes = resolvePairedAccessScopes(paired);
             const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);

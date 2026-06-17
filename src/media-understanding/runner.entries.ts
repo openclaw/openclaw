@@ -55,7 +55,7 @@ import type {
 } from "./types.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
-export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
 type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;

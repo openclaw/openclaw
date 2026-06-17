@@ -38,6 +38,8 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -59,6 +61,37 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai",
 ]);
+
+function resolveStatusChannelFeatureLine(params: {
+  cfg: OpenClawConfig;
+  statusChannel: string;
+  statusAccountId?: string;
+  sessionEntry?: SessionEntry;
+}): string | undefined {
+  const channel = normalizeOptionalLowercaseString(params.statusChannel);
+  if (channel !== "telegram") {
+    return undefined;
+  }
+  const telegramConfig = params.cfg.channels?.telegram;
+  const accountId = normalizeAccountId(
+    params.statusAccountId ??
+      params.sessionEntry?.lastAccountId ??
+      params.sessionEntry?.origin?.accountId ??
+      telegramConfig?.defaultAccount,
+  );
+  const accountConfig = resolveNormalizedAccountEntry(
+    telegramConfig?.accounts,
+    accountId,
+    normalizeAccountId,
+  );
+  const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
+  if (richMessagesSetting === true) {
+    return "Telegram rich messages: on · Bot API 10.1 sendRichMessage enabled";
+  }
+  return accountConfig?.richMessages === false
+    ? "Telegram rich messages: off · enable richMessages for this Telegram account"
+    : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
+}
 
 let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
   null;
@@ -534,6 +567,12 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const pluginHealthLine = Object.hasOwn(params, "pluginHealthLineOverride")
     ? params.pluginHealthLineOverride
     : await resolveRuntimePluginHealthLine();
+  const channelFeatureLine = resolveStatusChannelFeatureLine({
+    cfg,
+    statusChannel,
+    statusAccountId: params.statusAccountId,
+    sessionEntry,
+  });
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
@@ -620,6 +659,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     subagentsLine,
     taskLine,
     pluginHealthLine,
+    channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });

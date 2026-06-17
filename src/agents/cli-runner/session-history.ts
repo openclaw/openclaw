@@ -8,6 +8,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
@@ -329,7 +330,8 @@ async function loadCliSessionEntries(params: {
     }
     const entries = parseSessionEntries(await fsp.readFile(realSessionFile, "utf-8"));
     migrateSessionEntries(entries);
-    return entries.filter((entry) => entry.type !== "session");
+    const sessionEntries = entries.filter((entry) => entry.type !== "session");
+    return selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
   } catch {
     return [];
   }

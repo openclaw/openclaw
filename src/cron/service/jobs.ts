@@ -669,10 +669,16 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number; repairFutureCronNextRunAtMs?: boolean },
+  opts?: {
+    recomputeExpired?: boolean;
+    nowMs?: number;
+    repairFutureCronNextRunAtMs?: boolean;
+    skipFutureRepairJobIds?: ReadonlySet<string>;
+  },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
+  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
@@ -683,6 +689,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
+        !skipFutureRepairJobIds?.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
@@ -1012,7 +1019,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
-): CronDelivery {
+): CronDelivery | undefined {
   const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
     mode: existing?.mode ?? "none",
@@ -1114,6 +1121,22 @@ function mergeCronDelivery(
         Object.hasOwn(nextFd, "mode");
       next.failureDestination = hasFailureDestination ? nextFd : undefined;
     }
+  }
+
+  if (
+    existing === undefined &&
+    !("mode" in patch) &&
+    next.mode === "none" &&
+    next.channel === undefined &&
+    next.to === undefined &&
+    next.threadId === undefined &&
+    next.accountId === undefined &&
+    next.bestEffort === undefined &&
+    next.completionDestination === undefined &&
+    next.failureDestination === undefined
+  ) {
+    // Clearing an absent override must preserve implicit detached-job delivery.
+    return undefined;
   }
 
   return next;

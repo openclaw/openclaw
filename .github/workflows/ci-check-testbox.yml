@@ -6,6 +6,10 @@ on:
         type: string
         description: "Testbox session ID"
         required: true
+      timeout_minutes:
+        type: number
+        description: "Maximum GitHub job runtime for long Testbox commands"
+        default: 120
   pull_request:
     paths:
       - ".github/workflows/**"
@@ -25,7 +29,7 @@ jobs:
       contents: read
     name: "check"
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 30
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
     steps:
       - name: Begin Testbox
         uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043
@@ -61,7 +65,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               -c "http.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
@@ -91,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          timeout --signal=TERM --kill-after=10s 30s git \
+          timeout --signal=TERM --kill-after=10s 120s git \
             -c protocol.version=2 \
             fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
             "+refs/heads/main:refs/remotes/origin/main"

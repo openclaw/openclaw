@@ -972,7 +972,7 @@ describe("memory index", () => {
     }
   });
 
-  it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
+  it("rebuilds missing metadata with existing chunks before search", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
     const cfg = createCfg({
       storePath: dbPath,
@@ -998,25 +998,10 @@ describe("memory index", () => {
 
       const results = await nextManager.search("alpha");
 
-      expect(results).toStrictEqual([]);
-      expect(nextManager.status().dirty).toBe(true);
-      expect(nextManager.status().custom?.indexIdentity).toEqual({
-        status: "missing",
-        reason: "index metadata is missing",
-      });
-
-      vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-      await nextManager.sync({ reason: "test" });
-
       expect(nextManager.status().dirty).toBe(false);
       expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      const repairedAlphaResults = await nextManager.search("alpha");
-      expect(
-        repairedAlphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md")),
-      ).toBe(false);
-      const repairedResults = await nextManager.search("beta");
-      expect(repairedResults.length).toBeGreaterThan(0);
-      expect(repairedResults[0]?.path).toContain("memory/2026-01-13.md");
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-13.md"))).toBe(true);
     } finally {
       await nextManager.close?.();
     }
@@ -1614,6 +1599,46 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
+  });
+
+  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = db.prepare.bind(db);
+    let ftsSelects = 0;
+    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (sql.includes("FROM chunks_fts") && sql.includes("WHERE chunks_fts MATCH ?")) {
+        ftsSelects += 1;
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      const results = await manager.search(
+        "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
+        { maxResults: 5 },
+      );
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(ftsSelects).toBeGreaterThan(1);
+      expect(ftsSelects).toBeLessThanOrEqual(7);
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 
   it("reports vector availability after probe", async () => {

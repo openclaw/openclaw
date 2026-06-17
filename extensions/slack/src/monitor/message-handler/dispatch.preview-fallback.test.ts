@@ -45,6 +45,8 @@ let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
+      allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+      allowToolLifecycleWhenProgressHidden?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onReasoningStream?: (payload?: {
@@ -1749,6 +1751,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+    expect(capturedReplyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+    expect(capturedReplyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
     expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
       enabled: true,
       initialEmoji: "eyes",
@@ -1823,6 +1827,31 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
     const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
     expect(updates.join("\n")).not.toContain("Checking Reading");
+  });
+
+  it("extracts mm:think reasoning snapshots for Slack progress draft previews", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "reasoning",
+        text: "<mm:think>Reading\nChecking</mm:think>",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• Reading Checking"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).toContain("Reading Checking");
   });
 
   it("keeps plain Slack reasoning content that starts with Thinking", async () => {

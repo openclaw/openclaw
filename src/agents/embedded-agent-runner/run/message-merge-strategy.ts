@@ -5,14 +5,14 @@ import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Inputs required to reconcile an active session leaf with the prompt about to be sent. */
-export type OrphanedTrailingUserPromptMergeParams = {
+type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown };
 };
 
 /** Result of merging or dropping a trailing user leaf before provider submission. */
-export type OrphanedTrailingUserPromptMergeResult = {
+type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
   /**
@@ -24,7 +24,7 @@ export type OrphanedTrailingUserPromptMergeResult = {
 };
 
 /** Registry id for the transcript message merge behavior currently supported by embedded runs. */
-export type MessageMergeStrategyId = "orphan-trailing-user-prompt";
+type MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
 /** Strategy seam for tests and future runtime variants that alter prompt/leaf reconciliation. */
 export type MessageMergeStrategy = {

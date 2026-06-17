@@ -47,6 +47,16 @@ export type BtwEvent = {
   ts?: number;
 };
 
+export type SessionChangedEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  reason?: string;
+  phase?: string;
+  runId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;

@@ -1349,6 +1349,81 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample?.aggregateRssMiB).toBe(96);
   });
 
+  it("does not truncate malformed Windows PowerShell CPU or id samples", async () => {
+    const sample = await sampleProcess(1234, {
+      platform: "win32",
+      runCommand: async () => ({
+        stdout: `${256 * 1024 * 1024} 2.25oops 6789x ${512 * 1024 * 1024}oops`,
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: null,
+      cpuSeconds: null,
+      processId: 1234,
+      rssMiB: 256,
+    });
+  });
+
+  it("rejects malformed Windows PowerShell RSS samples", async () => {
+    const sample = await sampleProcess(1234, {
+      platform: "win32",
+      runCommand: async () => ({
+        stdout: `${256 * 1024 * 1024}oops 2.25 6789 ${512 * 1024 * 1024}`,
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toBeNull();
+  });
+
+  posixIt("rejects malformed POSIX process rows before sampling RSS", async () => {
+    const badRows = [
+      "  5678  1234  9007199254740993  0.2 child",
+      "  5678x  1234  2048  0.2 child",
+      "  5678  1234x  2048  0.2 child",
+    ];
+
+    for (const badRow of badRows) {
+      const sample = await sampleProcess(1234, {
+        platform: "linux",
+        runCommand: async () => ({
+          stdout: [
+            "  PID  PPID   RSS %CPU COMMAND",
+            "  1234     1  2048  0.1 openclaw-gateway",
+            badRow,
+          ].join("\n"),
+          stderr: "",
+        }),
+      });
+
+      expect(sample).toBeNull();
+    }
+  });
+
+  posixIt("ignores malformed POSIX process rows outside the sampled tree", async () => {
+    const sample = await sampleProcess(1234, {
+      platform: "linux",
+      runCommand: async () => ({
+        stdout: [
+          "  PID  PPID   RSS %CPU COMMAND",
+          "  1234     1  2048  0.1 openclaw-gateway",
+          "  5678  1234  4096  0.2 child",
+          "  9999  9998  9007199254740993  0.2 unrelated",
+        ].join("\n"),
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toMatchObject({
+      aggregateRssMiB: 6,
+      processId: 1234,
+      rssMiB: 2,
+    });
+  });
+
   it("samples the Windows gateway process by listening port", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const sample = await sampleWindowsProcessByPort(19675, {
@@ -1358,6 +1433,8 @@ describe("kitchen-sink RPC process sampling", () => {
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
+              "  TCP    127.0.0.1:196750       0.0.0.0:0              LISTENING       1111",
+              "  TCP    127.0.0.1:1967         0.0.0.0:0              LISTENING       2222",
               "  TCP    127.0.0.1:19675        0.0.0.0:0              LISTENING       6789",
             ].join("\r\n"),
             stderr: "",
@@ -1386,6 +1463,103 @@ describe("kitchen-sink RPC process sampling", () => {
     ]);
   });
 
+  it("falls back to strict tasklist RSS when Windows PowerShell sampling fails", async () => {
+    const calls: string[] = [];
+    const sample = await sampleWindowsProcessByPort(19675, {
+      runCommand: async (command: string) => {
+        calls.push(command);
+        if (command === "netstat.exe") {
+          return {
+            stdout: [
+              "  Proto  Local Address          Foreign Address        State           PID",
+              "  TCP    127.0.0.1:19675        0.0.0.0:0              LISTENING       6789",
+            ].join("\r\n"),
+            stderr: "",
+          };
+        }
+        if (command === "powershell.exe" || command === "powershell") {
+          throw new Error("powershell unavailable");
+        }
+        if (command === "tasklist.exe") {
+          return {
+            stdout: '"node.exe","6789","Console","1","262,144 K"',
+            stderr: "",
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    expect(sample).toEqual({
+      cpuPercent: null,
+      cpuSeconds: null,
+      processId: 6789,
+      rssMiB: 256,
+    });
+    expect(calls).toEqual(["netstat.exe", "powershell.exe", "powershell", "tasklist.exe"]);
+  });
+
+  it("falls back to the known Windows pid when tasklist reports malformed pid text", async () => {
+    const sample = await sampleWindowsProcessByPort(19675, {
+      runCommand: async (command: string) => {
+        if (command === "netstat.exe") {
+          return {
+            stdout: [
+              "  Proto  Local Address          Foreign Address        State           PID",
+              "  TCP    127.0.0.1:19675        0.0.0.0:0              LISTENING       6789",
+            ].join("\r\n"),
+            stderr: "",
+          };
+        }
+        if (command === "powershell.exe" || command === "powershell") {
+          throw new Error("powershell unavailable");
+        }
+        if (command === "tasklist.exe") {
+          return {
+            stdout: '"node.exe","9999x","Console","1","262,144 K"',
+            stderr: "",
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    expect(sample).toEqual({
+      cpuPercent: null,
+      cpuSeconds: null,
+      processId: 6789,
+      rssMiB: 256,
+    });
+  });
+
+  it("rejects malformed tasklist RSS instead of stripping digits", async () => {
+    const sample = await sampleWindowsProcessByPort(19675, {
+      runCommand: async (command: string) => {
+        if (command === "netstat.exe") {
+          return {
+            stdout: [
+              "  Proto  Local Address          Foreign Address        State           PID",
+              "  TCP    127.0.0.1:19675        0.0.0.0:0              LISTENING       6789",
+            ].join("\r\n"),
+            stderr: "",
+          };
+        }
+        if (command === "powershell.exe" || command === "powershell") {
+          throw new Error("powershell unavailable");
+        }
+        if (command === "tasklist.exe") {
+          return {
+            stdout: '"node.exe","6789","Console","1","262x144 K"',
+            stderr: "",
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    expect(sample).toBeNull();
+  });
+
   it("samples direct POSIX gateway RSS with descendants", async () => {
     const sample = await sampleProcess(4321, {
       platform: "linux",
@@ -1405,6 +1579,23 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample).toEqual({
       aggregateRssMiB: 384,
       cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
+  it("does not truncate malformed POSIX CPU samples", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      runCommand: async () => ({
+        stdout: " 4321     1  262144  12.5.6 node dist/index.js gateway --port 19080",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: null,
       processId: 4321,
       rssMiB: 256,
     });

@@ -21,6 +21,7 @@ import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
+  type TranscriptPersistedEntry,
 } from "./transcript-file-state.js";
 import {
   persistRuntimeTranscriptStateMutation,
@@ -261,7 +262,7 @@ export function rewriteTranscriptEntriesInState(params: {
   state: TranscriptFileState;
   replacements: TranscriptRewriteReplacement[];
   allowedRewriteSuffixEntryIds?: string[];
-}): TranscriptRewriteResult & { appendedEntries: SessionBranchEntry[] } {
+}): TranscriptRewriteResult & { appendedEntries: TranscriptPersistedEntry[] } {
   const replacementsById = new Map(
     params.replacements
       .filter((replacement) => replacement.entryId.trim().length > 0)
@@ -277,7 +278,58 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
-  const branch = params.state.getBranch();
+  const originalLeafId = params.state.getLeafId();
+  const originalAppendParentId = params.state.getAppendParentId();
+  const originalAppendMode = params.state.getAppendMode();
+  const activeBranch = params.state.getBranch();
+  const allEntries = params.state.getEntries();
+  let branch = activeBranch;
+  let restoreOriginalNavigation = false;
+  const replacementIdsOnBranch = (candidate: readonly SessionBranchEntry[]): Set<string> =>
+    new Set(
+      candidate
+        .filter((entry) => entry.type === "message" && replacementsById.has(entry.id))
+        .map((entry) => entry.id),
+    );
+  const activeReplacementIds = replacementIdsOnBranch(activeBranch);
+  if (activeReplacementIds.size > 0 && activeReplacementIds.size < replacementsById.size) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "rewrite targets span multiple branches",
+      appendedEntries: [],
+    };
+  }
+  const activeBranchHasEveryReplacement = activeReplacementIds.size === replacementsById.size;
+  if (!activeBranchHasEveryReplacement && params.allowedRewriteSuffixEntryIds) {
+    const allowedIds = new Set(params.allowedRewriteSuffixEntryIds);
+    const sideBranch = allEntries
+      .toReversed()
+      .filter((entry) => allowedIds.has(entry.id))
+      .map((entry) => params.state.getBranch(entry.id))
+      .find((candidate) => replacementIdsOnBranch(candidate).size === replacementsById.size);
+    if (sideBranch) {
+      branch = sideBranch;
+      restoreOriginalNavigation = true;
+    }
+  }
+  if (
+    !activeBranchHasEveryReplacement &&
+    !restoreOriginalNavigation &&
+    activeReplacementIds.size === 0 &&
+    params.replacements.some((replacement) =>
+      allEntries.some((entry) => entry.id === replacement.entryId),
+    )
+  ) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "rewrite targets span multiple branches",
+      appendedEntries: [],
+    };
+  }
   if (branch.length === 0) {
     return {
       changed: false,
@@ -351,7 +403,7 @@ export function rewriteTranscriptEntriesInState(params: {
     params.state.branch(firstMatchedEntry.parentId);
   }
 
-  const appendedEntries: SessionBranchEntry[] = [];
+  const appendedEntries: TranscriptPersistedEntry[] = [];
   const rewrittenEntryIds = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
@@ -366,6 +418,15 @@ export function rewriteTranscriptEntriesInState(params: {
         : params.state.appendMessage(replacement);
     rewrittenEntryIds.set(entry.id, newEntry.id);
     appendedEntries.push(newEntry);
+  }
+  if (restoreOriginalNavigation) {
+    appendedEntries.push(
+      params.state.appendLeafControl({
+        targetId: originalLeafId,
+        appendParentId: originalAppendParentId,
+        ...(originalAppendMode ? { appendMode: originalAppendMode } : {}),
+      }),
+    );
   }
 
   return {

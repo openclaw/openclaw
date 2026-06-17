@@ -335,6 +335,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes code-mode namespace live repro changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/code-mode-namespace-live.test.ts"],
+    });
+  });
+
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -481,6 +488,13 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/crabbox-wrapper.mjs"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/crabbox-wrapper.test.ts"],
+    });
+  });
+
+  it("keeps CI workflow edits on workflow guard tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/ci.yml"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-workflow-guards.test.ts"],
     });
   });
 

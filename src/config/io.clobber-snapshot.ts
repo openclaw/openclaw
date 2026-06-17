@@ -34,7 +34,7 @@ type ConfigClobberSnapshotFs = {
   ): unknown;
 };
 
-export type ConfigClobberSnapshotDeps = {
+type ConfigClobberSnapshotDeps = {
   fs: ConfigClobberSnapshotFs;
   logger: Pick<typeof console, "warn">;
 };

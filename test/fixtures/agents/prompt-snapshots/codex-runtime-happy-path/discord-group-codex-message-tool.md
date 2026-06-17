@@ -80,14 +80,17 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
+    "message",
+    "sessions_yield",
     "nodes",
     "cron",
-    "message",
     "tts",
     "gateway",
     "agents_list",
@@ -95,7 +98,6 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
-    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -119,7 +121,9 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false
+    "features.code_mode_only": false,
+    "features.standalone_web_search": false,
+    "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -223,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 45244,
-    "roughTokens": 11311
+    "chars": 50642,
+    "roughTokens": 12661
   },
   "openClawDeveloperInstructions": {
     "chars": 2988,
@@ -235,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6925
   },
   "totalWithDynamicToolsJson": {
-    "chars": 72946,
-    "roughTokens": 18237
+    "chars": 78344,
+    "roughTokens": 19586
   },
   "userInputText": {
     "chars": 1629,
@@ -562,9 +566,10 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 
 ```json
 [
+  "message",
+  "sessions_yield",
   "nodes",
   "cron",
-  "message",
   "tts",
   "gateway",
   "agents_list",
@@ -572,7 +577,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
-  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -706,7 +710,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message"
+    "name": "message",
+    "type": "function"
   }
 ]
 ```

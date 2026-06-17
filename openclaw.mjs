@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 19;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
+const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
+const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const parseNodeVersion = (rawVersion) => {
   const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
@@ -23,6 +25,15 @@ const parseNodeVersion = (rawVersion) => {
 const isSupportedNodeVersion = (version) =>
   version.major > MIN_NODE_MAJOR ||
   (version.major === MIN_NODE_MAJOR && version.minor >= MIN_NODE_MINOR);
+
+const isNodeVersionAffectedByCompileCacheDeadlock = (rawVersion) => {
+  const version = parseNodeVersion(rawVersion);
+  return version.major === 24 && version.minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
+};
+
+const shouldSkipCompileCacheForWindowsNode24 = () =>
+  process.platform === "win32" &&
+  isNodeVersionAffectedByCompileCacheDeadlock(process.versions.node);
 
 const ensureSupportedNodeVersion = () => {
   if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
@@ -194,10 +205,12 @@ const runRespawnedChild = (command, args, env) => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  if (!isSourceCheckoutLauncher()) {
+  const needsDisabledCompileCacheRespawn =
+    isSourceCheckoutLauncher() || shouldSkipCompileCacheForWindowsNode24();
+  if (!needsDisabledCompileCacheRespawn) {
     return false;
   }
-  if (process.env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+  if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
     return false;
   }
   if (!module.getCompileCacheDir?.() && !isNodeCompileCacheRequested()) {
@@ -206,7 +219,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   const env = {
     ...process.env,
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
   };
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
@@ -217,7 +230,11 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+  if (
+    isSourceCheckoutLauncher() ||
+    isNodeCompileCacheDisabled() ||
+    shouldSkipCompileCacheForWindowsNode24()
+  ) {
     return false;
   }
   if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
@@ -251,7 +268,8 @@ if (
   !waitingForCompileCacheRespawn &&
   module.enableCompileCache &&
   !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
+  !isSourceCheckoutLauncher() &&
+  !shouldSkipCompileCacheForWindowsNode24()
 ) {
   try {
     module.enableCompileCache(resolvePackagedCompileCacheDirectory());

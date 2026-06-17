@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerWhatsAppConnectionController,
@@ -81,6 +82,14 @@ function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): WebInbo
   const msg = onMessage.mock.calls[index]?.[0];
   expect(msg).toBeDefined();
   return msg as WebInboundMessage;
+}
+
+function expectDeprecatedAdmissionAliases(inbound: WebInboundMessage) {
+  expect(inbound.from).toBe(inbound.admission?.conversation.id);
+  expect(inbound.conversationId).toBe(inbound.admission?.conversation.id);
+  expect(inbound.accountId).toBe(inbound.admission?.accountId);
+  expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
+  expect(inbound.accessControlPassed).toBe(inbound.admission?.ingress.decision === "allow");
 }
 
 async function expectSocketOperationTimeout(
@@ -223,7 +232,6 @@ describe("web monitor inbox", () => {
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("+999");
     expect(inbound.platform.recipientJid).toBe("+123");
     expect(inbound.admission).toMatchObject({
       accountId: DEFAULT_ACCOUNT_ID,
@@ -239,8 +247,7 @@ describe("web monitor inbox", () => {
         decision: "allow",
       },
     });
-    expect(inbound.accountId).toBe(inbound.admission?.accountId);
-    expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
+    expectDeprecatedAdmissionAliases(inbound);
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",
@@ -416,7 +423,7 @@ describe("web monitor inbox", () => {
 
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage);
-    expect(inbound.chatType).toBe("group");
+    expect(inbound.admission?.conversation.kind).toBe("group");
     expect(inbound.group).toBeUndefined();
 
     await listener.close();
@@ -464,10 +471,10 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.admission?.conversation.id).toBe("123@g.us");
     expect(inbound.group?.subject).toBe("Recovered Group");
     expect(inbound.platform.senderE164).toBe("+444");
-    expect(inbound.chatType).toBe("group");
+    expect(inbound.admission?.conversation.kind).toBe("group");
     expect(inbound.group?.participants).toBeUndefined();
 
     await second.listener.close();
@@ -717,7 +724,7 @@ describe("web monitor inbox", () => {
       await waitForMessageCalls(onMessage, 1);
       const inbound = inboundMessage(onMessage);
       expect(inbound.payload.body).toBe("first\nsecond");
-      expect(inbound.chatType).toBe("direct");
+      expect(inbound.admission?.conversation.kind).toBe("direct");
     } finally {
       vi.useRealTimers();
     }
@@ -993,6 +1000,58 @@ describe("web monitor inbox", () => {
     } finally {
       vi.useRealTimers();
       await listener.close();
+    }
+  });
+
+  it("bounds stalled read-receipt socket operations instead of hanging", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      verbose: true,
+    });
+    vi.useFakeTimers();
+    try {
+      const messageId = nextMessageId("read-receipt-timeout");
+      // A WhatsApp socket whose read-receipt acknowledgement never resolves
+      // (e.g. a stalled Baileys privacy IQ query) would otherwise hang the
+      // inbound delivery pipeline forever.
+      sock.readMessages.mockImplementationOnce(() => new Promise(() => {}));
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: messageId,
+          remoteJid: "999@s.whatsapp.net",
+          text: "ping",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+
+      // The read receipt is attempted on the stalled socket...
+      await vi.waitFor(() => {
+        expect(sock.readMessages).toHaveBeenCalledWith([
+          { remoteJid: "999@s.whatsapp.net", id: messageId, participant: undefined, fromMe: false },
+        ]);
+      });
+
+      // ...and is bounded by the socket operation timeout rather than hanging.
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+      await vi.waitFor(() => {
+        const loggedTimeoutFailure = logSpy.mock.calls.some(
+          ([message]) =>
+            typeof message === "string" &&
+            message.includes(`Failed to mark message ${messageId} read`) &&
+            message.includes("readMessages timed out"),
+        );
+        expect(loggedTimeoutFailure).toBe(true);
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+      logSpy.mockRestore();
     }
   });
 
@@ -1286,7 +1345,7 @@ describe("web monitor inbox", () => {
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("+999");
+    expect(inbound.admission?.conversation.id).toBe("+999");
     expect(inbound.platform.recipientJid).toBe("+123");
 
     await listener.close();
@@ -1314,7 +1373,7 @@ describe("web monitor inbox", () => {
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("+1555");
+    expect(inbound.admission?.conversation.id).toBe("+1555");
     expect(inbound.platform.recipientJid).toBe("+123");
     expect(getPNForLID).not.toHaveBeenCalled();
 
@@ -1341,9 +1400,9 @@ describe("web monitor inbox", () => {
     expect(getPNForLID).toHaveBeenCalledWith("444@lid");
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.admission?.conversation.id).toBe("123@g.us");
     expect(inbound.platform.senderE164).toBe("+444");
-    expect(inbound.chatType).toBe("group");
+    expect(inbound.admission?.conversation.kind).toBe("group");
 
     await listener.close();
   });

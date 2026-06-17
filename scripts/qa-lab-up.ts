@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { parseStrictPositiveInteger } from "../src/infra/parse-finite-number.js";
 
 const options = {
   help: { type: "boolean", short: "h" },
@@ -64,23 +65,26 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
     return 0;
   }
 
-  const parsePort = (value: string | undefined) => {
+  const parsePort = (value: string | undefined, flag: string) => {
     if (!value) {
       return undefined;
     }
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-      throw new Error(`Invalid port: ${value}`);
+    const parsed = parseStrictPositiveInteger(value);
+    if (parsed === undefined) {
+      throw new Error(`${flag} must be a positive integer.`);
     }
     return parsed;
   };
+
+  const gatewayPort = parsePort(values["gateway-port"], "--gateway-port");
+  const qaLabPort = parsePort(values["qa-lab-port"], "--qa-lab-port");
 
   const { runQaDockerUpCommand } = await (deps.loadRuntime ?? loadQaLabRuntime)();
 
   await runQaDockerUpCommand({
     outputDir: values["output-dir"],
-    gatewayPort: parsePort(values["gateway-port"]),
-    qaLabPort: parsePort(values["qa-lab-port"]),
+    gatewayPort,
+    qaLabPort,
     providerBaseUrl: values["provider-base-url"],
     image: values.image,
     usePrebuiltImage: values["use-prebuilt-image"],

@@ -91,6 +91,7 @@ import {
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
+  type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
@@ -1045,8 +1046,15 @@ async function resolvePackageRuntimePreflightError(params: {
   tag: string;
   timeoutMs?: number;
   nodeRunner?: string;
+  spec?: string;
+  command?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<string | null> {
   if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
+    return null;
+  }
+  if (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec)) {
     return null;
   }
   const target = params.tag.trim();
@@ -1055,7 +1063,11 @@ async function resolvePackageRuntimePreflightError(params: {
   }
   const status = await fetchNpmPackageTargetStatus({
     target,
+    spec: params.spec,
     timeoutMs: params.timeoutMs,
+    command: params.command,
+    cwd: params.cwd,
+    env: params.env,
   });
   if (status.error) {
     return null;
@@ -1503,21 +1515,26 @@ async function runPackageInstallUpdate(params: {
   invocationCwd?: string;
   honorPackageRoot?: boolean;
   nodeRunner?: string;
+  installEnv?: NodeJS.ProcessEnv;
+  installTarget?: ResolvedGlobalInstallTarget;
 }): Promise<UpdateRunResult> {
-  const manager = await resolveGlobalManager({
-    root: params.root,
-    installKind: params.installKind,
-    timeoutMs: params.timeoutMs,
-  });
-  const installEnv = await createGlobalInstallEnv();
+  const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   const runCommand = createGlobalCommandRunner();
-  const installTarget = await resolveGlobalInstallTarget({
-    manager,
-    runCommand,
-    timeoutMs: params.timeoutMs,
-    pkgRoot: params.root,
-    honorPackageRoot: params.honorPackageRoot === true,
-  });
+  let installTarget = params.installTarget;
+  if (!installTarget) {
+    const manager = await resolveGlobalManager({
+      root: params.root,
+      installKind: params.installKind,
+      timeoutMs: params.timeoutMs,
+    });
+    installTarget = await resolveGlobalInstallTarget({
+      manager,
+      runCommand,
+      timeoutMs: params.timeoutMs,
+      pkgRoot: params.root,
+      honorPackageRoot: params.honorPackageRoot === true,
+    });
+  }
   const pkgRoot = installTarget.packageRoot;
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
@@ -1620,7 +1637,7 @@ async function runPackageInstallUpdate(params: {
 
   return {
     status: packageUpdate.failedStep ? "error" : "ok",
-    mode: manager,
+    mode: installTarget.manager,
     root: packageUpdate.verifiedPackageRoot ?? params.root,
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
@@ -3286,6 +3303,9 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   let downgradeRisk = false;
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
+  let packageInstallEnv: NodeJS.ProcessEnv | undefined;
+  let packageInstallCwd: string | undefined;
+  let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
   let packageAlreadyCurrent = false;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
   // Resolved independently of the root redirect so it covers the common case
@@ -3340,11 +3360,46 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   if (updateInstallKind !== "git") {
+    packageInstallEnv = await createGlobalInstallEnv();
+    packageInstallCwd = tryResolveInvocationCwd();
+    if (updateInstallKind === "package") {
+      const manager = await resolveGlobalManager({
+        root,
+        installKind,
+        timeoutMs: updateStepTimeoutMs,
+      });
+      packageInstallTarget = await resolveGlobalInstallTarget({
+        manager,
+        runCommand: createGlobalCommandRunner(),
+        timeoutMs: updateStepTimeoutMs,
+        pkgRoot: root,
+        honorPackageRoot:
+          managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
+      });
+    }
+    const npmMetadataCommand =
+      packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
     if (explicitTag) {
-      targetVersion = await resolveTargetVersion(tag, timeoutMs);
+      const explicitSpec = resolveGlobalInstallSpec({
+        packageName: DEFAULT_PACKAGE_NAME,
+        tag,
+        env: packageInstallEnv,
+      });
+      targetVersion = await resolveTargetVersion(tag, timeoutMs, {
+        spec: explicitSpec,
+        command: npmMetadataCommand,
+        cwd: packageInstallCwd,
+        env: packageInstallEnv,
+      });
     } else {
-      targetVersion = await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
+      targetVersion = await resolveNpmChannelTag({
+        channel,
+        timeoutMs,
+        command: npmMetadataCommand,
+        cwd: packageInstallCwd,
+        env: packageInstallEnv,
+      }).then((resolved) => {
         tag = resolved.tag;
         fallbackToLatest = channel === "beta" && resolved.tag === "latest";
         return resolved.version;
@@ -3367,7 +3422,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     packageInstallSpec = resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
-      env: process.env,
+      env: packageInstallEnv,
     });
   }
 
@@ -3485,8 +3540,12 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   if (updateInstallKind === "package") {
     const runtimePreflightError = await resolvePackageRuntimePreflightError({
       tag,
+      spec: packageInstallSpec ?? undefined,
       timeoutMs,
       nodeRunner: managedServiceNodeRunner,
+      command: packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined,
+      cwd: packageInstallCwd,
+      env: packageInstallEnv,
     });
     if (runtimePreflightError) {
       defaultRuntime.error(runtimePreflightError);
@@ -3591,6 +3650,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             honorPackageRoot:
               managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
             nodeRunner: managedServiceNodeRunner,
+            installEnv: packageInstallEnv,
+            installTarget: packageInstallTarget,
           })
         : await runGitUpdate({
             root,

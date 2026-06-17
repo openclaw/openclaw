@@ -4,6 +4,7 @@
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -28,6 +29,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/type
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
+import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
@@ -97,6 +99,25 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
     default:
       return false;
   }
+}
+
+function formatCliEmptyOutputDiagnostics(output: CliOutput): string | undefined {
+  const process = output.diagnostics?.process;
+  if (!process) {
+    return undefined;
+  }
+  return [
+    `backend=${process.backendId}`,
+    `reason=${process.processReason}`,
+    `exitCode=${process.exitCode ?? "null"}`,
+    `exitSignal=${process.exitSignal ?? "null"}`,
+    `durationMs=${process.durationMs}`,
+    `stdoutBytes=${process.stdoutBytes}`,
+    `stdoutHash=${process.stdoutHash}`,
+    `stderrBytes=${process.stderrBytes}`,
+    `stderrHash=${process.stderrHash}`,
+    `useResume=${process.useResume ? "true" : "false"}`,
+  ].join(" ");
 }
 
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
@@ -332,6 +353,9 @@ async function finalizeCliContextEngineTurn(params: {
   }
 
   let deferredTurnMaintenance: Promise<void> | undefined;
+  const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+    backendId: context.backendResolved.id,
+  });
   const result = await finalizeHarnessContextEngineTurn({
     contextEngine: context.contextEngine,
     promptError: false,
@@ -344,6 +368,9 @@ async function finalizeCliContextEngineTurn(params: {
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
+    contextEngineHostSupport,
+    providerId: runParams.provider,
+    modelId: context.modelId,
     runMaintenance: async (maintenanceParams) =>
       await runHarnessContextEngineMaintenance({
         ...maintenanceParams,
@@ -480,6 +507,9 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
+  // Prior turn maintenance can rewrite transcript entries after finalization.
+  // Reads for the next same-session inference must observe that rewrite.
+  await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   const historyMessages = needsHookHistory
     ? await loadCliSessionHistoryMessages({
         sessionId: params.sessionId,
@@ -769,6 +799,10 @@ export async function runPreparedCliAgent(
       !output.didSendViaMessagingTool &&
       params.allowEmptyAssistantReplyAsSilent !== true
     ) {
+      const emptyOutputDiagnostics = formatCliEmptyOutputDiagnostics(output);
+      if (emptyOutputDiagnostics) {
+        cliBackendLog.warn(`cli empty response diagnostics: ${emptyOutputDiagnostics}`);
+      }
       throw attachCliMessagingDeliveryEvidence(
         new FailoverError("CLI backend returned an empty response.", {
           reason: "empty_response",
@@ -966,6 +1000,11 @@ export async function runPreparedCliAgent(
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
       config: context.contextEngineConfig,
+      contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
+        backendId: context.backendResolved.id,
+      }),
+      providerId: params.provider,
+      modelId: context.modelId,
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine

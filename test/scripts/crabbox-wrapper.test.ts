@@ -449,6 +449,19 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected binary reported version=crabbox 0.22.0-rc.1");
   });
 
+  it("rejects unsafe Crabbox version numbers at the Blacksmith minimum gate", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.9007199254740993.0" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      "selected binary reported version=crabbox 0.9007199254740993.0",
+    );
+  });
+
   it("accepts post-release Crabbox describe builds at the Blacksmith minimum boundary", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
