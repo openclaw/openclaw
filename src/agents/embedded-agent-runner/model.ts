@@ -22,6 +22,7 @@ import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { log } from "./logger.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -1356,12 +1357,33 @@ function resolveConfiguredFallbackModel(params: {
             ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
             : {}),
           cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow:
-            configuredModel?.contextWindow ??
-            providerConfig?.contextWindow ??
-            providerConfig?.models?.[0]?.contextWindow ??
-            staticCatalogModel?.contextWindow ??
-            DEFAULT_CONTEXT_TOKENS,
+          contextWindow: (() => {
+            const configured =
+              configuredModel?.contextWindow ??
+              providerConfig?.contextWindow ??
+              providerConfig?.models?.[0]?.contextWindow;
+            const catalogWindow = staticCatalogModel?.contextWindow;
+            // When the native runtime catalog reports a lower context window
+            // than user config, prefer the native runtime limit — the runtime
+            // will cap it anyway (e.g. Codex gpt-5.5 catalog reports 272k but
+            // user config may specify 1M). Log a warning so the mismatch is
+            // debuggable.
+            if (
+              typeof configured === "number" &&
+              typeof catalogWindow === "number" &&
+              catalogWindow > 0 &&
+              configured > catalogWindow
+            ) {
+              log.warn(
+                `model ${modelId}: configured contextWindow ${configured} exceeds native runtime ` +
+                  `catalog contextWindow ${catalogWindow}; capping at runtime limit. ` +
+                  `Update models config to match the runtime limit, or switch to the API provider ` +
+                  `path if you need the larger window.`,
+              );
+              return catalogWindow;
+            }
+            return configured ?? catalogWindow ?? DEFAULT_CONTEXT_TOKENS;
+          })(),
           contextTokens:
             configuredModel?.contextTokens ??
             providerConfig?.contextTokens ??
