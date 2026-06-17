@@ -873,6 +873,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  const backfilledKeys = new Set<string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1572,19 +1573,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         let combinedBody = body;
         if (historyKey) {
-          // Backfill thread history from server when in-memory window is empty
-          // (e.g. after gateway restart or session clear), so the agent has
-          // prior thread context instead of replying blind.
-          if (threadRootId && (channelHistories.get(historyKey) || []).length === 0) {
+          // Backfill thread history from server when recovering from restart
+          // or session-clear (first time this history key is ever seen), so the
+          // agent has prior thread context instead of replying blind.
+          // Gate on backfilledKeys so normal steady-state turns whose kernel
+          // cleared pending history do not rehydrate the full server thread.
+          if (
+            threadRootId &&
+            !backfilledKeys.has(historyKey) &&
+            (channelHistories.get(historyKey) || []).length === 0
+          ) {
             try {
               const thread = await fetchMattermostThread(client, threadRootId);
               if (thread?.order && thread?.posts) {
+                // Select the bounded set of candidate posts first, then resolve
+                // senders for only those entries — avoids serial user lookups
+                // for every post in a large thread.
+                const candidateIds = thread.order
+                  .filter((pid) => {
+                    const p = thread.posts?.[pid];
+                    return p && p.id !== post.id;
+                  })
+                  .slice(-historyLimit);
                 const entries: HistoryEntry[] = [];
-                for (const pid of thread.order) {
-                  const p = thread.posts[pid];
-                  if (!p || p.id === post.id) {
-                    continue;
-                  }
+                for (const pid of candidateIds) {
+                  const p = thread.posts[pid]!;
                   const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
                   entries.push({
                     sender: user?.username ? `@${user.username}` : (p.user_id ?? "unknown"),
@@ -1594,7 +1607,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   });
                 }
                 if (entries.length > 0) {
-                  channelHistories.set(historyKey, entries.slice(-historyLimit));
+                  channelHistories.set(historyKey, entries);
+                  backfilledKeys.add(historyKey);
                 }
               }
             } catch {
