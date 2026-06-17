@@ -7,6 +7,20 @@
 
 ## Last Session
 
+- **Date**: 2026-06-17 (Per-user profile Phase 3 shipped to prod: app_profile injection + CI gate)
+- **What changed**:
+  - **Gateway PR #68** (`feat/app-profile-context`): inject each app-user's `app_profile` section into the agent context every turn as a synthetic `APP_PROFILE.md` bootstrap file, so `life` always knows the user without being reminded. New `src/agents/app-profile-context.ts` (fail-closed marker extractor, UTF-8 byte-safe 2 KB clamp, app-session-only via `isAppUserSession` + `resolveAppUserId`); 3-line wire in `src/agents/bootstrap-files.ts` (after hook overrides, before the context-file budget clamp; compaction-safe). 14/14 vitest; resolved per-run so no cross-user leak.
+  - **Gateway PR #69** (`fix/tsgo-type-errors`): greened the `check` (tsgo + oxlint) and `check-docs` (markdownlint + link-check) CI gates so openclaw PRs stop needing `--admin`. `chat.ts` typed to the real `AssistantContentBlock[]` union (one commented boundary cast, no `any`); 3 test-mock fixes; unused import + 3 redundant type-args dropped; doc lint/link fixes.
+  - **Gateway image `v2026.06.17.1`** (sourceSha `50f6c2d6f`): built from `main`, pushed to Artifact Registry, pinned to **`life` only** on 2ndClaw via single-agent recreate (fleet untouched per the staged-boot rule). Rollback ref `v2026.06.13.1` (`docker.env.bak.pre-v2026.06.17.1`).
+  - **`life` `workspace/AGENTS.md`**: added the `app_profile` writable section + maintenance rules (sections 4/5) so the agent keeps a concise running brief (`name` / `call_them` / `summary`). Host-only, effective next turn (`AGENTS.md.bak.pre-app-profile-prose`).
+  - **Phase 2 (`app.havaya` #24)**: confirmed already auto-deployed on merge (Coolify webhook); the home greeting reads the name from the per-user file.
+- **Validation**:
+  - `pnpm check` + `pnpm check:docs` green on #69; `app-profile-context` 14/14 vitest; image build compiled clean.
+  - Prod smoke: `life` recreated on `v2026.06.17.1`, boots healthy (gateway `:18789`, graphiti mcp ready, telegram up); public-chat smoke returned a coherent in-persona reply. 2 of 4 live user files already carry a seeded `app_profile` `name:` marker.
+- **Follow-ups**: register release `v2026.06.17.1` (sourceSha `50f6c2d6f`) via the dashboard `/api/platform/releases` (bookkeeping; optional dashboard step, prior rolls skipped it without harm).
+
+## Last Session (prev)
+
 - **Date**: 2026-06-01 / 2026-06-02 (Havaya per-user integration — writer + reader + parity)
 - **What changed**:
   - **Gateway PR #49** (`feat/save-user-section-tool`): new `save_user_section` agent tool writing allowlisted sections (`User_D_Prompt`, `app_note`) to `workspace/users/<appUserId>.md` with HTML-comment markers and fail-closed upsert. Added `appUserId?: string` to `SessionEntry` (`src/config/sessions/types.ts`), `ChatSendParamsSchema` (`src/gateway/protocol/schema/logs-chat.ts`), and `chat.send` handler (`src/gateway/server-methods/chat.ts`) — persists `appUserId` from the incoming RPC onto the session entry before dispatch so the tool can resolve identity server-side without the model passing a user id. Registered in `src/agents/openclaw-tools.ts` (only when `appUserId` resolves). 9 vitest unit tests (`src/agents/tools/save-user-section.test.ts`).
@@ -24,7 +38,7 @@
 
 ---
 
-## Last Session (prev)
+## Last Session (prev 2)
 
 - **Date**: 2026-05-12 (projectmanager wallet chat access)
 - **What changed**:
