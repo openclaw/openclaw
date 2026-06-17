@@ -216,7 +216,22 @@ export function resolveThinkingProfile(params: {
       normalized.levels.length > 0 &&
       (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
     ) {
-      return normalized;
+      // When a specific model was requested but not found in the catalog and
+      // the provider profile only offers "off", skip the profile and fall
+      // through to the base profile.  The catalog may be incomplete (e.g. a
+      // live-discovered Ollama model that reports thinking capabilities), and
+      // showing more levels is safe — the API rejects unsupported levels at
+      // runtime, while hiding valid levels blocks supported functionality.
+      if (
+        context.reasoning === undefined &&
+        context.modelId &&
+        normalized.levels.length === 1 &&
+        normalized.levels[0]?.id === "off"
+      ) {
+        // fall through to base profile
+      } else {
+        return normalized;
+      }
     }
   }
   if (context.reasoning === false) {
