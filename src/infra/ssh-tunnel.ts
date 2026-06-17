@@ -54,6 +54,11 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (!hostPart) {
     return null;
   }
+  // Reject host parts with leading/trailing colons (e.g. "host:", ":22")
+  // that would otherwise flow into SSH config HostName fields and break connections.
+  if (hostPart.startsWith(":") || hostPart.endsWith(":")) {
+    return null;
+  }
   // Security: Reject hostnames starting with '-' to prevent argument injection
   if (hostPart.startsWith("-")) {
     return null;

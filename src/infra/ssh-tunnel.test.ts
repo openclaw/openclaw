@@ -29,4 +29,11 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("me@-badhost")).toBeNull();
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
   });
+
+  it("rejects hostnames with stray leading or trailing colons", () => {
+    expect(parseSshTarget("host:")).toBeNull();
+    expect(parseSshTarget(":22")).toBeNull();
+    expect(parseSshTarget("user@:22")).toBeNull();
+    expect(parseSshTarget("user@host:")).toBeNull();
+  });
 });
