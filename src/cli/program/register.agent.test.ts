@@ -137,6 +137,68 @@ describe("registerAgentCommands", () => {
     expect(deps).toBeUndefined();
   });
 
+  it("accepts hidden bootstrap context mode for embedded local agent runs", async () => {
+    await runCli([
+      "agent",
+      "--message",
+      "hi",
+      "--local",
+      "--bootstrap-context-mode",
+      "lightweight",
+    ]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect(options).toEqual(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        bootstrapContextMode: "lightweight",
+      }),
+    );
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("accepts hidden tool disable switch for embedded local agent runs", async () => {
+    await runCli(["agent", "--message", "hi", "--local", "--disable-tools"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect(options).toEqual(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        disableTools: true,
+      }),
+    );
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("accepts hidden stream max-token override for embedded local agent runs", async () => {
+    await runCli(["agent", "--message", "hi", "--local", "--stream-max-tokens", "192"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect(options).toEqual(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        streamMaxTokens: "192",
+      }),
+    );
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("keeps internal eval options hidden from public agent help", () => {
+    const program = new Command();
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    const agentCommand = program.commands.find((candidate) => candidate.name() === "agent");
+
+    expect(agentCommand?.helpInformation()).not.toContain("bootstrap-context-mode");
+    expect(agentCommand?.helpInformation()).not.toContain("disable-tools");
+    expect(agentCommand?.helpInformation()).not.toContain("stream-max-tokens");
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);

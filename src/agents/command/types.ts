@@ -98,6 +98,8 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Internal local callers can disable all tools for eval/probe runs. */
+  disableTools?: boolean;
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];

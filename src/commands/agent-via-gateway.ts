@@ -25,7 +25,10 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
   classifySessionKeyShape,
@@ -83,6 +86,9 @@ type AgentCliOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  bootstrapContextMode?: "full" | "lightweight";
+  disableTools?: boolean;
+  streamMaxTokens?: string;
   local?: boolean;
 };
 
@@ -190,6 +196,17 @@ function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
     return NO_GATEWAY_TIMEOUT_MS;
   }
   return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
+}
+
+function parseStreamMaxTokens(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error("Invalid --stream-max-tokens. Use a positive integer.");
+  }
+  return parsed;
 }
 
 async function getGatewayDispatchConfig(options?: {
@@ -839,6 +856,7 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
+  const streamMaxTokens = parseStreamMaxTokens(opts.streamMaxTokens);
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
@@ -853,6 +871,7 @@ export async function agentCliCommand(
     cleanupCliLiveSessionOnRunEnd: true,
     oneShotCliRun: dispatchOpts.local === true,
     abortSignal: signalBridge.signal,
+    ...(streamMaxTokens !== undefined ? { streamParams: { maxTokens: streamMaxTokens } } : {}),
   };
   try {
     if (dispatchOpts.local === true) {
