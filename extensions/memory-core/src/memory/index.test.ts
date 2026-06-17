@@ -551,6 +551,52 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps existing file index rows when chunk publication fails", async () => {
+    const cfg = createCfg({});
+    const manager = await getFreshManager(cfg);
+    try {
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+
+      await manager.sync({ reason: "test" });
+
+      const initialSource = db
+        .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
+        .get("%2026-01-12.md", "memory") as { hash: string } | undefined;
+      const initialChunk = db
+        .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
+        .get("%2026-01-12.md", "memory") as { text: string } | undefined;
+      expect(initialSource?.hash).toBeTruthy();
+      expect(initialChunk?.text).toContain("Alpha memory line.");
+
+      db.exec(`
+        CREATE TRIGGER fail_chunk_publication
+        AFTER INSERT ON memory_index_chunks
+        BEGIN
+          SELECT RAISE(FAIL, 'forced chunk publication failure');
+        END;
+      `);
+      await fs.writeFile(path.join(memoryDir, "2026-01-12.md"), "# Log\nUpdated memory line.");
+      Reflect.set(manager, "dirty", true);
+
+      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+        "forced chunk publication failure",
+      );
+
+      expect(
+        db
+          .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
+          .get("%2026-01-12.md", "memory"),
+      ).toEqual(initialSource);
+      expect(
+        db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
+          .get("%2026-01-12.md", "memory"),
+      ).toEqual(initialChunk);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
     const stateDir = path.join(workspaceDir, "managed-memory-state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
