@@ -218,6 +218,13 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("[user](tg://user?id=123)")).toBe(
       '<a href="tg://user?id=123">user</a>',
     );
+    expect(markdownToTelegramRichHtml("[support](mailto:user@example.com)")).toBe(
+      '<a href="mailto:user@example.com">support</a>',
+    );
+    expect(markdownToTelegramRichHtml("[call](tel:+123456789)")).toBe(
+      '<a href="tel:+123456789">call</a>',
+    );
+    expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
   });
 
   it("preserves Markdown heading levels in rich HTML", () => {

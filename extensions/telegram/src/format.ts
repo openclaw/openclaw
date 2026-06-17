@@ -32,8 +32,8 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
-function isTelegramLinkHref(href: string): boolean {
-  return /^(?:https?:\/\/|tg:\/\/)/i.test(href);
+function isTelegramRichLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
 
 /**
@@ -57,7 +57,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   }
   // Telegram rich links reject local or relative hrefs; keep the label visible
   // instead of letting one unsupported link drop the whole message.
-  if (!isTelegramLinkHref(href)) {
+  if (!isTelegramRichLinkHref(href)) {
     return null;
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
