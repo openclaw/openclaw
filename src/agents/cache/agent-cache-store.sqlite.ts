@@ -28,13 +28,13 @@ import type {
 } from "./agent-cache-store.js";
 
 /** Options for an agent/scope-scoped SQLite runtime cache. */
-export type SqliteAgentCacheStoreOptions = OpenClawAgentDatabaseOptions & {
+type SqliteAgentCacheStoreOptions = OpenClawAgentDatabaseOptions & {
   scope: string;
   now?: () => number;
 };
 
 /** Options for writing a single SQLite agent cache entry. */
-export type WriteSqliteAgentCacheEntryOptions = SqliteAgentCacheStoreOptions &
+type WriteSqliteAgentCacheEntryOptions = SqliteAgentCacheStoreOptions &
   AgentRuntimeCacheWriteOptions;
 
 type CacheEntriesTable = OpenClawAgentKyselyDatabase["cache_entries"];
@@ -297,7 +297,7 @@ export function clearExpiredSqliteAgentCacheEntries(
 }
 
 /** Agent runtime cache store implementation backed by OpenClaw's SQLite DB. */
-export class SqliteAgentCacheStore implements AgentRuntimeCacheStore {
+class SqliteAgentCacheStore implements AgentRuntimeCacheStore {
   readonly #options: SqliteAgentCacheStoreOptions;
 
   constructor(options: SqliteAgentCacheStoreOptions) {
@@ -349,6 +349,6 @@ export class SqliteAgentCacheStore implements AgentRuntimeCacheStore {
 /** Create a SQLite-backed agent runtime cache store. */
 export function createSqliteAgentCacheStore(
   options: SqliteAgentCacheStoreOptions,
-): SqliteAgentCacheStore {
+): AgentRuntimeCacheStore {
   return new SqliteAgentCacheStore(options);
 }

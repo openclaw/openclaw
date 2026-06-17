@@ -16,7 +16,7 @@ export type ReplyDirectiveParseResult = {
 };
 
 /** Options for extracting reply directives from model text. */
-export type ReplyDirectiveParseOptions = {
+type ReplyDirectiveParseOptions = {
   currentMessageId?: string;
   silentToken?: string;
   extractMarkdownImages?: boolean;

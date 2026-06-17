@@ -15,7 +15,7 @@ import {
 import { isAnthropicBillingError, isApiKeyRateLimitError } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
-export type LiveProviderDriftReason =
+type LiveProviderDriftReason =
   | "auth"
   | "billing"
   | "model-not-found"
@@ -24,13 +24,13 @@ export type LiveProviderDriftReason =
   | "timeout";
 
 /** A normalized reason for skipping or soft-failing live provider drift. */
-export type LiveProviderDriftDecision = {
+type LiveProviderDriftDecision = {
   label: string;
   reason: LiveProviderDriftReason;
 };
 
 /** Classifier options that control which live-provider drift reasons are allowed. */
-export type LiveProviderDriftOptions = {
+type LiveProviderDriftOptions = {
   allowAuth?: boolean;
   allowBilling?: boolean;
   allowModelNotFound?: boolean;
@@ -41,7 +41,7 @@ export type LiveProviderDriftOptions = {
 };
 
 /** Converts arbitrary thrown values into text for provider drift matchers. */
-export function liveProviderErrorText(error: unknown): string {
+function liveProviderErrorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
@@ -69,12 +69,12 @@ export function isLiveRateLimitDrift(error: unknown): boolean {
 }
 
 /** Returns whether an error is expected live timeout drift. */
-export function isLiveTimeoutDrift(error: unknown): boolean {
+function isLiveTimeoutDrift(error: unknown): boolean {
   return isTimeoutErrorMessage(liveProviderErrorText(error));
 }
 
 /** Returns whether an error is expected live missing-model drift. */
-export function isLiveModelNotFoundDrift(error: unknown): boolean {
+function isLiveModelNotFoundDrift(error: unknown): boolean {
   return isModelNotFoundErrorMessage(liveProviderErrorText(error));
 }
 
