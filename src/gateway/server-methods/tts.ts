@@ -11,7 +11,6 @@ import {
   getTtsPersona,
   getTtsProvider,
   isTtsEnabled,
-  isTtsProviderConfigured,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
   resolveTtsAutoMode,
@@ -26,6 +25,12 @@ import {
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function yieldBeforeTtsStatusDiagnostics(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 /** Gateway request handlers for TTS status, preference mutation, and synthesis. */
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond, context }) => {
@@ -36,20 +41,32 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const provider = getTtsProvider(config, prefsPath);
       const persona = getTtsPersona(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
-      const fallbackProviders = resolveTtsProviderOrder(provider, cfg)
-        .slice(1)
-        .filter((candidate) => isTtsProviderConfigured(config, candidate, cfg));
-      // Report configured state per provider so the UI can explain why fallback
-      // order differs from the complete provider registry.
-      const providerStates = listSpeechProviders(cfg).map((candidate) => ({
-        id: candidate.id,
-        label: candidate.label,
-        configured: candidate.isConfigured({
+      await yieldBeforeTtsStatusDiagnostics();
+      const speechProviders = listSpeechProviders(cfg);
+      const configuredByProvider = new Map<string, boolean>();
+      const isProviderConfigured = (candidate: (typeof speechProviders)[number]) => {
+        const cached = configuredByProvider.get(candidate.id);
+        if (cached !== undefined) {
+          return cached;
+        }
+        const configured = candidate.isConfigured({
           cfg,
           providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
           timeoutMs: config.timeoutMs,
-        }),
+        });
+        configuredByProvider.set(candidate.id, configured);
+        return configured;
+      };
+      // Provider diagnostics can cold-load plugin metadata, so the same pass
+      // feeds UI state and fallback filtering instead of rescanning providers.
+      const providerStates = speechProviders.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        configured: isProviderConfigured(candidate),
       }));
+      const fallbackProviders = resolveTtsProviderOrder(provider, cfg, speechProviders)
+        .slice(1)
+        .filter((candidate) => configuredByProvider.get(candidate) === true);
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
         auto: autoMode,
