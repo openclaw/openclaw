@@ -416,4 +416,117 @@ describe("Feishu webhook signed-request e2e", () => {
       },
     );
   });
+
+  it("accepts encrypted url_verification challenges without signature header (Feishu deadlock fix)", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "challenge-no-signature",
+        path: "/hook-e2e-challenge-no-signature",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        // Feishu URL verification sends encrypted challenge WITHOUT signature headers
+        // This is the bootstrap phase that caused the deadlock reported in #58905
+        const encryptedChallenge = encryptFeishuPayload("encrypt_key", {
+          type: "url_verification",
+          challenge: "test-challenge-no-sig",
+        });
+        const rawBody = JSON.stringify({
+          encrypt: encryptedChallenge,
+          timestamp: "1711111111",
+          token: "verify_token",
+        });
+
+        // NO X-Lark-Signature header - this is the key difference from the signed test
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // Intentionally omitting X-Lark-Signature, X-Lark-Request-Timestamp, X-Lark-Request-Nonce
+          },
+          body: rawBody,
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          challenge: "test-challenge-no-sig",
+        });
+      },
+    );
+  });
+
+  it("rejects encrypted challenge with wrong verification token", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "wrong-token",
+        path: "/hook-e2e-wrong-token",
+        verificationToken: "correct_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        // Challenge with incorrect token should be rejected
+        const encryptedChallenge = encryptFeishuPayload("encrypt_key", {
+          type: "url_verification",
+          challenge: "test-challenge-wrong-token",
+        });
+        const rawBody = JSON.stringify({
+          encrypt: encryptedChallenge,
+          timestamp: "1711111111",
+          token: "wrong_token", // Incorrect token
+        });
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: rawBody,
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid token");
+      },
+    );
+  });
+
+  it("rejects malformed encrypt payload without signature header with 400", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "malformed-encrypt",
+        path: "/hook-e2e-malformed-encrypt",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        // Invalid base64 in encrypt field
+        const rawBody = JSON.stringify({
+          encrypt: "!!!invalid-base64!!!",
+          timestamp: "1711111111",
+          token: "verify_token",
+        });
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // NO signature headers
+          },
+          body: rawBody,
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.text()).toBe("Invalid encrypt payload");
+      },
+    );
+  });
 });
