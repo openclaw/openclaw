@@ -230,7 +230,9 @@ private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
     GatewayNodeApprovalState.PendingReapproval,
     GatewayNodeApprovalState.Unapproved,
     -> ClawStatus.Warning
-    GatewayNodeApprovalState.Unknown -> if (node.connected) ClawStatus.Neutral else ClawStatus.Warning
+    GatewayNodeApprovalState.Loading,
+    GatewayNodeApprovalState.Unsupported,
+    -> if (node.connected) ClawStatus.Neutral else ClawStatus.Warning
   }
 
 private fun nodeApprovalSubtitle(approvalState: GatewayNodeApprovalState): String? =
@@ -239,7 +241,9 @@ private fun nodeApprovalSubtitle(approvalState: GatewayNodeApprovalState): Strin
     GatewayNodeApprovalState.PendingApproval -> "Capability approval pending"
     GatewayNodeApprovalState.PendingReapproval -> "Capability reapproval pending"
     GatewayNodeApprovalState.Unapproved -> "Capability unapproved"
-    GatewayNodeApprovalState.Unknown -> null
+    GatewayNodeApprovalState.Loading,
+    GatewayNodeApprovalState.Unsupported,
+    -> null
   }
 
 private fun pendingDeviceSubtitle(device: GatewayPendingDeviceSummary): String {

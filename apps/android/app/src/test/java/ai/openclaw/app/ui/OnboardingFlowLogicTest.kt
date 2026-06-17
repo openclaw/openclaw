@@ -2,6 +2,9 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,8 +39,22 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun allowsFinishWhenOlderGatewayOmitsNodeCapabilityApprovalState() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unknown))
+  fun blocksFinishWhileDelayedNodeListResolvesPendingApproval() =
+    runTest {
+      val delayedNodeList = CompletableDeferred<GatewayNodeApprovalState>()
+      var approvalState = GatewayNodeApprovalState.Loading
+      val refresh = launch { approvalState = delayedNodeList.await() }
+
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+
+      delayedNodeList.complete(GatewayNodeApprovalState.PendingApproval)
+      refresh.join()
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+    }
+
+  @Test
+  fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
   }
 
   @Test
@@ -120,6 +137,19 @@ class OnboardingFlowLogicTest {
         statusText = "Connected",
         connectSettling = false,
         nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+      ),
+    )
+  }
+
+  @Test
+  fun showsFinishingStateWhileNodeApprovalLoads() {
+    assertEquals(
+      GatewayRecoveryUiState.Finishing,
+      gatewayRecoveryUiState(
+        ready = false,
+        statusText = "Connected",
+        connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
       ),
     )
   }

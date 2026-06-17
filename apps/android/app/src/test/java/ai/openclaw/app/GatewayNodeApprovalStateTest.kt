@@ -2,7 +2,9 @@ package ai.openclaw.app
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GatewayNodeApprovalStateTest {
@@ -12,7 +14,8 @@ class GatewayNodeApprovalStateTest {
     assertEquals(GatewayNodeApprovalState.PendingApproval, parseGatewayNodeApprovalState("pending-approval"))
     assertEquals(GatewayNodeApprovalState.PendingReapproval, parseGatewayNodeApprovalState("pending-reapproval"))
     assertEquals(GatewayNodeApprovalState.Unapproved, parseGatewayNodeApprovalState("unapproved"))
-    assertEquals(GatewayNodeApprovalState.Unknown, parseGatewayNodeApprovalState(null))
+    assertEquals(GatewayNodeApprovalState.Loading, parseGatewayNodeApprovalState(null))
+    assertEquals(GatewayNodeApprovalState.Loading, parseGatewayNodeApprovalState("future-state"))
   }
 
   @Test
@@ -42,14 +45,18 @@ class GatewayNodeApprovalStateTest {
   }
 
   @Test
-  fun treatsMissingNodeApprovalStateAsUnknown() {
+  fun treatsMissingNodeApprovalStateAsUnsupported() {
     val node =
       parseGatewayNodeSummary(
         Json.parseToJsonElement("""{"nodeId":"android-node","paired":true,"connected":true}"""),
       )
 
     requireNotNull(node)
-    assertEquals(GatewayNodeApprovalState.Unknown, node.approvalState)
+    assertEquals(GatewayNodeApprovalState.Unsupported, node.approvalState)
+    assertEquals(
+      GatewayNodeApprovalState.Unsupported,
+      currentNodeCapabilityApprovalState(nodes = listOf(node), selfNodeId = "android-node"),
+    )
     assertNull(node.pendingRequestId)
   }
 
@@ -90,8 +97,22 @@ class GatewayNodeApprovalStateTest {
       currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "self"),
     )
     assertEquals(
-      GatewayNodeApprovalState.Unknown,
+      GatewayNodeApprovalState.Loading,
       currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "missing"),
     )
+  }
+
+  @Test
+  fun ignoresStaleNodeApprovalRefreshResults() {
+    val guard = GatewayNodeApprovalRefreshGuard()
+    var approvalState = GatewayNodeApprovalState.Loading
+    val staleRefresh = guard.begin()
+    val currentRefresh = guard.begin()
+
+    assertFalse(guard.publishIfCurrent(staleRefresh) { approvalState = GatewayNodeApprovalState.Approved })
+    assertTrue(
+      guard.publishIfCurrent(currentRefresh) { approvalState = GatewayNodeApprovalState.PendingReapproval },
+    )
+    assertEquals(GatewayNodeApprovalState.PendingReapproval, approvalState)
   }
 }

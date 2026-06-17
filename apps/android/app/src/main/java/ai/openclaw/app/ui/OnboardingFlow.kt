@@ -1114,7 +1114,7 @@ internal fun gatewayRecoveryUiState(
   ready: Boolean,
   statusText: String,
   connectSettling: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState = GatewayNodeApprovalState.Unknown,
+  nodeCapabilityApprovalState: GatewayNodeApprovalState = GatewayNodeApprovalState.Loading,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {
@@ -1126,6 +1126,7 @@ internal fun gatewayRecoveryUiState(
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading -> GatewayRecoveryUiState.Finishing
     connectSettling -> GatewayRecoveryUiState.Finishing
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
     gatewayStatusLooksLikePartialConnect(statusText) -> GatewayRecoveryUiState.Finishing
@@ -1222,6 +1223,8 @@ private fun recoveryGatewayDetail(
       nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
     ) {
       "Gateway paired. Waiting for node capability approval."
+    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+      "Gateway paired. Checking node capability approval."
     } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
       recoveryGatewayApprovalCommand(gatewayConnectionProblem)
         ?.let { "Gateway approval is pending. Run this on the gateway host:" }
@@ -1294,7 +1297,7 @@ private class PermissionState(
   val applyToViewModel: () -> Unit,
 )
 
-/** Onboarding finishes on ready channels unless the gateway explicitly reports node approval is pending. */
+/** Onboarding finishes only after the gateway resolves node capability approval. */
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
@@ -1306,9 +1309,10 @@ internal fun canFinishOnboarding(
       GatewayNodeApprovalState.PendingApproval,
       GatewayNodeApprovalState.PendingReapproval,
       GatewayNodeApprovalState.Unapproved,
+      GatewayNodeApprovalState.Loading,
       -> false
       GatewayNodeApprovalState.Approved,
-      GatewayNodeApprovalState.Unknown,
+      GatewayNodeApprovalState.Unsupported,
       -> true
     }
 
