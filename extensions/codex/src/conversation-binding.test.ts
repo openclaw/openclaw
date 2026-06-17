@@ -287,6 +287,51 @@ describe("codex conversation binding", () => {
     });
   });
 
+  it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/resume") {
+          throw new Error("thread/resume should not receive network proxy config");
+        }
+        return conversationThreadStartResult("thread-new");
+      }),
+    });
+
+    await startCodexConversationThread({
+      pluginConfig: {
+        appServer: {
+          networkProxy: {
+            enabled: true,
+            domains: { "api.openai.com": "allow" },
+            allowUpstreamProxy: true,
+            proxyUrl: "http://127.0.0.1:3128",
+          },
+        },
+      },
+      sessionFile,
+      threadId: "thread-old",
+      workspaceDir: tempDir,
+      model: "gpt-5.4-mini",
+      modelProvider: "openai",
+    });
+
+    expect(requests.map((request) => request.method)).toEqual(["thread/start"]);
+    expect(requests[0]?.params).not.toHaveProperty("threadId");
+    expect(requests[0]?.params).not.toHaveProperty("sandbox");
+    expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
+    const bindingAfterStart = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    ) as Record<string, unknown>;
+    expect(bindingAfterStart.threadId).toBe("thread-new");
+    expect(bindingAfterStart.networkProxyProfileName).toBe("openclaw-network");
+    expect(bindingAfterStart.networkProxyConfigFingerprint).toBe(
+      NETWORK_PROXY_CONFIG_FINGERPRINT,
+    );
+  });
+
   it("preserves Codex auth and omits the public OpenAI provider for native bind threads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({

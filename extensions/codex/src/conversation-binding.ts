@@ -158,6 +158,8 @@ async function resolveConversationAppServerRuntime(params: {
 }
 
 const CODEX_CONVERSATION_GLOBAL_STATE = Symbol.for("openclaw.codex.conversationBinding");
+const CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS =
+  "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.";
 
 function getGlobalState(): CodexConversationGlobalState {
   const globalState = globalThis as typeof globalThis & {
@@ -451,6 +453,26 @@ function codexConversationSandboxOrPermissions(
   return { sandbox };
 }
 
+async function requestNewConversationBindingThread(
+  params: CodexThreadBindingParams,
+  resolved: CodexThreadBindingRuntime,
+): Promise<CodexThreadStartResponse> {
+  return await resolved.client.request(
+    "thread/start",
+    {
+      cwd: params.workspaceDir,
+      ...(resolved.model ? { model: resolved.model } : {}),
+      ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+      personality: CODEX_NATIVE_PERSONALITY_NONE,
+      ...buildThreadRequestRuntimeOptions(params, resolved),
+      developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
+      experimentalRawEvents: true,
+      persistExtendedHistory: true,
+    },
+    { timeoutMs: resolved.runtime.requestTimeoutMs },
+  );
+}
+
 async function writeThreadBindingFromResponse(
   params: CodexThreadBindingParams,
   resolved: CodexThreadBindingRuntime,
@@ -495,18 +517,23 @@ async function attachExistingThread(
 ): Promise<void> {
   const resolved = await resolveThreadBindingRuntime(params);
   try {
-    const response: CodexThreadResumeResponse = await resolved.client.request(
-      CODEX_CONTROL_METHODS.resumeThread,
-      {
-        threadId: params.threadId,
-        ...(resolved.model ? { model: resolved.model } : {}),
-        ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-        personality: CODEX_NATIVE_PERSONALITY_NONE,
-        ...buildThreadRequestRuntimeOptions(params, resolved),
-        persistExtendedHistory: true,
-      },
-      { timeoutMs: resolved.runtime.requestTimeoutMs },
-    );
+    // Codex applies network-proxy permission profiles at thread/start. Resuming
+    // an arbitrary existing thread cannot prove that profile is active.
+    const response: CodexThreadResumeResponse | CodexThreadStartResponse =
+      resolved.runtime.networkProxy
+        ? await requestNewConversationBindingThread(params, resolved)
+        : await resolved.client.request(
+            CODEX_CONTROL_METHODS.resumeThread,
+            {
+              threadId: params.threadId,
+              ...(resolved.model ? { model: resolved.model } : {}),
+              ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+              personality: CODEX_NATIVE_PERSONALITY_NONE,
+              ...buildThreadRequestRuntimeOptions(params, resolved),
+              persistExtendedHistory: true,
+            },
+            { timeoutMs: resolved.runtime.requestTimeoutMs },
+          );
     await writeThreadBindingFromResponse(params, resolved, response);
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
@@ -516,21 +543,7 @@ async function attachExistingThread(
 async function createThread(params: CodexThreadBindingParams): Promise<void> {
   const resolved = await resolveThreadBindingRuntime(params);
   try {
-    const response: CodexThreadStartResponse = await resolved.client.request(
-      "thread/start",
-      {
-        cwd: params.workspaceDir,
-        ...(resolved.model ? { model: resolved.model } : {}),
-        ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-        personality: CODEX_NATIVE_PERSONALITY_NONE,
-        ...buildThreadRequestRuntimeOptions(params, resolved),
-        developerInstructions:
-          "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
-        experimentalRawEvents: true,
-        persistExtendedHistory: true,
-      },
-      { timeoutMs: resolved.runtime.requestTimeoutMs },
-    );
+    const response = await requestNewConversationBindingThread(params, resolved);
     await writeThreadBindingFromResponse(params, resolved, response);
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
@@ -639,8 +652,7 @@ async function runBoundTurn(params: {
               ? { config: modelScopedRuntime.networkProxy.configPatch }
               : { sandbox }),
             ...(serviceTier ? { serviceTier } : {}),
-            developerInstructions:
-              "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
+            developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
             experimentalRawEvents: true,
             persistExtendedHistory: true,
           },
