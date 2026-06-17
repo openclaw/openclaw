@@ -417,7 +417,12 @@ module.exports = {
           true,
         );
         expect(next.status).toBe("done");
-        expect(wizardOpts).toEqual(expect.objectContaining({ skipUi: true }));
+        expect(wizardOpts).toEqual(
+          expect.objectContaining({
+            flow: "advanced",
+            skipUi: true,
+          }),
+        );
 
         await expect
           .poll(

@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { resolveControlUiLinks, waitForGatewayReachable } from "../commands/onboard-helpers.js";
-import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -29,62 +28,10 @@ export type AgentAssistedGatewayRuntime = {
   stop: () => Promise<void>;
 };
 
-const NOOP_GATEWAY_RUNTIME: AgentAssistedGatewayRuntime = {
-  temporary: false,
-  stop: async () => {},
-};
-
-type ExistingGatewayProbe = {
-  matches: boolean;
-  reachable: boolean;
-};
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function snapshotMatchesGatewaySettings(params: {
-  configSnapshot: unknown;
-  settings: GatewayWizardSettings;
-}): boolean {
-  if (params.settings.authMode === "trusted-proxy") {
-    return false;
-  }
-  const snapshot = asRecord(params.configSnapshot);
-  const config = asRecord(snapshot?.config);
-  const gateway = asRecord(config?.gateway);
-  const auth = asRecord(gateway?.auth);
-  const tailscale = asRecord(gateway?.tailscale);
-  return (
-    typeof snapshot?.path === "string" &&
-    path.resolve(snapshot.path) === path.resolve(resolveConfigPath()) &&
-    gateway?.port === params.settings.port &&
-    gateway.bind === params.settings.bind &&
-    gateway.customBindHost === params.settings.customBindHost &&
-    auth?.mode === params.settings.authMode &&
-    (tailscale?.mode ?? "off") === params.settings.tailscaleMode &&
-    (tailscale?.resetOnExit === true) === params.settings.tailscaleResetOnExit
-  );
-}
-
-function buildInvalidProbeAuth(settings: GatewayWizardSettings): GatewayProbeAuth | undefined {
-  const invalidSecret = `openclaw-setup-invalid-${randomUUID()}`;
-  if (settings.authMode === "token") {
-    return { token: invalidSecret };
-  }
-  if (settings.authMode === "password" || settings.authMode === "trusted-proxy") {
-    return { password: invalidSecret };
-  }
-  return undefined;
-}
-
 async function probeExistingGateway(params: {
   url: string;
   auth: GatewayProbeAuth;
-  settings: GatewayWizardSettings;
-}): Promise<ExistingGatewayProbe> {
+}): Promise<boolean> {
   // Do not let cached device credentials prove a listener that rejects the
   // active config's shared secret. The synthetic state path is never created.
   const env = {
@@ -95,32 +42,10 @@ async function probeExistingGateway(params: {
     url: params.url,
     auth: params.auth,
     timeoutMs: 1500,
-    detailLevel: "full",
-    env,
-  });
-  if (!expected.ok) {
-    return { matches: false, reachable: false };
-  }
-  if (
-    !snapshotMatchesGatewaySettings({
-      configSnapshot: expected.configSnapshot,
-      settings: params.settings,
-    })
-  ) {
-    return { matches: false, reachable: true };
-  }
-  const invalidAuth = buildInvalidProbeAuth(params.settings);
-  if (!invalidAuth) {
-    return { matches: true, reachable: true };
-  }
-  const invalid = await probeGateway({
-    url: params.url,
-    auth: invalidAuth,
-    timeoutMs: 1500,
     detailLevel: "none",
     env,
   });
-  return { matches: !invalid.ok, reachable: true };
+  return expected.ok;
 }
 
 function collectOutputTail(child: ChildProcess): () => string {
@@ -207,16 +132,12 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     });
   };
 
-  const existing = await probeExistingGateway({
+  const existingReachable = await probeExistingGateway({
     url: links.wsUrl,
     auth,
-    settings: params.settings,
   });
-  if (existing.matches) {
-    return NOOP_GATEWAY_RUNTIME;
-  }
   if (
-    existing.reachable ||
+    existingReachable ||
     findVerifiedGatewayListenerPidsOnPortSync(params.settings.port).length > 0
   ) {
     throw new Error(

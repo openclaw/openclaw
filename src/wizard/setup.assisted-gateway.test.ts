@@ -33,10 +33,6 @@ vi.mock("../gateway/probe.js", () => ({
   probeGateway,
 }));
 
-vi.mock("../config/paths.js", () => ({
-  resolveConfigPath: () => "/tmp/openclaw.json",
-}));
-
 vi.mock("../process/kill-tree.js", () => ({
   killProcessTree,
 }));
@@ -90,50 +86,8 @@ describe("agent-assisted Gateway runtime", () => {
     });
   });
 
-  it("reuses an already reachable Gateway", async () => {
-    probeGateway
-      .mockResolvedValueOnce({
-        ok: true,
-        configSnapshot: {
-          path: "/tmp/openclaw.json",
-          config: {
-            gateway: {
-              port: 18789,
-              bind: "loopback",
-              auth: { mode: "token" },
-            },
-          },
-        },
-      })
-      .mockResolvedValueOnce({ ok: false });
-
-    const result = await ensureAgentAssistedGatewayRuntime({
-      config: {},
-      settings,
-      prompter: createWizardPrompter(),
-    });
-
-    expect(result.temporary).toBe(false);
-    expect(spawn).not.toHaveBeenCalled();
-    expect(waitForGatewayReachable).not.toHaveBeenCalled();
-  });
-
-  it("rejects a reachable Gateway whose runtime auth does not match the active config", async () => {
-    probeGateway
-      .mockResolvedValueOnce({
-        ok: true,
-        configSnapshot: {
-          path: "/tmp/openclaw.json",
-          config: {
-            gateway: {
-              port: 18789,
-              bind: "loopback",
-              auth: { mode: "token" },
-            },
-          },
-        },
-      })
-      .mockResolvedValueOnce({ ok: true });
+  it("rejects an already reachable Gateway whose active security policy cannot be verified", async () => {
+    probeGateway.mockResolvedValueOnce({ ok: true });
 
     await expect(
       ensureAgentAssistedGatewayRuntime({
@@ -143,6 +97,23 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
+    expect(spawn).not.toHaveBeenCalled();
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it("rejects a verified Gateway listener that does not accept the active auth", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([4321]);
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(probeGateway).toHaveBeenCalledOnce();
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -169,78 +140,6 @@ describe("agent-assisted Gateway runtime", () => {
     ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it("rejects reuse for a reachable trusted-proxy Gateway", async () => {
-    probeGateway.mockResolvedValueOnce({
-      ok: true,
-      configSnapshot: {
-        path: "/tmp/openclaw.json",
-        config: {
-          gateway: {
-            port: 18789,
-            bind: "loopback",
-            auth: {
-              mode: "trusted-proxy",
-              trustedProxy: { userHeader: "x-forwarded-user" },
-            },
-          },
-        },
-      },
-    });
-
-    await expect(
-      ensureAgentAssistedGatewayRuntime({
-        config: {
-          gateway: {
-            auth: {
-              mode: "trusted-proxy",
-              trustedProxy: { userHeader: "x-forwarded-user" },
-            },
-          },
-        },
-        settings: {
-          ...settings,
-          authMode: "trusted-proxy",
-          gatewayToken: undefined,
-        },
-        prompter: createWizardPrompter(),
-      }),
-    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
-
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it("rejects reuse when the Tailscale exposure mode does not match", async () => {
-    probeGateway
-      .mockResolvedValueOnce({
-        ok: true,
-        configSnapshot: {
-          path: "/tmp/openclaw.json",
-          config: {
-            gateway: {
-              port: 18789,
-              bind: "loopback",
-              auth: { mode: "token" },
-              tailscale: { mode: "off" },
-            },
-          },
-        },
-      })
-      .mockResolvedValueOnce({ ok: false });
-
-    await expect(
-      ensureAgentAssistedGatewayRuntime({
-        config: {},
-        settings: {
-          ...settings,
-          tailscaleMode: "serve",
-        },
-        prompter: createWizardPrompter(),
-      }),
-    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
-
     expect(spawn).not.toHaveBeenCalled();
   });
 
