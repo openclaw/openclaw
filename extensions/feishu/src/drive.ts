@@ -347,7 +347,7 @@ async function listFolder(client: Lark.Client, folderToken?: string, opts?: { pa
       throw new Error(res.msg);
     }
     const files = (res.data?.files ?? []).map((f) => ({
-      token: f.token, name: f.name, type: f.type, url: f.url,
+      token: f.token, name: f.name, type: f.type as number, url: f.url,
       created_time: f.created_time, modified_time: f.modified_time, owner_id: f.owner_id,
     }));
     allFiles.push(...files);
