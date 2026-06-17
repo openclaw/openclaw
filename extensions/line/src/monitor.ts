@@ -175,15 +175,6 @@ export async function monitorLineProvider(
     throw new Error("LINE webhook mode requires a non-empty channel secret.");
   }
 
-  recordChannelRuntimeState({
-    channel: "line",
-    accountId: resolvedAccountId,
-    state: {
-      running: true,
-      lastStartAt: Date.now(),
-    },
-  });
-
   const bot = createLineBot({
     channelAccessToken: token,
     channelSecret: secret,
@@ -470,6 +461,15 @@ export async function monitorLineProvider(
           requestLifecycle.release();
         }
       },
+    },
+  });
+
+  recordChannelRuntimeState({
+    channel: "line",
+    accountId: resolvedAccountId,
+    state: {
+      running: true,
+      lastStartAt: Date.now(),
     },
   });
 

@@ -68,6 +68,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions.ts",
   "src/infra/outbound/message-action-tts.ts",
+  "src/tui/embedded-backend.ts",
 ]);
 
 export const migratedBundledPluginSessionAccessorFiles = new Set([
@@ -98,6 +99,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-reset-model.ts",
   "src/auto-reply/reply/session-updates.ts",
   "src/auto-reply/reply/session-usage.ts",
+  "src/tui/embedded-backend.ts",
 ]);
 
 export const migratedTranscriptWriterFiles = new Set([
@@ -290,8 +292,13 @@ export async function main() {
     "src/cron",
     "src/gateway",
     "src/infra",
+    "src/tui",
   ]);
-  const writeSourceRoots = resolveSourceRoots(repoRoot, ["src/agents", "src/auto-reply"]);
+  const writeSourceRoots = resolveSourceRoots(repoRoot, [
+    "src/agents",
+    "src/auto-reply",
+    "src/tui",
+  ]);
   const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, [
     "src/agents/command",
     "src/agents/embedded-agent-runner",

@@ -146,62 +146,67 @@ export async function startClickClackGatewayAccount(
   });
   let afterCursor = "";
   let initialized = false;
-  while (!ctx.abortSignal.aborted) {
-    const backlog = await client.events(workspaceId, afterCursor);
-    if (!initialized) {
-      // First pass establishes the cursor without replaying historical backlog
-      // into fresh gateway sessions.
-      for (const event of backlog) {
-        afterCursor = event.cursor || afterCursor;
-      }
-      initialized = true;
-    } else {
-      for (const event of backlog) {
-        afterCursor = event.cursor || afterCursor;
-        await processEvent({
-          account,
-          config: ctx.cfg,
-          client,
-          event,
-          botUserId: account.botUserId,
-        });
-      }
-    }
-    const socket = client.websocket(workspaceId, afterCursor);
-    await new Promise<void>((resolve, reject) => {
-      const abort = () => {
-        socket.close();
-        resolve();
-      };
-      ctx.abortSignal.addEventListener("abort", abort, { once: true });
-      socket.on("message", (data) => {
-        void (async () => {
-          const event = parseSocketEvent(data);
-          if (!event) {
-            ctx.log?.warn?.(`[${account.accountId}] skipped malformed ClickClack websocket event`);
-            return;
-          }
+  try {
+    while (!ctx.abortSignal.aborted) {
+      const backlog = await client.events(workspaceId, afterCursor);
+      if (!initialized) {
+        // First pass establishes the cursor without replaying historical backlog
+        // into fresh gateway sessions.
+        for (const event of backlog) {
+          afterCursor = event.cursor || afterCursor;
+        }
+        initialized = true;
+      } else {
+        for (const event of backlog) {
           afterCursor = event.cursor || afterCursor;
           await processEvent({
             account,
             config: ctx.cfg,
             client,
             event,
-            botUserId: account.botUserId ?? "",
+            botUserId: account.botUserId,
           });
-        })().catch(reject);
+        }
+      }
+      const socket = client.websocket(workspaceId, afterCursor);
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => {
+          socket.close();
+          resolve();
+        };
+        ctx.abortSignal.addEventListener("abort", abort, { once: true });
+        socket.on("message", (data) => {
+          void (async () => {
+            const event = parseSocketEvent(data);
+            if (!event) {
+              ctx.log?.warn?.(
+                `[${account.accountId}] skipped malformed ClickClack websocket event`,
+              );
+              return;
+            }
+            afterCursor = event.cursor || afterCursor;
+            await processEvent({
+              account,
+              config: ctx.cfg,
+              client,
+              event,
+              botUserId: account.botUserId ?? "",
+            });
+          })().catch(reject);
+        });
+        socket.on("close", () => {
+          ctx.abortSignal.removeEventListener("abort", abort);
+          resolve();
+        });
+        socket.on("error", reject);
       });
-      socket.on("close", () => {
-        ctx.abortSignal.removeEventListener("abort", abort);
-        resolve();
-      });
-      socket.on("error", reject);
-    });
-    if (!ctx.abortSignal.aborted) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, account.reconnectMs);
-      });
+      if (!ctx.abortSignal.aborted) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, account.reconnectMs);
+        });
+      }
     }
+  } finally {
+    ctx.setStatus({ accountId: account.accountId, running: false });
   }
-  ctx.setStatus({ accountId: account.accountId, running: false });
 }

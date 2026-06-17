@@ -16,6 +16,7 @@ const DEFAULT_ITERATIONS = 10;
 export const READY_TIMEOUT_MS = 120_000;
 /** Per-probe timeout used while polling gateway readiness endpoints. */
 export const READY_PROBE_TIMEOUT_MS = 1_000;
+const GATEWAY_FORCE_KILL_GRACE_MS = 250;
 const PARENT_TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const IS_DIRECT_RUN =
   typeof process.argv[1] === "string" &&
@@ -320,10 +321,12 @@ export async function stopGateway(child, options = {}) {
     return;
   }
   const killGraceMs = Math.max(0, options.killGraceMs ?? 1_500);
+  const forceKillGraceMs = Math.max(0, options.forceKillGraceMs ?? GATEWAY_FORCE_KILL_GRACE_MS);
   signalGatewayProcess(child, "SIGTERM", options.killProcess);
   const exited = await waitForGatewayExit(child, killGraceMs, options.killProcess);
   if (!exited) {
     signalGatewayProcess(child, "SIGKILL", options.killProcess);
+    await waitForGatewayExit(child, forceKillGraceMs, options.killProcess);
   }
 }
 

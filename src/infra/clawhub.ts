@@ -386,27 +386,6 @@ export type ClawHubSkillSecurityVerdictsResponse = {
   items: ClawHubSkillSecurityVerdictItem[];
 };
 
-export type ClawHubSkillListResponse = {
-  items: Array<{
-    slug: string;
-    displayName: string;
-    summary?: string;
-    tags?: Record<string, string>;
-    latestVersion?: {
-      version: string;
-      createdAt: number;
-      changelog?: string;
-    } | null;
-    metadata?: {
-      os?: string[] | null;
-      systems?: string[] | null;
-    } | null;
-    createdAt: number;
-    updatedAt: number;
-  }>;
-  nextCursor?: string | null;
-};
-
 export type ClawHubDownloadResult = {
   archivePath: string;
   integrity: string;
@@ -1171,25 +1150,6 @@ export async function fetchClawHubSkillCard(params: {
   return new TextDecoder().decode(bytes);
 }
 
-export async function listClawHubSkills(params: {
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-  limit?: number;
-}): Promise<ClawHubSkillListResponse> {
-  return await fetchJson<ClawHubSkillListResponse>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/skills",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
-}
-
 export async function downloadClawHubPackageArchive(params: {
   name: string;
   version?: string;
@@ -1507,14 +1467,6 @@ function formatTelemetryRootLabel(root: string): string {
 /** Resolves the preferred latest package version from detail metadata. */
 export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): string | null {
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
-}
-
-/** Detects package or skill detail payloads that represent skill-family packages. */
-export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
-  if ("package" in detail) {
-    return detail.package?.family === "skill";
-  }
-  return Boolean(detail.skill);
 }
 
 /** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */
