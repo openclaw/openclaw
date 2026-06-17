@@ -63,21 +63,6 @@ export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
 }
 
-/** Returns true when a method requires the pairing operator scope. */
-export function isPairingMethod(method: string): boolean {
-  return resolveScopedMethod(method) === PAIRING_SCOPE;
-}
-
-/** Returns true when a method can be satisfied by read or stronger write/admin scopes. */
-export function isReadMethod(method: string): boolean {
-  return resolveScopedMethod(method) === READ_SCOPE;
-}
-
-/** Returns true when a method requires write or admin operator scope. */
-export function isWriteMethod(method: string): boolean {
-  return resolveScopedMethod(method) === WRITE_SCOPE;
-}
-
 /** Returns true when a method is reserved for node-role clients instead of operators. */
 export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);

@@ -45,6 +45,7 @@ import {
   parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
+  resolveKitchenSinkRpcPort,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
@@ -83,6 +84,11 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
   });
@@ -123,6 +129,15 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(() => readPositiveInt("0", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_PORT")).toThrow(
       'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a positive integer. Got: "0"',
     );
+  });
+
+  it("uses an explicit RPC port or asks the OS for an available fallback", async () => {
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
+    ).resolves.toBe(19080);
+    await expect(
+      resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
+    ).resolves.toBe(45678);
   });
 
   it("cleans up the generated temporary home tree", async () => {
