@@ -45,6 +45,7 @@ import {
   parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
+  resolveKitchenSinkRpcPort,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
@@ -83,6 +84,11 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
   });
@@ -123,6 +129,15 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(() => readPositiveInt("0", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_PORT")).toThrow(
       'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a positive integer. Got: "0"',
     );
+  });
+
+  it("uses an explicit RPC port or asks the OS for an available fallback", async () => {
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
+    ).resolves.toBe(19080);
+    await expect(
+      resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
+    ).resolves.toBe(45678);
   });
 
   it("cleans up the generated temporary home tree", async () => {
@@ -234,6 +249,48 @@ describe("kitchen-sink RPC gateway teardown", () => {
     ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: 0,
+      kill: vi.fn(),
+      pid: 12347,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn(() => true);
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 1 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12347, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12347, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  posixIt("rechecks process group liveness after the wrapper exits during teardown", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      kill: vi.fn(),
+      pid: 12348,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+      if (signal === "SIGTERM") {
+        setTimeout(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        }, 0);
+      }
+      return true;
+    });
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 100 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12348, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12348, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12348, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("fails readiness waits before polling after signaled gateway exits", async () => {

@@ -1,6 +1,10 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -85,6 +89,25 @@ export type {
   SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+
+export type SessionEntryPatchProjectionSnapshot = {
+  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
+};
+
+export type SessionEntryPatchProjectionTarget = {
+  candidateKeys?: readonly string[];
+  primaryKey: string;
+};
+
+export type SessionEntryPatchProjectionContext = SessionEntryPatchProjectionSnapshot &
+  SessionEntryPatchProjectionTarget & {
+    existingEntry?: SessionEntry;
+  };
+
+export type SessionEntryPatchProjectionFailure = { ok: false };
+
+export type SessionEntryPatchProjectionResult<TFailure extends SessionEntryPatchProjectionFailure> =
+  { ok: true; entry: SessionEntry } | TFailure;
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
@@ -923,6 +946,129 @@ export async function updateSessionStore<T>(
       singleEntryPersistence: opts?.resolveSingleEntryPersistence?.(result) ?? undefined,
     });
     return result;
+  });
+}
+
+function cloneSessionEntryProjectionSnapshot(
+  store: Record<string, SessionEntry>,
+): SessionEntryPatchProjectionSnapshot {
+  return {
+    entries: Object.entries(store).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry: cloneSessionEntry(entry),
+    })),
+  };
+}
+
+function resolveFreshestProjectedEntry(params: {
+  store: Record<string, SessionEntry>;
+  candidateKeys: readonly string[];
+}): SessionEntry | undefined {
+  let freshest: SessionEntry | undefined;
+  const keys = new Set<string>();
+  for (const candidateKey of params.candidateKeys) {
+    const trimmed = normalizeOptionalString(candidateKey) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    keys.add(trimmed);
+    for (const match of findSessionStoreKeysIgnoreCase(params.store, trimmed)) {
+      keys.add(match);
+    }
+  }
+  for (const key of keys) {
+    const entry = params.store[key];
+    if (!entry) {
+      continue;
+    }
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
+      freshest = entry;
+    }
+  }
+  return freshest;
+}
+
+function findSessionStoreKeysIgnoreCase(
+  store: Record<string, SessionEntry>,
+  targetKey: string,
+): string[] {
+  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
+  return Object.keys(store).filter((key) => normalizeLowercaseStringOrEmpty(key) === lowered);
+}
+
+function migrateSessionEntryProjectionTarget(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionEntryPatchProjectionTarget;
+}): void {
+  const candidateKeys = params.target.candidateKeys ?? [params.target.primaryKey];
+  const freshest = resolveFreshestProjectedEntry({
+    store: params.store,
+    candidateKeys,
+  });
+  const currentPrimary = params.store[params.target.primaryKey];
+  if (
+    freshest &&
+    (!currentPrimary || (freshest.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0))
+  ) {
+    params.store[params.target.primaryKey] = freshest;
+  }
+
+  const keysToDelete = new Set<string>();
+  for (const candidateKey of candidateKeys) {
+    const trimmed = normalizeOptionalString(candidateKey) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed !== params.target.primaryKey) {
+      keysToDelete.add(trimmed);
+    }
+    for (const match of findSessionStoreKeysIgnoreCase(params.store, trimmed)) {
+      if (match !== params.target.primaryKey) {
+        keysToDelete.add(match);
+      }
+    }
+  }
+  for (const key of keysToDelete) {
+    delete params.store[key];
+  }
+}
+
+/**
+ * Applies a storage-neutral entry projection inside the session-store writer.
+ * The projection receives a cloned snapshot and returns the replacement entry;
+ * it cannot mutate the backing whole store.
+ */
+export async function applySessionEntryPatchProjection<
+  TFailure extends SessionEntryPatchProjectionFailure,
+>(params: {
+  storePath: string;
+  resolveTarget: (
+    snapshot: SessionEntryPatchProjectionSnapshot,
+  ) => SessionEntryPatchProjectionTarget;
+  project: (
+    context: SessionEntryPatchProjectionContext,
+  ) =>
+    | Promise<SessionEntryPatchProjectionResult<TFailure>>
+    | SessionEntryPatchProjectionResult<TFailure>;
+}): Promise<SessionEntryPatchProjectionResult<TFailure>> {
+  return await runExclusiveSessionStoreWrite(params.storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(params.storePath);
+    const target = params.resolveTarget(cloneSessionEntryProjectionSnapshot(store));
+    migrateSessionEntryProjectionTarget({ store, target });
+    const projected = await params.project({
+      ...target,
+      entries: cloneSessionEntryProjectionSnapshot(store).entries,
+      ...(store[target.primaryKey]
+        ? { existingEntry: cloneSessionEntry(store[target.primaryKey]) }
+        : {}),
+    });
+    if (projected.ok) {
+      store[target.primaryKey] = cloneSessionEntry(projected.entry);
+    }
+    await saveSessionStoreUnlocked(params.storePath, store, {
+      activeSessionKey: target.primaryKey,
+    });
+    return projected.ok ? { ...projected, entry: cloneSessionEntry(projected.entry) } : projected;
   });
 }
 

@@ -3035,15 +3035,20 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 canWrite: hasOperatorWriteAccess(auth),
                 canModelOverride: hasOperatorAdminAccess(auth),
-                pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
-                  enabledByDefault: false,
-                }),
+                pluginEnabled: state.configSnapshot
+                  ? isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
+                      enabledByDefault: false,
+                    })
+                  : null,
+                pluginEnablementError:
+                  !state.configSnapshot && !state.configLoading ? state.lastError : null,
                 agentsList: state.agentsList,
                 sessions: state.sessionsResult?.sessions ?? [],
                 onOpenSession: (sessionKey) => {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
                 onRequestUpdate: requestHostUpdate,
               });
             })

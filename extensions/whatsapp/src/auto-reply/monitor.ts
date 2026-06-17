@@ -159,9 +159,6 @@ export async function monitorWebChannel(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const statusController = createWebChannelStatusController(tuning.statusSink);
-  statusController.emit();
-
   const baseCfg = getRuntimeConfig();
   const sourceCfg = getRuntimeConfigSourceSnapshot();
   const { cfg, account } = resolveWebMonitorConfigSnapshot({
@@ -234,6 +231,8 @@ export async function monitorWebChannel(
     sleep,
     isNonRetryableStatus: isNonRetryableWebCloseStatus,
   });
+  const statusController = createWebChannelStatusController(tuning.statusSink);
+  statusController.emit();
 
   try {
     while (true) {
