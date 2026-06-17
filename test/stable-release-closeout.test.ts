@@ -91,6 +91,21 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toEqual(first.manifest);
   });
 
+  it("replays an existing partial closeout using its recorded rollback drill", () => {
+    const first = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+    const replay = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      allowStaleRollbackDrill: true,
+      nowMs: Date.parse("2026-10-01T00:00:00Z"),
+    });
+
+    expect(replay.errors).toEqual([]);
+    expect(replay.manifest).toEqual(first.manifest);
+  });
+
   it("requires the canonical macOS zip, dmg, and dSYM assets", () => {
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,

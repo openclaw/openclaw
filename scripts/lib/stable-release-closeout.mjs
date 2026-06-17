@@ -87,7 +87,7 @@ function verifyRollbackDrill(params, errors) {
   const ageMs = params.nowMs - drillDateMs;
   if (ageMs < 0) {
     errors.push(`rollback drill date is in the future: ${params.rollbackDrillDate}.`);
-  } else if (ageMs > MAX_ROLLBACK_DRILL_AGE_MS) {
+  } else if (!params.allowStaleRollbackDrill && ageMs > MAX_ROLLBACK_DRILL_AGE_MS) {
     errors.push(
       `rollback drill is older than 90 days: ${params.rollbackDrillDate}. Run the private rollback drill before stable closeout.`,
     );

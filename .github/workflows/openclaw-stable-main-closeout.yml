@@ -39,6 +39,7 @@ jobs:
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
       fallback_correction: ${{ steps.inputs.outputs.fallback_correction }}
       main_ref: ${{ steps.inputs.outputs.main_ref }}
+      repair_partial_closeout: ${{ steps.inputs.outputs.repair_partial_closeout }}
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
     steps:
@@ -104,29 +105,56 @@ jobs:
           evidence_checksum_asset="${evidence_asset}.sha256"
           closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
           closeout_checksum_asset="${closeout_asset}.sha256"
-          if [[ "$EVENT_NAME" == "push" ]]; then
+          closeout_dir="$RUNNER_TEMP/release-closeout-evidence"
+          mkdir -p "$closeout_dir"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$closeout_asset" --pattern "$closeout_checksum_asset" --dir "$closeout_dir" || true
+          closeout_json_path="$closeout_dir/$closeout_asset"
+          closeout_checksum_path="$closeout_dir/$closeout_checksum_asset"
+          repair_partial_closeout=false
+          existing_closeout_full_release_validation_run_id=""
+          existing_closeout_release_publish_run_id=""
+          if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
+            expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
+            actual_closeout_digest="$(sha256sum "$closeout_json_path" | awk '{print $1}')"
+            if [[ "$expected_closeout_digest" =~ ^[0-9a-f]{64}$ &&
+              "$expected_closeout_digest" == "$actual_closeout_digest" ]]; then
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it." >&2
+            exit 1
+          fi
+          if [[ -f "$closeout_checksum_path" ]]; then
+            echo "Stable closeout evidence for $tag has a checksum without its manifest; refusing to repair it." >&2
+            exit 1
+          fi
+          if [[ -f "$closeout_json_path" ]]; then
+            existing_closeout_tag="$(jq -r '.releaseTag // empty' "$closeout_json_path")"
+            existing_closeout_main_ref="$(jq -r '.mainSha // empty' "$closeout_json_path")"
+            existing_closeout_full_release_validation_run_id="$(jq -r '.fullReleaseValidationRunId // empty' "$closeout_json_path")"
+            existing_closeout_release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$closeout_json_path")"
+            existing_closeout_rollback_drill_id="$(jq -r '.rollbackDrill.id // empty' "$closeout_json_path")"
+            existing_closeout_rollback_drill_date="$(jq -r '.rollbackDrill.date // empty' "$closeout_json_path")"
+            if [[ "$existing_closeout_tag" != "$tag" ||
+              ! "$existing_closeout_main_ref" =~ ^[0-9a-f]{40}$ ||
+              -z "$existing_closeout_full_release_validation_run_id" ||
+              -z "$existing_closeout_release_publish_run_id" ||
+              -z "$existing_closeout_rollback_drill_id" ||
+              ! "$existing_closeout_rollback_drill_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "Stable closeout manifest for $tag is incomplete; refusing to repair it." >&2
+              exit 1
+            fi
+            main_ref="$existing_closeout_main_ref"
+            ROLLBACK_DRILL_ID="$existing_closeout_rollback_drill_id"
+            ROLLBACK_DRILL_DATE="$existing_closeout_rollback_drill_date"
+            repair_partial_closeout=true
+          elif [[ "$EVENT_NAME" == "push" ]]; then
             main_version="$(jq -r '.version // empty' package.json)"
             if [[ "$main_version" != "$release_package_version" &&
               "$main_version" != "$fallback_package_version" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
-            fi
-
-            closeout_dir="$RUNNER_TEMP/release-closeout-evidence"
-            mkdir -p "$closeout_dir"
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$closeout_asset" --pattern "$closeout_checksum_asset" --dir "$closeout_dir" || true
-            closeout_json_path="$closeout_dir/$closeout_asset"
-            closeout_checksum_path="$closeout_dir/$closeout_checksum_asset"
-            if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
-              expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
-              actual_closeout_digest="$(sha256sum "$closeout_json_path" | awk '{print $1}')"
-              if [[ "$expected_closeout_digest" =~ ^[0-9a-f]{64}$ &&
-                "$expected_closeout_digest" == "$actual_closeout_digest" ]]; then
-                echo "should_closeout=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              echo "Stable closeout evidence for $tag is incomplete or invalid; refusing to skip verification." >&2
             fi
           else
             main_ref="main"
@@ -158,6 +186,12 @@ jobs:
             echo "Stable closeout is required for $tag, but postpublish evidence does not bind $evidence_source_tag to exactly one Full Release Validation run and its Publish run." >&2
             exit 1
           fi
+          if [[ "$repair_partial_closeout" == "true" &&
+            ( "$existing_closeout_full_release_validation_run_id" != "$full_release_validation_run_id" ||
+              "$existing_closeout_release_publish_run_id" != "$release_publish_run_id" ) ]]; then
+            echo "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to repair it." >&2
+            exit 1
+          fi
           if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
@@ -170,6 +204,7 @@ jobs:
             echo "evidence_tag=$evidence_source_tag"
             echo "fallback_correction=$fallback_correction"
             echo "main_ref=$main_ref"
+            echo "repair_partial_closeout=$repair_partial_closeout"
             echo "should_closeout=true"
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
@@ -285,6 +320,7 @@ jobs:
           RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
           ROLLBACK_DRILL_ID: ${{ needs.resolve.outputs.rollback_drill_id }}
           ROLLBACK_DRILL_DATE: ${{ needs.resolve.outputs.rollback_drill_date }}
+          REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}
           CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
         run: |
           set -euo pipefail
@@ -301,6 +337,7 @@ jobs:
             --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
             --rollback-drill-id "$ROLLBACK_DRILL_ID" \
             --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
+            --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"
           release_version="${RELEASE_TAG#v}"
           sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" | awk -v asset="openclaw-${release_version}-stable-main-closeout.json" \

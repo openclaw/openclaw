@@ -111,6 +111,7 @@ describe("package acceptance workflow", () => {
     const evidenceDownloadIndex = workflow.indexOf(
       'if ! gh release download "$evidence_source_tag"',
     );
+    const partialRepairIndex = workflow.indexOf('if [[ -f "$closeout_json_path" ]]; then');
 
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
@@ -137,8 +138,16 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('expected_closeout_digest="$(awk');
     expect(workflow).toContain('actual_closeout_digest="$(sha256sum "$closeout_json_path"');
     expect(workflow).toContain(
-      "Stable closeout evidence for $tag is incomplete or invalid; refusing to skip verification.",
+      "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it.",
     );
+    expect(workflow).toContain("repair_partial_closeout=false");
+    expect(workflow).toContain(
+      "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to repair it.",
+    );
+    expect(workflow).toContain(
+      "REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}",
+    );
+    expect(workflow).toContain('--allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT"');
     expect(workflow).toContain(
       'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
     );
@@ -146,6 +155,8 @@ describe("package acceptance workflow", () => {
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
     expect(releaseVersionGateIndex).toBeGreaterThan(-1);
+    expect(partialRepairIndex).toBeGreaterThan(-1);
+    expect(partialRepairIndex).toBeLessThan(releaseVersionGateIndex);
     expect(evidenceDownloadIndex).toBeGreaterThan(releaseVersionGateIndex);
   });
 

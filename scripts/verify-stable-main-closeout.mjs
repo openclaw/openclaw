@@ -67,6 +67,7 @@ function main() {
     releasePublishRunId: args["release-publish-run-id"],
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
+    allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",
     nowMs: Date.now(),
   });
   if (result.errors.length > 0 || !result.manifest) {
