@@ -22,14 +22,6 @@ export function migrateLegacyNotifyFallback(params: {
     ? normalizeHttpWebhookUrl(configuredLegacyWebhook)
     : undefined;
 
-  const warnMissingLegacyWebhook = (jobName: string) => {
-    warnings.push(
-      configuredLegacyWebhook
-        ? `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`
-        : `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-    );
-  };
-
   for (const raw of params.jobs) {
     if (!("notify" in raw)) {
       continue;
@@ -77,13 +69,14 @@ export function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
+    if (configuredLegacyWebhook && !legacyWebhook) {
+      // Keep the marker so doctor can retry after the operator fixes the target.
+      warnings.push(
+        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`,
+      );
+      continue;
+    }
     if (!legacyWebhook) {
-      if (configuredLegacyWebhook) {
-        // Keep the marker when the configured target is invalid so doctor can retry
-        // after the operator fixes it.
-        warnMissingLegacyWebhook(jobName);
-        continue;
-      }
       // Without a configured target, the top-level marker cannot affect delivery.
       delete raw.notify;
       changed = true;
