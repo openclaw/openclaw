@@ -380,7 +380,7 @@ describe("Codex app-server config", () => {
     ).toThrow("appServer.url is required");
   });
 
-  it("marks authenticated non-loopback websocket app-servers as remote read-only runtimes", () => {
+  it("marks authenticated non-loopback websocket app-servers as remote runtimes", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
@@ -398,7 +398,6 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       connectionClass: "remote",
       remoteAppsSubstrate: "preconfigured",
-      remoteMutationPolicy: "read-only",
       remoteWorkspace: {
         localRoot: "/Users/kevinlin/code/openclaw",
         remoteRoot: "/home/oai/openclaw-workspaces",
@@ -418,7 +417,6 @@ describe("Codex app-server config", () => {
 
     expectFields(runtime, "runtime", {
       connectionClass: "local-loopback",
-      remoteMutationPolicy: "install-and-refresh",
     });
   });
 

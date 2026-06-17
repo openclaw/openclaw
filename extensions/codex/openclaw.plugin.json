@@ -161,10 +161,6 @@
             "type": "array",
             "items": { "type": "string" }
           },
-          "remoteMutationPolicy": {
-            "type": "string",
-            "enum": ["read-only", "install-and-refresh"]
-          },
           "remoteWorkspace": {
             "type": "object",
             "additionalProperties": false,
@@ -397,11 +393,6 @@
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
-      "advanced": true
-    },
-    "appServer.remoteMutationPolicy": {
-      "label": "Remote Mutation Policy",
-      "help": "Controls whether OpenClaw may install or refresh plugins on the remote Codex app-server. Use read-only for preconfigured remote servers.",
       "advanced": true
     },
     "appServer.remoteWorkspace": {

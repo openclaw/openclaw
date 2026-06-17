@@ -5,11 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
-import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  type CodexAppServerRemoteMutationPolicy,
-  type ResolvedCodexPluginPolicy,
-} from "./config.js";
+import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
 import {
   findOpenAiCuratedPluginSummary,
   pluginReadParams,
@@ -25,7 +21,6 @@ export type CodexPluginActivationReason =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
-  | "preconfigured_remote_missing"
   | "auth_required"
   | "refresh_failed";
 
@@ -52,7 +47,6 @@ export type EnsureCodexPluginActivationParams = {
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
   installEvenIfActive?: boolean;
-  mutationPolicy?: CodexAppServerRemoteMutationPolicy;
   targetAppIds?: readonly string[];
 };
 
@@ -98,28 +92,6 @@ export async function ensureCodexPluginActivation(
       marketplace: resolved.marketplace,
       diagnostics: [],
     };
-  }
-
-  if (params.mutationPolicy === "read-only") {
-    const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
-    if (params.appCache && params.appCacheKey) {
-      refreshDiagnostics.push(
-        ...(await refreshCodexAppInventoryOnly({
-          request: params.request,
-          appCache: params.appCache,
-          appCacheKey: params.appCacheKey,
-          targetAppIds: params.targetAppIds,
-        })),
-      );
-    }
-    return activationFailure(
-      params.identity,
-      "preconfigured_remote_missing",
-      {
-        message: `${params.identity.pluginName} is not installed and enabled on the remote Codex app-server; appServer.remoteMutationPolicy=read-only requires the remote app-server to be preconfigured.`,
-      },
-      refreshDiagnostics,
-    );
   }
 
   const installResponse = (await params.request(
@@ -168,34 +140,6 @@ export async function ensureCodexPluginActivation(
       })),
     ],
   };
-}
-
-async function refreshCodexAppInventoryOnly(params: {
-  request: CodexPluginRuntimeRequest;
-  appCache: CodexAppInventoryCache;
-  appCacheKey: string;
-  targetAppIds?: readonly string[];
-}): Promise<CodexPluginActivationDiagnostic[]> {
-  params.appCache.invalidate(params.appCacheKey, "Codex remote plugin state needs app inventory refresh");
-  const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as v2.AppsListResponse;
-  try {
-    await params.appCache.refreshNow({
-      key: params.appCacheKey,
-      request,
-      forceRefetch: true,
-      targetAppIds: params.targetAppIds,
-    });
-    return [];
-  } catch (error) {
-    return [
-      {
-        message: `Codex app inventory refresh skipped: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      },
-    ];
-  }
 }
 
 /** Forces Codex plugin, skill, hook, MCP, and app inventory refreshes after activation. */

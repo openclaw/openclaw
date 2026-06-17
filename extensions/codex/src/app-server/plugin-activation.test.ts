@@ -145,39 +145,6 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
-  it("does not mutate remote read-only plugin state when a configured plugin is missing", async () => {
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const appCache = new CodexAppInventoryCache();
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      appCache,
-      appCacheKey: "remote-runtime",
-      mutationPolicy: "read-only",
-      request: async (method, params) => {
-        calls.push({ method, params });
-        if (method === "plugin/list") {
-          return pluginList([
-            pluginSummary("google-calendar", { installed: false, enabled: false }),
-          ]);
-        }
-        if (method === "app/list") {
-          expectBooleanParam(params, "forceRefetch", true);
-          return { data: [], nextCursor: null } satisfies v2.AppsListResponse;
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: false,
-      reason: "preconfigured_remote_missing",
-      installAttempted: false,
-    });
-    expect(result.diagnostics[0]?.message).toContain("remote Codex app-server");
-    expect(calls.map((call) => call.method)).toEqual(["plugin/list", "app/list"]);
-    expect(appCache.getRevision()).toBeGreaterThan(0);
-  });
-
   it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
     const appCache = new CodexAppInventoryCache();
     const result = await ensureCodexPluginActivation({

@@ -31,7 +31,6 @@ describe("Codex app-server attempt diagnostics", () => {
       sandbox: "danger-full-access" as const,
       connectionClass: "local-loopback" as const,
       remoteAppsSubstrate: "preconfigured" as const,
-      remoteMutationPolicy: "install-and-refresh" as const,
       serviceTier: "priority" as const,
     };
     const resolvedPluginPolicy = resolveCodexPluginsPolicy({

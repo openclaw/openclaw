@@ -161,7 +161,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     sandbox: "workspace-write",
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
-    remoteMutationPolicy: "install-and-refresh",
   };
 }
 
@@ -835,7 +834,6 @@ describe("Codex app-server turn params", () => {
       sandbox: "danger-full-access" as const,
       connectionClass: "local-loopback" as const,
       remoteAppsSubstrate: "preconfigured" as const,
-      remoteMutationPolicy: "install-and-refresh" as const,
       serviceTier: "flex" as const,
     };
 

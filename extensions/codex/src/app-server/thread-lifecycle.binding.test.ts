@@ -36,7 +36,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     codeModeOnly: false,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
-    remoteMutationPolicy: "install-and-refresh",
   };
 }
 
@@ -2276,7 +2275,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         sandbox: "workspace-write",
         connectionClass: "local-loopback",
         remoteAppsSubstrate: "preconfigured",
-        remoteMutationPolicy: "install-and-refresh",
       },
     });
 

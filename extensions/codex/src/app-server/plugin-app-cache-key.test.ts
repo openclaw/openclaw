@@ -87,7 +87,6 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
           headers: {},
         },
         connectionClass: "remote",
-        remoteMutationPolicy: "read-only",
         remoteWorkspace: {
           localRoot: "/Users/kevinlin/code/openclaw",
           remoteRoot: "/home/oai/openclaw-workspaces",
@@ -109,7 +108,6 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
           headers: {},
         },
         connectionClass: "remote",
-        remoteMutationPolicy: "install-and-refresh",
       },
       runtimeIdentity: {
         serverVersion: "0.20.0",

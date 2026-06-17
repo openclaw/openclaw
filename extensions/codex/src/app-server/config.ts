@@ -30,7 +30,6 @@ type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
 export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
-export type CodexAppServerRemoteMutationPolicy = "read-only" | "install-and-refresh";
 export type CodexAppServerRemoteWorkspaceMapping = {
   localRoot: string;
   remoteRoot: string;
@@ -179,7 +178,6 @@ export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   connectionClass: CodexAppServerConnectionClass;
   remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
-  remoteMutationPolicy: CodexAppServerRemoteMutationPolicy;
   remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
@@ -220,7 +218,6 @@ export type CodexPluginConfig = {
     authToken?: string;
     headers?: Record<string, string>;
     clearEnv?: string[];
-    remoteMutationPolicy?: CodexAppServerRemoteMutationPolicy;
     remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
@@ -255,7 +252,6 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
-  "remoteMutationPolicy",
   "remoteWorkspace",
   "codeModeOnly",
   "requestTimeoutMs",
@@ -303,7 +299,6 @@ const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network"
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
-const codexAppServerRemoteMutationPolicySchema = z.enum(["read-only", "install-and-refresh"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
   "on-request",
@@ -404,7 +399,6 @@ const codexPluginConfigSchema = z
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
-        remoteMutationPolicy: codexAppServerRemoteMutationPolicySchema.optional(),
         remoteWorkspace: codexAppServerRemoteWorkspaceSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
@@ -550,9 +544,6 @@ export function resolveCodexAppServerRuntimeOptions(
   const url = readNonEmptyString(config.url);
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
-  const remoteMutationPolicy =
-    resolveRemoteMutationPolicy(config.remoteMutationPolicy) ??
-    (connectionClass === "remote" ? "read-only" : "install-and-refresh");
   const remoteWorkspace = normalizeRemoteWorkspaceMapping(config.remoteWorkspace);
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
@@ -680,7 +671,6 @@ export function resolveCodexAppServerRuntimeOptions(
     },
     connectionClass,
     remoteAppsSubstrate,
-    remoteMutationPolicy,
     ...(remoteWorkspace ? { remoteWorkspace } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
@@ -1048,12 +1038,6 @@ export function withMcpElicitationsApprovalPolicy(
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
-}
-
-function resolveRemoteMutationPolicy(
-  value: unknown,
-): CodexAppServerRemoteMutationPolicy | undefined {
-  return value === "read-only" || value === "install-and-refresh" ? value : undefined;
 }
 
 function normalizeRemoteWorkspaceMapping(

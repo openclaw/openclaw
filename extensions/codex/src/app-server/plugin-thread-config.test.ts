@@ -616,7 +616,6 @@ describe("Codex plugin thread config", () => {
       appCache,
       appCacheKey: "runtime",
       request,
-      mutationPolicy: "install-and-refresh",
     });
 
     expect(config.configPatch?.apps).toMatchObject({
@@ -757,15 +756,8 @@ describe("Codex plugin thread config", () => {
       pluginConfig: { codexPlugins: { enabled: true } },
       appCacheKey: "runtime-b",
     });
-    const remoteReadOnly = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
-      appCacheKey: "runtime-a",
-      mutationPolicy: "read-only",
-    });
-
     expect(second).toBe(first);
     expect(third).not.toBe(second);
-    expect(remoteReadOnly).not.toBe(second);
   });
 
   it("uses app-level destructive policy for plugins without OpenClaw tool-name knowledge", async () => {

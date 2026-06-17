@@ -51,7 +51,6 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     sandbox: "workspace-write",
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
-    remoteMutationPolicy: "install-and-refresh",
   };
 }
 

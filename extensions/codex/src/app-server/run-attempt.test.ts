@@ -158,7 +158,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     codeModeOnly: false,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
-    remoteMutationPolicy: "install-and-refresh",
   };
 }
 

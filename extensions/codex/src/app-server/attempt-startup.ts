@@ -237,7 +237,6 @@ export async function startCodexAttemptThread(params: {
               ? buildCodexPluginThreadConfigInputFingerprint({
                   pluginConfig: pluginThreadConfigPluginConfig,
                   appCacheKey: pluginAppCacheKey,
-                  mutationPolicy: params.appServer.remoteMutationPolicy,
                 })
               : undefined;
             const attemptParams = params.buildAttemptParams();
@@ -349,7 +348,6 @@ export async function startCodexAttemptThread(params: {
                           }),
                           appCache: defaultCodexAppInventoryCache,
                           appCacheKey: pluginAppCacheKey,
-                          mutationPolicy: params.appServer.remoteMutationPolicy,
                         }),
                     }
                   : undefined,
