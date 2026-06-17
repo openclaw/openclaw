@@ -39,14 +39,15 @@ Use the setup commands by intent:
 
 ## Global flags
 
-| Flag                    | Purpose                                                               |
-| ----------------------- | --------------------------------------------------------------------- |
-| `--dev`                 | Isolate state under `~/.openclaw-dev` and shift default ports         |
-| `--profile <name>`      | Isolate state under `~/.openclaw-<name>`                              |
-| `--container <name>`    | Target a named container for execution                                |
-| `--no-color`            | Disable ANSI colors (`NO_COLOR=1` is also respected)                  |
-| `--update`              | Shorthand for [`openclaw update`](/cli/update) (source installs only) |
-| `-V`, `--version`, `-v` | Print version and exit                                                |
+| Flag                    | Purpose                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `--dev`                 | Isolate state under `~/.openclaw-dev` and shift default ports                                              |
+| `--profile <name>`      | Isolate state under `~/.openclaw-<name>`                                                                   |
+| `--container <name>`    | Target a named container for execution                                                                     |
+| `--log-level <level>`   | Global log level override for file + console: `silent`, `fatal`, `error`, `warn`, `info`, `debug`, `trace` |
+| `--no-color`            | Disable ANSI colors (`NO_COLOR=1` is also respected)                                                       |
+| `--update`              | Shorthand for [`openclaw update`](/cli/update) (source installs only)                                      |
+| `-V`, `--version`, `-v` | Print version and exit                                                                                     |
 
 ## Output modes
 
