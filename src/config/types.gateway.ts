@@ -492,7 +492,10 @@ export type GatewayDirectInvokeOptIns = {
    * sender (`senderIsOwner === true`) for the tool to actually be reachable;
    * this triple-key gating is intentional, see GatewayToolsConfig.directInvoke
    * docs. A non-owner trusted-proxy caller (e.g. `operator.write`) is refused
-   * even when both config keys are set.
+   * the built-in `read` tool even when both config keys are set; the owner gate
+   * scopes only built-in host-FS materialization, so a same-named allowlisted
+   * plugin tool still resolves under the normal `gateway.tools.allow`/`deny`
+   * policy.
    *
    * Exposes host filesystem reads outside the workspace unless
    * `tools.fs.workspaceOnly` is also enabled.
