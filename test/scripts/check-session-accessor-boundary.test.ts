@@ -1,14 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  findGatewaySessionCreateLifecycleViolations,
   findSessionAccessorBoundaryViolations,
+  findSessionAccessorWriteBoundaryViolations,
+  findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
   migratedSessionAccessorFiles,
+  migratedSessionAccessorWriteFiles,
+  migratedTranscriptWriterFiles,
 } from "../../scripts/check-session-accessor-boundary.mjs";
 
 describe("session accessor boundary guard", () => {
   it("ratchets only the files migrated by the session accessor slices", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
+        "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+        "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/agents/embedded-agent-runner/tool-result-truncation.ts",
+        "src/agents/embedded-agent-runner/transcript-rewrite.ts",
+        "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+        "src/auto-reply/reply/agent-runner-helpers.ts",
+        "src/auto-reply/reply/agent-runner.ts",
+        "src/auto-reply/reply/commands-subagents/action-info.ts",
+        "src/auto-reply/reply/followup-runner.ts",
+        "src/auto-reply/reply/queue/drain.ts",
         "src/commands/export-trajectory.ts",
         "src/commands/health.ts",
         "src/commands/sandbox-explain.ts",
@@ -19,6 +34,7 @@ describe("session accessor boundary guard", () => {
         "src/config/sessions/combined-store-gateway.ts",
         "src/cron/isolated-agent/delivery-target.ts",
         "src/cron/service/timer.ts",
+        "src/gateway/session-compaction-checkpoints.ts",
         "src/gateway/session-utils.ts",
         "src/gateway/sessions-resolve.ts",
         "src/gateway/server-methods/sessions.ts",
@@ -33,6 +49,47 @@ describe("session accessor boundary guard", () => {
         "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
         "extensions/discord/src/monitor/thread-session-close.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
+      ]),
+    );
+  });
+
+  it("ratchets only the auto-reply files migrated to session accessor writes", () => {
+    expect(migratedSessionAccessorWriteFiles).toEqual(
+      new Set([
+        "src/agents/command/attempt-execution.shared.ts",
+        "src/agents/command/session-store.ts",
+        "src/agents/embedded-agent-runner/run.ts",
+        "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/auto-reply/reply/abort-cutoff.runtime.ts",
+        "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
+        "src/auto-reply/reply/agent-runner-execution.ts",
+        "src/auto-reply/reply/agent-runner-memory.ts",
+        "src/auto-reply/reply/agent-runner.ts",
+        "src/auto-reply/reply/body.ts",
+        "src/auto-reply/reply/commands-acp/lifecycle.ts",
+        "src/auto-reply/reply/commands-reset.ts",
+        "src/auto-reply/reply/directive-handling.impl.ts",
+        "src/auto-reply/reply/directive-handling.persist.ts",
+        "src/auto-reply/reply/dispatch-from-config.runtime.ts",
+        "src/auto-reply/reply/followup-runner.ts",
+        "src/auto-reply/reply/get-reply.ts",
+        "src/auto-reply/reply/model-selection.ts",
+        "src/auto-reply/reply/session-reset-model.ts",
+        "src/auto-reply/reply/session-updates.ts",
+        "src/auto-reply/reply/session-usage.ts",
+      ]),
+    );
+  });
+
+  it("ratchets only the files migrated by the transcript writer slice", () => {
+    expect(migratedTranscriptWriterFiles).toEqual(
+      new Set([
+        "src/agents/command/attempt-execution.ts",
+        "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
+        "src/config/sessions/transcript.ts",
+        "src/gateway/server-methods/chat.ts",
+        "src/gateway/server-methods/chat-transcript-inject.ts",
+        "src/sessions/user-turn-transcript.ts",
       ]),
     );
   });
@@ -103,6 +160,116 @@ describe("session accessor boundary guard", () => {
       findSessionAccessorBoundaryViolations(`
         import { listSessionEntries } from "../config/sessions/session-accessor.js";
         listSessionEntries({ storePath });
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags legacy writer imports and calls", () => {
+    expect(
+      findSessionAccessorWriteBoundaryViolations(`
+        import { applySessionStoreEntryPatch, saveSessionStore, updateSessionStore, updateSessionStoreEntry as updateEntry } from "../config/sessions.js";
+        saveSessionStore(storePath, store);
+        updateSessionStore(storePath, () => undefined);
+        sessions.updateSessionStoreEntry({ storePath, sessionKey, update });
+        applySessionStoreEntryPatch({ storePath, sessionKey, patch });
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports legacy session store writer "applySessionStoreEntryPatch"' },
+      { line: 2, reason: 'imports legacy session store writer "saveSessionStore"' },
+      { line: 2, reason: 'imports legacy session store writer "updateSessionStore"' },
+      { line: 2, reason: 'imports legacy session store writer "updateSessionStoreEntry"' },
+      { line: 3, reason: 'calls legacy session store writer "saveSessionStore"' },
+      { line: 4, reason: 'calls legacy session store writer "updateSessionStore"' },
+      { line: 5, reason: 'references legacy session store writer "updateSessionStoreEntry"' },
+      { line: 6, reason: 'calls legacy session store writer "applySessionStoreEntryPatch"' },
+    ]);
+  });
+
+  it("allows migrated accessor writes", () => {
+    expect(
+      findSessionAccessorWriteBoundaryViolations(`
+        import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+        updateSessionEntry({ storePath, sessionKey }, () => undefined);
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags legacy transcript writer imports", () => {
+    expect(
+      findTranscriptWriterBoundaryViolations(`
+        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+        import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
+        import { rewriteTranscriptEntriesInSessionFile } from "../agents/embedded-agent-runner/transcript-rewrite.js";
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
+      { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
+      {
+        line: 4,
+        reason: 'imports legacy transcript writer "rewriteTranscriptEntriesInSessionFile"',
+      },
+    ]);
+  });
+
+  it("flags direct and namespace legacy transcript writer calls", () => {
+    expect(
+      findTranscriptWriterBoundaryViolations(`
+        appendSessionTranscriptMessage({ transcriptPath, message });
+        transcriptEvents.emitSessionTranscriptUpdate({ sessionFile });
+        transcriptAppend["appendSessionTranscriptMessage"]({ transcriptPath, message });
+        transcriptRewrite.rewriteTranscriptEntriesInSessionFile({ sessionFile, request });
+      `),
+    ).toEqual([
+      { line: 2, reason: 'calls legacy transcript writer "appendSessionTranscriptMessage"' },
+      { line: 3, reason: 'references legacy transcript writer "emitSessionTranscriptUpdate"' },
+      { line: 4, reason: 'references legacy transcript writer "appendSessionTranscriptMessage"' },
+      {
+        line: 5,
+        reason: 'references legacy transcript writer "rewriteTranscriptEntriesInSessionFile"',
+      },
+    ]);
+  });
+
+  it("allows migrated transcript writer helpers", () => {
+    expect(
+      findTranscriptWriterBoundaryViolations(`
+        import { appendTranscriptMessage, publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
+        appendTranscriptMessage(scope, { message });
+        publishTranscriptUpdate(scope, { messageId });
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags legacy writers inside the gateway sessions.create lifecycle", () => {
+    expect(
+      findGatewaySessionCreateLifecycleViolations(`
+        const handlers = {
+          "sessions.create": async () => {
+            await updateSessionStore(storePath, () => undefined);
+            ensureSessionTranscriptFile(params);
+          },
+          "sessions.patch": async () => {
+            await updateSessionStore(storePath, () => undefined);
+          },
+        };
+      `),
+    ).toEqual([
+      { line: 4, reason: 'calls legacy sessions.create lifecycle writer "updateSessionStore"' },
+      {
+        line: 5,
+        reason: 'calls legacy sessions.create lifecycle writer "ensureSessionTranscriptFile"',
+      },
+    ]);
+  });
+
+  it("allows the gateway sessions.create lifecycle accessor seam", () => {
+    expect(
+      findGatewaySessionCreateLifecycleViolations(`
+        const handlers = {
+          "sessions.create": async () => {
+            await createSessionEntryWithTranscript(scope, createEntry);
+          },
+        };
       `),
     ).toEqual([]);
   });

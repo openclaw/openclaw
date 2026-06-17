@@ -1,5 +1,6 @@
 // Channel resolution exposes read-only outbound runtime facades and performs
 // optional bootstrap for deliverable channels that are not loaded yet.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import { channelPluginHasNativeApprovalPromptUi } from "../../channels/plugins/native-approval-prompt.js";
@@ -23,6 +24,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
@@ -111,6 +113,43 @@ function maybeBootstrapChannelPlugin(params: {
   bootstrapOutboundChannelPlugin(params);
 }
 
+function normalizeOutboundChannelForResolution(params: {
+  channel: string;
+  cfg?: OpenClawConfig;
+  allowBootstrap?: boolean;
+}): { channel?: DeliverableMessageChannel; didBootstrap: boolean } {
+  const normalized = normalizeMessageChannel(params.channel);
+  const deliverable = normalizeDeliverableOutboundChannel(normalized);
+  if (deliverable || !normalized || normalized === INTERNAL_MESSAGE_CHANNEL) {
+    return { channel: deliverable, didBootstrap: false };
+  }
+
+  const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistries(normalized);
+  if (activeRuntimePlugin) {
+    return {
+      channel: activeRuntimePlugin.id as DeliverableMessageChannel,
+      didBootstrap: false,
+    };
+  }
+  if (params.allowBootstrap !== true) {
+    return { channel: undefined, didBootstrap: false };
+  }
+
+  // External channel ids remain normalized before their runtime is registered.
+  // Bootstrap first, then let the runtime candidate lookup confirm sendability.
+  maybeBootstrapChannelPlugin({
+    channel: normalized as DeliverableMessageChannel,
+    cfg: params.cfg,
+  });
+  const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistries(normalized);
+  return {
+    // The pinned channel registry may intentionally lag the active runtime
+    // registry, so strict registry validation here would hide a usable plugin.
+    channel: (bootstrappedRuntimePlugin?.id ?? normalized) as DeliverableMessageChannel,
+    didBootstrap: true,
+  };
+}
+
 function resolveDirectFromRegistry(
   registry: ReturnType<typeof getActivePluginRegistry>,
   channel: string,
@@ -118,9 +157,18 @@ function resolveDirectFromRegistry(
   if (!registry) {
     return undefined;
   }
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
+  if (!normalizedChannel) {
+    return undefined;
+  }
   for (const entry of registry.channels) {
     const plugin = entry?.plugin;
-    if (plugin?.id === channel) {
+    if (
+      normalizeOptionalLowercaseString(plugin?.id) === normalizedChannel ||
+      plugin?.meta?.aliases?.some(
+        (alias) => normalizeOptionalLowercaseString(alias) === normalizedChannel,
+      )
+    ) {
       return plugin;
     }
   }
@@ -144,8 +192,20 @@ function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefine
   return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
 }
 
+function channelPluginHasActivatedOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
+  return Boolean(
+    plugin?.outbound?.sendText ||
+    plugin?.outbound?.deliveryMode === "gateway" ||
+    resolveSendCapableMessageAdapter(plugin),
+  );
+}
+
 function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
   return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
+}
+
+function resolveActivatedOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
+  return channelPluginHasActivatedOutboundSurface(plugin) ? plugin : undefined;
 }
 
 function resolveRuntimeOutboundPluginCandidate(params: {
@@ -154,14 +214,18 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   setupFallback?: ChannelPlugin;
   bundled?: ChannelPlugin;
   allowSetupShell?: boolean;
+  requireActivatedRuntime?: boolean;
 }): ChannelPlugin | undefined {
-  if (channelPluginHasRuntimeOutboundSurface(params.loaded)) {
+  const hasRuntimeSurface = params.requireActivatedRuntime
+    ? channelPluginHasActivatedOutboundSurface
+    : channelPluginHasRuntimeOutboundSurface;
+  if (hasRuntimeSurface(params.loaded)) {
     return params.loaded;
   }
-  if (params.runtime) {
+  if (hasRuntimeSurface(params.runtime)) {
     return params.runtime;
   }
-  if (channelPluginHasRuntimeOutboundSurface(params.bundled)) {
+  if (hasRuntimeSurface(params.bundled)) {
     return params.bundled;
   }
   if (params.allowSetupShell) {
@@ -200,6 +264,12 @@ function resolveRuntimeOutboundPluginFromRuntimeRegistries(
   channel: string,
 ): ChannelPlugin | undefined {
   return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
+}
+
+function resolveActivatedOutboundPluginFromRuntimeRegistries(
+  channel: string,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, resolveActivatedOutboundPlugin);
 }
 
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
@@ -260,7 +330,7 @@ export function resolveOutboundChannelPlugin(params: {
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): ChannelPlugin | undefined {
-  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  const { channel: normalized, didBootstrap } = normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
   }
@@ -268,7 +338,10 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  const runtimeCurrent = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const requireActivatedRuntime = params.allowBootstrap === true;
+  const runtimeCurrent = requireActivatedRuntime
+    ? resolveActivatedOutboundPluginFromRuntimeRegistries(normalized)
+    : resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
   const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
   const bundledCurrent = resolve();
   const candidate = resolveRuntimeOutboundPluginCandidate({
@@ -277,21 +350,23 @@ export function resolveOutboundChannelPlugin(params: {
     setupFallback,
     bundled: bundledCurrent,
     allowSetupShell: params.allowBootstrap !== true,
+    requireActivatedRuntime,
   });
   if (candidate) {
     return candidate;
   }
 
-  if (params.allowBootstrap !== true) {
+  if (params.allowBootstrap !== true || didBootstrap) {
     return undefined;
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
-    runtime: resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized),
+    runtime: resolveActivatedOutboundPluginFromRuntimeRegistries(normalized),
     setupFallback: resolveDirectFromRuntimeRegistries(normalized),
     bundled: resolve(),
+    requireActivatedRuntime: true,
   });
 }
 
@@ -301,7 +376,7 @@ export function resolveOutboundChannelMessageAdapter(params: {
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
-  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  const { channel: normalized, didBootstrap } = normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
   }
@@ -309,7 +384,7 @@ export function resolveOutboundChannelMessageAdapter(params: {
     resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
     resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
     resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
-  if (current || params.allowBootstrap !== true) {
+  if (current || params.allowBootstrap !== true || didBootstrap) {
     return current;
   }
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });

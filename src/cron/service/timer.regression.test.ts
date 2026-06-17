@@ -2527,6 +2527,7 @@ describe("cron service timer regressions", () => {
       let now = scheduledAt;
       const wallStart = Date.now();
       let abortWallMs: number | undefined;
+      let abortReason: unknown;
       const started = createDeferred<void>();
 
       const state = createCronServiceState({
@@ -2553,6 +2554,7 @@ describe("cron service timer regressions", () => {
               }
               if (abortSignal.aborted) {
                 abortWallMs = Date.now();
+                abortReason = abortSignal.reason;
                 resolve();
                 return;
               }
@@ -2560,6 +2562,7 @@ describe("cron service timer regressions", () => {
                 "abort",
                 () => {
                   abortWallMs = Date.now();
+                  abortReason = abortSignal.reason;
                   resolve();
                 },
                 { once: true },
@@ -2582,6 +2585,10 @@ describe("cron service timer regressions", () => {
 
       const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
       expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1_000);
+      expect(abortReason).toMatchObject({
+        name: "TimeoutError",
+        message: "cron: job execution timed out",
+      });
 
       const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
       expect(job?.state.lastStatus).toBe("error");
@@ -2872,6 +2879,7 @@ describe("cron service timer regressions", () => {
       let now = scheduledAt;
       const started = createDeferred<void>();
       let abortObserved = false;
+      let abortReason: unknown;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const onIsolatedAgentSetupTimeout = vi.fn();
       const state = createCronServiceState({
@@ -2912,6 +2920,7 @@ describe("cron service timer regressions", () => {
               "abort",
               () => {
                 abortObserved = true;
+                abortReason = abortSignal.reason;
               },
               { once: true },
             );
@@ -2931,6 +2940,10 @@ describe("cron service timer regressions", () => {
       expect(job.state.lastStatus).toBe("error");
       expect(job.state.lastError).toContain("stalled before execution start");
       expect(job.state.lastError).toContain("context-engine");
+      expect(abortReason).toMatchObject({
+        name: "TimeoutError",
+        message: expect.stringContaining("context-engine"),
+      });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
       expect(requireRecord(cleanupArgs.job).id).toBe("isolated-pre-model-timeout-74803");

@@ -86,7 +86,10 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./command/attempt-callbacks.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -97,7 +100,10 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
@@ -615,7 +621,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     throw new Error("Message (--message) is required");
   }
   const rawExplicitSessionKey = opts.sessionKey?.trim();
-  if (!opts.to && !opts.sessionId && !rawExplicitSessionKey && !opts.agentId) {
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const rawTo = opts.to?.trim();
+  const toSessionKey =
+    !rawExplicitSessionKey && !requestedSessionId && classifySessionKeyShape(rawTo) === "agent"
+      ? rawTo
+      : undefined;
+  if (!opts.to && !requestedSessionId && !rawExplicitSessionKey && !opts.agentId) {
     throw new Error(
       "Pass --to <E.164>, --session-key, --session-id, or --agent to choose a session",
     );
@@ -647,12 +659,14 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
-    rawExplicitSessionKey,
-    agentIdOverride,
-    shouldScopeDefaultAgentKey,
-    cfg,
-  });
+  const explicitSessionKey =
+    toSessionKey ??
+    resolveExplicitAgentCommandSessionKey({
+      rawExplicitSessionKey,
+      agentIdOverride,
+      shouldScopeDefaultAgentKey,
+      cfg,
+    });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -698,10 +712,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   });
   const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
+  const commandOpts = toSessionKey
+    ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
+    : opts;
   const sessionResolution = resolveSession({
     cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
+    to: commandOpts.to,
+    sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
@@ -791,6 +808,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
   return {
+    opts: commandOpts,
     body,
     transcriptBody,
     cfg,
@@ -826,15 +844,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts,
+  initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
-  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
-  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
+  const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState =
+    initialOpts.preserveUserFacingSessionModelState === true;
+  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
+  const opts = prepared.opts;
   const {
     body,
     transcriptBody,
@@ -1652,7 +1672,7 @@ async function agentCommandInternal(
       : sessionFile;
 
     const startedAt = Date.now();
-    const attemptLifecycleState = {
+    const attemptLifecycleState: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
       lifecycleEnded: false,
@@ -1706,6 +1726,52 @@ async function agentCommandInternal(
         },
       });
     };
+    const resolveLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      includeErrorPayload: boolean,
+    ) =>
+      attemptLifecycleState.lifecycleError ??
+      (includeErrorPayload
+        ? runResult.payloads?.find(
+            (payload) => payload.isError === true && typeof payload.text === "string",
+          )?.text
+        : undefined) ??
+      (runResult.meta.error ? "Agent run failed" : undefined);
+    const emitLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      fallbackExhausted: boolean,
+    ) => {
+      if (attemptLifecycleState.lifecycleEnded) {
+        return;
+      }
+      attemptLifecycleState.lifecycleEnded = true;
+      const error =
+        resolveLifecycleResultError(runResult, fallbackExhausted) ??
+        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+      emitAgentEvent({
+        runId,
+        lifecycleGeneration,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error,
+          ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
+          ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
+          ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
+          ...(typeof runResult.meta.providerStarted === "boolean"
+            ? { providerStarted: runResult.meta.providerStarted }
+            : {}),
+          ...(typeof runResult.meta.aborted === "boolean"
+            ? { aborted: runResult.meta.aborted }
+            : {}),
+          ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
+          ...(runResult.meta.yielded === true ? { yielded: true } : {}),
+          ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
+        },
+      });
+    };
     const emitLifecyclePostTurnError = (error: unknown) => {
       if (attemptLifecycleState.lifecycleEnded) {
         return;
@@ -1733,6 +1799,7 @@ async function agentCommandInternal(
     let result: AgentAttemptResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    let fallbackExhausted = false;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
@@ -1798,8 +1865,12 @@ async function agentCommandInternal(
               model: modelLocal,
               result: resultLocal,
             }),
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
+            attemptLifecycleState.lifecycleError = undefined;
+            attemptLifecycleState.lifecycleFinishing = false;
+            attemptLifecycleState.lifecycleEnded = false;
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
               providerOverride === autoFallbackPrimaryProbe.provider &&
@@ -1873,7 +1944,7 @@ async function agentCommandInternal(
                 lifecycleGeneration = nextLifecycleGeneration;
               },
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
-              deferTerminalLifecycleEnd: true,
+              deferTerminalLifecycle: true,
             });
           },
         });
@@ -1883,7 +1954,9 @@ async function agentCommandInternal(
         }
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackExhausted = fallbackResult.outcome === "exhausted";
         if (
+          !fallbackExhausted &&
           autoFallbackPrimaryProbe &&
           !autoFallbackPrimaryProbeInterruptedByLiveSwitch &&
           sessionEntry &&
@@ -1940,7 +2013,9 @@ async function agentCommandInternal(
             },
           };
         }
-        emitLifecycleFinishing(result);
+        if (!fallbackExhausted) {
+          emitLifecycleFinishing(result);
+        }
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
@@ -2078,7 +2153,9 @@ async function agentCommandInternal(
             opts.bootstrapContextRunKind !== "heartbeat" &&
             !opts.internalEvents?.length,
           preserveRuntimeModel:
-            opts.bootstrapContextRunKind === "heartbeat" || preserveUserFacingSessionModelState,
+            fallbackExhausted ||
+            opts.bootstrapContextRunKind === "heartbeat" ||
+            preserveUserFacingSessionModelState,
           preserveUserFacingSessionModelState,
         });
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
@@ -2260,7 +2337,11 @@ async function agentCommandInternal(
         }
       }
 
-      emitLifecycleEnd(result);
+      if (fallbackExhausted || resolveLifecycleResultError(result, false)) {
+        emitLifecycleResultError(result, fallbackExhausted);
+      } else {
+        emitLifecycleEnd(result);
+      }
       return deliveryResult;
     } catch (error) {
       emitLifecyclePostTurnError(error);

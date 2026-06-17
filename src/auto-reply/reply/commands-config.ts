@@ -248,7 +248,9 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
         reply: { text: "⚙️ Debug overrides: (none)" },
       };
     }
-    const json = JSON.stringify(overrides, null, 2);
+    const schema = loadGatewayRuntimeConfigSchema();
+    const redactedOverrides = redactConfigObject(overrides, schema.uiHints);
+    const json = JSON.stringify(redactedOverrides, null, 2);
     return {
       shouldContinue: false,
       reply: {
@@ -292,8 +294,14 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
         reply: { text: `⚠️ ${result.error ?? "Invalid override."}` },
       };
     }
-    const valueLabel =
-      typeof debugCommand.value === "string"
+    const parsedOverridePath = parseConfigPath(debugCommand.path);
+    const valueLabel = parsedOverridePath.path
+      ? formatConfigSetValueLabel({
+          path: parsedOverridePath.path,
+          value: debugCommand.value,
+          uiHints: loadGatewayRuntimeConfigSchema().uiHints,
+        })
+      : typeof debugCommand.value === "string"
         ? `"${debugCommand.value}"`
         : JSON.stringify(debugCommand.value);
     return {

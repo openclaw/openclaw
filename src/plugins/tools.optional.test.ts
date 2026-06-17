@@ -372,6 +372,7 @@ function createXaiToolManifest() {
     },
     toolMetadata: {
       x_search: {
+        replaySafe: true,
         authSignals: [{ provider: "xai" }],
         configSignals: [
           {
@@ -1269,6 +1270,7 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
+    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });

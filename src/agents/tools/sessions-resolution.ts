@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   listSpawnedSessionKeys,
@@ -233,24 +234,53 @@ function buildSessionIdResolveParams(params: {
   sessionId: string;
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
+  allowMissing?: boolean;
 }) {
   return {
     sessionId: params.sessionId,
     spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
     includeGlobal: !params.restrictToSpawned,
     includeUnknown: !params.restrictToSpawned,
+    ...(params.allowMissing ? { allowMissing: true } : {}),
   };
+}
+
+async function callGatewayResolveSession(
+  params: Record<string, unknown> & { allowMissing?: boolean },
+) {
+  try {
+    return await sessionsResolutionDeps.callGateway({
+      method: "sessions.resolve",
+      params,
+    });
+  } catch (error) {
+    const olderGatewayRejectedProbe =
+      params.allowMissing === true &&
+      error instanceof GatewayClientRequestError &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      error.message.includes("invalid sessions.resolve params") &&
+      error.message.includes("unexpected property 'allowMissing'");
+    if (!olderGatewayRejectedProbe) {
+      throw error;
+    }
+    // Protocol v4 gateways predating allowMissing reject the additive field.
+    // Retry without it for mixed-version correctness; remove at the next protocol break.
+    const legacyParams: Record<string, unknown> = { ...params };
+    delete legacyParams.allowMissing;
+    return await sessionsResolutionDeps.callGateway({
+      method: "sessions.resolve",
+      params: legacyParams,
+    });
+  }
 }
 
 async function callGatewayResolveSessionId(params: {
   sessionId: string;
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
+  allowMissing?: boolean;
 }): Promise<string> {
-  const result = await sessionsResolutionDeps.callGateway({
-    method: "sessions.resolve",
-    params: buildSessionIdResolveParams(params),
-  });
+  const result = await callGatewayResolveSession(buildSessionIdResolveParams(params));
   const key = normalizeOptionalString(result?.key) ?? "";
   if (!key) {
     throw new Error(
@@ -266,6 +296,7 @@ async function resolveSessionKeyFromSessionId(params: {
   mainKey: string;
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
+  allowMissing?: boolean;
 }): Promise<SessionReferenceResolution> {
   try {
     // Resolve via gateway so we respect store routing and visibility rules.
@@ -301,15 +332,14 @@ async function resolveSessionKeyFromKey(params: {
   mainKey: string;
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
+  allowMissing?: boolean;
 }): Promise<SessionReferenceResolution | null> {
   try {
     // Try key-based resolution first so non-standard keys keep working.
-    const result = await sessionsResolutionDeps.callGateway({
-      method: "sessions.resolve",
-      params: {
-        key: params.key,
-        spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
-      },
+    const result = await callGatewayResolveSession({
+      key: params.key,
+      spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+      ...(params.allowMissing ? { allowMissing: true } : {}),
     });
     const key = normalizeOptionalString(result?.key) ?? "";
     if (!key) {
@@ -332,6 +362,7 @@ async function tryResolveSessionKeyFromSessionId(params: {
   mainKey: string;
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
+  allowMissing?: boolean;
 }): Promise<Extract<SessionReferenceResolution, { ok: true }> | null> {
   try {
     const key = await callGatewayResolveSessionId(params);
@@ -353,6 +384,7 @@ async function resolveSessionReferenceByKeyOrSessionId(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
   allowUnresolvedSessionId: boolean;
+  allowMissing?: boolean;
   skipKeyLookup?: boolean;
   forceSessionIdLookup?: boolean;
 }): Promise<SessionReferenceResolution | null> {
@@ -364,6 +396,7 @@ async function resolveSessionReferenceByKeyOrSessionId(params: {
       mainKey: params.mainKey,
       requesterInternalKey: params.requesterInternalKey,
       restrictToSpawned: params.restrictToSpawned,
+      allowMissing: params.allowMissing,
     });
     if (resolvedByKey) {
       return resolvedByKey;
@@ -379,6 +412,7 @@ async function resolveSessionReferenceByKeyOrSessionId(params: {
       mainKey: params.mainKey,
       requesterInternalKey: params.requesterInternalKey,
       restrictToSpawned: params.restrictToSpawned,
+      allowMissing: params.allowMissing,
     });
   }
   return await resolveSessionKeyFromSessionId({
@@ -387,6 +421,7 @@ async function resolveSessionReferenceByKeyOrSessionId(params: {
     mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
     restrictToSpawned: params.restrictToSpawned,
+    allowMissing: params.allowMissing,
   });
 }
 
@@ -410,6 +445,7 @@ export async function resolveSessionReference(params: {
       requesterInternalKey: params.requesterInternalKey,
       restrictToSpawned: params.restrictToSpawned,
       allowUnresolvedSessionId: true,
+      allowMissing: true,
       skipKeyLookup: params.restrictToSpawned,
       forceSessionIdLookup: true,
     });

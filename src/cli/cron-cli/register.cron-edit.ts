@@ -112,6 +112,11 @@ export function registerCronEditCommand(cron: Command) {
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
+      .option(
+        "--clear-model",
+        "Remove the per-job model override (restore normal cron model precedence)",
+        false,
+      )
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
@@ -130,6 +135,10 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
+      .option("--clear-channel", "Unset the delivery channel", false)
+      .option("--clear-to", "Unset the delivery destination", false)
+      .option("--clear-thread-id", "Unset the Telegram forum topic thread id", false)
+      .option("--clear-account", "Unset the per-job delivery account override", false)
       .option(
         "--best-effort-deliver",
         "Do not fail job if delivery fails (also implies --announce when used alone)",
@@ -276,6 +285,9 @@ export function registerCronEditCommand(cron: Command) {
             );
           }
           const model = normalizeOptionalString(opts.model);
+          if (model && opts.clearModel) {
+            throw new Error("Use --model or --clear-model, not both");
+          }
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
           const rawTimeoutSeconds =
@@ -311,11 +323,28 @@ export function registerCronEditCommand(cron: Command) {
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
           const hasDeliveryTarget =
-            typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
-          const hasDeliveryAccount = typeof opts.account === "string";
+            typeof opts.channel === "string" ||
+            typeof opts.to === "string" ||
+            hasDeliveryThreadId ||
+            Boolean(opts.clearChannel) ||
+            Boolean(opts.clearTo) ||
+            Boolean(opts.clearThreadId);
+          const hasDeliveryAccount = typeof opts.account === "string" || Boolean(opts.clearAccount);
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           if (hasWebhookDelivery && (hasDeliveryTarget || hasDeliveryAccount)) {
             throw new Error("--webhook cannot be combined with chat delivery options.");
+          }
+          if (typeof opts.channel === "string" && opts.clearChannel) {
+            throw new Error("Use --channel or --clear-channel, not both");
+          }
+          if (typeof opts.to === "string" && opts.clearTo) {
+            throw new Error("Use --to or --clear-to, not both");
+          }
+          if (hasDeliveryThreadId && opts.clearThreadId) {
+            throw new Error("Use --thread-id or --clear-thread-id, not both");
+          }
+          if (typeof opts.account === "string" && opts.clearAccount) {
+            throw new Error("Use --account or --clear-account, not both");
           }
           const hasCommandSpecificPayloadField =
             Boolean(commandShell) ||
@@ -343,6 +372,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||
             Boolean(model) ||
+            Boolean(opts.clearModel) ||
             Boolean(thinking) ||
             (hasTimeoutSeconds &&
               !hasCommandSpecificPayloadField &&
@@ -370,7 +400,11 @@ export function registerCronEditCommand(cron: Command) {
           } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
-            assignIf(payload, "model", model, Boolean(model));
+            if (opts.clearModel) {
+              payload.model = null;
+            } else {
+              assignIf(payload, "model", model, Boolean(model));
+            }
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(
@@ -428,21 +462,29 @@ export function registerCronEditCommand(cron: Command) {
               // Back-compat: best-effort true and payload edits historically implied announce mode.
               delivery.mode = "announce";
             }
-            if (typeof opts.channel === "string") {
+            if (opts.clearChannel) {
+              delivery.channel = null;
+            } else if (typeof opts.channel === "string") {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
             }
             if (hasWebhookDelivery) {
               const webhook = normalizeOptionalString(opts.webhook) ?? "";
               delivery.to = webhook ? webhook : undefined;
+            } else if (opts.clearTo) {
+              delivery.to = null;
             } else if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
             }
-            if (hasDeliveryThreadId) {
+            if (opts.clearThreadId) {
+              delivery.threadId = null;
+            } else if (hasDeliveryThreadId) {
               delivery.threadId = threadId;
             }
-            if (typeof opts.account === "string") {
+            if (opts.clearAccount) {
+              delivery.accountId = null;
+            } else if (typeof opts.account === "string") {
               const account = opts.account.trim();
               delivery.accountId = account ? account : undefined;
             }

@@ -16,7 +16,7 @@ import { parseAudioTag } from "./audio-tags.js";
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 /** Ordered output segment emitted after visible text and extracted media are separated. */
-export type ParsedMediaOutputSegment =
+type ParsedMediaOutputSegment =
   | {
       type: "text";
       text: string;

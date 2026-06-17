@@ -8,17 +8,20 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   claimAgentRunContext,
-  emitAgentPlanEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   registerAgentRunContext,
@@ -40,11 +43,11 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../agent-bundle-mcp-tools.js";
 import {
-  resolveAgentExecutionContract,
   resolveAgentDir,
   resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
+import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import { resolveProcessToolScopeKey } from "../agent-tools.js";
 import {
   type AuthProfileFailureReason,
@@ -99,6 +102,11 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -113,7 +121,12 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
-import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import {
+  resolveSessionSuspensionReason,
+  resolveSessionSuspensionTarget,
+  suspendSession,
+  type SessionSuspensionParams,
+} from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -124,7 +137,10 @@ import {
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import {
+  runContextEngineMaintenance,
+  waitForDeferredTurnMaintenanceForSession,
+} from "./context-engine-maintenance.js";
 import {
   hasMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -136,7 +152,6 @@ import { resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
-  type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import {
@@ -184,16 +199,12 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-  resolveAckExecutionFastPathInstruction,
+  hasAttemptTerminalState,
   resolveAttemptReplayMetadata,
-  extractPlanningOnlyPlanDetails,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
-  resolvePlanningOnlyRetryLimit,
-  resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
-  STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   shouldRetryMissingAssistantTurn,
@@ -219,7 +230,6 @@ import type {
   EmbeddedAgentRunResult,
   TraceAttempt,
   ToolSummaryTrace,
-  EmbeddedRunLivenessState,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
@@ -284,12 +294,12 @@ async function resetNoRealConversationTokenSnapshot(params: {
   }
   const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
   try {
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: params.sessionKey,
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      update: async () => ({
+    await updateSessionEntry(
+      {
+        storePath,
+        sessionKey: params.sessionKey,
+      },
+      async () => ({
         totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: undefined,
@@ -299,7 +309,11 @@ async function resetNoRealConversationTokenSnapshot(params: {
         contextBudgetStatus: undefined,
         updatedAt: Date.now(),
       }),
-    });
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      },
+    );
   } catch (err) {
     log.warn(
       `[context-overflow-precheck] failed to reset stale context snapshot for ` +
@@ -528,14 +542,64 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
   ];
 }
 
+function resolveInitialEmbeddedRunModel(params: {
+  config: RunEmbeddedAgentParams["config"];
+  agentId?: string;
+  provider?: string;
+  model?: string;
+}): { provider: string; modelId: string } {
+  const cfg = params.config ?? {};
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId: params.agentId,
+  });
+  const explicitProvider = normalizeOptionalString(params.provider);
+  const explicitModel = normalizeOptionalString(params.model);
+  const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
+
+  if (explicitProvider && explicitModel) {
+    return { provider: explicitProvider, modelId: explicitModel };
+  }
+
+  if (explicitModel) {
+    const provider = explicitProvider ?? defaultProvider;
+    const aliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: provider,
+    });
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw: explicitModel,
+      defaultProvider: provider,
+      aliasIndex,
+    });
+    return {
+      provider: explicitProvider ?? resolved?.ref.provider ?? provider,
+      modelId: resolved?.ref.model ?? explicitModel,
+    };
+  }
+
+  return {
+    provider: explicitProvider ?? defaultProvider,
+    modelId: configuredDefault.model || DEFAULT_MODEL,
+  };
+}
+
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const requestedProvider = normalizeOptionalString(paramsInput.provider);
+  const requestedModel = normalizeOptionalString(paramsInput.model);
+  const needsConfiguredDefault = !paramsInput.config && !requestedProvider && !requestedModel;
+  const config =
+    paramsInput.config ??
+    (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...paramsInput,
+      config,
       lifecycleGeneration,
     }),
   );
@@ -560,6 +624,17 @@ async function runEmbeddedAgentInternal(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  // Outer fallback attempts defer session suspension only while another
+  // candidate remains. Direct and final-candidate runs suspend normally.
+  const failureSuspension = resolveSessionSuspensionTarget();
+  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+    const suspension = { ...suspensionParams, laneId: globalLane };
+    if (failureSuspension.mode === "defer") {
+      failureSuspension.defer(suspension);
+      return;
+    }
+    void suspendSession(suspension);
+  };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
   let laneTaskProgressAtMs = Date.now();
@@ -681,7 +756,12 @@ async function runEmbeddedAgentInternal(
 
   throwIfAborted();
 
-  return enqueueSession(() => {
+  return enqueueSession(async () => {
+    throwIfAborted();
+    // Same-session reads below must see any prior deferred transcript rewrite.
+    // Checkpoint before the global lane so unrelated sessions can still start
+    // while this session waits on its own maintenance lane.
+    await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
     throwIfAborted();
     return enqueueGlobal(async () => {
       throwIfAborted();
@@ -751,8 +831,12 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let { provider, modelId } = resolveInitialEmbeddedRunModel({
+        config: params.config,
+        agentId: workspaceResolution.agentId,
+        provider: params.provider,
+        model: params.model,
+      });
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
@@ -810,6 +894,7 @@ async function runEmbeddedAgentInternal(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
+      const requestedModelId = modelId;
       const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
       startupStages.mark("hooks");
       await ensureSelectedAgentHarnessPlugin({
@@ -1171,6 +1256,32 @@ async function runEmbeddedAgentInternal(
       const traceAttempts: TraceAttempt[] = [];
       const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
         attempt.result === "rotate_profile" || attempt.result === "fallback_model";
+      const resolveRuntimeFallbackReason = (): string | null => {
+        const fallbackAttempt = traceAttempts.findLast(
+          (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
+        );
+        return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
+      };
+      const buildEmbeddedContextEngineRuntimeSettings = (settingsParams: {
+        tokenBudget?: number | null;
+        maxOutputTokens?: number | null;
+        degradedReason?: string | null;
+      }) => {
+        const fallbackReason = resolveRuntimeFallbackReason();
+        return buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider,
+          requestedModel: requestedModelId,
+          resolvedModel: modelId,
+          selectedContextEngineId: contextEngine.info.id,
+          contextEngineSelectionSource:
+            contextEngine.info.id === "legacy" ? "default" : "configured",
+          promptTokenBudget: settingsParams.tokenBudget,
+          maxOutputTokens: settingsParams.maxOutputTokens,
+          fallbackReason,
+          degradedReason: settingsParams.degradedReason,
+        });
+      };
 
       const initialThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
@@ -1292,10 +1403,6 @@ async function runEmbeddedAgentInternal(
         config: params.config,
         agentId: params.agentId,
       });
-      const configuredExecutionContract = resolveAgentExecutionContract(
-        params.config,
-        sessionAgentId,
-      );
       const strictAgenticActive = isStrictAgenticExecutionContractActive({
         config: params.config,
         sessionKey: params.sessionKey,
@@ -1304,8 +1411,6 @@ async function runEmbeddedAgentInternal(
         modelId,
       });
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
-      const configuredExecutionContractForLog = configuredExecutionContract ?? "unspecified";
-      const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
       const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
       const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
@@ -1329,7 +1434,6 @@ async function runEmbeddedAgentInternal(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let consecutiveSameModelRateLimitRetries = 0;
-      let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
@@ -1355,9 +1459,24 @@ async function runEmbeddedAgentInternal(
       );
       let postCompactionAbortController: AbortController | undefined;
       let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-      const observePostCompactionToolOutcome = (
-        observation: PostCompactionGuardObservation,
-      ): void => {
+      const attemptTerminalToolPresentation = {
+        ordinal: -1,
+        value: undefined as string | undefined,
+      };
+      let nextToolOutcomeOrdinal = 0;
+      const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
+      const readAttemptTerminalToolPresentation = (): string | undefined =>
+        attemptTerminalToolPresentation.value;
+      const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
+        const observationOrdinal =
+          observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
+        if (observationOrdinal >= attemptTerminalToolPresentation.ordinal) {
+          attemptTerminalToolPresentation.ordinal = observationOrdinal;
+          attemptTerminalToolPresentation.value = observation.terminalPresentation;
+        }
+        if (observation.presentationOnly) {
+          return;
+        }
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
           postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
@@ -1365,16 +1484,10 @@ async function runEmbeddedAgentInternal(
         }
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
-      let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
-      const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
-        provider,
-        modelId,
-        prompt: params.prompt,
-      });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       let codexAppServerRecoveryRetries = 0;
@@ -1675,8 +1788,6 @@ async function runEmbeddedAgentInternal(
             (provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt);
           nextAttemptPromptOverride = null;
           const promptAdditions = [
-            ackExecutionFastPathInstruction,
-            planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
             compactionContinuationRetryInstruction,
@@ -1793,6 +1904,9 @@ async function runEmbeddedAgentInternal(
             disableTools: params.disableTools,
             provider,
             modelId,
+            requestedModelId,
+            fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
+            fallbackReason: resolveRuntimeFallbackReason(),
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
@@ -1827,7 +1941,8 @@ async function runEmbeddedAgentInternal(
             agentId: workspaceResolution.agentId,
             beforeAgentStartResult,
             thinkLevel,
-            onToolOutcome: observePostCompactionToolOutcome,
+            onToolOutcome: observeToolOutcome,
+            allocateToolOutcomeOrdinal,
             onRunProgress: notifyRunProgress,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
@@ -1855,6 +1970,10 @@ async function runEmbeddedAgentInternal(
             onToolResult: params.onToolResult,
             onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: params.onAgentEvent,
+            deferTerminalLifecycle:
+              params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+            deferTerminalLifecycleEnd:
+              params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -2005,11 +2124,13 @@ async function runEmbeddedAgentInternal(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
+          // Transcript fallback can outlive a provider or alias transition.
+          // Reuse it only when it reports the effective model for this attempt.
           const sessionAssistantForCandidate =
             !currentAttemptAssistant &&
             !isAssistantForModelRef(sessionLastAssistant, {
-              provider,
-              model: modelId,
+              provider: effectiveModel.provider,
+              model: effectiveModel.id,
             })
               ? undefined
               : sessionLastAssistant;
@@ -2037,6 +2158,9 @@ async function runEmbeddedAgentInternal(
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
+                authMode: lastProfileId
+                  ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+                  : undefined,
               })
             : undefined;
           const assistantErrorText =
@@ -2173,6 +2297,9 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: timeoutCompactionRuntimeContext,
+                    runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
+                      tokenBudget: ctxInfo.tokens,
+                    }),
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2358,6 +2485,12 @@ async function runEmbeddedAgentInternal(
                 // run-level abort signal through, so a hung plugin compact()
                 // cannot stall overflow recovery indefinitely. A timeout/abort
                 // surfaces as a thrown error handled by the catch below.
+                const overflowCompactionRuntimeSettings = buildEmbeddedContextEngineRuntimeSettings(
+                  {
+                    tokenBudget: ctxInfo.tokens,
+                    degradedReason: "context_overflow",
+                  },
+                );
                 compactResult = await compactContextEngineWithSafetyTimeout(
                   contextEngine,
                   {
@@ -2371,6 +2504,7 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2384,6 +2518,7 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                     config: params.config,
                     agentId: sessionAgentId,
                   });
@@ -2650,10 +2785,14 @@ async function runEmbeddedAgentInternal(
             // promptErrorSource === "compaction" means the model call already completed and the
             // abort happened only while waiting for compaction/retry cleanup. Retrying from here
             // would replay that completed tool turn as a fresh prompt attempt.
+            const promptAuthMode = lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined;
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
               profileId: lastProfileId,
+              authMode: promptAuthMode,
               sessionId: sessionIdUsed,
               lane: globalLane,
             });
@@ -2661,11 +2800,10 @@ async function runEmbeddedAgentInternal(
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
             if (normalizedPromptFailover?.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
                 failedProvider: normalizedPromptFailover.provider ?? provider,
                 failedModel: normalizedPromptFailover.model ?? modelId,
@@ -2883,6 +3021,7 @@ async function runEmbeddedAgentInternal(
                   provider,
                   model: modelId,
                   profileId: lastProfileId,
+                  authMode: promptAuthMode,
                   sessionId: sessionIdUsed,
                   lane: globalLane,
                   status,
@@ -3069,6 +3208,9 @@ async function runEmbeddedAgentInternal(
             authFailure,
             rateLimitFailure,
             billingFailure,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             cloudCodeAssistFormatError,
             isProbeSession,
             overloadProfileRotations,
@@ -3131,11 +3273,10 @@ async function runEmbeddedAgentInternal(
                 : {}),
             });
             if (assistantFailoverOutcome.error.suspend) {
-              void suspendSession({
+              suspendForFailure({
                 cfg: params.config,
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
-                laneId: globalLane,
                 reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
                 failedProvider: assistantFailoverOutcome.error.provider ?? provider,
                 failedModel: assistantFailoverOutcome.error.model ?? modelId,
@@ -3184,6 +3325,9 @@ async function runEmbeddedAgentInternal(
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            authMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             thinkingLevel: params.thinkLevel,
@@ -3312,6 +3456,17 @@ async function runEmbeddedAgentInternal(
                 livenessState,
                 timeoutPhase,
                 providerStarted,
+                // Completion-idle recovery is exhausted here. Keep this terminal so
+                // model fallback cannot replay a potentially still-active Codex turn.
+                ...(shouldSurfaceCodexCompletionTimeout
+                  ? {
+                      error: {
+                        kind: "incomplete_turn" as const,
+                        message: timeoutText,
+                        fallbackSafe: false,
+                      },
+                    }
+                  : {}),
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
@@ -3352,17 +3507,6 @@ async function runEmbeddedAgentInternal(
             timedOut,
             attempt,
           });
-          const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolvePlanningOnlyRetryInstruction({
-                provider,
-                modelId,
-                executionContract,
-                prompt: params.prompt,
-                aborted,
-                timedOut,
-                attempt,
-              });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({
@@ -3387,50 +3531,6 @@ async function runEmbeddedAgentInternal(
                 attempt,
               });
           if (
-            nextPlanningOnlyRetryInstruction &&
-            planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
-          ) {
-            const planningOnlyText = (attempt.assistantTexts ?? []).join("\n\n").trim();
-            const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
-            if (planDetails) {
-              emitAgentPlanEvent({
-                runId: params.runId,
-                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                data: {
-                  phase: "update",
-                  title: "Assistant proposed a plan",
-                  explanation: planDetails.explanation,
-                  steps: planDetails.steps,
-                  source: "planning_only_retry",
-                },
-              });
-              void params.onAgentEvent?.({
-                stream: "plan",
-                data: {
-                  phase: "update",
-                  title: "Assistant proposed a plan",
-                  explanation: planDetails.explanation,
-                  steps: planDetails.steps,
-                  source: "planning_only_retry",
-                },
-              });
-            }
-            planningOnlyRetryAttempts += 1;
-            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
-            const planningOnlyRetryLogPrefix =
-              executionContract === "strict-agentic"
-                ? "strict-agentic execution contract triggered"
-                : "planning-only turn detected";
-            log.warn(
-              `${planningOnlyRetryLogPrefix}: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} harness=${sanitizeForLog(agentHarness.id)} ` +
-                `contract=${executionContract} configured=${configuredExecutionContractForLog} — retrying ` +
-                `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
-            );
-            continue;
-          }
-          if (
-            !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts < maxReasoningOnlyRetryAttempts
           ) {
@@ -3444,7 +3544,6 @@ async function runEmbeddedAgentInternal(
             continue;
           }
           const reasoningOnlyRetriesExhausted =
-            !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts >= maxReasoningOnlyRetryAttempts;
           if (
@@ -3466,7 +3565,6 @@ async function runEmbeddedAgentInternal(
             continue;
           }
           if (
-            !nextPlanningOnlyRetryInstruction &&
             !nextReasoningOnlyRetryInstruction &&
             nextEmptyResponseRetryInstruction &&
             emptyResponseRetryAttempts < maxEmptyResponseRetryAttempts
@@ -3489,6 +3587,18 @@ async function runEmbeddedAgentInternal(
                 timedOut,
                 attempt,
               });
+          const incompleteTurnFallbackSafe = Boolean(
+            incompleteTurnText &&
+            !aborted &&
+            !timedOut &&
+            !promptError &&
+            !attempt.lastToolError &&
+            !hasAttemptTerminalState(attempt) &&
+            !accumulatedReplayState.hadPotentialSideEffects,
+          );
+          const terminalToolPresentation = incompleteTurnFallbackSafe
+            ? readAttemptTerminalToolPresentation()
+            : undefined;
           if (
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&
@@ -3500,7 +3610,7 @@ async function runEmbeddedAgentInternal(
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
-            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
+            !accumulatedReplayState.hadPotentialSideEffects &&
             compactionContinuationRetryAttempts < 1
           ) {
             compactionContinuationRetryAttempts += 1;
@@ -3519,73 +3629,20 @@ async function runEmbeddedAgentInternal(
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
             );
           }
-          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
-            log.warn(
-              `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} configured=${configuredExecutionContractForLog} — surfacing blocked state`,
-            );
-            // Criterion 4 of the GPT-5.4 parity gate requires every terminal
-            // exit path to emit an explicit livenessState + replayInvalid so
-            // downstream observers never see "silent disappearance". Every
-            // other hard-error terminal branch in this file uses "blocked"
-            // for its livenessState (role ordering, image size, schema
-            // error, compaction timeout, aborted-with-no-payloads). Match
-            // that convention here so lifecycle consumers treat an
-            // isError:true strict-agentic-blocked payload the same way they
-            // treat any other error-terminal payload. Replay validity is
-            // delegated to the shared resolver because the plan-only
-            // transcript itself is replay-safe even though the run is
-            // terminal.
-            const replayInvalid = resolveReplayInvalidForAttempt(null);
-            const livenessState: EmbeddedRunLivenessState = "blocked";
-            setTerminalLifecycleMeta({
-              replayInvalid,
-              livenessState,
-            });
-            return {
-              payloads: [
-                {
-                  text: STRICT_AGENTIC_BLOCKED_TEXT,
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta,
-                aborted,
-                systemPromptReport: attempt.systemPromptReport,
-                finalPromptText: attempt.finalPromptText,
-                finalAssistantVisibleText,
-                finalAssistantRawText,
-                replayInvalid,
-                livenessState,
-                toolSummary: attemptToolSummary,
-                ...(failureSignal ? { failureSignal } : {}),
-                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
-              },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
-            };
-          }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
-            const replayInvalid = resolveReplayInvalidForAttempt(
-              "⚠️ Agent couldn't generate a response. Please try again.",
-            );
+            const incompletePayloadText = terminalToolPresentation
+              ? terminalToolPresentation.concat(
+                  "\n\n",
+                  "⚠️ Agent couldn't generate a response. Please try again.",
+                )
+              : "⚠️ Agent couldn't generate a response. Please try again.";
+            const replayInvalid = resolveReplayInvalidForAttempt(incompletePayloadText);
             const livenessState = resolveRunLivenessState({
               payloadCount: 0,
               aborted,
               timedOut,
               attempt,
-              incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
+              incompleteTurnText: incompletePayloadText,
             });
             setTerminalLifecycleMeta({
               replayInvalid,
@@ -3601,7 +3658,7 @@ async function runEmbeddedAgentInternal(
             return {
               payloads: [
                 {
-                  text: "⚠️ Agent couldn't generate a response. Please try again.",
+                  text: incompletePayloadText,
                   isError: true,
                 },
               ],
@@ -3615,6 +3672,12 @@ async function runEmbeddedAgentInternal(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                error: {
+                  kind: "incomplete_turn",
+                  message: "Agent couldn't generate a response.",
+                  fallbackSafe: incompleteTurnFallbackSafe,
+                  terminalPresentation: terminalToolPresentation !== undefined,
+                },
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
@@ -3633,7 +3696,6 @@ async function runEmbeddedAgentInternal(
             };
           }
           if (
-            !nextPlanningOnlyRetryInstruction &&
             !nextReasoningOnlyRetryInstruction &&
             nextEmptyResponseRetryInstruction &&
             emptyResponseRetryAttempts >= maxEmptyResponseRetryAttempts
@@ -3664,10 +3726,12 @@ async function runEmbeddedAgentInternal(
                 `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
                 `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
                 `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
-                `compactions=${attemptCompactionCount} planningRetries=${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} ` +
-                `reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
+                `compactions=${attemptCompactionCount} reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
                 `emptyRetries=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
-                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — surfacing error to user`,
+                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +
+                (terminalToolPresentation
+                  ? "surfacing tool-authored terminal presentation"
+                  : "surfacing error to user"),
             );
 
             // Mark the failing profile for cooldown so multi-profile setups
@@ -3683,7 +3747,9 @@ async function runEmbeddedAgentInternal(
             return {
               payloads: [
                 {
-                  text: incompleteTurnText,
+                  text: terminalToolPresentation
+                    ? terminalToolPresentation.concat("\n\n", incompleteTurnText)
+                    : incompleteTurnText,
                   isError: true,
                 },
               ],
@@ -3697,6 +3763,12 @@ async function runEmbeddedAgentInternal(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                error: {
+                  kind: "incomplete_turn",
+                  message: "Agent couldn't generate a response.",
+                  fallbackSafe: incompleteTurnFallbackSafe,
+                  terminalPresentation: terminalToolPresentation !== undefined,
+                },
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
@@ -3729,7 +3801,6 @@ async function runEmbeddedAgentInternal(
               beforeAgentFinalizeRevisionReason,
             );
             suppressNextUserMessagePersistence = true;
-            planningOnlyRetryInstruction = null;
             reasoningOnlyRetryInstruction = null;
             emptyResponseRetryInstruction = null;
             compactionContinuationRetryInstruction = null;

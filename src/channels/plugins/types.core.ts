@@ -758,6 +758,8 @@ export type ChannelMessageActionAdapter = {
       ChannelMessageActionName,
       {
         aliases: string[];
+        /** Alias fields that identify the destination conversation, not an existing message. */
+        deliveryTargetAliases?: string[];
       }
     >
   >;
@@ -765,6 +767,8 @@ export type ChannelMessageActionAdapter = {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
+  /** Return true when a provider-native tool invocation has a visible or destructive side effect. */
+  isToolDeliveryAction?: (params: { args: Record<string, unknown> }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   /** Recover the actual resolved send route from a successful action result. */
   extractToolSendResult?: (params: {

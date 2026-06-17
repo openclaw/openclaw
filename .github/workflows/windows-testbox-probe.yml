@@ -133,8 +133,9 @@ jobs:
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
               Invoke-WebRequest -Uri $env:UBUNTU_WSL_ROOTFS_URL -OutFile $rootfs -UseBasicParsing
-              wsl.exe --import UbuntuProbe $wslRoot $rootfs --version 2
-              Write-Host "wsl_import_exit=$LASTEXITCODE"
+              $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
+              Write-Host $import.Text
+              Write-Host "wsl_import_exit=$($import.Code)"
               $list = Invoke-WslText -Arguments @("--list", "--verbose")
               Write-Host $list.Text
               Write-Host "wsl_list_after_import_exit=$($list.Code)"
@@ -144,14 +145,15 @@ jobs:
             if ($distros.Count -gt 0) {
               $distro = $distros[0]
               Write-Host "wsl_probe_distro=$distro"
-              wsl.exe -d $distro --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+              $exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
             } else {
-              wsl.exe --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+              $exec = Invoke-WslText -Arguments @("--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
             }
-            if ($LASTEXITCODE -eq 0) {
+            Write-Host $exec.Text
+            if ($exec.Code -eq 0) {
               $ok = $true
             }
-            Write-Host "wsl_exec_exit=$LASTEXITCODE"
+            Write-Host "wsl_exec_exit=$($exec.Code)"
           }
 
           if ($ok) {

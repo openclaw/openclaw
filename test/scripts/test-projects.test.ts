@@ -335,6 +335,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes code-mode namespace live repro changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/code-mode-namespace-live.test.ts"],
+    });
+  });
+
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -484,6 +491,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps CI workflow edits on workflow guard tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/ci.yml"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-workflow-guards.test.ts"],
+    });
+  });
+
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
     for (const workflowPath of [
       ".github/workflows/ci-check-testbox.yml",
@@ -581,6 +595,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/package-openclaw-for-docker.mjs",
         ["test/scripts/package-openclaw-for-docker.test.ts"],
       ],
+      ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+      ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
       ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
@@ -1123,6 +1139,8 @@ describe("scripts/test-projects changed-target routing", () => {
     withTinyGitRepo(
       {
         "test/helpers/temp-dir.ts": "export const tempDir = 'x';\n",
+        "test/helpers/temp-dir.test.ts":
+          "import { tempDir } from './temp-dir.js';\nvoid tempDir;\n",
         "src/foo.test.ts":
           "import { tempDir } from '../test/helpers/temp-dir.js';\nvoid tempDir;\n",
       },
@@ -1131,7 +1149,7 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     );
 
-    expect(targets).toEqual(["src/foo.test.ts"]);
+    expect(targets).toEqual(["test/helpers/temp-dir.test.ts", "src/foo.test.ts"]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {

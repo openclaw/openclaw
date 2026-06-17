@@ -37,6 +37,7 @@ async function writeEvidence(pathLocal: string) {
         kind: "openclaw.qa.evidence-summary",
         schemaVersion: 2,
         generatedAt: "2026-06-14T00:00:00.000Z",
+        evidenceMode: "full",
         entries: [],
       },
       null,

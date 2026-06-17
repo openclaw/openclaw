@@ -40,7 +40,7 @@ function isToolDocBlockStart(line: string): boolean {
     return true;
   }
   return (
-    normalized.endsWith(":") && normalized === normalized.toUpperCase() && normalized.length > 12
+    normalized.endsWith(":") && line.trim() === line.trim().toUpperCase() && normalized.length > 12
   );
 }
 

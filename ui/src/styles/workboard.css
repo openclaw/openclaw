@@ -377,6 +377,9 @@
   min-height: 0;
   padding: 10px;
   display: grid;
+  /* Pin implicit rows to content height so an overflowing column scrolls instead
+     of squeezing cards, which collapsed their line-clamped titles to 0px. */
+  grid-auto-rows: max-content;
   gap: 10px;
   align-content: start;
   overflow-y: auto;

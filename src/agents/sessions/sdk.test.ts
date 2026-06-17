@@ -110,6 +110,84 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
   return streamMocks.streamSimple.mock.lastCall?.[2] ?? {};
 }
 
+function appendPersistedAssistantMessage(params: {
+  sessionManager: SessionManager;
+  content: unknown;
+  stopReason?: "stop" | "aborted";
+}) {
+  params.sessionManager.appendMessage({
+    role: "assistant",
+    content: params.content,
+    api: "messages",
+    provider: "anthropic",
+    model: "sonnet-4.6",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: params.stopReason ?? "stop",
+    timestamp: Date.now(),
+  } as Parameters<SessionManager["appendMessage"]>[0]);
+}
+
+async function createSessionFromManager(sessionManager: SessionManager) {
+  const { session } = await createAgentSession({
+    model: testModel,
+    resourceLoader: createEmptyResourceLoader(),
+    sessionManager,
+    settingsManager: SettingsManager.inMemory(),
+    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+  });
+  return session;
+}
+
+async function createSessionWithPersistedAssistantContent(content: unknown) {
+  const sessionManager = SessionManager.inMemory();
+  appendPersistedAssistantMessage({ sessionManager, content });
+  return await createSessionFromManager(sessionManager);
+}
+
+describe("AgentSession getLastAssistantText", () => {
+  it.each([
+    {
+      name: "legacy string content",
+      content: " legacy assistant text ",
+      expected: "legacy assistant text",
+    },
+    {
+      name: "normal text blocks",
+      content: [
+        { type: "thinking", thinking: "hidden" },
+        { type: "text", text: "visible " },
+        { type: "text", text: "answer" },
+      ],
+      expected: "visible answer",
+    },
+    { name: "null content", content: null, expected: undefined },
+    { name: "object content", content: { type: "text", text: "malformed" }, expected: undefined },
+  ])("reads $name without throwing", async ({ content, expected }) => {
+    const session = await createSessionWithPersistedAssistantContent(content);
+    expect(session.getLastAssistantText()).toBe(expected);
+  });
+
+  it("skips aborted malformed content and returns the preceding assistant text", async () => {
+    const sessionManager = SessionManager.inMemory();
+    appendPersistedAssistantMessage({ sessionManager, content: "previous answer" });
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: null,
+      stopReason: "aborted",
+    });
+    const session = await createSessionFromManager(sessionManager);
+
+    expect(session.getLastAssistantText()).toBe("previous answer");
+  });
+});
+
 describe("createAgentSession attribution headers", () => {
   it("tolerates Bedrock models that do not expose baseUrl", async () => {
     const options = await createSessionAndStreamModel(

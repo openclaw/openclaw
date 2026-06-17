@@ -10,9 +10,19 @@ const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
-const ensureConfigReadyMock = vi.fn(async () => {});
+type EnsureConfigReadyOptions = {
+  beforeStateMigrations?: () => Promise<boolean>;
+  commandPath?: string[];
+  requireConfig?: boolean;
+};
+const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
+  async () => {},
+);
 const ensurePluginRegistryLoadedMock = vi.fn();
 const routeLogsToStderrMock = vi.fn();
+const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
+const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
+const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
 
 const runtimeMock = {
   log: vi.fn(),
@@ -48,6 +58,12 @@ vi.mock("./config-guard.js", () => ({
 
 vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
+}));
+
+vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
+  prepareGatewayRunBootstrap: prepareGatewayRunBootstrapMock,
+  recheckGatewayRunBootstrap: recheckGatewayRunBootstrapMock,
+  reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -129,6 +145,16 @@ describe("registerPreActionHooks", () => {
     programLocal
       .command("status")
       .option("--json")
+      .action(() => {});
+    const gateway = programLocal
+      .command("gateway")
+      .option("--force")
+      .option("--reset")
+      .action(() => {});
+    gateway
+      .command("run")
+      .option("--force")
+      .option("--reset")
       .action(() => {});
     programLocal
       .command("backup")
@@ -238,6 +264,59 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     processTitleSetSpy.mockRestore();
+  });
+
+  it("runs gateway pre-bootstrap before full-CLI gateway bootstrap", async () => {
+    prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
+    const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
+    gatewayRunCommand.setOptionValueWithSource("force", true, "cli");
+    try {
+      await runPreAction({
+        parseArgv: ["gateway", "run"],
+        processArgv: [
+          "node",
+          "openclaw",
+          "--log-level",
+          "debug",
+          "gateway",
+          "run",
+          "--raw-stream-path",
+          "--reset",
+          "--force",
+        ],
+      });
+    } finally {
+      gatewayRunCommand.setOptionValueWithSource("force", false, "default");
+    }
+
+    expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
+      opts: { force: true, reset: false },
+      runtime: runtimeMock,
+    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the gateway config recheck to the state migration boundary", async () => {
+    await runPreAction({
+      parseArgv: ["gateway", "run"],
+      processArgv: ["node", "openclaw", "gateway", "run"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beforeStateMigrations: expect.any(Function),
+        commandPath: ["gateway", "run"],
+      }),
+    );
+    const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
+    await beforeStateMigrations?.();
+    expect(recheckGatewayRunBootstrapMock).toHaveBeenCalledWith({
+      opts: { force: false, reset: false },
+      runtime: runtimeMock,
+    });
+    expect(reloadTrustedGatewayRunEnvironmentMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+    });
   });
 
   it("loads plugins for text local agent runs", async () => {

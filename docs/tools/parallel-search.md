@@ -11,8 +11,8 @@ OpenClaw bundles two [Parallel](https://parallel.ai/) `web_search` providers:
 
 - **Parallel Search (Free)** (`parallel-free`) -- Parallel's free
   [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). Requires no
-  account or API key. OpenClaw selects it automatically when no other web search
-  provider is configured, so `web_search` works without setup.
+  account or API key. Select it explicitly when you want Parallel's hosted
+  key-free search path.
 - **Parallel Search** (`parallel`) -- Parallel's paid Search API. Requires a
   `PARALLEL_API_KEY` and offers higher rate limits and objective tuning.
 
@@ -29,8 +29,8 @@ explicitly.
 
 ## API key (paid provider)
 
-`parallel-free` requires no setup. The paid `parallel` provider needs an API
-key:
+`parallel-free` requires no API key, but it still must be selected as the
+managed provider. The paid `parallel` provider needs an API key:
 
 <Steps>
   <Step title="Create an account">
@@ -66,6 +66,8 @@ key:
   tools: {
     web: {
       search: {
+        // Use "parallel-free" for the free Search MCP, or "parallel" for
+        // the paid API-backed provider shown here.
         provider: "parallel",
       },
     },

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan } from "../../plugins/types.js";
 
 /** Embedded migration mode that returns config patch details instead of persisting them. */
-export type MigrationConfigPatchMode = "return";
+type MigrationConfigPatchMode = "return";
 
 /** Common options accepted by migrate list, plan, apply, and default flows. */
 export type MigrateCommonOptions = {

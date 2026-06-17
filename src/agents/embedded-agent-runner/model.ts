@@ -2,6 +2,7 @@
  * Resolves embedded-agent provider/model selections from config, registry, and catalogs.
  */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
@@ -21,7 +22,7 @@ import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { buildModelAliasLines } from "../model-alias-lines.js";
+import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -454,7 +455,7 @@ function findInlineModelMatch(params: {
   );
 }
 
-export { buildModelAliasLines, buildInlineProviderModels };
+export { buildInlineProviderModels };
 
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -851,6 +852,43 @@ function applyConfiguredProviderOverrides(params: {
     providerConfig.localService,
   );
 }
+type ExplicitModelResolution =
+  | { kind: "resolved"; model: Model; source: "configured" }
+  | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
+  | { kind: "suppressed" };
+
+function shouldSuppressInlineConfiguredModel(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  baseUrl?: string;
+}): boolean {
+  if (
+    shouldUnconditionallySuppress({
+      provider: params.provider,
+      id: params.modelId,
+      ...(params.cfg ? { config: params.cfg } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    })
+  ) {
+    return true;
+  }
+  if (
+    normalizeProviderId(params.provider) !== "openai" ||
+    normalizeLowercaseStringOrEmpty(params.modelId) !== "gpt-5.3-codex-spark"
+  ) {
+    return false;
+  }
+  return shouldSuppressBuiltInModel({
+    provider: params.provider,
+    id: params.modelId,
+    ...(params.cfg ? { config: params.cfg } : {}),
+    ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+}
+
 function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -859,7 +897,7 @@ function resolveExplicitModelWithRegistry(params: {
   agentDir?: string;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
-}): { kind: "resolved"; model: Model } | { kind: "suppressed" } | undefined {
+}): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
@@ -869,17 +907,21 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (inlineMatch?.api) {
-    // Unconditional suppressions (no `when` clause) represent absolute provider
-    // capability blocks that cannot be overridden by inline user configuration.
-    // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
-    // intentionally bypassable when the user has explicitly configured the model.
-    // (#74451)
+    const transport = resolveProviderTransport({
+      provider,
+      api: inlineMatch.api,
+      baseUrl: inlineMatch.baseUrl ?? providerConfig?.baseUrl,
+      cfg,
+      workspaceDir,
+      runtimeHooks,
+    });
     if (
-      shouldUnconditionallySuppress({
+      shouldSuppressInlineConfiguredModel({
         provider,
-        id: modelId,
-        ...(cfg ? { config: cfg } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
+        modelId,
+        cfg,
+        workspaceDir,
+        baseUrl: transport.baseUrl,
       })
     ) {
       return { kind: "suppressed" };
@@ -893,6 +935,7 @@ function resolveExplicitModelWithRegistry(params: {
     }) as StaticCatalogFallbackModel | undefined;
     return {
       kind: "resolved",
+      source: "configured",
       model: normalizeResolvedModel({
         provider,
         cfg,
@@ -913,11 +956,10 @@ function resolveExplicitModelWithRegistry(params: {
     };
   }
   if (
-    shouldSuppressBuiltInModel({
+    shouldUnconditionallySuppress({
       provider,
       id: modelId,
       ...(cfg ? { config: cfg } : {}),
-      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
     })
   ) {
@@ -926,8 +968,31 @@ function resolveExplicitModelWithRegistry(params: {
   const model = modelRegistry.find(provider, modelId) as Model | null;
 
   if (model) {
+    const configuredBaseUrl =
+      typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+    const discoveredBaseUrl =
+      typeof (model as { baseUrl?: unknown }).baseUrl === "string"
+        ? (model as { baseUrl: string }).baseUrl
+        : undefined;
+    const effectiveBaseUrl = configuredBaseUrl ?? discoveredBaseUrl;
+    if (
+      shouldSuppressBuiltInModel({
+        provider,
+        id: modelId,
+        ...(cfg ? { config: cfg } : {}),
+        ...(effectiveBaseUrl ? { baseUrl: effectiveBaseUrl } : {}),
+        ...(workspaceDir ? { workspaceDir } : {}),
+      })
+    ) {
+      return { kind: "suppressed" };
+    }
     return {
       kind: "resolved",
+      source: "registry",
+      dropOnRuntimeMiss:
+        normalizeProviderId(provider) === "openai" &&
+        modelId.trim().toLowerCase() === "gpt-5.3-codex-spark" &&
+        !effectiveBaseUrl,
       model: normalizeResolvedModel({
         provider,
         cfg,
@@ -963,6 +1028,7 @@ function resolveExplicitModelWithRegistry(params: {
     });
     return {
       kind: "resolved",
+      source: "configured",
       model: normalizeResolvedModel({
         provider,
         cfg,
@@ -981,6 +1047,21 @@ function resolveExplicitModelWithRegistry(params: {
         runtimeHooks,
       }),
     };
+  }
+  if (fallbackInlineMatch) {
+    return undefined;
+  }
+
+  if (
+    shouldSuppressBuiltInModel({
+      provider,
+      id: modelId,
+      ...(cfg ? { config: cfg } : {}),
+      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
+    })
+  ) {
+    return { kind: "suppressed" };
   }
 
   return undefined;
@@ -1053,6 +1134,12 @@ function resolvePluginDynamicModelWithRegistry(params: {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
+  const agentRuntimeId =
+    agentHarnessPolicy.runtimeSource !== "implicit" ||
+    cfg?.plugins?.entries?.codex?.enabled === true
+      ? agentHarnessPolicy.runtime
+      : undefined;
   const authProfile = resolveDynamicModelAuthProfile({
     provider,
     cfg,
@@ -1076,6 +1163,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
       config: cfg,
       agentDir,
       workspaceDir,
+      ...(agentRuntimeId ? { agentRuntimeId } : {}),
       provider,
       modelId,
       modelRegistry,
@@ -1104,6 +1192,45 @@ function resolvePluginDynamicModelWithRegistry(params: {
     model: overriddenDynamicModel,
     runtimeHooks,
   });
+}
+
+function resolveRuntimePreferredSuppressedModel(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: CoreModelRegistry;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  authProfileId?: string;
+  preferredProfile?: string;
+  runtimeHooks?: ProviderRuntimeHooks;
+}): Model | undefined {
+  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  if (
+    !shouldCompareProviderRuntimeResolvedModel({
+      provider: params.provider,
+      modelId: params.modelId,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      runtimeHooks,
+    })
+  ) {
+    return undefined;
+  }
+  return resolvePluginDynamicModelWithRegistry({ ...params, runtimeHooks });
+}
+
+function shouldDropRuntimePreferredExplicitMiss(params: {
+  provider: string;
+  modelId: string;
+  explicitModel: ExplicitModelResolution;
+}): boolean {
+  return (
+    params.explicitModel.kind === "resolved" &&
+    params.explicitModel.source === "registry" &&
+    params.explicitModel.dropOnRuntimeMiss
+  );
 }
 
 function resolveConfiguredFallbackModel(params: {
@@ -1176,6 +1303,18 @@ function resolveConfiguredFallbackModel(params: {
     workspaceDir,
     runtimeHooks,
   });
+  if (
+    configuredModel &&
+    shouldSuppressInlineConfiguredModel({
+      provider,
+      modelId,
+      cfg,
+      workspaceDir,
+      baseUrl: fallbackTransport.baseUrl,
+    })
+  ) {
+    return undefined;
+  }
   const requestConfig = resolveProviderRequestConfig({
     provider,
     api: fallbackTransport.api ?? "openai-responses",
@@ -1345,16 +1484,6 @@ function mergeModelCompat(
   return { ...base, ...override };
 }
 
-function preferProviderRuntimeResolvedModel(params: {
-  explicitModel: Model;
-  runtimeResolvedModel?: Model;
-}): Model {
-  if (params.runtimeResolvedModel) {
-    return params.runtimeResolvedModel;
-  }
-  return params.explicitModel;
-}
-
 function normalizeProviderModelRef(params: {
   provider: string;
   modelId: string;
@@ -1398,7 +1527,7 @@ export function resolveModelWithRegistry(params: {
   };
   const explicitModel = resolveExplicitModelWithRegistry(scopedParams);
   if (explicitModel?.kind === "suppressed") {
-    return undefined;
+    return resolveRuntimePreferredSuppressedModel(scopedParams);
   }
   if (explicitModel?.kind === "resolved") {
     if (
@@ -1413,11 +1542,16 @@ export function resolveModelWithRegistry(params: {
     ) {
       return explicitModel.model;
     }
-    const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(scopedParams);
-    return preferProviderRuntimeResolvedModel({
-      explicitModel: explicitModel.model,
-      runtimeResolvedModel: pluginDynamicModel,
-    });
+    return (
+      resolvePluginDynamicModelWithRegistry(scopedParams) ??
+      (shouldDropRuntimePreferredExplicitMiss({
+        provider: scopedParams.provider,
+        modelId: scopedParams.modelId,
+        explicitModel,
+      })
+        ? undefined
+        : explicitModel.model)
+    );
   }
   const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(scopedParams);
   if (pluginDynamicModel) {
@@ -1546,6 +1680,20 @@ export async function resolveModelAsync(
     runtimeHooks,
   });
   if (explicitModel?.kind === "suppressed") {
+    const suppressedRuntimeModel = resolveRuntimePreferredSuppressedModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      modelRegistry,
+      cfg,
+      agentDir: resolvedAgentDir,
+      workspaceDir,
+      authProfileId: options?.authProfileId,
+      preferredProfile: options?.preferredProfile,
+      runtimeHooks,
+    });
+    if (suppressedRuntimeModel) {
+      return { model: suppressedRuntimeModel, authStorage, modelRegistry };
+    }
     return {
       error: buildUnknownModelError({
         provider: normalizedRef.provider,

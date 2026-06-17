@@ -992,13 +992,29 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(telegramPrompt).toContain("Telegram rich text is available");
     expect(telegramPrompt).toContain("<details><summary>...</summary>...</details>");
+    expect(telegramPrompt).toContain("tables with alignment/captions/spans");
+    expect(telegramPrompt).toContain("pull quotes");
+    expect(telegramPrompt).toContain('task lists via `<input type="checkbox"/>` inside `<li>`');
+    expect(telegramPrompt).toContain("anchors/in-message links");
+    expect(telegramPrompt).toContain("maps/collages/slideshows");
+    expect(telegramPrompt).toContain("use `<details>`, not legacy `<blockquote expandable>`");
+    expect(telegramPrompt).toContain("use `<ul><li>...</li></ul>`, not literal bullet characters");
+    expect(telegramPrompt).toContain(
+      'standalone rich media blocks such as `<img src="https://..."/>`',
+    );
+    expect(telegramPrompt).toContain("use captions/credits when helpful");
+    expect(telegramPrompt).toContain("Media tags are blocks, not inline prose");
     expect(telegramPrompt).toContain("This is not legacy MarkdownV2/parse_mode");
-    expect(telegramPrompt).toContain("Button labels are plain text only");
+    expect(telegramPrompt).toContain("OpenClaw renders Telegram-safe rich messages");
+    expect(telegramPrompt).toContain("button labels are plain text only");
     expect(telegramPrompt.indexOf("Telegram rich text is available")).toBeGreaterThan(
       telegramPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
     );
     expect(discordPrompt).not.toContain("Telegram rich text is available");
     expect(plainTelegramPrompt).not.toContain("Telegram rich text is available");
+    expect(plainTelegramPrompt).toContain("Telegram rich messages are disabled");
+    expect(plainTelegramPrompt).toContain("Do not claim Bot API 10.1 tables");
+    expect(plainTelegramPrompt).toContain("enable Telegram rich messages for this channel/account");
   });
 
   it("describes Telegram rich text for automatic final replies without the message tool", () => {
@@ -1067,6 +1083,22 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
     },
   );
+
+  it("requires an explicit target for message-tool-only turns when requested", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+      runtimeInfo: {
+        channel: "telegram",
+        chatType: "group",
+      },
+    });
+
+    expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).not.toContain("The target defaults to the current source channel");
+  });
 
   it("tells automatic source delivery to expose generated media as MEDIA directives", () => {
     const prompt = buildAgentSystemPrompt({
