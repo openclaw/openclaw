@@ -18,6 +18,7 @@ import { resolveModelRefFromString, type ModelRef } from "../agents/model-select
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
@@ -1857,8 +1858,20 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = replacement.text;
       normalized.shouldSkip = false;
     }
+    // When message_tool_only mode is active and the heartbeat response tool was
+    // not called, suppress the raw reply to prevent private text from leaking to
+    // the channel (e.g. Telegram). The model must explicitly call the response
+    // tool with notify:true to send a visible reply.
+    // Error/failure notices that opt into source-suppression delivery (e.g.
+    // Codex usage limits) are still delivered.
+    const leakMessageToolOnlyReply =
+      usesHeartbeatResponseTool &&
+      !heartbeatToolResponse &&
+      replyPayload &&
+      !getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression;
     const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
+      leakMessageToolOnlyReply ||
+      (normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion);
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
