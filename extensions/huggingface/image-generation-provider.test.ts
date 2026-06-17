@@ -213,6 +213,23 @@ describe("huggingface image-generation provider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects requests for more than one image (capability is single-image)", async () => {
+    mockHuggingfaceApiKey();
+    const fetchMock = mockSuccessfulImageResponse();
+
+    const provider = buildHuggingfaceImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "huggingface",
+        model: "",
+        prompt: "draw a cat",
+        cfg: {},
+        count: 2,
+      }),
+    ).rejects.toThrow(/single image per request/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("declares the hf-inference text-to-image capability surface", () => {
     const provider = buildHuggingfaceImageGenerationProvider();
     expect(provider.id).toBe("huggingface");

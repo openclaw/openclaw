@@ -76,6 +76,11 @@ export function buildHuggingfaceImageGenerationProvider(): ImageGenerationProvid
           "Hugging Face image generation does not support input images; use a provider with edit capability",
         );
       }
+      if (typeof req.count === "number" && req.count > 1) {
+        throw new Error(
+          "Hugging Face image generation supports only a single image per request (count must be 1)",
+        );
+      }
       const auth = await resolveApiKeyForProvider({
         provider: PROVIDER_ID,
         cfg: req.cfg,
@@ -127,6 +132,7 @@ export function buildHuggingfaceImageGenerationProvider(): ImageGenerationProvid
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
       try {
