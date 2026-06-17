@@ -25,8 +25,22 @@ export const formatResponseUsageLine = (params: {
   }
   const input = usage.input;
   const output = usage.output;
-  if (typeof input !== "number" && typeof output !== "number") {
+  const total = usage.total;
+  if (typeof input !== "number" && typeof output !== "number" && typeof total !== "number") {
     return null;
+  }
+  // Handle total-only usage when input/output are not available
+  if (typeof input !== "number" && typeof output !== "number" && typeof total === "number") {
+    const cost =
+      params.showCost
+        ? estimateUsageCost({
+            usage: { input: total, output: 0 },
+            cost: params.costConfig,
+          })
+        : undefined;
+    const costLabel = params.showCost ? formatUsd(cost) : undefined;
+    const suffix = costLabel ? ` · est ${costLabel}` : "";
+    return `Usage: ${formatTokenCount(total)} total${suffix}`;
   }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
