@@ -85,7 +85,7 @@ const NETWORK_PROXY_CONFIG_PATCH = {
     "openclaw-network": {
       filesystem: {
         ":minimal": "read",
-        ":project_roots": {
+        ":workspace_roots": {
           ".": "write",
         },
       },

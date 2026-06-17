@@ -1181,7 +1181,7 @@ describe("runCodexAppServerSideQuestion", () => {
         "openclaw-network": {
           filesystem: {
             ":minimal": "read",
-            ":project_roots": { ".": "write" },
+            ":workspace_roots": { ".": "write" },
           },
           network: {
             enabled: true,
