@@ -2239,8 +2239,7 @@ export async function runReplyAgent(params: {
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
-      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined) ??
-      (followupRun.run.session?.responseUsage as SessionEntry["responseUsage"] | undefined);
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage) && !preserveUserFacingSessionState) {
       const costConfig = resolveModelCostConfig({
