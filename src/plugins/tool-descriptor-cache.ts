@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
-import type { JsonObject, ToolDescriptor } from "../tools/types.js";
+import { evaluateToolAvailability } from "../tools/availability.js";
+import type {
+  JsonObject,
+  ToolAvailabilityExpression,
+  ToolDescriptor,
+} from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -151,17 +156,53 @@ export function capturePluginToolDescriptor(params: {
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+
+  // Preserve tool-authored availability expressions so descriptor-driven
+  // planning can enforce them.  Read through a narrowed record so the
+  // descriptor cache stays decoupled from the agent-tool type contract.
+  const rawAvailability = (params.tool as { availability?: unknown })
+    .availability;
+  const availability: ToolAvailabilityExpression | undefined =
+    rawAvailability !== undefined &&
+    typeof rawAvailability === "object" &&
+    rawAvailability !== null &&
+    !Array.isArray(rawAvailability) &&
+    ("kind" in rawAvailability ||
+      "allOf" in rawAvailability ||
+      "anyOf" in rawAvailability)
+      ? (rawAvailability as ToolAvailabilityExpression)
+      : undefined;
+
+  const descriptor: ToolDescriptor = {
+    name: params.tool.name,
+    ...(title ? { title } : {}),
+    description: params.tool.description,
+    inputSchema: asJsonObject(params.tool.parameters),
+    owner: { kind: "plugin", pluginId: params.pluginId },
+    executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+    ...(availability ? { availability } : {}),
+  };
+
+  // Surface malformed availability at descriptor-registration time
+  // (once per captured descriptor) so plugin authors see authoring
+  // errors immediately.  Only unsupported-signal diagnostics are
+  // authoring-time concerns; runtime conditions (auth, config, env)
+  // are evaluated later with a real context.
+  if (availability) {
+    const diagnostics = evaluateToolAvailability({ descriptor });
+    for (const diag of diagnostics) {
+      if (diag.reason === "unsupported-signal") {
+        console.warn(
+          `[plugins] tool descriptor authoring error (${params.pluginId}/${params.tool.name}): ${diag.message}`,
+        );
+      }
+    }
+  }
+
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     optional: params.optional,
-    descriptor: {
-      name: params.tool.name,
-      ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
-      owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
-    },
+    descriptor,
   };
 }
 

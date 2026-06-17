@@ -17,6 +17,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -168,5 +169,114 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+});
+
+describe("capturePluginToolDescriptor availability validation", () => {
+  afterEach(() => {
+    resetPluginToolDescriptorCache();
+  });
+
+  function makeTool(overrides: Record<string, unknown> = {}) {
+    return {
+      name: "test_tool",
+      description: "A test tool",
+      parameters: { type: "object" as const, properties: {} },
+      ...overrides,
+    } as never;
+  }
+
+  it("warns when tool has empty availability anyOf group", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { anyOf: [] } }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("tool descriptor authoring error (test-plugin/test_tool)"),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Empty availability anyOf group"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns when tool has empty availability allOf group", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { allOf: [] } }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Empty availability allOf group"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for valid availability expression", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { kind: "always" } }),
+        optional: false,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn when tool has no availability", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool(),
+        optional: false,
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for non-expression availability metadata", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { privateMeta: true } }),
+        optional: false,
+      });
+      // Non-expression objects are treated as metadata, not availability expressions
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("preserves availability on the captured descriptor when valid", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cached = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { kind: "always" } }),
+        optional: false,
+      });
+      expect(cached.descriptor.availability).toEqual({ kind: "always" });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
