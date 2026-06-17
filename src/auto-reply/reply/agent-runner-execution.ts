@@ -42,8 +42,8 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
-import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -75,9 +75,8 @@ import {
   resolveSessionStoreEntry,
   resolveSessionTranscriptPath,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { removeSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -3531,13 +3530,7 @@ export async function runAgentTurnWithFallback(params: {
           }
 
           // Remove session entry from store using a fresh, locked snapshot.
-          await updateSessionStore(params.storePath, (store) => {
-            const resolved = resolveSessionStoreEntry({ store, sessionKey });
-            delete store[resolved.normalizedKey];
-            for (const legacyKey of resolved.legacyKeys) {
-              delete store[legacyKey];
-            }
-          });
+          await removeSessionEntry({ storePath: params.storePath, sessionKey });
         } catch (cleanupErr) {
           defaultRuntime.error(
             `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,

@@ -25,12 +25,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveSessionStoreEntry,
   type SessionEntry,
   type SessionPostCompactionDelegate,
-  updateSessionStore,
 } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntry,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
@@ -1606,40 +1608,24 @@ export async function runReplyAgent(replyParams: {
       activeSessionEntry.continuationChainStartedAt = params.startedAt;
       activeSessionEntry.continuationChainTokens = params.tokens;
       activeSessionEntry.continuationChainId = chainId;
-    }
-    if (activeSessionStore) {
-      const resolved = resolveSessionStoreEntry({ store: activeSessionStore, sessionKey });
-      const existingEntry = resolved.existing ?? activeSessionEntry;
-      if (existingEntry) {
-        activeSessionStore[resolved.normalizedKey] = {
-          ...existingEntry,
-          continuationChainCount: params.count,
-          continuationChainStartedAt: params.startedAt,
-          continuationChainTokens: params.tokens,
-          continuationChainId: chainId,
-        };
-        for (const legacyKey of resolved.legacyKeys) {
-          delete activeSessionStore[legacyKey];
-        }
+      if (activeSessionStore) {
+        activeSessionStore[sessionKey] = activeSessionEntry;
       }
     }
     if (storePath) {
       try {
-        await updateSessionStore(storePath, (store) => {
-          const resolved = resolveSessionStoreEntry({ store, sessionKey });
-          if (resolved.existing) {
-            store[resolved.normalizedKey] = {
-              ...resolved.existing,
-              continuationChainCount: params.count,
-              continuationChainStartedAt: params.startedAt,
-              continuationChainTokens: params.tokens,
-              continuationChainId: chainId,
-            };
-            for (const legacyKey of resolved.legacyKeys) {
-              delete store[legacyKey];
-            }
-          }
-        });
+        await patchSessionEntry(
+          { storePath, sessionKey },
+          () => ({
+            continuationChainCount: params.count,
+            continuationChainStartedAt: params.startedAt,
+            continuationChainTokens: params.tokens,
+            continuationChainId: chainId,
+          }),
+          // Chain bookkeeping is not user activity: preserve updatedAt so the
+          // persist does not bump the session's last-activity ordering.
+          { preserveActivity: true },
+        );
       } catch (err) {
         defaultRuntime.log(
           `Failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
@@ -1817,18 +1803,12 @@ export async function runReplyAgent(replyParams: {
       });
       if (pressureResult.fired && storePath) {
         try {
-          await updateSessionStore(storePath, (store) => {
-            const resolved = resolveSessionStoreEntry({ store, sessionKey });
-            if (resolved.existing) {
-              store[resolved.normalizedKey] = {
-                ...resolved.existing,
-                lastContextPressureBand: pressureResult.band,
-              };
-              for (const legacyKey of resolved.legacyKeys) {
-                delete store[legacyKey];
-              }
-            }
-          });
+          await patchSessionEntry(
+            { storePath, sessionKey },
+            () => ({ lastContextPressureBand: pressureResult.band }),
+            // Band bookkeeping must not count as activity; keep updatedAt stable.
+            { preserveActivity: true },
+          );
         } catch (err) {
           defaultRuntime.log(
             `context-pressure band persistence failed (non-fatal): ${String(err)}`,

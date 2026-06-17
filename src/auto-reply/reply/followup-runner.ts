@@ -26,7 +26,11 @@ import {
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntry,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -36,8 +40,8 @@ import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -1330,12 +1334,10 @@ export function createFollowupRunner(params: {
           { dispatchToolDelegates },
           { resolveLiveContinuationRuntimeConfig },
           { loadContinuationChainState, persistContinuationChainState },
-          { updateSessionStore: updateSessionStoreFromStoreModule, resolveSessionStoreEntry },
         ] = await Promise.all([
           import("../continuation/delegate-dispatch.js"),
           import("../continuation/config.js"),
           import("../continuation/state.js"),
-          import("../../config/sessions/store.js"),
         ]);
         const tailUsage = runResult.meta?.agentMeta?.usage;
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
@@ -1359,29 +1361,25 @@ export function createFollowupRunner(params: {
           // -> `updateSessionStoreEntry`, which `loadSessionStore(...,
           // skipCache: true)` and patches usage fields only --
           // `continuationChain*` is not in that patch shape. Without an
-          // explicit `updateSessionStore` call the followup-only token chain
+          // explicit chain-state persist the followup-only token chain
           // never reaches disk; cost-cap and `maxChainLength` enforcement
           // see stale values across cache eviction or gateway restart.
           if (storePath && sessionKey) {
             try {
-              await updateSessionStoreFromStoreModule(storePath, (store) => {
-                const resolved = resolveSessionStoreEntry({ store, sessionKey });
-                if (resolved.existing) {
-                  store[resolved.normalizedKey] = {
-                    ...resolved.existing,
-                    continuationChainCount: nextState.currentChainCount,
-                    continuationChainStartedAt: nextState.chainStartedAt,
-                    continuationChainTokens: nextState.accumulatedChainTokens,
-                    // Persist the chain id to disk too so it survives gateway
-                    // restart / cache eviction and the next drain does not
-                    // re-mint a fresh id.
-                    ...(nextState.chainId ? { continuationChainId: nextState.chainId } : {}),
-                  };
-                  for (const legacyKey of resolved.legacyKeys) {
-                    delete store[legacyKey];
-                  }
-                }
-              });
+              await patchSessionEntry(
+                { storePath, sessionKey },
+                () => ({
+                  continuationChainCount: nextState.currentChainCount,
+                  continuationChainStartedAt: nextState.chainStartedAt,
+                  continuationChainTokens: nextState.accumulatedChainTokens,
+                  // Persist the chain id to disk too so it survives gateway
+                  // restart / cache eviction and the next drain does not
+                  // re-mint a fresh id.
+                  ...(nextState.chainId ? { continuationChainId: nextState.chainId } : {}),
+                }),
+                // Chain bookkeeping is not user activity: keep updatedAt stable.
+                { preserveActivity: true },
+              );
             } catch (err) {
               // Mirror agent-runner.ts's defensive log: persistence failure
               // must not break the followup reply itself.
@@ -1435,11 +1433,7 @@ export function createFollowupRunner(params: {
         delaySeconds?: number;
         traceparent?: string;
       }[] = attemptContinueWorkRequests;
-      if (
-        effectiveContinueWorkRequests.length === 0 &&
-        continuationEnabled &&
-        sessionKey
-      ) {
+      if (effectiveContinueWorkRequests.length === 0 && continuationEnabled && sessionKey) {
         const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
           import("../continuation/signal.js"),
           import("../tokens.js"),
@@ -1483,12 +1477,10 @@ export function createFollowupRunner(params: {
           { resolveLiveContinuationRuntimeConfig },
           { loadContinuationChainState, persistContinuationChainState },
           { scheduleContinuationWorkBatch },
-          { updateSessionStore: updateSessionStoreFromStoreModule, resolveSessionStoreEntry },
         ] = await Promise.all([
           import("../continuation/config.js"),
           import("../continuation/state.js"),
           import("../continuation/lazy.runtime.js"),
-          import("../../config/sessions/store.js"),
         ]);
         const continuationConfig = resolveLiveContinuationRuntimeConfig(runtimeConfig);
         const tailUsage = runResult.meta?.agentMeta?.usage;
@@ -1534,24 +1526,19 @@ export function createFollowupRunner(params: {
           // reloads the advanced budget after cache eviction or restart.
           if (storePath) {
             try {
-              await updateSessionStoreFromStoreModule(storePath, (store) => {
-                const resolved = resolveSessionStoreEntry({ store, sessionKey });
-                if (!resolved.existing) {
-                  return;
-                }
-                store[resolved.normalizedKey] = {
-                  ...resolved.existing,
+              await patchSessionEntry(
+                { storePath, sessionKey },
+                () => ({
                   continuationChainCount: scheduleResult.chainState.currentChainCount,
                   continuationChainStartedAt: scheduleResult.chainState.chainStartedAt,
                   continuationChainTokens: scheduleResult.chainState.accumulatedChainTokens,
                   ...(scheduleResult.chainState.chainId
                     ? { continuationChainId: scheduleResult.chainState.chainId }
                     : {}),
-                };
-                for (const legacyKey of resolved.legacyKeys) {
-                  delete store[legacyKey];
-                }
-              });
+                }),
+                // Chain bookkeeping is not user activity: keep updatedAt stable.
+                { preserveActivity: true },
+              );
             } catch (err) {
               defaultRuntime.error?.(
                 `[followup-runner] failed to persist continue_work chain state for ${sessionKey}: ${String(err)}`,

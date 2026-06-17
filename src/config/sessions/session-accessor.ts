@@ -26,6 +26,7 @@ import {
   patchSessionEntry as patchFileSessionEntry,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
+  updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
@@ -363,6 +364,22 @@ export async function updateSessionEntry(
     skipMaintenance: options.skipMaintenance,
     takeCacheOwnership: options.takeCacheOwnership,
     update,
+  });
+}
+
+/**
+ * Removes a session's canonical entry plus any folded legacy-alias rows from
+ * the resolved store. Reset and corruption-recovery paths use this to drop a
+ * session so the next turn starts fresh; alias cleanup mirrors the store
+ * writer's normalized-key rules so stale aliases cannot resurrect the entry.
+ */
+export async function removeSessionEntry(scope: SessionAccessScope): Promise<void> {
+  await updateSessionStore(resolveAccessStorePath(scope), (store) => {
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+    delete store[resolved.normalizedKey];
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
+    }
   });
 }
 
