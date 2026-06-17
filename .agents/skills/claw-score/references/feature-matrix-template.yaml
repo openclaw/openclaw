@@ -1,0 +1,20 @@
+# Feature Matrix YAML Template
+#
+# Use this template to create or refresh
+# `<artifact-root>/<surface-slug>/scores.yaml`.
+# Copy category names and note filenames from the selected surface's taxonomy
+# `categories`, then add scores. Features and search anchors stay in taxonomy
+# and are joined by the renderer.
+#
+# For a new scoring run under the current process, keep `process_version: 3`.
+# For a mechanical edit to an existing score YAML without rescoring, preserve the
+# existing `process_version` instead of blindly bumping it.
+
+version: 1
+process_version: 3
+data:
+  - name: <Category>
+    category_note: <category-slug>.md
+    coverage: 0
+    quality: 0
+    completeness: 0
