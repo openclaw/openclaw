@@ -703,9 +703,6 @@ function resolveCronMessageToolAwarenessTarget(params: {
   delivery: SourceDeliveryVisibleDelivery;
   resolvedDelivery: DeliveryTargetResolution;
 }): (SuccessfulDeliveryTarget & { text: string }) | undefined {
-  if (!params.delivery.verifiedTarget) {
-    return undefined;
-  }
   const { target } = params.delivery;
   const text =
     normalizeOptionalString(target.text) ??
@@ -718,21 +715,25 @@ function resolveCronMessageToolAwarenessTarget(params: {
   const channel =
     targetChannel && targetChannel !== "message"
       ? targetChannel
-      : params.resolvedDelivery.ok
+      : params.delivery.verifiedTarget && params.resolvedDelivery.ok
         ? params.resolvedDelivery.channel
         : undefined;
   const to =
     normalizeOptionalString(target.to) ??
-    (params.resolvedDelivery.ok ? params.resolvedDelivery.to : undefined);
+    (params.delivery.verifiedTarget && params.resolvedDelivery.ok
+      ? params.resolvedDelivery.to
+      : undefined);
   if (!channel || !to) {
     return undefined;
   }
   const accountId =
     target.accountId ??
-    (params.resolvedDelivery.ok ? params.resolvedDelivery.accountId : undefined);
+    (params.delivery.verifiedTarget && params.resolvedDelivery.ok
+      ? params.resolvedDelivery.accountId
+      : undefined);
   const threadId =
     target.threadId ??
-    (target.threadImplicit === true && params.resolvedDelivery.ok
+    (params.delivery.verifiedTarget && target.threadImplicit === true && params.resolvedDelivery.ok
       ? params.resolvedDelivery.threadId
       : undefined);
   return {

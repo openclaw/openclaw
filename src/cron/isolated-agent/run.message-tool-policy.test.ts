@@ -1222,6 +1222,51 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("queues awareness for explicit message-tool sends even when they do not satisfy the delivery target", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    runEmbeddedAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([
+        {
+          tool: "message",
+          provider: "openclaw-weixin",
+          to: "user-123",
+          text: "386502",
+        },
+      ]),
+    );
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "message-tool-off-plan-awareness",
+        name: "Message Tool Off Plan Awareness",
+      }),
+    });
+
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledTimes(1);
+    expect(queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0]).toMatchObject({
+      job: { id: "message-tool-off-plan-awareness" },
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            verifiedTarget: false,
+            target: {
+              tool: "message",
+              provider: "openclaw-weixin",
+              to: "user-123",
+              text: "386502",
+            },
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+  });
+
   it("rewrites generic message provider to resolved channel in delivery trace", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());

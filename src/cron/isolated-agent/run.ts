@@ -1223,7 +1223,7 @@ async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  if (sourceDeliveryOutcome.verifiedMessageToolDelivery) {
+  if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
     await queueCronMessageToolDeliveryAwareness({
       cfg: prepared.input.cfg,

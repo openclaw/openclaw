@@ -546,6 +546,67 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("queues message-tool awareness for explicit off-plan message-tool deliveries", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:openclaw-weixin:direct:user-123",
+      baseSessionKey: "agent:main:openclaw-weixin:direct:user-123",
+      to: "user-123",
+    });
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery({
+        channel: "telegram",
+        to: "123456",
+        accountId: "telegram-bot",
+        threadId: "42",
+      }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "openclaw-weixin",
+              to: "user-123",
+              text: "386502",
+            },
+            verifiedTarget: false,
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "openclaw-weixin",
+        target: "user-123",
+        accountId: undefined,
+        threadId: undefined,
+      }),
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\n386502",
+      {
+        sessionKey: "agent:main:openclaw-weixin:direct:user-123",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123:",
+      },
+    );
+  });
+
   it("keeps announce fallback when message-tool delivery is not verified for the target", async () => {
     const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
     params.sourceDeliveryOutcome = {
