@@ -19,7 +19,7 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
+import { sanitizeAssistantVisibleTextWithOptions } from "../shared/text/assistant-visible-text.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
@@ -75,7 +75,7 @@ function sanitizeAssistantChatHistoryText(
   text: string,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
 ): { text: string; changed: boolean } {
-  const sanitized = sanitizeAssistantVisibleText(text);
+  const sanitized = sanitizeAssistantVisibleTextWithOptions(text, { trim: "none" });
   const truncated = truncateChatHistoryText(sanitized, maxChars);
   return {
     text: truncated.text,
