@@ -5,6 +5,7 @@ import {
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { modelKey } from "../agents/model-selection.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -661,16 +662,24 @@ export async function runSetupWizard(
     return;
   }
 
+  // Assisted reruns recover the configured default entry; fresh and full setup
+  // keep using global defaults unless the caller explicitly selects an agent.
+  const setupAgentId =
+    opts.agentId ??
+    (useAgentAssistedSetup && baseConfig.agents?.list?.length
+      ? resolveDefaultAgentId(baseConfig)
+      : undefined);
+  const setupOpts = setupAgentId ? { ...opts, agentId: setupAgentId } : opts;
   const workspaceInput =
     opts.workspace ??
     (flow === "quickstart"
-      ? opts.agentId
-        ? resolveAgentWorkspaceDir(baseConfig, opts.agentId)
+      ? setupAgentId
+        ? resolveAgentWorkspaceDir(baseConfig, setupAgentId)
         : (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await prompter.text({
           message: t("wizard.setup.workspaceDirectory"),
-          initialValue: opts.agentId
-            ? resolveAgentWorkspaceDir(baseConfig, opts.agentId)
+          initialValue: setupAgentId
+            ? resolveAgentWorkspaceDir(baseConfig, setupAgentId)
             : (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE),
         }));
 
@@ -682,7 +691,7 @@ export async function runSetupWizard(
     let localConfig = applyLocalSetupWorkspaceConfig(
       config,
       workspaceDir,
-      opts.agentId ? { agentId: opts.agentId } : undefined,
+      setupAgentId ? { agentId: setupAgentId } : undefined,
     );
     if (opts.skipBootstrap) {
       localConfig = applySkipBootstrapConfig(localConfig);
@@ -703,8 +712,8 @@ export async function runSetupWizard(
   };
   let nextConfig = buildLocalSetupConfig(baseConfig);
   const hasRunnableSetupAgent = async (config: OpenClawConfig): Promise<boolean> =>
-    opts.agentId
-      ? await hasRunnableLocalAgent(config, { agentId: opts.agentId })
+    setupAgentId
+      ? await hasRunnableLocalAgent(config, { agentId: setupAgentId })
       : await hasRunnableLocalAgent(config);
   const applySetupAgentModel = (
     config: OpenClawConfig,
@@ -712,12 +721,12 @@ export async function runSetupWizard(
     applyDefaultModel: (config: OpenClawConfig, model: string) => OpenClawConfig,
     modelSourceConfig: OpenClawConfig = config,
   ): OpenClawConfig => {
-    if (!opts.agentId) {
+    if (!setupAgentId) {
       return applyDefaultModel(config, model);
     }
-    const existingModel = resolveAgentConfig(modelSourceConfig, opts.agentId)?.model;
+    const existingModel = resolveAgentConfig(modelSourceConfig, setupAgentId)?.model;
     return applyAgentConfig(config, {
-      agentId: opts.agentId,
+      agentId: setupAgentId,
       model:
         existingModel && typeof existingModel === "object"
           ? { ...existingModel, primary: model }
@@ -728,8 +737,8 @@ export async function runSetupWizard(
     config: OpenClawConfig,
     applyDefaultModel: (config: OpenClawConfig, model: string) => OpenClawConfig,
   ): OpenClawConfig => {
-    const selectedModel = opts.agentId
-      ? resolveAgentEffectiveModelPrimary(config, opts.agentId)
+    const selectedModel = setupAgentId
+      ? resolveAgentEffectiveModelPrimary(config, setupAgentId)
       : undefined;
     return selectedModel ? applyDefaultModel(config, selectedModel) : config;
   };
@@ -737,7 +746,7 @@ export async function runSetupWizard(
     previousConfig: OpenClawConfig,
     pickerConfig: OpenClawConfig,
   ): OpenClawConfig =>
-    opts.agentId ? restoreSetupAgentDefaultModel(pickerConfig, previousConfig) : pickerConfig;
+    setupAgentId ? restoreSetupAgentDefaultModel(pickerConfig, previousConfig) : pickerConfig;
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
   let hasRunnableAgent =
@@ -745,7 +754,7 @@ export async function runSetupWizard(
   const canOfferMigration =
     useAgentAssistedSetup &&
     authChoiceFromPrompt &&
-    !opts.agentId &&
+    !setupAgentId &&
     !hasRunnableAgent &&
     (await isSetupMigrationTargetFresh({ baseConfig, workspaceDir }));
   if (canOfferMigration) {
@@ -802,7 +811,7 @@ export async function runSetupWizard(
     const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
     ({ promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js"));
     authStore = ensureAuthProfileStore(
-      opts.agentId ? resolveAgentDir(nextConfig, opts.agentId) : undefined,
+      setupAgentId ? resolveAgentDir(nextConfig, setupAgentId) : undefined,
       {
         allowKeychainPrompt: false,
       },
@@ -845,7 +854,7 @@ export async function runSetupWizard(
         secretInputMode: opts.secretInputMode,
       });
       nextConfig = customResult.config;
-      if (opts.agentId) {
+      if (setupAgentId) {
         nextConfig = restoreSetupAgentDefaultModel(nextConfig, configBeforeCustomProvider);
         if (customResult.providerId && customResult.modelId) {
           const { applyPrimaryModel } = await loadModelPickerModule();
@@ -876,7 +885,7 @@ export async function runSetupWizard(
           includeProviderPluginSetups: false,
           loadCatalog: false,
           workspaceDir,
-          ...(opts.agentId ? { agentDir: resolveAgentDir(nextConfig, opts.agentId) } : {}),
+          ...(setupAgentId ? { agentDir: resolveAgentDir(nextConfig, setupAgentId) } : {}),
           runtime,
         });
         if (modelSelection.config) {
@@ -888,7 +897,7 @@ export async function runSetupWizard(
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          ...(setupAgentId ? { agentId: setupAgentId } : {}),
           validateCatalog: false,
         });
       }
@@ -904,11 +913,11 @@ export async function runSetupWizard(
       config: nextConfig,
       prompter,
       runtime,
-      setDefaultModel: !opts.agentId,
+      setDefaultModel: !setupAgentId,
       preserveExistingDefaultModel: true,
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      ...(setupAgentId ? { agentId: setupAgentId } : {}),
       opts: {
-        ...opts,
+        ...setupOpts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
       },
     });
@@ -953,7 +962,7 @@ export async function runSetupWizard(
         preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
         browseCatalogOnDemand: true,
         workspaceDir,
-        ...(opts.agentId ? { agentDir: resolveAgentDir(nextConfig, opts.agentId) } : {}),
+        ...(setupAgentId ? { agentDir: resolveAgentDir(nextConfig, setupAgentId) } : {}),
         runtime,
       });
       if (modelSelection.config) {
@@ -965,7 +974,7 @@ export async function runSetupWizard(
     }
 
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      ...(setupAgentId ? { agentId: setupAgentId } : {}),
       validateCatalog: false,
     });
     const canFinishModelSetupAfterSelection = shouldPromptModelSelection
@@ -1003,7 +1012,7 @@ export async function runSetupWizard(
     await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      ...(setupAgentId ? { agentId: setupAgentId } : {}),
     });
     if (opts.json) {
       const { logNonInteractiveOnboardingJson } =
@@ -1028,7 +1037,7 @@ export async function runSetupWizard(
     await finishAgentAssistedSetup({
       config: nextConfig,
       settings: gateway.settings,
-      opts,
+      opts: setupOpts,
       prompter,
     });
     return;
@@ -1078,7 +1087,7 @@ export async function runSetupWizard(
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    ...(setupAgentId ? { agentId: setupAgentId } : {}),
   });
 
   if (opts.skipSearch) {

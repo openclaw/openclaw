@@ -984,6 +984,85 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("recovers the configured default agent when no agent is explicitly selected", async () => {
+    const defaultAgentConfig = {
+      agents: {
+        defaults: {
+          model: "openai/main-model",
+          workspace: "/tmp/main-workspace",
+        },
+        list: [
+          { id: "main" },
+          {
+            id: "ops",
+            default: true,
+            workspace: "/tmp/ops-workspace",
+            model: {
+              primary: "anthropic/old-model",
+              fallbacks: ["openai/ops-fallback"],
+            },
+          },
+        ],
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: defaultAgentConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-api-key");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: defaultAgentConfig,
+      agentModelOverride: "anthropic/ops-model",
+    });
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+
+    expect(hasRunnableLocalAgent).toHaveBeenCalledWith(expect.any(Object), { agentId: "ops" });
+    expect(getMockCallArg(hasRunnableLocalAgent, 1, 0, "default agent readiness")).toEqual(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({ model: "openai/main-model" }),
+          list: expect.arrayContaining([
+            expect.objectContaining({
+              id: "ops",
+              model: {
+                primary: "anthropic/ops-model",
+                fallbacks: ["openai/ops-fallback"],
+              },
+            }),
+          ]),
+        }),
+      }),
+    );
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        setDefaultModel: false,
+      }),
+    );
+    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/ops-workspace",
+      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    expect(finishAgentAssistedSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { acceptRisk: true, agentId: "ops" },
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
   it("applies a custom provider model only to the selected secondary agent", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
