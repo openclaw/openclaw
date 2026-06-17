@@ -31,11 +31,11 @@ export function buildUsageContract(
 
   const maxTokens = state.contextTokenBudget;
   const usedTokens =
-    typeof state.contextUsedTokens === "number" && state.contextUsedTokens > 0
+    typeof state.contextUsedTokens === "number" && state.contextUsedTokens >= 0
       ? state.contextUsedTokens
       : promptTotal > 0
         ? promptTotal
-        : undefined;
+        : 0;
   const pctUsed =
     maxTokens && usedTokens !== undefined ? Math.round((usedTokens / maxTokens) * 100) : undefined;
 
