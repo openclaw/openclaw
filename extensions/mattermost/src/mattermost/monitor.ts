@@ -33,6 +33,7 @@ import {
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostThreadPosts,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
   type MattermostClient,
@@ -1483,6 +1484,39 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 : null,
           });
         };
+
+        // ── Thread history backfill: seed in-memory history from server ──
+        // When a thread reply arrives but the local in-memory history window is
+        // empty (gateway restart, session clear, token expiry), fetch the full
+        // thread from the Mattermost server so the agent has context instead of
+        // replying blind. Best-effort — never blocks inbound dispatch.
+        if (threadRootId && historyKey) {
+          const existing = channelHistories.get(historyKey);
+          if (!existing || existing.length === 0) {
+            try {
+              const threadPosts = await fetchMattermostThreadPosts(client, threadRootId);
+              if (threadPosts.length > 0) {
+                const entries: HistoryEntry[] = [];
+                for (const p of threadPosts) {
+                  if (p.id === post.id) continue;
+                  const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+                  const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
+                  entries.push({
+                    sender,
+                    body: p.message || "[attachment]",
+                    timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
+                    messageId: p.id ?? undefined,
+                  });
+                }
+                if (entries.length > 0) {
+                  channelHistories.set(historyKey, entries.slice(-historyLimit));
+                }
+              }
+            } catch {
+              // best-effort: server fetch failure should not block the message
+            }
+          }
+        }
 
         const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
         const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];
