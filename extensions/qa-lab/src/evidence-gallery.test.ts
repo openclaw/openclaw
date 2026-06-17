@@ -1,0 +1,253 @@
+// Qa Lab tests cover generic QA evidence gallery behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  buildQaEvidenceGalleryModel,
+  resolveQaEvidenceArtifactFile,
+  resolveQaEvidenceFile,
+} from "./evidence-gallery.js";
+import {
+  QA_EVIDENCE_FILENAME,
+  buildVitestEvidenceSummary,
+  type QaEvidenceSummaryJson,
+} from "./evidence-summary.js";
+
+async function createTempRepo() {
+  return fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-gallery-"));
+}
+
+async function writeJson(filePath: string, value: unknown) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+describe("evidence gallery", () => {
+  it("builds a generic gallery model for non-UX QA Lab evidence", async () => {
+    const repoRoot = await createTempRepo();
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+    await fs.mkdir(path.join(outputDir, "runner"), { recursive: true });
+    await fs.writeFile(path.join(outputDir, "runner", "result.json"), '{"ok":true}\n', "utf8");
+    await fs.writeFile(path.join(outputDir, "runner", "output.log"), "vitest pass\n", "utf8");
+
+    const evidence: QaEvidenceSummaryJson = buildVitestEvidenceSummary({
+      artifactPaths: [
+        { kind: "runner-result", path: "runner/result.json" },
+        { kind: "log", path: "runner/output.log" },
+      ],
+      env: {
+        OPENCLAW_QA_REF: "gallery-test",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-17T12:00:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      targets: [
+        {
+          id: "qa-lab.generic-vitest",
+          title: "Generic Vitest evidence",
+          sourcePath: "extensions/qa-lab/src/generic.test.ts",
+          primaryCoverageIds: ["qa.generic"],
+        },
+        {
+          id: "qa-lab.no-artifacts",
+          title: "Generic entry without artifacts",
+          sourcePath: "extensions/qa-lab/src/no-artifacts.test.ts",
+          primaryCoverageIds: ["qa.empty"],
+        },
+      ],
+      results: [
+        {
+          id: "qa-lab.generic-vitest",
+          status: "pass",
+          durationMs: 42,
+        },
+        {
+          id: "qa-lab.no-artifacts",
+          status: "skipped",
+          durationMs: 1,
+        },
+      ],
+    });
+    evidence.entries[1] = {
+      ...evidence.entries[1],
+      execution: {
+        ...evidence.entries[1].execution!,
+        artifacts: [],
+      },
+    };
+    const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
+    await writeJson(evidencePath, evidence);
+
+    const model = await buildQaEvidenceGalleryModel({
+      evidencePath: outputDir,
+      repoRoot,
+    });
+
+    expect(model.counts).toMatchObject({ pass: 1, skipped: 1, fail: 0, blocked: 0 });
+    expect(model.producerContext).toBeNull();
+    expect(model.entries).toHaveLength(2);
+    expect(model.entries[0]).toMatchObject({
+      id: "qa-lab.generic-vitest",
+      kind: "vitest-test",
+      artifacts: [
+        expect.objectContaining({
+          exists: true,
+          kind: "runner-result",
+          mediaKind: "json",
+          preview: '{\n  "ok": true\n}',
+        }),
+        expect.objectContaining({
+          exists: true,
+          kind: "log",
+          mediaKind: "text",
+          preview: "vitest pass\n",
+        }),
+      ],
+    });
+    expect(model.entries[1]).toMatchObject({
+      id: "qa-lab.no-artifacts",
+      artifacts: [],
+    });
+  });
+
+  it("detects UX Matrix producer context from suite-level evidence artifacts", async () => {
+    const repoRoot = await createTempRepo();
+    const suiteDir = path.join(repoRoot, ".artifacts", "qa-e2e", "suite");
+    const runDir = path.join(suiteDir, "script", "ux-matrix-evidence-dashboard", "run-1");
+    await fs.mkdir(path.join(runDir, "surfaces", "web-ui", "stages", "first-run"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(runDir, "surfaces", "web-ui", "stages", "first-run", "screenshot.png"),
+      "png",
+    );
+    await writeJson(path.join(runDir, "manifest.json"), {
+      run: {
+        runId: "run-1",
+        status: "pass",
+      },
+    });
+    await writeJson(path.join(runDir, "matrix.json"), {
+      counts: {
+        pass: 1,
+        "proof-gap": 2,
+      },
+      cells: [
+        { stage: "first-run", status: "pass", surface: "web-ui" },
+        { stage: "first-run", status: "proof-gap", surface: "cli" },
+        { stage: "error-state", status: "proof-gap", surface: "cli" },
+      ],
+    });
+    await writeJson(path.join(runDir, "release-ledger.json"), {
+      counts: {
+        pass: 1,
+        "proof-gap": 2,
+      },
+    });
+    await fs.writeFile(path.join(runDir, "scorecard.md"), "# UX Matrix\n\n- pass: 1\n", "utf8");
+    await fs.writeFile(path.join(runDir, "commands.txt"), "node ux matrix\n", "utf8");
+    await fs.mkdir(path.join(runDir, "preflight"), { recursive: true });
+    await fs.writeFile(path.join(runDir, "preflight", "memory.txt"), "memory ok\n", "utf8");
+
+    await writeJson(path.join(suiteDir, QA_EVIDENCE_FILENAME), {
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-06-17T12:00:00.000Z",
+      evidenceMode: "full",
+      entries: [
+        {
+          test: {
+            kind: "ux-matrix-cell",
+            id: "ux-matrix.web-ui.first-run",
+            title: "UX Matrix: web-ui / first-run",
+            source: { path: "scripts/ux-matrix/dashboard.ts" },
+          },
+          coverage: [{ id: "ui.control", role: "primary" }],
+          execution: {
+            runner: "ux-matrix-dashboard",
+            environment: {
+              ref: "gallery-test",
+              os: "darwin",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "ux-matrix",
+              live: false,
+              model: { name: null, ref: null },
+              fixture: "mocked-control-ui-and-isolated-cli",
+            },
+            packageSource: { kind: "source-checkout", sha: "abc123" },
+            artifacts: [
+              {
+                kind: "screenshot",
+                path: ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/surfaces/web-ui/stages/first-run/screenshot.png",
+                source: "ux-matrix:web-ui:first-run",
+              },
+            ],
+          },
+          result: { status: "pass", timing: { wallMs: 1 } },
+        },
+      ],
+    });
+
+    const model = await buildQaEvidenceGalleryModel({
+      evidencePath: suiteDir,
+      repoRoot,
+    });
+
+    expect(model.producerContext).toMatchObject({
+      kind: "ux-matrix",
+      manifest: {
+        runId: "run-1",
+        runStatus: "pass",
+      },
+      matrix: {
+        cells: 3,
+        counts: {
+          pass: 1,
+          "proof-gap": 2,
+        },
+        stages: ["error-state", "first-run"],
+        surfaces: ["cli", "web-ui"],
+      },
+      releaseLedger: {
+        counts: {
+          pass: 1,
+          "proof-gap": 2,
+        },
+      },
+    });
+    expect(model.producerContext?.scorecard?.preview).toContain("# UX Matrix");
+    expect(model.producerContext?.commands?.preview).toBe("node ux matrix\n");
+    expect(model.producerContext?.preflight.memoryPath).toContain("preflight/memory.txt");
+  });
+
+  it("resolves evidence and artifacts inside the repo root only", async () => {
+    const repoRoot = await createTempRepo();
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "suite");
+    const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
+    await writeJson(evidencePath, {
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-06-17T12:00:00.000Z",
+      evidenceMode: "full",
+      entries: [],
+    });
+    await fs.writeFile(path.join(outputDir, "artifact.log"), "ok\n", "utf8");
+
+    await expect(resolveQaEvidenceFile({ inputPath: outputDir, repoRoot })).resolves.toBe(
+      await fs.realpath(evidencePath),
+    );
+    await expect(
+      resolveQaEvidenceArtifactFile({
+        artifactPath: "artifact.log",
+        evidencePath,
+        repoRoot,
+      }),
+    ).resolves.toBe(await fs.realpath(path.join(outputDir, "artifact.log")));
+    await expect(
+      resolveQaEvidenceFile({ inputPath: "/tmp/not-openclaw-evidence.json", repoRoot }),
+    ).rejects.toThrow("Evidence path must exist inside the repo root.");
+  });
+});

@@ -52,7 +52,7 @@ describe("qa scenario catalog", () => {
       pack.scenarios
         .filter((scenario) => scenario.execution?.kind !== "flow")
         .map((scenario) => scenario.id),
-    ).toStrictEqual(["control-ui-chat-flow-playwright"]);
+    ).toStrictEqual(["control-ui-chat-flow-playwright", "ux-matrix-evidence-dashboard"]);
     expect(
       pack.scenarios
         .filter((scenario) => scenario.execution.kind === "flow")
@@ -139,6 +139,19 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
+  });
+
+  it("loads script evidence producer scenarios from YAML", () => {
+    const scenario = readQaScenarioById("ux-matrix-evidence-dashboard");
+
+    expect(scenario.execution.kind).toBe("script");
+    if (scenario.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${scenario.execution.kind}`);
+    }
+    expect(scenario.execution.path).toBe("scripts/ux-matrix/dashboard.ts");
+    expect(scenario.execution.args).toEqual(["--once", "--artifact-base", "${outputDir}"]);
+    expect(scenario.coverage?.primary).toContain("ui.control");
+    expect(scenario.coverage?.secondary).toEqual(["cli-entrypoint", "status-snapshots"]);
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {

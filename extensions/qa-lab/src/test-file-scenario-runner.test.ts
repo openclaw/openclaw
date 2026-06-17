@@ -12,7 +12,7 @@ import {
 const tempRoots: string[] = [];
 
 function makeTestFileScenario(
-  executionKind: "vitest" | "playwright",
+  executionKind: "script" | "vitest" | "playwright",
   pathLocal: string,
 ): QaSeedScenarioWithSource {
   return {
@@ -35,6 +35,9 @@ function makeTestFileScenario(
     execution: {
       kind: executionKind,
       path: pathLocal,
+      ...(executionKind === "script"
+        ? { args: ["--once", "--artifact-base", "${outputDir}"] }
+        : {}),
     },
   };
 }
@@ -203,5 +206,230 @@ describe("qa test file scenario runner", () => {
         },
       },
     });
+  });
+
+  it("runs script scenarios and imports producer QA evidence artifacts", async () => {
+    const repoRoot = await makeTempRepo("qa-script-scenario-");
+    const commands: QaScenarioCommandExecution[] = [];
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("script", "scripts/ux-matrix/dashboard.ts")],
+      runCommand: async (command) => {
+        commands.push(command);
+        const scenarioArtifactBase = path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-script",
+          "scenario-script",
+        );
+        const runRoot = path.join(scenarioArtifactBase, "run-1");
+        await fs.mkdir(path.join(runRoot, "surfaces", "web-ui"), { recursive: true });
+        await fs.writeFile(path.join(runRoot, "surfaces", "web-ui", "screenshot.png"), "png");
+        await fs.writeFile(
+          path.join(runRoot, "qa-evidence.json"),
+          `${JSON.stringify(
+            {
+              kind: "openclaw.qa.evidence-summary",
+              schemaVersion: 2,
+              generatedAt: "2026-06-14T00:00:00.000Z",
+              evidenceMode: "full",
+              entries: [
+                {
+                  test: {
+                    kind: "ux-matrix-cell",
+                    id: "ux-matrix.web-ui.first-run",
+                    title: "UX Matrix: web-ui / first-run",
+                    source: { path: "scripts/ux-matrix/dashboard.ts" },
+                  },
+                  coverage: [{ id: "ui.control", role: "primary" }],
+                  execution: {
+                    runner: "ux-matrix-dashboard",
+                    environment: {
+                      ref: "scenario-ref",
+                      os: "darwin",
+                      nodeVersion: "v24.0.0",
+                    },
+                    provider: {
+                      id: "ux-matrix",
+                      live: false,
+                      model: { name: null, ref: null },
+                      fixture: "mocked-control-ui-and-isolated-cli",
+                    },
+                    packageSource: { kind: "source-checkout", sha: "abc123" },
+                    artifacts: [
+                      {
+                        kind: "screenshot",
+                        path: "surfaces/web-ui/screenshot.png",
+                        source: "ux-matrix:web-ui:first-run",
+                      },
+                    ],
+                  },
+                  result: { status: "pass", timing: { wallMs: 1 } },
+                },
+              ],
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(scenarioArtifactBase, "latest-run.json"),
+          `${JSON.stringify({ qaEvidence: path.join(runRoot, "qa-evidence.json") }, null, 2)}\n`,
+          "utf8",
+        );
+        return {
+          exitCode: 0,
+          stdout: "script pass\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.executionKind).toBe("script");
+    expect(commands.map((command) => command.args)).toEqual([
+      [
+        "--import",
+        "tsx",
+        "scripts/ux-matrix/dashboard.ts",
+        "--once",
+        "--artifact-base",
+        path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script", "scenario-script"),
+      ],
+    ]);
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+    expect(evidence.entries).toHaveLength(1);
+    expect(evidence.entries[0]).toMatchObject({
+      test: {
+        kind: "ux-matrix-cell",
+        id: "ux-matrix.web-ui.first-run",
+      },
+      coverage: [
+        {
+          id: "ui.control",
+          role: "primary",
+        },
+      ],
+      execution: {
+        runner: "ux-matrix-dashboard",
+        artifacts: [
+          {
+            kind: "screenshot",
+            path: ".artifacts/qa-e2e/scenario-script/scenario-script/run-1/surfaces/web-ui/screenshot.png",
+            source: "ux-matrix:web-ui:first-run",
+          },
+        ],
+      },
+      result: {
+        status: "pass",
+      },
+    });
+  });
+
+  it("does not import producer QA evidence artifacts from failed script scenarios", async () => {
+    const repoRoot = await makeTempRepo("qa-script-failed-scenario-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-failed"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("script", "scripts/ux-matrix/dashboard.ts")],
+      runCommand: async () => {
+        const scenarioArtifactBase = path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-script-failed",
+          "scenario-script",
+        );
+        const runRoot = path.join(scenarioArtifactBase, "run-1");
+        await fs.mkdir(runRoot, { recursive: true });
+        await fs.writeFile(
+          path.join(runRoot, "qa-evidence.json"),
+          `${JSON.stringify(
+            {
+              kind: "openclaw.qa.evidence-summary",
+              schemaVersion: 2,
+              generatedAt: "2026-06-14T00:00:00.000Z",
+              evidenceMode: "full",
+              entries: [
+                {
+                  test: {
+                    kind: "ux-matrix-cell",
+                    id: "ux-matrix.web-ui.first-run",
+                    title: "UX Matrix: web-ui / first-run",
+                    source: { path: "scripts/ux-matrix/dashboard.ts" },
+                  },
+                  coverage: [{ id: "ui.control", role: "primary" }],
+                  execution: {
+                    runner: "ux-matrix-dashboard",
+                    environment: {
+                      ref: "scenario-ref",
+                      os: "darwin",
+                      nodeVersion: "v24.0.0",
+                    },
+                    provider: {
+                      id: "ux-matrix",
+                      live: false,
+                      model: { name: null, ref: null },
+                      fixture: "stale-producer-evidence",
+                    },
+                    packageSource: { kind: "source-checkout", sha: "abc123" },
+                    artifacts: [],
+                  },
+                  result: { status: "pass", timing: { wallMs: 1 } },
+                },
+              ],
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(scenarioArtifactBase, "latest-run.json"),
+          `${JSON.stringify({ qaEvidence: path.join(runRoot, "qa-evidence.json") }, null, 2)}\n`,
+          "utf8",
+        );
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: "script failed\n",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+    expect(evidence.entries).toHaveLength(1);
+    expect(evidence.entries[0]).toMatchObject({
+      test: {
+        kind: "script-test",
+        id: "scenario-script",
+        source: {
+          path: "scripts/ux-matrix/dashboard.ts",
+        },
+      },
+      result: {
+        status: "fail",
+        failure: {
+          reason: "node exited with 1",
+        },
+      },
+    });
+    expect(evidence.entries[0]?.test.id).not.toBe("ux-matrix.web-ui.first-run");
   });
 });

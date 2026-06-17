@@ -16,6 +16,7 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import { buildQaEvidenceGalleryModel, resolveQaEvidenceArtifactFile } from "./evidence-gallery.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
   isCaptureQueryPreset,
@@ -170,6 +171,38 @@ function createQaLabConfig(baseUrl: string): OpenClawConfig {
 
 function normalizeQaLabCleanupError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
+}
+
+function detectQaEvidenceArtifactContentType(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) {
+    return "image/png";
+  }
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (lower.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (lower.endsWith(".webm")) {
+    return "video/webm";
+  }
+  if (lower.endsWith(".mp4")) {
+    return "video/mp4";
+  }
+  if (lower.endsWith(".mov")) {
+    return "video/quicktime";
+  }
+  if (lower.endsWith(".json") || lower.endsWith(".jsonl")) {
+    return "application/json; charset=utf-8";
+  }
+  if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".log")) {
+    return "text/plain; charset=utf-8";
+  }
+  return "application/octet-stream";
 }
 
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
@@ -385,6 +418,48 @@ export async function startQaLabServer(
         }
         if (req.method === "GET" && url.pathname === "/api/outcomes") {
           writeJson(res, 200, { run: latestScenarioRun });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/evidence") {
+          const evidencePath =
+            url.searchParams.get("path")?.trim() || runnerSnapshot.artifacts?.evidencePath;
+          if (!evidencePath) {
+            writeJson(res, 200, { evidence: null });
+            return;
+          }
+          writeJson(res, 200, {
+            evidence: await buildQaEvidenceGalleryModel({
+              evidencePath,
+              repoRoot,
+            }),
+          });
+          return;
+        }
+        if (
+          (req.method === "GET" || req.method === "HEAD") &&
+          url.pathname === "/api/evidence/artifact"
+        ) {
+          const evidencePath = url.searchParams.get("evidencePath")?.trim();
+          const artifactPath = url.searchParams.get("artifactPath")?.trim();
+          if (!evidencePath || !artifactPath) {
+            writeError(res, 400, "Missing evidencePath or artifactPath");
+            return;
+          }
+          const artifactFile = await resolveQaEvidenceArtifactFile({
+            artifactPath,
+            evidencePath,
+            repoRoot,
+          });
+          const body = await fs.promises.readFile(artifactFile);
+          res.writeHead(200, {
+            "content-type": detectQaEvidenceArtifactContentType(artifactFile),
+            "content-length": body.byteLength,
+          });
+          if (req.method === "HEAD") {
+            res.end();
+            return;
+          }
+          res.end(body);
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {

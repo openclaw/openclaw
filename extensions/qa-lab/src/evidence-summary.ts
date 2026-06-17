@@ -705,6 +705,20 @@ export function buildPlaywrightEvidenceSummary(
   });
 }
 
+export function buildScriptEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "script",
+    testKind: "script-test",
+    runner: params.runner ?? "script",
+  });
+}
+
 export function buildLiveTransportEvidenceSummary(
   params: QaEvidenceBuildBase & {
     checks: readonly QaEvidenceLiveTransportCheckInput[];

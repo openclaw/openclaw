@@ -74,7 +74,7 @@ describe("qa suite runtime launcher", () => {
     runQaTestFileScenarios.mockImplementation(
       async (params: {
         outputDir: string;
-        scenarios: Array<{ id: string; execution: { kind: "vitest" | "playwright" } }>;
+        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
       }) => {
         const [scenario] = params.scenarios;
         if (!scenario) {
@@ -169,6 +169,35 @@ describe("qa suite runtime launcher", () => {
         kind: scenario.execution.kind,
       })),
     ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
+  });
+
+  it("routes selected script scenarios to the script scenario runner", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-script-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/script",
+      scenarioIds: ["ux-matrix-evidence-dashboard"],
+    });
+
+    expect(result).toMatchObject({
+      executionKind: "suite",
+      result: {
+        evidencePath: path.join(repoRoot, ".artifacts", "qa-e2e", "script", "qa-evidence.json"),
+      },
+    });
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    const [call] = runQaTestFileScenarios.mock.calls[0] ?? [];
+    expect(call).toMatchObject({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "script", "script"),
+    });
+    expect(
+      call.scenarios.map((scenario: { id: string; execution: { kind: string } }) => ({
+        id: scenario.id,
+        kind: scenario.execution.kind,
+      })),
+    ).toEqual([{ id: "ux-matrix-evidence-dashboard", kind: "script" }]);
   });
 
   it("runs mixed flow and Vitest/Playwright scenarios as one suite", async () => {
