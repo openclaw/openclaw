@@ -16,6 +16,7 @@ function successfulRun(name: string, id: number, updatedAt: string) {
     status: "completed",
     conclusion: "success",
     head_sha: sha,
+    path: ".github/workflows/ci.yml",
     created_at: "2026-06-17T10:46:24Z",
     updated_at: updatedAt,
     html_url: `https://github.com/openclaw/openclaw/actions/runs/${id}`,
@@ -84,7 +85,32 @@ describe("verify-pr-hosted-gates", () => {
         sha,
         workflowRuns: [
           {
+            ...successfulRun(`CI release gate ${sha}`, 1, "2026-06-17T10:47:00Z"),
+            event: "workflow_dispatch",
+            path: ".github/workflows/ci.yml@refs/heads/release-controls",
+            display_title: `CI release gate ${sha}`,
+          },
+        ],
+      }),
+    ).toEqual({
+      headSha: sha,
+      workflows: [expect.objectContaining({ name: `CI release gate ${sha}`, id: 1 })],
+    });
+  });
+
+  it("prefers the exact release-gate fallback while scheduled CI remains queued", () => {
+    expect(
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
             ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            status: "queued",
+            conclusion: null,
+            updated_at: "2026-06-17T10:50:00Z",
+          },
+          {
+            ...successfulRun(`CI release gate ${sha}`, 2, "2026-06-17T10:49:00Z"),
             event: "workflow_dispatch",
             display_title: `CI release gate ${sha}`,
           },
@@ -92,8 +118,27 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
-      workflows: [expect.objectContaining({ name: "CI", id: 1 })],
+      workflows: [expect.objectContaining({ name: `CI release gate ${sha}`, id: 2 })],
     });
+  });
+
+  it("rejects a completed scheduled CI failure even when a fallback passed", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            conclusion: "failure",
+          },
+          {
+            ...successfulRun(`CI release gate ${sha}`, 2, "2026-06-17T10:49:00Z"),
+            event: "workflow_dispatch",
+            display_title: `CI release gate ${sha}`,
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head CI workflow");
   });
 
   it("rejects an unmarked manual CI run", () => {
@@ -102,9 +147,25 @@ describe("verify-pr-hosted-gates", () => {
         sha,
         workflowRuns: [
           {
-            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            ...successfulRun(`CI release gate ${sha}`, 1, "2026-06-17T10:47:00Z"),
             event: "workflow_dispatch",
             display_title: "CI",
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head CI workflow");
+  });
+
+  it("rejects a manual release-gate title from another workflow", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun(`CI release gate ${sha}`, 1, "2026-06-17T10:47:00Z"),
+            event: "workflow_dispatch",
+            path: ".github/workflows/something-else.yml",
+            display_title: `CI release gate ${sha}`,
           },
         ],
       }),

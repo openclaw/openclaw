@@ -10,6 +10,7 @@ export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Blacksmith Build Artifacts Testbox",
   "Workflow Sanity",
 ];
+const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
@@ -64,19 +65,22 @@ function formatObservedRuns(runs) {
 
 function isReleaseGateCiRun(run, sha) {
   return (
-    run?.name === "CI" &&
     run?.event === "workflow_dispatch" &&
     run?.head_sha === sha &&
+    String(run?.path ?? "").split("@", 1)[0] === CI_WORKFLOW_PATH &&
     run?.display_title === `CI release gate ${sha}`
   );
 }
 
 function matchingAuthoritativeRuns(runs, workflowName, sha) {
   return runs.filter((run) => {
-    if (run?.name !== workflowName || run?.head_sha !== sha) {
+    if (run?.head_sha !== sha) {
       return false;
     }
-    return run.event === "pull_request" || (workflowName === "CI" && isReleaseGateCiRun(run, sha));
+    if (run?.event === "pull_request") {
+      return run.name === workflowName;
+    }
+    return workflowName === "CI" && isReleaseGateCiRun(run, sha);
   });
 }
 
@@ -86,9 +90,24 @@ function latestRun(runs) {
   )[0];
 }
 
+function preferredCiRun(runs) {
+  const scheduledRuns = runs.filter((run) => run.event === "pull_request");
+  const failedScheduledRun = scheduledRuns.find(
+    (run) => run.status === "completed" && run.conclusion !== "success",
+  );
+  if (failedScheduledRun) {
+    return failedScheduledRun;
+  }
+  const latestScheduledRun = latestRun(scheduledRuns);
+  if (latestScheduledRun?.status === "completed") {
+    return latestScheduledRun;
+  }
+  return latestRun(runs.filter((run) => run.event === "workflow_dispatch")) ?? latestScheduledRun;
+}
+
 function successfulRunOrThrow(runs, workflowName, sha) {
   const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha);
-  const run = latestRun(matchingRuns);
+  const run = workflowName === "CI" ? preferredCiRun(matchingRuns) : latestRun(matchingRuns);
   if (!run || run.status !== "completed" || run.conclusion !== "success") {
     throw new Error(
       `Missing successful exact-head ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
