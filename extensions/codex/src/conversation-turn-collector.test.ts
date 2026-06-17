@@ -183,6 +183,76 @@ describe("codex conversation turn collector", () => {
     await expect(completion).rejects.toThrow("model exploded");
   });
 
+  it("surfaces the recovered final answer when a failed turn still produced a message", async () => {
+    // Codex marks the turn failed for a recovered mid-turn error but still emits
+    // the final agentMessage item; the recovered answer must win over the banner.
+    const collector = createCodexConversationTurnCollector("thread-1");
+    collector.setTurnId("turn-1");
+    const completion = collector.wait({ timeoutMs: 1_000 });
+
+    collector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          error: { message: "sandbox command failed" },
+          items: [{ type: "agentMessage", id: "item-1", text: "here is the recovered answer" }],
+        },
+      },
+    });
+
+    await expect(completion).resolves.toEqual({ replyText: "here is the recovered answer" });
+  });
+
+  it("surfaces recovered streamed deltas when the failed turn carries no message item", async () => {
+    const collector = createCodexConversationTurnCollector("thread-1");
+    collector.setTurnId("turn-1");
+    const completion = collector.wait({ timeoutMs: 1_000 });
+
+    collector.handleNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "recovered reply",
+      },
+    });
+    collector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "failed", error: { message: "stream hiccup" }, items: [] },
+      },
+    });
+
+    await expect(completion).resolves.toEqual({ replyText: "recovered reply" });
+  });
+
+  it("surfaces the recovered answer when the failed turn completes before wait", async () => {
+    const collector = createCodexConversationTurnCollector("thread-1");
+    collector.setTurnId("turn-1");
+
+    collector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          error: { message: "sandbox command failed" },
+          items: [{ type: "agentMessage", id: "item-1", text: "recovered before wait" }],
+        },
+      },
+    });
+
+    await expect(collector.wait({ timeoutMs: 1_000 })).resolves.toEqual({
+      replyText: "recovered before wait",
+    });
+  });
+
   it("times out when the app-server never completes the turn", async () => {
     vi.useFakeTimers();
     try {
