@@ -5376,7 +5376,7 @@ describe("workboard controller", () => {
     vi.useFakeTimers();
     const host = {};
     const state = getWorkboardState(host);
-    const cards = Array.from({ length: 33 }, (_, index) => ({
+    const cards = Array.from({ length: 65 }, (_, index) => ({
       ...sampleCard,
       id: `card-${index}`,
       status: "running" as const,
@@ -5384,7 +5384,6 @@ describe("workboard controller", () => {
     }));
     state.loaded = true;
     state.cards = cards;
-    state.autoRefreshIntervalMs = 5000;
     const client = createClient((method, params) => {
       if (method === "tasks.list") {
         return { tasks: [] };
@@ -5403,14 +5402,74 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.lifecycleTasksPrepared).toBe(false);
 
+    vi.clearAllMocks();
+    configureWorkboardPolling({
+      host,
+      client: client as never,
+      enabled: false,
+      requestUpdate,
+    });
     await vi.advanceTimersByTimeAsync(100);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
 
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(false);
+
+    vi.clearAllMocks();
+    await vi.advanceTimersByTimeAsync(100);
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
     expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(1);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.lifecycleTasksPrepared).toBe(true);
+  });
+
+  it("fails closed when bounded confirmations exceed their freshness window", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const cards = Array.from({ length: 33 }, (_, index) => ({
+      ...sampleCard,
+      id: `card-${index}`,
+      status: "running" as const,
+      taskId: `task-${index}`,
+    }));
+    state.loaded = true;
+    state.cards = cards;
+    const client = createClient((method, params) => {
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        return { task: { ...sampleTask, id: taskId, taskId } };
+      }
+      return {};
+    });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
+    expect(state.lifecycleTaskRefreshContinueAt).not.toBeNull();
+
+    vi.clearAllMocks();
+    await vi.advanceTimersByTimeAsync(5001);
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lifecycleTaskRefreshContinueAt).toBeNull();
+    expect(state.lifecycleTaskRefreshError).not.toBeNull();
+
+    vi.clearAllMocks();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("stops bounded exact confirmations after a transient batch failure", async () => {

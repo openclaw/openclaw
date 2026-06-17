@@ -397,6 +397,7 @@ export type WorkboardUiState = {
   lifecycleTasksPreparedAt: number | null;
   lifecycleTaskRefreshFailed: boolean;
   lifecycleTaskRefreshRetryAt: number | null;
+  lifecycleTaskRefreshContinueAt: number | null;
   lifecycleTaskRefreshError: string | null;
   lifecycleConfirmedTaskIds: Set<string>;
   lifecycleTaskConfirmationStartedAt: number | null;
@@ -447,6 +448,10 @@ const workboardLifecycleTaskRetryTimers = new WeakMap<
   WorkboardHost,
   ReturnType<typeof setTimeout>
 >();
+const workboardLifecycleTaskContinuationTimers = new WeakMap<
+  WorkboardHost,
+  ReturnType<typeof setTimeout>
+>();
 const workboardPollingEntries = new WeakMap<
   WorkboardHost,
   {
@@ -468,6 +473,8 @@ const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
 const WORKBOARD_TASK_DISCOVERY_BATCH_SIZE = 4;
 const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 const WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_WINDOW_MS = 5000;
+const WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_TIMEOUT_ERROR =
+  "Task confirmation exceeded its freshness window.";
 const WORKBOARD_LIFECYCLE_TASK_RETRY_MS = 5000;
 const WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS = 100;
 
@@ -516,7 +523,7 @@ function invalidateWorkboardLoads(host: WorkboardHost) {
   const state = workboardStates.get(host);
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false, { host });
-    resetWorkboardLifecycleTaskConfirmations(state);
+    resetWorkboardLifecycleTaskConfirmations(state, { host });
     if (workboardLoadPromises.has(host)) {
       if (!state.draftSaving) {
         state.loading = false;
@@ -548,6 +555,14 @@ function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
   }
 }
 
+function clearWorkboardLifecycleTaskContinuationTimer(host: WorkboardHost) {
+  const timer = workboardLifecycleTaskContinuationTimers.get(host);
+  if (timer) {
+    clearTimeout(timer);
+    workboardLifecycleTaskContinuationTimers.delete(host);
+  }
+}
+
 function trackWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
   const writes = workboardLifecycleWritePromises.get(host) ?? new Set<Promise<unknown>>();
   writes.add(write);
@@ -572,21 +587,26 @@ async function waitForWorkboardLifecycleWrites(host: WorkboardHost) {
   }
 }
 
-function resetWorkboardLifecycleTaskConfirmations(state: WorkboardUiState) {
+function resetWorkboardLifecycleTaskConfirmations(
+  state: WorkboardUiState,
+  options: { host?: WorkboardHost } = {},
+) {
   state.lifecycleConfirmedTaskIds = new Set();
   state.lifecycleTaskConfirmationStartedAt = null;
+  setWorkboardLifecycleTaskRefreshContinuation(state, false, options);
 }
 
 export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
   clearWorkboardLifecycleTaskPreparedTimer(host);
   clearWorkboardLifecycleTaskRetryTimer(host);
+  clearWorkboardLifecycleTaskContinuationTimer(host);
   workboardLifecycleTaskRefreshPromises.delete(host);
   const state = workboardStates.get(host);
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false);
     setWorkboardLifecycleTaskRefreshFailed(state, false);
     state.lifecycleTaskRefreshError = null;
-    resetWorkboardLifecycleTaskConfirmations(state);
+    resetWorkboardLifecycleTaskConfirmations(state, { host });
     // In-flight lifecycle writes clear themselves in finally. Keep them visible
     // so reconnect loads wait for their backend mutations before becoming writable.
     // Detach stale loads so reconnecting can start fresh without letting the
@@ -681,11 +701,48 @@ function setWorkboardLifecycleTaskRefreshFailed(
   workboardLifecycleTaskRetryTimers.set(host, nextTimer);
 }
 
+function setWorkboardLifecycleTaskRefreshContinuation(
+  state: WorkboardUiState,
+  pending: boolean,
+  options: {
+    host?: WorkboardHost;
+    requestUpdate?: () => void;
+  } = {},
+) {
+  state.lifecycleTaskRefreshContinueAt = pending
+    ? Date.now() + WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS
+    : null;
+  const host = options.host;
+  if (!host) {
+    return;
+  }
+  clearWorkboardLifecycleTaskContinuationTimer(host);
+  if (!pending || !options.requestUpdate) {
+    return;
+  }
+  // Continue bounded exact-confirmation even when routine polling is off.
+  // Keep this separate so render polling cannot cancel the freshness-bounded sequence.
+  const nextTimer = setTimeout(() => {
+    workboardLifecycleTaskContinuationTimers.delete(host);
+    options.requestUpdate?.();
+  }, WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS);
+  workboardLifecycleTaskContinuationTimers.set(host, nextTimer);
+}
+
 function workboardLifecycleTaskRefreshRetryPending(state: WorkboardUiState, now = Date.now()) {
   return (
     state.lifecycleTaskRefreshFailed &&
     state.lifecycleTaskRefreshRetryAt !== null &&
     now < state.lifecycleTaskRefreshRetryAt
+  );
+}
+
+function workboardLifecycleTaskRefreshContinuationWaiting(
+  state: WorkboardUiState,
+  now = Date.now(),
+) {
+  return (
+    state.lifecycleTaskRefreshContinueAt !== null && now < state.lifecycleTaskRefreshContinueAt
   );
 }
 
@@ -720,6 +777,7 @@ function createDefaultState(): WorkboardUiState {
     lifecycleTasksPreparedAt: null,
     lifecycleTaskRefreshFailed: false,
     lifecycleTaskRefreshRetryAt: null,
+    lifecycleTaskRefreshContinueAt: null,
     lifecycleTaskRefreshError: null,
     lifecycleConfirmedTaskIds: new Set(),
     lifecycleTaskConfirmationStartedAt: null,
@@ -2177,7 +2235,7 @@ async function loadWorkboardInternal(
       state.statuses = normalized.statuses;
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;
-      resetWorkboardLifecycleTaskConfirmations(state);
+      resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
       const recoveredFromLifecycleTaskRefresh =
         state.lifecycleTaskRefreshFailed && !lifecycleTaskRefreshFailed;
       if (!preserveLifecycleTaskRefreshFailure) {
@@ -3021,11 +3079,21 @@ async function refreshWorkboardLifecycleTasks(
     try {
       const previousTasksByCardId = state.tasksByCardId;
       const confirmationNow = Date.now();
-      if (
-        state.lifecycleTaskConfirmationStartedAt === null ||
+      const confirmationExpired =
+        state.lifecycleTaskConfirmationStartedAt !== null &&
         confirmationNow - state.lifecycleTaskConfirmationStartedAt >=
-          WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_WINDOW_MS
-      ) {
+          WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_WINDOW_MS;
+      if (state.lifecycleTaskRefreshContinueAt !== null && confirmationExpired) {
+        resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
+        setWorkboardLifecycleTaskRefreshFailed(state, true, {
+          host: params.host,
+          requestUpdate: params.requestUpdate,
+        });
+        state.lifecycleTaskRefreshError = WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_TIMEOUT_ERROR;
+        params.requestUpdate?.();
+        return null;
+      }
+      if (state.lifecycleTaskConfirmationStartedAt === null || confirmationExpired) {
         resetWorkboardLifecycleTaskConfirmations(state);
         state.lifecycleTaskConfirmationStartedAt = confirmationNow;
       }
@@ -3086,7 +3154,7 @@ async function refreshWorkboardLifecycleTasks(
         state.lifecycleConfirmedTaskIds.add(taskId);
       }
       if (confirmationResult.error) {
-        resetWorkboardLifecycleTaskConfirmations(state);
+        resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
         setWorkboardLifecycleTaskRefreshFailed(state, true, {
           host: params.host,
           requestUpdate: params.requestUpdate,
@@ -3096,14 +3164,13 @@ async function refreshWorkboardLifecycleTasks(
         return null;
       }
       if (!workboardTaskLinksReadyForLifecycle(taskLinkState)) {
-        setWorkboardLifecycleTaskRefreshFailed(state, true, {
+        setWorkboardLifecycleTaskRefreshContinuation(state, true, {
           host: params.host,
           requestUpdate: params.requestUpdate,
-          retryDelayMs: WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS,
         });
         return null;
       }
-      resetWorkboardLifecycleTaskConfirmations(state);
+      resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
       const recoveredTaskRefreshError = state.lifecycleTaskRefreshError;
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
       state.lifecycleTaskRefreshError = null;
@@ -3122,7 +3189,7 @@ async function refreshWorkboardLifecycleTasks(
       ) {
         return null;
       }
-      resetWorkboardLifecycleTaskConfirmations(state);
+      resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
       setWorkboardLifecycleTaskRefreshFailed(state, true, {
         host: params.host,
         requestUpdate: params.requestUpdate,
@@ -3151,10 +3218,12 @@ export async function syncWorkboardLifecycle(params: {
 }) {
   const state = getWorkboardState(params.host);
   const taskRefreshRetryPending = workboardLifecycleTaskRefreshRetryPending(state);
+  const taskRefreshContinuationWaiting = workboardLifecycleTaskRefreshContinuationWaiting(state);
   if (
     !params.client ||
     !state.loaded ||
-    (taskRefreshRetryPending && workboardLifecycleRequiresTaskRefresh(state)) ||
+    ((taskRefreshRetryPending || taskRefreshContinuationWaiting) &&
+      workboardLifecycleRequiresTaskRefresh(state)) ||
     workboardLifecycleSyncBlocked(params.host, state)
   ) {
     return;
@@ -3166,6 +3235,7 @@ export async function syncWorkboardLifecycle(params: {
   if (
     !tasksPrepared &&
     !taskRefreshRetryPending &&
+    !taskRefreshContinuationWaiting &&
     shouldRefreshWorkboardTasksForLifecycle(state)
   ) {
     tasksPreparedAt = await refreshWorkboardLifecycleTasks(
@@ -3590,7 +3660,7 @@ export async function dispatchWorkboard(params: {
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     state.tasksByCardId = new Map();
-    resetWorkboardLifecycleTaskConfirmations(state);
+    resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
     try {
       applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
