@@ -10,7 +10,8 @@ import { createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
-import { sendMessageSlack } from "./send.js";
+import { hasCustomIdentity, isSlackCustomizeScopeError, sendMessageSlack } from "./send.js";
+import type { SlackSendIdentity } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
 export type SlackActionClientOpts = {
@@ -272,16 +273,57 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts & {
+    blocks?: (Block | KnownBlock)[];
+    identity?: SlackSendIdentity;
+  } = {},
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  await client.chat.update({
+  const basePayload = {
     channel: channelId,
     ts: messageId,
     text: buildSlackEditTextPayload(content, blocks),
     ...(blocks ? { blocks } : {}),
-  });
+  };
+  const identity = opts.identity;
+  try {
+    // Slack honors username/icon_url/icon_emoji on chat.update at runtime, but the
+    // @slack/web-api ChatUpdateArguments type omits them, and icon_url/icon_emoji are
+    // mutually exclusive. Assemble each payload in a const so the extra identity
+    // fields reach the API without tripping object-literal excess-property checks.
+    if (identity?.iconUrl) {
+      const updatePayload = {
+        ...basePayload,
+        ...(identity.username ? { username: identity.username } : {}),
+        icon_url: identity.iconUrl,
+      };
+      await client.chat.update(updatePayload);
+      return;
+    }
+    if (identity?.iconEmoji) {
+      const updatePayload = {
+        ...basePayload,
+        ...(identity.username ? { username: identity.username } : {}),
+        icon_emoji: identity.iconEmoji,
+      };
+      await client.chat.update(updatePayload);
+      return;
+    }
+    const updatePayload = {
+      ...basePayload,
+      ...(identity?.username ? { username: identity.username } : {}),
+    };
+    await client.chat.update(updatePayload);
+  } catch (err) {
+    // Mirror the send path: if the workspace lacks chat:write.customize, retry the
+    // edit without custom identity so the message still updates with the bot identity.
+    if (!hasCustomIdentity(identity) || !isSlackCustomizeScopeError(err)) {
+      throw err;
+    }
+    logVerbose("slack edit: missing chat:write.customize, retrying without custom identity");
+    await client.chat.update(basePayload);
+  }
 }
 
 export async function deleteSlackMessage(

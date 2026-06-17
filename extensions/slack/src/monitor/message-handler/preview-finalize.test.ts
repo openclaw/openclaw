@@ -33,6 +33,35 @@ describe("finalizeSlackPreviewEdit", () => {
     editSlackMessageMock.mockReset();
   });
 
+  it("forwards agent identity through to editSlackMessage", async () => {
+    editSlackMessageMock.mockResolvedValueOnce(undefined);
+    const client = createClient();
+
+    await finalizeSlackPreviewEdit({
+      client,
+      token: "xoxb-test",
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "final answer",
+      identity: {
+        username: "OpenClaw Agent",
+        iconEmoji: ":lobster:",
+      },
+    });
+
+    expect(editSlackMessageMock).toHaveBeenCalledWith(
+      "C123",
+      "171234.567",
+      "final answer",
+      expect.objectContaining({
+        identity: {
+          username: "OpenClaw Agent",
+          iconEmoji: ":lobster:",
+        },
+      }),
+    );
+  });
+
   it("treats a thrown edit as success when history readback already matches", async () => {
     editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
     const client = createClient({
