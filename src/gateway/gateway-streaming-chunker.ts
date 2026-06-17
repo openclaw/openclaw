@@ -3,6 +3,8 @@
 // to reduce SSE overhead.
 import type { GatewayHttpStreamingConfig } from "../config/types.gateway.js";
 
+const DEFAULT_STREAMING_MIN_CHARS = 200;
+const DEFAULT_STREAMING_MAX_CHARS = 800;
 const DEFAULT_STREAMING_IDLE_MS = 500;
 
 export type SseChunkBufferFlush = (text: string) => void;
@@ -14,16 +16,32 @@ export type SseChunkBuffer = {
   destroy(): void;
 };
 
+function createPassthroughBuffer(flush: SseChunkBufferFlush): SseChunkBuffer {
+  let destroyed = false;
+  return {
+    get length() { return 0; },
+    push(delta) {
+      if (!delta || destroyed) { return; }
+      flush(delta);
+    },
+    flush() { return false; },
+    destroy() { destroyed = true; },
+  };
+}
+
 export function createSseChunkBuffer(
   flush: SseChunkBufferFlush,
   config: GatewayHttpStreamingConfig | undefined,
 ): SseChunkBuffer {
-  const minChars = Math.max(1, Math.floor(config?.minChars ?? 200));
-  const maxChars =
-    config?.maxChars !== undefined
-      ? Math.max(minChars, Math.floor(config.maxChars))
-      : Math.max(minChars, 800);
-  const idleMs = Math.max(0, Math.floor(config?.idleMs ?? DEFAULT_STREAMING_IDLE_MS));
+  // When no streaming config is provided, operate in pass-through mode
+  // to preserve existing behavior. No buffering, no idle timers.
+  if (!config) {
+    return createPassthroughBuffer(flush);
+  }
+
+  const minChars = Math.max(1, Math.floor(config.minChars ?? DEFAULT_STREAMING_MIN_CHARS));
+  const maxChars = Math.max(minChars, Math.floor(config.maxChars ?? DEFAULT_STREAMING_MAX_CHARS));
+  const idleMs = Math.max(0, Math.floor(config.idleMs ?? DEFAULT_STREAMING_IDLE_MS));
 
   const bufferingEnabled = maxChars > minChars;
 
