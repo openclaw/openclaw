@@ -401,6 +401,8 @@ describe("resolveTranscriptPolicy", () => {
     "moonshot/kimi-k2.7-code",
     "kimi-k2-thinking",
     "hf:moonshotai/kimi-k2-thinking",
+    "minimax-m3",
+    "openrouter/minimax/minimax-m3",
     "xiaomi/mimo-v2.6-pro",
     "xiaomi/mimo-v2.6-pro:cloud",
   ])(
