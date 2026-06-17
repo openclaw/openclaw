@@ -389,6 +389,9 @@ The branch already has a real shared SQLite base:
   path/source row shape and serialized embedding compatibility. These tables
   are derived/search cache, not canonical transcript storage; they can be
   deleted and rebuilt from memory workspace files and configured sources.
+  Opening a shipped generic-name memory index migrates its metadata, sources,
+  chunks, and embedding cache into the canonical tables; derived FTS/vector
+  tables are rebuilt under their canonical names.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
   `subagents/runs.json` file is doctor migration input only.
@@ -1725,6 +1728,9 @@ Keep shared coordination state in `state/openclaw.sqlite`:
   WAL, and busy-timeout settings. Payload bytes are gzip-compressed in
   `capture_blobs.data`; there is no debug proxy runtime sidecar DB override,
   blob directory, or proxy-capture-only generated schema/codegen target.
+  Doctor/startup migration imports shipped `debug-proxy/capture.sqlite` rows
+  and referenced payload blobs, including active legacy DB/blob environment
+  overrides, then archives those sources while leaving CA certificates intact.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.
