@@ -449,10 +449,6 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
-        preToolUseUnavailable:
-          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
-            ? "noop"
-            : undefined,
         nice: params.command?.nice,
         timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
           params.command?.timeoutMs,
@@ -590,7 +586,7 @@ function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegist
     cfg: registration.config,
     agentId: registration.agentId,
   });
-  return loopDetection?.enabled !== false;
+  return loopDetection?.enabled === true;
 }
 
 function nativeHookRelayEventHasLocalWork(
@@ -598,8 +594,9 @@ function nativeHookRelayEventHasLocalWork(
   event: NativeHookRelayEvent,
 ): boolean {
   if (event === "pre_tool_use") {
-    // Avoid spawning a native hook relay for every Codex tool call when there
-    // is no before_tool_call hook, trusted-tool policy, or loop detector work.
+    // Avoid spawning a native hook relay for every Codex tool call when no
+    // before_tool_call hook, trusted-tool policy, or explicit loop detector can
+    // make a decision.
     return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
   }
   if (event === "post_tool_use") {
