@@ -2215,6 +2215,16 @@ export async function runAgentTurnWithFallback(params: {
                       }),
                     ]);
                   },
+                  onCommentaryText:
+                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                      ? async (payload) => {
+                          await params.opts?.onItemEvent?.({
+                            itemId: payload.itemId,
+                            kind: "preamble",
+                            progressText: payload.text,
+                          });
+                        }
+                      : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await params.opts?.onToolResult?.(payload);
                   },

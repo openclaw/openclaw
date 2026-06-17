@@ -194,10 +194,13 @@ vi.mock("../../infra/agent-events.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
     "../../infra/agent-events.js",
   );
+  const emitAgentEvent = vi.fn((...args: Parameters<typeof actual.emitAgentEvent>) =>
+    actual.emitAgentEvent(...args),
+  );
   return {
     ...actual,
     clearAgentRunContext: vi.fn(),
-    emitAgentEvent: vi.fn(),
+    emitAgentEvent,
     registerAgentRunContext: vi.fn(),
   };
 });
@@ -2590,11 +2593,9 @@ describe("runAgentTurnWithFallback", () => {
     state.runCliAgentMock.mockImplementationOnce(
       async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
-        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-          "../../infra/agent-events.js",
-        );
+        const agentEvents = await import("../../infra/agent-events.js");
         // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
-        realAgentEvents.emitAgentEvent({
+        agentEvents.emitAgentEvent({
           runId: params.runId,
           stream: "item",
           data: {

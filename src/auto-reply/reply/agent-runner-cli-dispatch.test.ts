@@ -2,7 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+  resetAgentEventsForTest,
+} from "../../infra/agent-events.js";
 import {
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -25,7 +30,12 @@ afterEach(() => {
 
 describe("runCliAgentWithLifecycle", () => {
   it("keeps the captured lifecycle generation on start and terminal events", async () => {
-    const events: Array<{ stream?: string; lifecycleGeneration?: string; data?: Record<string, unknown> }> = [];
+    const events: Array<{
+      stream?: string;
+      lifecycleGeneration?: string;
+      data?: Record<string, unknown>;
+    }> = [];
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const stop = onAgentEvent((event) => {
       if (event.runId === "run-before-restart") {
         events.push(event);
@@ -39,7 +49,7 @@ describe("runCliAgentWithLifecycle", () => {
     try {
       await runCliAgentWithLifecycle({
         runId: "run-before-restart",
-        lifecycleGeneration: "pre-restart-generation",
+        lifecycleGeneration,
         provider: "claude-cli",
         runParams: {
           sessionId: "session-1",
@@ -60,7 +70,7 @@ describe("runCliAgentWithLifecycle", () => {
     const lifecycleEvents = events.filter((event) => event.stream === "lifecycle");
     expect(lifecycleEvents).toHaveLength(2);
     expect(
-      lifecycleEvents.every((event) => event.lifecycleGeneration === "pre-restart-generation"),
+      lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
   });
 
