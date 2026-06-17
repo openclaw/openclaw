@@ -113,11 +113,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       totalTokens: 200_000,
       totalTokensFresh: false,
     };
-    await writeTestSessionStore(
-      path.join(rootDir, "sessions.json"),
-      "agent:main:main",
-      sessionEntry,
-    );
+    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "agent:main:main", sessionEntry);
 
     const entry = await runWithEntry(sessionEntry, sessionFile);
 
@@ -139,11 +135,7 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       totalTokens: 200_000,
       totalTokensFresh: true,
     };
-    await writeTestSessionStore(
-      path.join(rootDir, "sessions.json"),
-      "agent:main:main",
-      sessionEntry,
-    );
+    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "agent:main:main", sessionEntry);
 
     await runWithEntry(sessionEntry, sessionFile);
 
