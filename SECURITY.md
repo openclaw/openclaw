@@ -12,6 +12,7 @@ Security work is shared across a number of OpenClaw maintainers, including engin
 
 Report vulnerabilities directly to the repository where the issue lives:
 
+- **Rockie BYOK tenant runtime packaging** — [Rockielab/rockie-claw](https://github.com/Rockielab/rockie-claw)
 - **Core CLI and gateway** — [openclaw/openclaw](https://github.com/openclaw/openclaw)
 - **macOS desktop app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/macos)
 - **iOS app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/ios)
@@ -20,6 +21,11 @@ Report vulnerabilities directly to the repository where the issue lives:
 - **Trust and threat model** — [openclaw/trust](https://github.com/openclaw/trust)
 
 For issues that don't fit a specific repo, or if you're unsure, email **[security@openclaw.ai](mailto:security@openclaw.ai)** and we'll route it.
+
+For Rockie fork-specific runtime-packaging boundaries, see
+[`docs/rockie-fork-surface.md`](docs/rockie-fork-surface.md). Issues in shared
+OpenClaw core should still be routed to upstream OpenClaw unless the report is
+specific to Rockie's tenant-runtime packaging.
 
 For OpenClaw core issues, submit through a private [GitHub Security Advisory](https://github.com/openclaw/openclaw/security/advisories/new). Do not open a public issue or PR that discloses an unpatched vulnerability, exploit path, secret, or security-sensitive proof of concept.
 

@@ -1,7 +1,8 @@
-# Known clean-audit deferrals — platform-runtime
+# Known clean-audit deferrals
 
-The `/clean` audit blocks on two new `.md` files in this dirty tree.
-Both are retained as legitimate documentation artifacts.
+This file records documentation artifacts that were intentionally kept when a
+cleanup pass requested explanation instead of deletion. It is public-facing and
+should not contain private operator details.
 
 ## Blockers (deferred, not fixed)
 
@@ -11,14 +12,14 @@ Both are retained as legitimate documentation artifacts.
   `platform-context/api/runtime_proxy_service.py` consumes — the
   contract has to live somewhere.
 
-- `docs/multitenant-runtime.md` — operator-facing doc for the new
-  `rockielab-runtime-multitenant` image. The existing `docs/` tree
-  already has hundreds of per-component docs in nested directories;
-  this file follows the same convention. Folding it into an existing
-  doc would obscure the topic split.
+- `docs/rockie-fork-surface.md` — public map of Rockie-owned fork prefixes and
+  OpenClaw core patch groups that still need explicit justification.
+
+- `docs/upstream-ancestry-repair.md` — public-safe proof note for the PR #99
+  ancestry repair path. It records the proof branch and tree-equivalence checks
+  without rewriting public `main`.
 
 ## Why we don't bypass with `CLEAN_BYPASS=1`
 
-Phase 8 owns the actual commit and will decide the bypass posture.
-This file documents the audit state at the end of Phase 7 so the
-Phase 8 commit author has full context.
+The docs above make the fork understandable to public readers and are part of
+the open-source quality gate for Rockie's OpenClaw-derived tenant runtime.

@@ -9,6 +9,14 @@ Welcome to the lobster tank! 🦞
 - **Discord:** https://discord.gg/clawd
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
 
+## Rockie Fork Notes
+
+`Rockielab/rockie-claw` packages OpenClaw for Rockie BYOK tenant runtimes. For
+fork-specific contribution scope, see [`docs/rockie-fork-surface.md`](docs/rockie-fork-surface.md).
+Changes outside the listed Rockie-owned prefixes should explain why the patch
+cannot live behind an overlay, plugin, MCP integration, or runtime
+configuration boundary.
+
 ## Maintainers
 
 - **Peter Steinberger** - Benevolent Dictator

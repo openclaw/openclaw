@@ -1,12 +1,15 @@
 <!-- ROCKIE POINTER (preserved on upstream merges; the README body below is OpenClaw's) -->
 
-> **Reading this from the Rockie monorepo?** This repo is `platform-runtime`,
-> a fork of `openclaw/openclaw` that bakes the per-tenant Fly machine image
-> for Rockie. The Rockie-specific surface is:
+> **Reading this from Rockie?** `Rockielab/rockie-claw` is Rockie's
+> OpenClaw-derived package for BYOK tenant runtimes. Upstream OpenClaw remains
+> the base project; Rockie carries the runtime packaging and tenant-integration
+> patches needed to run OpenClaw inside Rockie-managed tenant machines.
+>
+> Rockie-specific code is intentionally isolated where possible so upstream
+> OpenClaw changes remain easy to review and merge. The main owned surfaces are:
 >
 > - **`Dockerfile.multitenant`** — bakes claude/codex binaries + OpenClaw
->   gateway + Go PTY-WS broker (`apps/broker/`) + skills overlay assembled
->   from `../platform-skills/`.
+>   gateway + Go PTY-WS broker (`apps/broker/`) + skills overlay support.
 > - **`overlay/multitenant/`** — `entrypoint.sh` (mode router:
 >   `MODE=subscription|byok|open-weights`, `BINARY=claude|codex`) and
 >   `assemble-skills.sh` (canonical-source: `../platform-skills/skills/`).
@@ -24,8 +27,10 @@
 > - **`AGENTS.md` / `CLAUDE.md` (symlink)** — process doc; the Rockie
 >   appendix is at the bottom under `## Multitenant runtime (Rockie additions)`.
 >
-> For cross-repo orientation, see `../docs/architecture.md` in the workspace
-> meta-repo. The OpenClaw upstream README continues below.
+> For the maintained fork map and ancestry-repair notes, see
+> [`docs/rockie-fork-surface.md`](docs/rockie-fork-surface.md) and
+> [`docs/upstream-ancestry-repair.md`](docs/upstream-ancestry-repair.md).
+> The OpenClaw upstream README continues below.
 
 ---
 
