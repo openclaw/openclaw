@@ -1459,12 +1459,11 @@ function buildDiagnoseResult(params: {
       })
     : null;
   const transcriptResolved = Boolean(tail);
-  const deliveryUncertain = Boolean(
+  const deliveryUncertain =
     isDiagnoseRowTerminal(target.row) &&
     !target.row.lastChannel &&
     !target.row.lastTo &&
-    !target.row.lastThreadId,
-  );
+    !target.row.lastThreadId;
   const lastChannel = normalizeOptionalString(target.row.lastChannel);
   const lastTo = normalizeOptionalString(target.row.lastTo);
   const lastThreadId = normalizeOptionalString(target.row.lastThreadId);
