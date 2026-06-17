@@ -3,24 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadGlobalRuntimeDotEnvFiles } from "../infra/dotenv-global.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 
 /** Load only the env files needed before dispatching a command through the gateway. */
 export async function loadGatewayDispatchCliDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  // When cwd has been deleted, skip workspace .env check — it cannot exist.
-  let cwd: string | undefined;
-  try {
-    cwd = process.cwd();
-  } catch {
-    // cwd deleted; workspace .env cannot exist.
-  }
-  if (cwd) {
-    const cwdEnvPath = path.join(cwd, ".env");
-    if (fs.existsSync(cwdEnvPath)) {
-      const { loadCliDotEnv } = await import("./dotenv.js");
-      loadCliDotEnv({ quiet });
-      return;
-    }
+  // Skip the workspace .env check when the launch cwd was deleted — it cannot
+  // exist. Global fallback loading below is independent of cwd and still runs.
+  const cwd = tryProcessCwd();
+  if (cwd && fs.existsSync(path.join(cwd, ".env"))) {
+    const { loadCliDotEnv } = await import("./dotenv.js");
+    loadCliDotEnv({ quiet });
+    return;
   }
 
   // Agent dispatch only needs trusted runtime env for gateway credentials.

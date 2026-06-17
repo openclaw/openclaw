@@ -215,6 +215,24 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("skips workspace .env and still loads global env when cwd was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+            code: "ENOENT",
+          });
+        });
+        delete process.env.FOO;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
   it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
@@ -703,6 +721,24 @@ describe("loadCliDotEnv", () => {
         expect(process.env.FOO).toBeUndefined();
         expect(process.env.BAR).toBeUndefined();
         expect(process.env.BAZ).toBe("from-workspace");
+      });
+    });
+  });
+
+  it("still loads global CLI env when cwd was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+            code: "ENOENT",
+          });
+        });
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
       });
     });
   });

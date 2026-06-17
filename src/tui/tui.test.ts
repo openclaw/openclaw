@@ -343,6 +343,26 @@ describe("resolveInitialTuiAgentId", () => {
       }),
     ).toBe("main");
   });
+
+  it("falls back when cwd was deleted before TUI startup", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      expect(
+        resolveInitialTuiAgentId({
+          cfg,
+          fallbackAgentId: "main",
+          initialSessionInput: "",
+        }),
+      ).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {

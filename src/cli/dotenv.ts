@@ -2,20 +2,16 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadGlobalRuntimeDotEnvFiles, loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 
 /** Load `.env` files for normal CLI commands without overriding existing process env. */
 export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  // When cwd has been deleted, skip workspace .env — it cannot exist.
-  let cwd: string | undefined;
-  try {
-    cwd = process.cwd();
-  } catch {
-    // cwd deleted; workspace .env cannot exist, skip it.
-  }
+  // Skip workspace .env when the launch cwd was deleted — it cannot exist.
+  // Global fallback loading below is independent of cwd and still runs.
+  const cwd = tryProcessCwd();
   if (cwd) {
-    const cwdEnvPath = path.join(cwd, ".env");
-    loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
   }
 
   if (opts?.loadGlobalEnv === false) {

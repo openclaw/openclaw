@@ -7,6 +7,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "AI_GATEWAY_API_KEY",
@@ -243,16 +244,11 @@ export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  // When cwd has been deleted, skip workspace .env — it cannot exist.
-  let cwd: string | undefined;
-  try {
-    cwd = process.cwd();
-  } catch {
-    // cwd deleted; workspace .env cannot exist, skip it.
-  }
+  // Skip workspace .env when the launch cwd was deleted — it cannot exist.
+  // Global fallback loading below is independent of cwd and still runs.
+  const cwd = tryProcessCwd();
   if (cwd) {
-    const cwdEnvPath = path.join(cwd, ".env");
-    loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),

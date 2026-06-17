@@ -1,6 +1,8 @@
 // Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
+import os from "node:os";
 import type { Component, SelectItem } from "@earendil-works/pi-tui";
+import { resolveProcessCwdOrFallback } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -30,7 +32,11 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAllowed = false;
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
-  const getCwd = deps.getCwd ?? (() => process.cwd());
+  // Fall back to the OS home dir when the launch cwd was deleted so `!cmd`
+  // local shell commands still run instead of crashing on process.cwd(). Home
+  // is the intuitive shell cwd for a missing project directory; this is a
+  // caller-specific choice distinct from runTui's wrapper-dir fallback.
+  const getCwd = deps.getCwd ?? (() => resolveProcessCwdOrFallback(os.homedir()));
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
 

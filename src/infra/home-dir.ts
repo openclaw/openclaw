@@ -1,22 +1,7 @@
 // Resolves OpenClaw home and platform-specific config directories.
 import os from "node:os";
 import path from "node:path";
-
-/**
- * Returns process.cwd(), falling back to os.homedir() when the working
- * directory has been deleted or is otherwise inaccessible.
- *
- * This must NOT fall back to os.tmpdir() — shared temp can participate
- * in PATH resolution for project-local-bin and would introduce a
- * PATH-boundary security issue (cf. PR #74994 review).
- */
-export function safeCwd(fallback?: string): string {
-  try {
-    return process.cwd();
-  } catch {
-    return fallback ?? os.homedir();
-  }
-}
+import { resolveProcessCwdOrFallback } from "./safe-cwd.js";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -86,12 +71,27 @@ export function resolveOsHomeDir(
   return raw ? path.resolve(raw) : undefined;
 }
 
-/** Resolves the effective home or falls back to cwd when no home source exists. */
+/**
+ * Resolves the effective home or falls back to cwd when no home source exists.
+ *
+ * This branch only runs when every home source (OPENCLAW_HOME, HOME, USERPROFILE,
+ * Termux, os.homedir()) is unavailable, so os.homedir() cannot serve as the
+ * fallback here — it is already empty/throwing, and `path.resolve("")` would
+ * reach back into process.cwd() and crash on a deleted launch directory.
+ *
+ * Fall back to the running Node binary's directory instead: it is always
+ * non-empty, points at a real existing directory, and is not a shared temp
+ * (state writes to a shared tmpdir are a symlink/pre-create attack surface,
+ * cf. PR #74994 review). process.cwd() is still preferred when it is valid.
+ */
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(safeCwd());
+  return (
+    resolveEffectiveHomeDir(env, homedir) ??
+    path.resolve(resolveProcessCwdOrFallback(path.dirname(process.execPath)))
+  );
 }
 
 /** Resolves the OS home or falls back to cwd when no OS home source exists. */
@@ -99,7 +99,10 @@ export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveOsHomeDir(env, homedir) ?? path.resolve(safeCwd());
+  return (
+    resolveOsHomeDir(env, homedir) ??
+    path.resolve(resolveProcessCwdOrFallback(path.dirname(process.execPath)))
+  );
 }
 
 /** Expands leading `~`, `~/`, or `~\` with the effective home when one is known. */

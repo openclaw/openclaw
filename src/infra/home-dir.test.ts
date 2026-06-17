@@ -1,5 +1,4 @@
 // Tests OpenClaw home directory resolution.
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,7 +8,6 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
-  safeCwd,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -149,7 +147,7 @@ describe("resolveRequiredHomeDir", () => {
       homedir: () => {
         throw new Error("no home");
       },
-      expected: safeCwd(),
+      expected: path.resolve(process.cwd()),
     },
     {
       name: "returns a fully resolved path for OPENCLAW_HOME",
@@ -163,7 +161,7 @@ describe("resolveRequiredHomeDir", () => {
       homedir: () => {
         throw new Error("no home");
       },
-      expected: safeCwd(),
+      expected: path.resolve(process.cwd()),
     },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
@@ -253,7 +251,7 @@ describe("resolveHomeRelativePath", () => {
           throw new Error("no home");
         },
       },
-      expected: path.resolve(safeCwd()),
+      expected: path.resolve(process.cwd()),
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(resolveHomeRelativePath(input, opts)).toBe(expected);
@@ -273,34 +271,30 @@ describe("resolveOsHomeRelativePath", () => {
   });
 });
 
-describe("safeCwd", () => {
+describe("resolveRequiredHomeDir (deleted cwd)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("returns process.cwd() when cwd is accessible", () => {
-    expect(safeCwd()).toBe(process.cwd());
-  });
-
-  it("falls back to os.homedir() when process.cwd() throws ENOENT", () => {
-    const enoent = new Error("ENOENT: no such file or directory, uv_cwd");
-    (enoent as NodeJS.ErrnoException).code = "ENOENT";
-    vi.spyOn(process, "cwd").mockImplementation(() => {
-      throw enoent;
+  it("falls back to the running Node binary dir when no home source exists and cwd was deleted", () => {
+    // Every home source is unavailable and the launch cwd is gone: os.homedir()
+    // is already empty here (otherwise resolveEffectiveHomeDir would have used
+    // it), so the fallback must be a non-empty, non-shared directory. The Node
+    // binary dir is guaranteed to exist and avoids shared tmpdir state writes.
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
     });
-    expect(safeCwd()).toBe(os.homedir());
-  });
 
-  it("uses explicit fallback when provided and cwd is deleted", () => {
-    const enoent = new Error("ENOENT: no such file or directory, uv_cwd");
-    (enoent as NodeJS.ErrnoException).code = "ENOENT";
-    vi.spyOn(process, "cwd").mockImplementation(() => {
-      throw enoent;
-    });
-    expect(safeCwd("/custom/fallback")).toBe("/custom/fallback");
-  });
-
-  it("ignores explicit fallback when cwd is accessible", () => {
-    expect(safeCwd("/should/not/be/used")).toBe(process.cwd());
+    try {
+      expect(
+        resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toBe(path.resolve(path.dirname(process.execPath)));
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });

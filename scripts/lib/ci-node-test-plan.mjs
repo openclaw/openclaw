@@ -569,6 +569,7 @@ function resolveInfraShardName(file) {
     name.startsWith("home-dir") ||
     name.startsWith("host-env") ||
     name.startsWith("openclaw-exec-env") ||
+    name.startsWith("safe-cwd") ||
     name.startsWith("secret") ||
     name.startsWith("secure-random")
   ) {

@@ -1,5 +1,6 @@
 // Verifies local shell process handling for TUI local mode.
 import { EventEmitter } from "node:events";
+import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
@@ -145,5 +146,44 @@ describe("createLocalShellRunner", () => {
     // The failure reason in stderr must survive even though stdout filled the cap;
     // the previous head-cut kept all stdout and dropped stderr entirely.
     expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
+  });
+
+  it("falls back to home dir for spawn cwd when process.cwd() is deleted", async () => {
+    const spawnCommand = vi.fn((_command: string, _options: unknown) => {
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      return {
+        stdout,
+        stderr,
+        on: (event: string, callback: (...args: unknown[]) => void) => {
+          if (event === "close") {
+            setImmediate(() => callback(0, null));
+          }
+        },
+      };
+    });
+
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      const run = harness.runLocalShellLine("!pwd");
+      harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+      await run;
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    const spawnOptions = spawnCommand.mock.calls[0]?.[1] as
+      | { cwd?: string; env?: Record<string, string> }
+      | undefined;
+    expect(spawnOptions?.cwd).toBe(os.homedir());
   });
 });

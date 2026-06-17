@@ -11,6 +11,7 @@ import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
@@ -315,13 +316,9 @@ export function resolveMissingPluginCommandMessage(
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  // When cwd has been deleted, skip workspace .env — it cannot exist.
-  let cwd: string | undefined;
-  try {
-    cwd = process.cwd();
-  } catch {
-    // cwd deleted; workspace .env cannot exist, skip it.
-  }
+  // Skip the workspace .env check when the launch cwd was deleted — it cannot
+  // exist. The global state-dir .env check below is independent of cwd.
+  const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }

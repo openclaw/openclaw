@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
-import { safeCwd } from "./home-dir.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 type EnsureOpenClawPathOpts = {
   /** Executable whose directory should stay first for shebang-compatible child processes. */
@@ -81,10 +81,12 @@ function candidateBinDirs(
   existingPathParts: ReadonlySet<string>,
 ): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
-  // safeCwd falls back to os.homedir() when cwd is deleted; must NOT use
-  // os.tmpdir() here — that would let shared temp participate in PATH
-  // resolution for project-local-bin (cf. PR #74994 review).
-  const cwd = opts.cwd ?? safeCwd();
+  // Nullable cwd: when the launch directory was deleted, there is no project
+  // cwd to resolve project-local bins from. Skip the lookup entirely rather
+  // than substituting $HOME — treating $HOME/node_modules/.bin as the deleted
+  // project path would change project-local PATH trust semantics
+  // (cf. PR #74994 review).
+  const cwd = opts.cwd ?? tryProcessCwd();
   const homeDir = opts.homeDir ?? os.homedir();
   const platform = opts.platform ?? process.platform;
 
@@ -118,7 +120,7 @@ function candidateBinDirs(
   const allowProjectLocalBin =
     opts.allowProjectLocalBin === true ||
     isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN);
-  if (allowProjectLocalBin) {
+  if (allowProjectLocalBin && cwd) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
     if (isExecutable(path.join(localBinDir, "openclaw"))) {
       append.push(localBinDir);
