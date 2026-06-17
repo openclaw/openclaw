@@ -438,6 +438,7 @@ describe("skills cli commands", () => {
     expect(help).toContain("<skill-ref>");
     expect(help).toContain("@owner/slug");
     expect(help).toContain("openclaw skills install @owner/weather");
+    expect(help).not.toContain("openclaw skills install weather");
   });
 
   it("installs a skill from a git source into the active workspace", async () => {
