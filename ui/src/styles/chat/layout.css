@@ -1816,6 +1816,21 @@
   grid-template-areas: "session";
 }
 
+.chat-controls__session-row--session-switcher.chat-controls__session-row--has-quota {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "agent"
+    "session"
+    "quota";
+}
+
+.chat-controls__session-row--session-switcher.chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "session"
+    "quota";
+}
+
 .chat-controls__session-row--compact {
   width: 44px;
 }
