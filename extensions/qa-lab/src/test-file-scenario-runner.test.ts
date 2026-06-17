@@ -335,7 +335,7 @@ describe("qa test file scenario runner", () => {
     });
   });
 
-  it("does not import producer QA evidence artifacts from failed script scenarios", async () => {
+  it("imports producer QA evidence artifacts from failed script scenarios", async () => {
     const repoRoot = await makeTempRepo("qa-script-failed-scenario-");
     const result = await runQaTestFileScenarios({
       repoRoot,
@@ -381,12 +381,18 @@ describe("qa test file scenario runner", () => {
                       id: "ux-matrix",
                       live: false,
                       model: { name: null, ref: null },
-                      fixture: "stale-producer-evidence",
+                      fixture: "failed-producer-evidence",
                     },
                     packageSource: { kind: "source-checkout", sha: "abc123" },
                     artifacts: [],
                   },
-                  result: { status: "pass", timing: { wallMs: 1 } },
+                  result: {
+                    status: "fail",
+                    failure: {
+                      reason: "UX Matrix cell failed.",
+                    },
+                    timing: { wallMs: 1 },
+                  },
                 },
               ],
             },
@@ -411,11 +417,39 @@ describe("qa test file scenario runner", () => {
       } as NodeJS.ProcessEnv,
     });
 
+    expect(result.results[0]).toMatchObject({
+      status: "fail",
+      failureMessage: "node exited with 1",
+      producerEvidence: {
+        entries: [
+          {
+            test: {
+              id: "ux-matrix.web-ui.first-run",
+            },
+            result: {
+              status: "fail",
+            },
+          },
+        ],
+      },
+    });
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
-    expect(evidence.entries).toHaveLength(1);
+    expect(evidence.entries).toHaveLength(2);
     expect(evidence.entries[0]).toMatchObject({
+      test: {
+        kind: "ux-matrix-cell",
+        id: "ux-matrix.web-ui.first-run",
+      },
+      result: {
+        status: "fail",
+        failure: {
+          reason: "UX Matrix cell failed.",
+        },
+      },
+    });
+    expect(evidence.entries[1]).toMatchObject({
       test: {
         kind: "script-test",
         id: "scenario-script",
@@ -430,7 +464,6 @@ describe("qa test file scenario runner", () => {
         },
       },
     });
-    expect(evidence.entries[0]?.test.id).not.toBe("ux-matrix.web-ui.first-run");
   });
 
   it("fails script scenario results when imported producer evidence fails", async () => {

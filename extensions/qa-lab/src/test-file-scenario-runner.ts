@@ -67,6 +67,7 @@ type QaScenarioCommandStep = {
 type QaTestFileScenarioResult = {
   durationMs: number;
   failureMessage?: string;
+  includeFallbackEvidence?: boolean;
   logPath: string;
   producerEvidence?: QaEvidenceSummaryJson;
   scenario: QaTestFileScenario;
@@ -280,7 +281,7 @@ async function runQaTestFileScenario(params: {
     ...params,
     steps: definition.buildSteps(params.scenario, { outputDir: params.outputDir }),
   });
-  if (params.scenario.execution.kind !== "script" || result.status !== "pass") {
+  if (params.scenario.execution.kind !== "script") {
     return result;
   }
   const producerEvidenceResult = await readScriptProducerEvidence({
@@ -288,6 +289,16 @@ async function runQaTestFileScenario(params: {
     repoRoot: params.repoRoot,
     scenario: params.scenario,
   });
+  if (!producerEvidenceResult.producerEvidence) {
+    return result;
+  }
+  if (result.status !== "pass") {
+    return {
+      ...result,
+      ...producerEvidenceResult,
+      includeFallbackEvidence: true,
+    };
+  }
   return {
     ...result,
     ...producerEvidenceResult,
@@ -344,7 +355,9 @@ function buildTestFileEvidence(params: {
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
-    const fallbackResults = params.results.filter((result) => !result.producerEvidence);
+    const fallbackResults = params.results.filter(
+      (result) => !result.producerEvidence || result.includeFallbackEvidence,
+    );
     const fallbackEvidence =
       fallbackResults.length > 0
         ? definition.buildEvidenceSummary({
