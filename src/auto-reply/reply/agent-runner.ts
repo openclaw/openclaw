@@ -1264,6 +1264,8 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.images !== undefined ? { images: followupRun.images } : {}),
+        ...(followupRun.imageOrder !== undefined ? { imageOrder: followupRun.imageOrder } : {}),
       },
     );
     if (steerOutcome.queued) {

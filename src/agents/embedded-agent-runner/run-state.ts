@@ -8,6 +8,7 @@ import {
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /**
@@ -33,6 +34,10 @@ export type EmbeddedAgentQueueMessageOptions = {
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Image attachments to thread onto the steered user turn (same shape as FollowupRun.images). */
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  /** Ordering metadata for the steered images relative to inline prompt references. */
+  imageOrder?: PromptImageOrderEntry[];
 };
 
 export type ActiveEmbeddedRunSnapshot = {
