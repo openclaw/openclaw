@@ -1,8 +1,8 @@
-// Gateway Smoke tests cover QA Lab gateway smoke evidence.
+// Gateway Smoke tests cover gateway smoke script behavior.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { runGatewaySmoke } from "../../../../scripts/dev/gateway-smoke.js";
+import { runGatewaySmoke } from "../../scripts/dev/gateway-smoke.js";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
