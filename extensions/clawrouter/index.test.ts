@@ -105,6 +105,13 @@ describe("clawrouter provider plugin", () => {
         provider: "clawrouter",
         api: "anthropic-messages",
         id: "anthropic/default",
+        params: {
+          clawrouterRoute: {
+            api: "anthropic-messages",
+            baseUrl: "https://clawrouter.example/v1/native/anthropic",
+            upstreamModel: "claude-sonnet-4-5-20250929",
+          },
+        },
       } as never,
       {} as never,
       { apiKey: "CLAWROUTER_API_KEY" } as never,
@@ -117,6 +124,8 @@ describe("clawrouter provider plugin", () => {
     expect(calls[0]?.id).toBe("claude-sonnet-4-5-20250929");
     expect(calls[0]?.params).toBeUndefined();
     expect(calls[1]?.headers).toBeUndefined();
+    expect(calls[1]?.id).toBe("claude-sonnet-4-5-20250929");
+    expect(calls[1]?.params).toBeUndefined();
   });
 
   it("resolves managed secret refs before credential-scoped discovery", async () => {

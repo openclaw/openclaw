@@ -24,14 +24,15 @@ function createClawRouterStreamWrapper(underlying: StreamFn | undefined): Stream
   }
   return (model, context, options) => {
     const apiKey = options?.apiKey?.trim();
+    const preparedModel = prepareClawRouterRequestModel(model);
     if (!apiKey || apiKey === ENV_API_KEY_MARKER) {
-      return underlying(model, context, options);
+      return underlying(preparedModel, context, options);
     }
     return underlying(
-      prepareClawRouterRequestModel({
-        ...model,
-        headers: withBearerAuthorization(model.headers, apiKey),
-      }),
+      {
+        ...preparedModel,
+        headers: withBearerAuthorization(preparedModel.headers, apiKey),
+      },
       context,
       options,
     );
