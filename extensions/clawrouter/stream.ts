@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { prepareClawRouterRequestModel } from "./provider-catalog.js";
 
@@ -37,10 +36,6 @@ function createClawRouterStreamWrapper(underlying: StreamFn | undefined): Stream
       options,
     );
   };
-}
-
-export function createClawRouterStreamFn(): StreamFn {
-  return createClawRouterStreamWrapper(streamSimple) as StreamFn;
 }
 
 export function wrapClawRouterProviderStream(

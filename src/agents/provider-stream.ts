@@ -5,7 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Api, Model } from "../llm/types.js";
-import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
+import { resolveProviderStreamFn, wrapProviderStreamFn } from "../plugins/provider-runtime.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
 import type { StreamFn } from "./runtime/index.js";
@@ -18,8 +18,9 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowRuntimePluginLoad?: boolean;
+  applyProviderWrapper?: boolean;
 }): StreamFn | undefined {
-  const streamFn =
+  const baseStreamFn =
     resolveProviderStreamFn({
       provider: params.model.provider,
       config: params.cfg,
@@ -41,9 +42,26 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
-  if (!streamFn) {
+  if (!baseStreamFn) {
     return undefined;
   }
+  const streamFn = params.applyProviderWrapper
+    ? (wrapProviderStreamFn({
+        provider: params.model.provider,
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        context: {
+          config: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          provider: params.model.provider,
+          modelId: params.model.id,
+          model: params.model,
+          streamFn: baseStreamFn,
+        },
+      }) ?? baseStreamFn)
+    : baseStreamFn;
   // Register custom APIs only after a concrete stream exists, so later callers
   // can route by model.api without reloading provider runtime hooks.
   ensureCustomApiRegistered(params.model.api, streamFn);

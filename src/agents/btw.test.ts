@@ -1198,6 +1198,7 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
       workspaceDir: "/tmp/workspace",
+      applyProviderWrapper: true,
     });
     expectRecordFields(registerParams.model, {
       provider: "ollama",

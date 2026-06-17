@@ -239,7 +239,7 @@ function buildDiscoveredModels(
       models.set(routed.definition.id, routed.definition);
     }
   }
-  return [...models.values()].sort((left, right) => left.id.localeCompare(right.id));
+  return [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export async function buildClawRouterProviderConfig(params: {

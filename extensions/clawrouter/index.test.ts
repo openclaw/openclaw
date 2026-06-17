@@ -57,7 +57,6 @@ describe("clawrouter provider plugin", () => {
       envVars: ["CLAWROUTER_API_KEY"],
       isModernModelRef: expect.any(Function),
       buildReplayPolicy: expect.any(Function),
-      createStreamFn: expect.any(Function),
       normalizeResolvedModel: expect.any(Function),
       sanitizeReplayHistory: expect.any(Function),
       wrapSimpleCompletionStreamFn: expect.any(Function),
@@ -68,17 +67,6 @@ describe("clawrouter provider plugin", () => {
       label: "ClawRouter proxy key",
       kind: "api_key",
     });
-    expect(
-      provider?.createStreamFn?.({
-        provider: "clawrouter",
-        modelId: "anthropic/default",
-        model: {
-          provider: "clawrouter",
-          api: "anthropic-messages",
-          id: "anthropic/default",
-        },
-      } as never),
-    ).toBeTypeOf("function");
     expect(provider?.wrapSimpleCompletionStreamFn).toBe(provider?.wrapStreamFn);
   });
 
@@ -95,7 +83,7 @@ describe("clawrouter provider plugin", () => {
       streamFn: baseStreamFn,
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       {
         provider: "clawrouter",
         api: "anthropic-messages",
@@ -112,7 +100,7 @@ describe("clawrouter provider plugin", () => {
       {} as never,
       { apiKey: "runtime-proxy-key" } as never,
     );
-    wrapped?.(
+    void wrapped?.(
       {
         provider: "clawrouter",
         api: "anthropic-messages",
