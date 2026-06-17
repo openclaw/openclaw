@@ -1060,6 +1060,59 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
+  it("preserves auto-selected session CLI BTW routing before resolving runtime auth", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const sessionEntry = createSessionEntry({
+      authProfileOverride: "anthropic:auto-cli",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+    resolveSessionAuthProfileOverrideMock.mockImplementation(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        if (params.sessionEntry) {
+          params.sessionEntry.authProfileOverride = "anthropic:api";
+          params.sessionEntry.authProfileOverrideSource = "auto";
+        }
+        return "anthropic:api";
+      },
+    );
+    mockDoneAnswer("Generic fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry,
+      sessionStore,
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
   it("loads Claude CLI auth for BTW from persisted auth-store order", async () => {
     const staticAuthStore = {
       version: 1 as const,

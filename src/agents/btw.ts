@@ -582,23 +582,6 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const runtimeSelectionForHarness = await resolveRuntimeSelection();
-  const runtimeHarness = selectAgentHarness({
-    provider: runtimeSelectionForHarness.model.provider,
-    modelId: runtimeSelectionForHarness.model.id,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
-  if (runtimeHarness.runSideQuestion) {
-    return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
-  }
-  if (runtimeHarness.id === "codex") {
-    throw new Error(
-      `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
-    );
-  }
-
   const fallbackPolicy = resolveAvailableAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
@@ -661,6 +644,23 @@ export async function runBtwSideQuestion(
       messageProvider: params.messageProvider,
       currentChannelId: params.currentChannelId,
     });
+  }
+
+  const runtimeSelectionForHarness = await resolveRuntimeSelection();
+  const runtimeHarness = selectAgentHarness({
+    provider: runtimeSelectionForHarness.model.provider,
+    modelId: runtimeSelectionForHarness.model.id,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  if (runtimeHarness.runSideQuestion) {
+    return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
+  }
+  if (runtimeHarness.id === "codex") {
+    throw new Error(
+      `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
+    );
   }
 
   const { model, authProfileId, authProfileIdSource } = runtimeSelectionForHarness;
