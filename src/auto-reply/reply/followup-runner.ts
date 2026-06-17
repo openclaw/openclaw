@@ -1256,10 +1256,18 @@ export function createFollowupRunner(params: {
         const userFacingErrorPayload = runResult.payloads?.find(
           (payload) => payload.isError === true && typeof payload.text === "string",
         )?.text;
+        const trajectoryTerminalError =
+          runResult.meta && typeof runResult.meta === "object" && "terminalError" in runResult.meta
+            ? (runResult.meta as Record<string, unknown>).terminalError
+            : undefined;
         const terminalErrorMessage =
           deferredLifecycleError ??
           userFacingErrorPayload ??
-          (runResult.meta?.error ? "Agent run failed" : undefined);
+          (trajectoryTerminalError === "non_deliverable_terminal_turn"
+            ? "Agent run failed: non-deliverable terminal turn"
+            : runResult.meta?.error
+              ? "Agent run failed"
+              : undefined);
         const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
         if (fallbackExhausted) {
           const exhaustionError = new Error(

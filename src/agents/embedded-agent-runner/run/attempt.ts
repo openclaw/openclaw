@@ -5585,6 +5585,8 @@ export async function runEmbeddedAttempt(
         timedOutDuringToolExecution,
         promptError,
         promptErrorSource,
+        terminalError: attemptTrajectoryTerminal.terminalError,
+        terminalStatus: attemptTrajectoryTerminal.status,
         preflightRecovery,
         sessionIdUsed,
         sessionFileUsed,

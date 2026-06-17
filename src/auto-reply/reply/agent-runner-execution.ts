@@ -117,6 +117,7 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
 import {
@@ -992,6 +993,9 @@ function buildExternalRunFailureReply(
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
+  }
+  if (/non.deliverable/i.test(normalizedMessage) || /tool.?(use|call).*no.*(reply|delivery)/i.test(normalizedMessage)) {
+    return { text: NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT, isGenericRunnerFailure: false };
   }
   return {
     text: options?.includeDetails
@@ -2935,10 +2939,18 @@ export async function runAgentTurnWithFallback(params: {
       const userFacingErrorPayload = runResult.payloads?.find(
         (payload) => payload.isError === true && typeof payload.text === "string",
       )?.text;
+      const trajectoryTerminalError =
+        runResult.meta && typeof runResult.meta === "object" && "terminalError" in runResult.meta
+          ? (runResult.meta as Record<string, unknown>).terminalError
+          : undefined;
       const terminalErrorMessage =
         deferredLifecycleError ??
         userFacingErrorPayload ??
-        (embeddedError ? "Agent run failed" : undefined);
+        (trajectoryTerminalError === "non_deliverable_terminal_turn"
+          ? NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT
+          : embeddedError
+            ? "Agent run failed"
+            : undefined);
       const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
         if (settledLifecycleTerminal) {
           settledLifecycleTerminal.emit("error", error, extraData);
