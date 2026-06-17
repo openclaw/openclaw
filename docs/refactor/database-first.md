@@ -382,15 +382,13 @@ The branch already has a real shared SQLite base:
   exact transcript event row.
 - Memory-core indexes now use explicit agent-database tables
   `memory_index_meta`, `memory_index_sources`, `memory_index_chunks`, and
-  `memory_embedding_cache`; optional FTS/vector side indexes use the same
-  `memory_index_*` prefix instead of generic `meta`, `files`, `chunks`, or
-  `chunks_vec` tables. `memory_index_sources` is keyed by
-  `(source_kind, source_key)` and carries optional `session_id` ownership, so
-  session-derived sources and chunks cascade when a session is deleted. Cached
-  chunk embeddings are stored as Float32 SQLite BLOBs, not JSON text arrays.
-  These tables are derived/search cache, not canonical transcript storage; they
-  can be deleted and rebuilt from `sessions`, `transcript_events`, and memory
-  workspace files.
+  `memory_embedding_cache`, with `memory_index_state` tracking revision changes.
+  Optional FTS/vector side indexes are named `memory_index_chunks_fts` and
+  `memory_index_chunks_vec` instead of generic `meta`, `files`, `chunks`,
+  `chunks_fts`, or `chunks_vec` tables. The canonical names retain the current
+  path/source row shape and serialized embedding compatibility. These tables
+  are derived/search cache, not canonical transcript storage; they can be
+  deleted and rebuilt from memory workspace files and configured sources.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
   `subagents/runs.json` file is doctor migration input only.
@@ -1492,10 +1490,11 @@ vfs_entries(namespace, path, kind, content_blob, metadata_json, updated_at)
 tool_artifacts(run_id, artifact_id, kind, metadata_json, blob, created_at)
 run_artifacts(run_id, path, kind, metadata_json, blob, created_at)
 trajectory_runtime_events(session_id, run_id, seq, event_json, created_at)
-memory_index_meta(meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
-memory_index_sources(source_kind, source_key, path, session_id, hash, mtime, size)
-memory_index_chunks(id, source_kind, source_key, path, session_id, start_line, end_line, hash, model, text, embedding, embedding_dims, updated_at)
+memory_index_meta(key, value)
+memory_index_sources(path, source, hash, mtime, size)
+memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
 memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at)
+memory_index_state(id, revision)
 cache_entries(scope, key, value_json, blob, expires_at, updated_at)
 ```
 
@@ -1723,9 +1722,9 @@ Keep shared coordination state in `state/openclaw.sqlite`:
   `media_blobs` and removes the source files after successful row writes.
 - Debug proxy capture sessions, events, and payload blobs. Done: captures live
   in the shared state DB and open through the shared state DB bootstrap, schema,
-  WAL, and busy-timeout settings. There is no debug proxy runtime sidecar DB
-  override, blob directory, or proxy-capture-only generated schema/codegen
-  target.
+  WAL, and busy-timeout settings. Payload bytes are gzip-compressed in
+  `capture_blobs.data`; there is no debug proxy runtime sidecar DB override,
+  blob directory, or proxy-capture-only generated schema/codegen target.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.
