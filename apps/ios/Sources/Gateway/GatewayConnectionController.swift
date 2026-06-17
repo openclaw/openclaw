@@ -125,6 +125,7 @@ final class GatewayConnectionController {
     private(set) var pendingTrustPrompt: TrustPrompt?
 
     private let discovery = GatewayDiscoveryModel()
+    private let discoveryEnabled: Bool
     private weak var appModel: NodeAppModel?
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
@@ -137,6 +138,7 @@ final class GatewayConnectionController {
     }
 
     init(appModel: NodeAppModel, startDiscovery: Bool = true) {
+        self.discoveryEnabled = startDiscovery
         self.appModel = appModel
 
         GatewaySettingsStore.bootstrapPersistence()
@@ -146,7 +148,7 @@ final class GatewayConnectionController {
         self.updateFromDiscovery()
         self.observeDiscovery()
 
-        if startDiscovery {
+        if self.discoveryEnabled {
             self.discovery.start()
         }
     }
@@ -156,6 +158,11 @@ final class GatewayConnectionController {
     }
 
     func setScenePhase(_ phase: ScenePhase) {
+        guard self.discoveryEnabled else {
+            self.discovery.stop()
+            return
+        }
+
         switch phase {
         case .background:
             self.discovery.stop()
@@ -169,6 +176,12 @@ final class GatewayConnectionController {
     }
 
     func restartDiscovery() {
+        guard self.discoveryEnabled else {
+            self.discovery.stop()
+            self.updateFromDiscovery()
+            return
+        }
+
         self.discovery.stop()
         self.didAutoConnect = false
         self.discovery.start()

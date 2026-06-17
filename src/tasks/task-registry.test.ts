@@ -58,6 +58,8 @@ import {
 } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
+  getInspectableTaskAuditFindings,
+  getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -2092,6 +2094,27 @@ describe("task-registry", () => {
     });
   });
 
+  it("uses the child session agent for cross-agent background task attribution", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+
+      const created = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:child",
+        runId: "run-worker-subagent",
+        task: "Inspect worker state",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      expect(created.agentId).toBe("worker");
+      expect(listTasksForAgentId("worker").map((task) => task.taskId)).toEqual([created.taskId]);
+      expect(listTasksForAgentId("main")).toEqual([]);
+    });
+  });
+
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -2122,6 +2145,37 @@ describe("task-registry", () => {
         status: "running",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
+  it("keeps zero-argument inspection helpers fresh", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-16T00:00:00Z"));
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-inspection-freshness",
+        task: "Inspect fresh task state",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      let listCalls = 0;
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, task]]),
+        snapshotTasks: [task],
+        listTaskRecords: () => {
+          listCalls += 1;
+          return listCalls === 1 ? [task] : [];
+        },
+      });
+
+      expect(getInspectableTaskRegistrySummary().total).toBe(1);
+      expect(getInspectableTaskAuditFindings()).toStrictEqual([]);
+      expect(listCalls).toBe(2);
     });
   });
 

@@ -66,6 +66,7 @@ type CodexDynamicToolHookContext = {
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
+  allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -107,6 +108,7 @@ export type CodexDynamicToolBridge = {
     options?: {
       signal?: AbortSignal;
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
+      toolCallOrdinal?: number;
     },
   ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
@@ -227,6 +229,7 @@ export function createCodexDynamicToolBridge(params: {
           isError: true,
           observer: params.hookContext?.onToolOutcome,
           toolName: call.tool,
+          toolCallOrdinal: options?.toolCallOrdinal,
         });
         notifyAgentToolResult(
           options?.onAgentToolResult,
@@ -326,6 +329,7 @@ export function createCodexDynamicToolBridge(params: {
           isError: resultIsError,
           observer: params.hookContext?.onToolOutcome,
           toolName,
+          toolCallOrdinal: options?.toolCallOrdinal,
         });
         const messagingTelemetryArgs = applyCurrentMessageProvider(
           toolName,
@@ -393,6 +397,7 @@ export function createCodexDynamicToolBridge(params: {
           isError: true,
           observer: params.hookContext?.onToolOutcome,
           toolName,
+          toolCallOrdinal: options?.toolCallOrdinal,
         });
         notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
         collectToolTelemetry({

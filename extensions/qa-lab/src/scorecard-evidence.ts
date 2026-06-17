@@ -7,7 +7,10 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
+import type {
+  QaScorecardCategoryCoverageReport,
+  QaScorecardEvidenceMode,
+} from "./scorecard-taxonomy.js";
 import { readQaScorecardFeatureCoverageByCategory } from "./scorecard-taxonomy.js";
 
 type QaProfileScorecardFilters = {
@@ -155,6 +158,7 @@ export function buildQaProfileScorecardEvidence(params: {
 
 export async function attachQaProfileScorecardEvidenceToFile(params: {
   evidencePath: string;
+  evidenceMode?: QaScorecardEvidenceMode;
   profile: string;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
@@ -170,6 +174,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   });
   const nextEvidence = attachQaEvidenceScorecard({
     summary: evidence,
+    evidenceMode: params.evidenceMode,
     profile: params.profile,
     scorecard,
   });

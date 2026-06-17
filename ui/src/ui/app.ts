@@ -78,6 +78,10 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
@@ -108,7 +112,10 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
+import {
+  loadSkillWorkshopProposals,
+  type SkillWorkshopState,
+} from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -308,6 +315,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
+  @state() realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null = null;
   @state() realtimeTalkOptions = {
     provider: "",
     model: "",
@@ -607,6 +615,8 @@ export class OpenClawApp extends LitElement {
   @state() overviewLogCursor = 0;
 
   @state() skillsLoading = false;
+  @state() skillsAgentId: string | null = null;
+  skillsAgentRevision = 0;
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
   @state() skillsFilter = "";
@@ -634,6 +644,7 @@ export class OpenClawApp extends LitElement {
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
   @state() skillWorkshopLoading = false;
+  @state() skillWorkshopAgentId: string | null = null;
   @state() skillWorkshopLoaded = false;
   @state() skillWorkshopError: string | null = null;
   @state() skillWorkshopInspectingKey: string | null = null;
@@ -854,6 +865,12 @@ export class OpenClawApp extends LitElement {
     if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);
     }
+    if (
+      this.tab === "skillWorkshop" &&
+      (changed.has("sessionKey") || changed.has("assistantAgentId"))
+    ) {
+      void loadSkillWorkshopProposals(this, { force: true });
+    }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }
@@ -926,8 +943,8 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  async loadAssistantIdentity() {
-    await loadAssistantIdentityInternal(this);
+  async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {
+    await loadAssistantIdentityInternal(this, opts);
   }
 
   applySettings(next: UiSettings) {
@@ -1168,6 +1185,29 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkOptions = { ...this.realtimeTalkOptions, ...next };
   }
 
+  async fetchRealtimeTalkCatalog() {
+    if (!this.client || !this.connected) {
+      return;
+    }
+    this.realtimeTalkCatalogProviders = null;
+    try {
+      const result = await this.client.request<{
+        realtime?: { providers?: RealtimeTalkCatalogProvider[] };
+      }>("talk.catalog", {});
+      const providers = result?.realtime?.providers ?? [];
+      this.realtimeTalkCatalogProviders = providers;
+      const update = reconcileRealtimeTalkCatalogSelection({
+        providers,
+        selection: this.realtimeTalkOptions,
+      });
+      if (update) {
+        this.updateRealtimeTalkOptions(update);
+      }
+    } catch {
+      this.realtimeTalkCatalogProviders = null;
+    }
+  }
+
   private buildRealtimeTalkLaunchOptions(): RealtimeTalkLaunchOptions {
     const options = this.realtimeTalkOptions ?? {
       provider: "",
@@ -1237,10 +1277,6 @@ export class OpenClawApp extends LitElement {
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
           }
-          if (status === "error" && this.realtimeTalkDetail) {
-            this.lastError = this.realtimeTalkDetail;
-            this.chatError = this.realtimeTalkDetail;
-          }
         },
         onTranscript: (entry) => {
           this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
@@ -1264,8 +1300,6 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkActive = false;
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      this.lastError = this.realtimeTalkDetail;
-      this.chatError = this.realtimeTalkDetail;
     }
   }
 

@@ -95,6 +95,12 @@ import {
 } from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  readRecentSessionMessagesWithStatsAsync,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCountAsync,
+  readSessionPreviewItemsFromTranscript,
+} from "../session-transcript-readers.js";
+import {
   archiveFileOnDisk,
   buildGatewaySessionDiskCompactionCheckpointPreviewsByDirSync,
   buildGatewaySessionInfo,
@@ -102,10 +108,6 @@ import {
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
-  readSessionMessageCountAsync,
-  readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -396,7 +398,7 @@ function resolveCheckpointForkSource(
   if (preCompactionFile) {
     return {
       sourceFile: preCompactionFile,
-      sourceLeafId: checkpoint.preCompaction.leafId,
+      sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
       totalTokens: checkpoint.tokensBefore,
     };
   }
@@ -405,7 +407,7 @@ function resolveCheckpointForkSource(
     return null;
   }
   const postCompactionLeafId =
-    checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+    checkpoint.postCompaction.entryId ?? checkpoint.postCompaction.leafId;
   if (!postCompactionLeafId) {
     return null;
   }
@@ -865,7 +867,12 @@ async function handleSessionSend(params: {
   }
 
   const messageSeq =
-    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
+    (await readSessionMessageCountAsync({
+      agentId: requestedAgentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+      storePath,
+    })) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -1203,10 +1210,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           continue;
         }
         const items = readSessionPreviewItemsFromTranscript(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
-          target.agentId,
+          {
+            agentId: target.agentId,
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+            storePath: target.storePath,
+          },
           limit,
           maxChars,
         );
@@ -1598,11 +1607,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? (await readSessionMessageCountAsync(
-          createdEntry.sessionId,
-          target.storePath,
-          createdEntry.sessionFile,
-        )) + 1
+      ? (await readSessionMessageCountAsync({
+          agentId: target.agentId,
+          sessionFile: createdEntry.sessionFile,
+          sessionId: createdEntry.sessionId,
+          storePath: target.storePath,
+        })) + 1
       : undefined;
 
     if (initialMessage) {
@@ -2482,9 +2492,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      entry.sessionId,
-      storePath,
-      entry.sessionFile,
+      {
+        agentId: requestedAgent.agentId,
+        sessionFile: entry.sessionFile,
+        sessionId: entry.sessionId,
+        storePath,
+      },
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,

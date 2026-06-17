@@ -23,13 +23,11 @@ import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../.
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  applySessionStoreEntryPatch,
-  loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
@@ -120,6 +118,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -250,10 +249,12 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
+  didSendViaMessagingTool?: boolean;
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
@@ -1107,8 +1108,10 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestStore = loadSessionStore(storePath, { skipCache: true, clone: false });
-    const latestEntry = latestStore?.[sessionKey];
+    const latestEntry = loadSessionEntry({
+      storePath,
+      sessionKey,
+    });
     if (!latestEntry) {
       return fallbackEntry;
     }
@@ -1200,6 +1203,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const replyOperationRunState = resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -1243,12 +1247,9 @@ export async function runReplyAgent(params: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await applySessionStoreEntryPatch({
-        storePath,
-        sessionKey,
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
         skipMaintenance: true,
         takeCacheOwnership: true,
-        patch: { updatedAt },
       });
     }
   };
@@ -1296,6 +1297,9 @@ export async function runReplyAgent(params: {
   });
 
   if (activeRunQueueAction === "drop") {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
+    }
     typing.cleanup();
     return undefined;
   }
@@ -1406,6 +1410,9 @@ export async function runReplyAgent(params: {
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "owned" };
+    }
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
@@ -1416,6 +1423,12 @@ export async function runReplyAgent(params: {
       routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
+    if (replyOperationRunState) {
+      replyOperationRunState.admission =
+        admission.status === "owned"
+          ? { status: "owned" }
+          : { status: "skipped", reason: admission.reason };
+    }
     if (admission.status === "skipped") {
       typing.cleanup();
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
@@ -1488,14 +1501,16 @@ export async function runReplyAgent(params: {
       restartRecoveryDeliveryRunId,
       updatedAt,
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1514,16 +1529,18 @@ export async function runReplyAgent(params: {
       restartRecoveryDeliveryRunId: undefined,
       updatedAt: Date.now(),
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId &&
         current.abortedLastRun !== true &&
         current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1740,16 +1757,17 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             groupActivationNeedsSystemIntro: false,
             updatedAt,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 
@@ -1885,17 +1903,18 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = fallbackStateEntry;
       }
       if (sessionKey && storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
             fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
             fallbackNoticeReason: fallbackTransition.nextState.reason,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
     const usedCliProvider = isCliProvider(providerUsed, cfg);
@@ -1953,6 +1972,7 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      didSendViaMessagingTool: runResult.didSendViaMessagingTool,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
@@ -2527,19 +2547,20 @@ export async function runReplyAgent(params: {
           runtimePolicySessionKey,
           opts,
         });
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 

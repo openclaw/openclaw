@@ -582,7 +582,7 @@ describe("runtime web tools resolution", () => {
     });
   });
 
-  it("auto-selects a keyless provider when no credentials are configured", async () => {
+  it("does not auto-select a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -595,12 +595,9 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(metadata.search.selectedProvider).toBe("duckduckgo");
-    expect(metadata.search.providerSource).toBe("auto-detect");
-    expectDiagnostic(metadata.search.diagnostics, {
-      code: "WEB_SEARCH_AUTODETECT_SELECTED",
-      messageIncludes: 'keyless provider "duckduckgo"',
-    });
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.diagnostics).toEqual([]);
   });
 
   it.each([
@@ -958,7 +955,7 @@ describe("runtime web tools resolution", () => {
     expect(resolvedConfig.models?.providers?.google?.apiKey).toBe("google-provider-ref-key");
   });
 
-  it("warns when provider is invalid and falls back to auto-detect", async () => {
+  it("keeps an invalid provider unselected without resolving another provider", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
@@ -987,9 +984,13 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.search.providerConfigured).toBeUndefined();
-    expect(metadata.search.providerSource).toBe("auto-detect");
-    expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-runtime-key");
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(readProviderKey(resolvedConfig, "gemini")).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_API_KEY_REF",
+    });
     expectDiagnostic(metadata.search.diagnostics, {
       code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
       path: "tools.web.search.provider",

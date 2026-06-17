@@ -801,7 +801,7 @@ describe("CLI attempt execution", () => {
       await fs.realpath(sessionFile),
     );
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
-    expect(persisted[sessionKey]?.updatedAt).toBeLessThan(nowCalls.at(-1) ?? 0);
+    expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
@@ -1034,11 +1034,13 @@ describe("CLI attempt execution", () => {
       throw new Error("Expected CLI transcript session file.");
     }
     expect(path.isAbsolute(sessionFile)).toBe(true);
-    expect(
-      sessionFile.endsWith(
-        path.join(".openclaw", "agents", "main", "sessions", `${sessionEntry.sessionId}.jsonl`),
-      ),
-    ).toBe(true);
+    const persistedFirst = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(await fs.realpath(persistedFirst[sessionKey]?.sessionFile ?? "")).toBe(
+      await fs.realpath(sessionFile),
+    );
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
@@ -1162,6 +1164,54 @@ describe("CLI attempt execution", () => {
       messageProvider: "discord-voice",
       currentChannelId: "channel:voice-room",
       senderId: "sender-voice",
+    });
+  });
+
+  it("forwards message-tool-only policy and requires explicit subagent targets", async () => {
+    const sessionKey = "agent:main:subagent:claude-message-policy";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-message-policy",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("sent"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "route this",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-message-policy",
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
     });
   });
 

@@ -15,6 +15,7 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import type { MentionTarget } from "./mention-target.types.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -129,6 +130,7 @@ type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   accountId?: string;
   identity?: OutboundIdentity;
+  mentionTargets?: MentionTarget[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -149,6 +151,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     accountId,
     identity,
+    mentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
@@ -743,7 +746,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: false,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk }) => {
+              sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
                   to: chatId,
@@ -752,6 +755,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
+                  ...(info?.kind === "final" && isFirst && mentionTargets?.length
+                    ? { mentions: mentionTargets }
+                    : {}),
                 });
               },
             });

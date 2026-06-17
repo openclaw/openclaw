@@ -5281,6 +5281,41 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
   });
 
+  it("keeps managed web_search for provider-qualified Codex model overrides", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("web_search")]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "modelProvider/capabilities/read") {
+        return { webSearch: true };
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.modelId = "lmstudio/local-model";
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((request) => request.method)).not.toContain(
+      "modelProvider/capabilities/read",
+    );
+    const startRequest = requests.find((request) => request.method === "thread/start");
+    const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
+    const startConfig = startRequestParams?.config as Record<string, unknown> | undefined;
+    const dynamicToolNames = (
+      startRequestParams?.dynamicTools as Array<{ name?: string }> | undefined
+    )?.map((tool) => tool.name);
+    expect(startRequestParams?.model).toBe("local-model");
+    expect(startRequestParams?.modelProvider).toBe("lmstudio");
+    expect(startConfig?.web_search).toBe("disabled");
+    expect(dynamicToolNames).toContain("web_search");
+  });
+
   it("uses bound local model providers when disabling Guardian on resumed threads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

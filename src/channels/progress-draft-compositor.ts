@@ -312,7 +312,7 @@ function normalizeReasoningProgressLine(text: string): string {
 }
 
 const REASONING_PROGRESS_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
 const REASONING_PROGRESS_TAG_NAMES = [
   "think",
   "thinking",
@@ -321,6 +321,9 @@ const REASONING_PROGRESS_TAG_NAMES = [
   "antml:think",
   "antml:thinking",
   "antml:thought",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
 ] as const;
 const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((name) => [
   `<${name}`,

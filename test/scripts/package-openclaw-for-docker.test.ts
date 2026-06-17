@@ -96,6 +96,23 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+  it("rejects package artifact output names that escape the output directory", () => {
+    for (const outputName of [
+      "../openclaw-current.tgz",
+      "nested/openclaw-current.tgz",
+      "openclaw-current.zip",
+      ".openclaw-current.tgz",
+    ]) {
+      expect(() => parseArgs(["--output-name", outputName])).toThrow(
+        `--output-name must be a tarball filename, not a path: ${outputName}`,
+      );
+    }
+
+    expect(parseArgs(["--output-name", "openclaw-current.tar.gz"]).outputName).toBe(
+      "openclaw-current.tar.gz",
+    );
+  });
+
   it("uses build-all as the single bounded package artifact build step", async () => {
     const calls: Array<{
       command: string;
@@ -144,6 +161,29 @@ describe("package-openclaw-for-docker", () => {
         timeoutMs: 1234,
       },
     ]);
+  });
+
+  it("rejects loose package artifact timeout env values", async () => {
+    const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
+    try {
+      for (const value of ["1e3", "123.9", "9007199254740993", "0"]) {
+        process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = value;
+
+        await expect(
+          buildPackageArtifacts("/repo", {
+            runImpl: async () => undefined,
+          }),
+        ).rejects.toThrow(
+          "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS must be a positive timeout in milliseconds",
+        );
+      }
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = previousTimeout;
+      }
+    }
   });
 
   it("trims and restores the changelog around ignore-scripts package artifacts", async () => {

@@ -19,6 +19,7 @@ const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
 const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
 const PACKAGE_URL_MAX_REDIRECTS = 5;
+export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
@@ -130,7 +131,14 @@ export function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
+  validateOutputName(options.outputName);
   return options;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
 }
 
 export function validateOpenClawPackageSpec(spec) {
@@ -280,20 +288,6 @@ function formatCapturedCommandOutput(buffer) {
 
 export const runCommandForTest = run;
 
-async function walkFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const absolute = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkFiles(absolute)));
-    } else if (entry.isFile()) {
-      files.push(absolute);
-    }
-  }
-  return files;
-}
-
 async function sha256(file) {
   const hash = createHash("sha256");
   const handle = await fs.open(file, "r");
@@ -326,16 +320,50 @@ async function assertExpectedSha256(file, expected) {
 }
 
 async function findSingleTarball(dir) {
-  const files = (await walkFiles(path.resolve(ROOT_DIR, dir)))
-    .filter((file) => /\.t(?:ar\.)?gz$/u.test(path.basename(file)))
-    .toSorted((a, b) => a.localeCompare(b));
-  if (files.length !== 1) {
+  const root = path.resolve(ROOT_DIR, dir);
+  const pending = [root];
+  const tarballs = [];
+  let scannedEntries = 0;
+
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    const handle = await fs.opendir(currentDir);
+    for await (const entry of handle) {
+      scannedEntries += 1;
+      if (scannedEntries > ARTIFACT_TARBALL_SCAN_MAX_ENTRIES) {
+        throw new Error(
+          `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries under ${dir}; provide a smaller artifact directory containing exactly one .tgz.`,
+        );
+      }
+
+      const absolute = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(absolute);
+        continue;
+      }
+      if (entry.isFile() && /\.t(?:ar\.)?gz$/u.test(entry.name)) {
+        tarballs.push(absolute);
+        if (tarballs.length > 1) {
+          throw new Error(
+            `source=artifact requires exactly one .tgz under ${dir}; found at least 2: ${tarballs.toSorted((a, b) => a.localeCompare(b)).join(", ")}`,
+          );
+        }
+      }
+    }
+  }
+
+  if (tarballs.length !== 1) {
     throw new Error(
-      `source=artifact requires exactly one .tgz under ${dir}; found ${files.length}: ${files.join(", ")}`,
+      `source=artifact requires exactly one .tgz under ${dir}; found ${tarballs.length}: ${tarballs.join(", ")}`,
     );
   }
-  return files[0];
+  return tarballs[0];
 }
+
+export const findSingleTarballForTest = findSingleTarball;
 
 export async function readArtifactPackageCandidateMetadata(dir) {
   const metadataPath = path.join(path.resolve(ROOT_DIR, dir), "package-candidate.json");
@@ -693,11 +721,21 @@ function toTrustedPorts(value, sourceId) {
   if (!Array.isArray(ports) || ports.length === 0) {
     throw new Error(`trusted package source ${sourceId} must define non-empty ports`);
   }
-  const normalized = ports.map((port) => Number(port));
+  const normalized = ports.map((port) => parseTrustedPort(port));
   if (normalized.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
     throw new Error(`trusted package source ${sourceId} has invalid ports`);
   }
   return [...new Set(normalized)].toSorted((a, b) => a - b);
+}
+
+function parseTrustedPort(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && /^[0-9]+$/u.test(value)) {
+    return Number(value);
+  }
+  return Number.NaN;
 }
 
 function toPathPrefixes(value, sourceId) {
