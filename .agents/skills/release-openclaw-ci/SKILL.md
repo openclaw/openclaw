@@ -57,7 +57,7 @@ gh workflow run openclaw-performance.yml \
   -f repeat=3 \
   -f deep_profile=false \
   -f live_openai_candidate=false \
-  -f fail_on_regression=false
+  -f fail_on_regression=true
 ```
 
 - Do not wait for full release validation to start this early perf signal.
@@ -66,8 +66,9 @@ gh workflow run openclaw-performance.yml \
 - Call out any regression in the release proof. Treat a major regression as a
   release blocker until it is fixed, waived by the operator, or proven to be
   infrastructure noise.
-- Full Release Validation also records advisory product-performance evidence;
-  the early standalone run is for overlap and faster regression discovery.
+- Full Release Validation records blocking product-performance evidence. The
+  early standalone run is for overlap and faster regression discovery, but a
+  regression or missing child run blocks the parent validation.
 
 Prefer the trusted workflow on `main`, target the exact release SHA:
 
@@ -89,7 +90,7 @@ gh workflow run full-release-validation.yml \
   -f rerun_group=all
 ```
 
-Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Use narrow `rerun_group` after focused fixes.
+Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Stable and full profiles force the release soak; the beta profile may opt in with `run_release_soak=true`. Use narrow `rerun_group` after focused fixes.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.

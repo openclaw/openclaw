@@ -145,7 +145,7 @@ jobs:
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.target_ref || github.ref }}
           fetch-depth: 1
@@ -153,7 +153,7 @@ jobs:
 
       - name: Checkout performance workflow helpers
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           path: .artifacts/performance-workflow
@@ -556,7 +556,7 @@ jobs:
 
       - name: Upload Kova artifacts
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

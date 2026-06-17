@@ -8,6 +8,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+  validateFullManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
@@ -57,6 +58,49 @@ describe("release candidate checklist", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
       "--skip-dispatch requires --full-release-run and --npm-preflight-run",
     );
+  });
+
+  it("requires stable validation evidence to include soak and blocking performance", () => {
+    const stableManifest = {
+      workflowName: "Full Release Validation",
+      targetSha: "candidate-sha",
+      releaseProfile: "stable",
+      rerunGroup: "all",
+      runReleaseSoak: "true",
+      controls: { performanceBlocking: true },
+    };
+
+    expect(() =>
+      validateFullManifest(stableManifest, {
+        targetSha: "candidate-sha",
+        releaseProfile: "stable",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateFullManifest(
+        {
+          ...stableManifest,
+          runReleaseSoak: "false",
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "stable",
+        },
+      ),
+    ).toThrow("runReleaseSoak=true");
+    expect(() =>
+      validateFullManifest(
+        {
+          ...stableManifest,
+          controls: { performanceBlocking: false },
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "stable",
+        },
+      ),
+    ).toThrow("blocking product performance");
   });
 
   it("stops parsing options after the argument terminator", () => {

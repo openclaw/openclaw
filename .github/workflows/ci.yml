@@ -598,7 +598,7 @@ jobs:
           install-bun: "false"
 
       - name: Restore build-all step cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .artifacts/build-all-cache
           key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
@@ -607,7 +607,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist_build_cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/
@@ -630,14 +630,14 @@ jobs:
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
 
       - name: Upload built runtime artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-runtime-build
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
       - name: Upload bundled plugin asset artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bundled-plugin-assets
           path: |
@@ -668,7 +668,7 @@ jobs:
 
       - name: Upload startup memory report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: startup-memory
           path: .artifacts/startup-memory/
@@ -757,7 +757,7 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         continue-on-error: true
         with:
           path: |
@@ -769,7 +769,7 @@ jobs:
 
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
@@ -1339,7 +1339,7 @@ jobs:
 
       - name: Upload deadcode reports
         if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: deadcode-reports
           path: .artifacts/deadcode
@@ -1428,7 +1428,7 @@ jobs:
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
         if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/plugin-sdk
@@ -1696,7 +1696,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
@@ -1965,7 +1965,7 @@ jobs:
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -1974,7 +1974,7 @@ jobs:
 
       - name: Cache Swift build directory
         id: swift-build-cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -2105,7 +2105,7 @@ jobs:
           exit 1
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
         with:
           distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
@@ -2117,7 +2117,7 @@ jobs:
             apps/android/gradle/libs.versions.toml
 
       - name: Cache Android SDK
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
           key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
@@ -2204,7 +2204,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout timing summary helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
           fetch-depth: 1
@@ -2220,7 +2220,7 @@ jobs:
           cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload CI timing summary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-timings-summary
           path: ci-timings-summary.txt

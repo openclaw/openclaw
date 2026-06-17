@@ -1982,6 +1982,7 @@
     "oxlint-tsgolint": "0.23.0",
     "shiki": "4.1.0",
     "signal-utils": "0.21.1",
+    "sigstore": "4.1.1",
     "tsdown": "0.22.1",
     "tsx": "4.22.3",
     "unrun": "0.3.0",
