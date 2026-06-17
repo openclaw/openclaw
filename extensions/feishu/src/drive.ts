@@ -338,7 +338,7 @@ async function listFolder(
   const allFiles: Array<{
     token: string;
     name: string;
-    type: number;
+    type: string;
     url?: string;
     created_time?: string;
     modified_time?: string;
@@ -365,7 +365,7 @@ async function listFolder(
     const files = (res.data?.files ?? []).map((f) => ({
       token: f.token,
       name: f.name,
-      type: Number(f.type),
+      type: f.type,
       url: f.url,
       created_time: f.created_time,
       modified_time: f.modified_time,
