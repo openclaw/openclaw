@@ -181,7 +181,11 @@ export class EmbeddedBlockChunker {
         if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
           if (chunk.trim().length > 0) {
-            emit(chunk);
+            // Attach the canonical paragraph boundary the chunk just ended at so a
+            // downstream client that concatenates successive deliveries reconstructs
+            // the separator (issue #42106). The coalescer normalizes any trailing
+            // newline run before re-joining, so this never compounds into 4+ newlines.
+            emit(`${chunk}\n\n`);
           }
           start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
           reopenFence = undefined;

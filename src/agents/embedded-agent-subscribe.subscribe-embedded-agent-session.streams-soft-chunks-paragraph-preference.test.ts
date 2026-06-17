@@ -27,6 +27,11 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
+    // The onBlockReply callback intentionally delivers trimEnd-ed visible text per
+    // paragraph, so the per-delivery payloads are unchanged by #42106. The recovered
+    // paragraph separator lives on the coalesced outbound wire (joiner "\n\n") and in
+    // the chunker's own emitted output (see the chunker reconstruction test), not in
+    // this observability callback.
     expect(blockReplyTexts(onBlockReply)).toEqual(["First block line", "Second block line"]);
     expect(subscription.assistantTexts).toEqual(["First block line", "Second block line"]);
   });
@@ -45,6 +50,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
+    // Per-delivery payloads stay trimEnd-ed and unchanged by #42106 (see the note in
+    // the paragraph-preference test above); the separator is restored on the wire.
     expect(blockReplyTexts(onBlockReply)).toEqual(["Intro", "```bash\nline1\nline2\n```", "Outro"]);
   });
 });
