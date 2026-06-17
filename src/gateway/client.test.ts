@@ -771,6 +771,139 @@ describe("GatewayClient close handling", () => {
     }
   });
 
+  it("reconnects quietly after one clean pre-hello close with a pending connect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      token: "shared-token",
+      onClose,
+      onConnectError,
+      onHelloOk,
+    });
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      expect(firstWs.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(true);
+
+      firstWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+      expect(onClose).toHaveBeenCalledWith(1000, "", {
+        phase: "pre-hello",
+        transientPreHelloCleanClose: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(wsInstances).toHaveLength(2);
+      const secondWs = getLatestWs();
+      secondWs.emitOpen();
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-2" },
+        }),
+      );
+      const connectFrame = JSON.parse(
+        secondWs.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+      ) as { id?: string };
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrame.id,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onHelloOk).toHaveBeenCalledOnce();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces repeated clean pre-hello closes with a pending connect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      token: "shared-token",
+      onClose,
+      onConnectError,
+    });
+    try {
+      client.start();
+      const firstWs = getLatestWs();
+      firstWs.emitOpen();
+      firstWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      firstWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const secondWs = getLatestWs();
+      secondWs.emitOpen();
+      secondWs.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-2" },
+        }),
+      );
+      secondWs.emitClose(1000, "");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onClose).toHaveBeenNthCalledWith(1, 1000, "", {
+        phase: "pre-hello",
+        transientPreHelloCleanClose: true,
+      });
+      expect(onClose).toHaveBeenNthCalledWith(2, 1000, "");
+      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(onConnectError.mock.calls[0]?.[0]).toMatchObject({
+        message: "gateway closed (1000): ",
+      });
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears pending reconnect timers on stop", async () => {
     vi.useFakeTimers();
     try {

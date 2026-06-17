@@ -100,6 +100,26 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - `dev`: moving head on `main`
 - When using a beta Git tag, publish npm with the matching beta version suffix so the plain version is not consumed or blocked
 
+## Close stable releases on main
+
+Stable publication is not complete until `main` carries the actual shipped release state.
+
+1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
+   forward-port real fixes that are absent from `main`. Do not blindly merge
+   release-only compatibility, test, or validation adapters into newer `main`.
+2. Set `main` to the shipped stable version, not a speculative next train. Run
+   `pnpm release:prep` after the root version change, then
+   `pnpm deps:shrinkwrap:generate`.
+3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
+   tagged release branch. Include the stable `appcast.xml` update when the mac
+   release published one.
+4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
+   section to `main` until the operator explicitly starts that release train.
+5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
+   contains the shipped version and changelog before calling the stable release
+   done.
+
 ## Handle versions and release files consistently
 
 - Version locations include:
@@ -205,6 +225,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
   or editing a release, extract from `## YYYY.M.PATCH` through the line before the
   next level-2 heading and use that complete block as the release notes.
+- Before publishing or closing a release, run
+  `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
+  and beta release tag in the train. Do not publish or leave a page live when
+  it is missing a source-history reference, eligible human credit, or the
+  complete matching changelog body.
 - To update an existing GitHub Release body, resolve the numeric release id and
   patch that resource with the notes file as the `body` field:
   `gh api repos/openclaw/openclaw/releases/tags/vYYYY.M.PATCH --jq .id`, then
@@ -773,13 +798,13 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
 32. For stable releases, download `macos-appcast-<tag>` from the successful
-    private mac run, update `appcast.xml` on `main`, and verify the feed. Merge
-    or cherry-pick release branch changes back to `main` after stable succeeds.
+    private mac run, update `appcast.xml` on `main`, verify the feed, then
+    complete the **Close stable releases on main** gate.
 33. For beta releases, publish the mac assets only when intentionally requested;
     expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-34. After publish, verify npm and the attached release artifacts.
+34. After stable main closeout, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

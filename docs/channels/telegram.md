@@ -111,6 +111,10 @@ After a successful startup, OpenClaw caches the bot identity in the state direct
 
 ## Access control and activation
 
+### Group bot identity
+
+In Telegram groups and forum topics, an explicit mention of the configured bot handle (for example `@my_bot`) is treated as addressing the selected OpenClaw agent, even when the agent persona name differs from the Telegram username. The group silence policy still applies to unrelated group traffic, but the bot handle itself is not considered "someone else."
+
 <Tabs>
   <Tab title="DM policy">
     `channels.telegram.dmPolicy` controls direct message access:
@@ -418,7 +422,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Rich message formatting">
-    Outbound text uses standard Telegram HTML messages by default so replies remain readable across current Telegram clients.
+    Outbound text uses standard Telegram HTML messages by default so replies remain readable across current Telegram clients. This compatibility mode supports normal bold, italic, links, code, spoilers, and quotes, but not Bot API 10.1 rich-only blocks such as native tables, details, rich media, and formulas.
 
     Set `channels.telegram.richMessages: true` to opt into Bot API 10.1 rich messages:
 
@@ -432,13 +436,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    When enabled:
+
+    - The agent is told that Telegram rich messages are available for this bot/account.
     - Markdown text is rendered through OpenClaw's Markdown IR and sent as Telegram rich HTML.
     - Explicit rich HTML payloads preserve supported Bot API 10.1 tags such as headings, tables, details, rich media, and formulas.
     - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
     This keeps model text away from Telegram Rich Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
 
-    Rich messages require compatible Telegram clients. Some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported, so keep this option disabled unless every client used with the bot can render them.
+    Default: off for client compatibility. Rich messages require compatible Telegram clients; some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported. Keep this option disabled unless every client used with the bot can render them. `/status` shows whether the current Telegram session has rich messages on or off.
 
     Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 

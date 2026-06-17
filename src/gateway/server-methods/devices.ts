@@ -1,4 +1,5 @@
 // Gateway RPC handlers for device pairing and device-token lifecycle operations.
+import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -25,6 +26,10 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
+import {
+  emitTrustedSecurityEvent,
+  type DiagnosticSecurityEventInput,
+} from "../../infra/diagnostic-events.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
@@ -39,6 +44,8 @@ type DeviceSessionAuthz = {
 type DeviceManagementAuthz = DeviceSessionAuthz & {
   normalizedTargetDeviceId: string;
 };
+
+type DeviceSecurityDecision = NonNullable<DiagnosticSecurityEventInput["policy"]>["decision"];
 
 const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
 const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
@@ -178,6 +185,144 @@ function pairedDeviceHasNonOperatorRole(device: {
   return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
 }
 
+function hashDeviceSecurityId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
+}
+
+function emitDeviceSecurityEvent(params: {
+  action: string;
+  outcome: DiagnosticSecurityEventInput["outcome"];
+  severity: DiagnosticSecurityEventInput["severity"];
+  authz: DeviceSessionAuthz;
+  targetDeviceId?: string;
+  policyId: string;
+  decision: DeviceSecurityDecision;
+  controlId: string;
+  reason?: string;
+  attributes?: Record<string, string | number | boolean>;
+}) {
+  emitTrustedSecurityEvent({
+    category: "auth",
+    action: params.action,
+    outcome: params.outcome,
+    severity: params.severity,
+    actor: {
+      kind: "operator",
+      ...(params.authz.callerDeviceId
+        ? { deviceIdHash: hashDeviceSecurityId(params.authz.callerDeviceId) }
+        : {}),
+      role: params.authz.isAdminCaller ? "admin" : "operator",
+    },
+    target: {
+      kind: "device",
+      ...(params.targetDeviceId ? { idHash: hashDeviceSecurityId(params.targetDeviceId) } : {}),
+    },
+    policy: {
+      id: params.policyId,
+      decision: params.decision,
+      ...(params.reason ? { reason: params.reason } : {}),
+    },
+    control: {
+      id: params.controlId,
+      family: "auth",
+    },
+    ...(params.reason ? { reason: params.reason } : {}),
+    ...(params.attributes ? { attributes: params.attributes } : {}),
+  });
+}
+
+function emitDevicePairingDeniedSecurityEvent(params: {
+  authz: DeviceSessionAuthz;
+  targetDeviceId?: string;
+  controlId: string;
+  reason: string;
+  severity?: DiagnosticSecurityEventInput["severity"];
+}) {
+  emitDeviceSecurityEvent({
+    action: "device.pairing.denied",
+    outcome: "denied",
+    severity: params.severity ?? "medium",
+    authz: params.authz,
+    targetDeviceId: params.targetDeviceId,
+    policyId: "gateway.device-pairing",
+    decision: "deny",
+    controlId: params.controlId,
+    reason: params.reason,
+  });
+}
+
+function emitDevicePairingLifecycleSecurityEvent(params: {
+  action: "device.pairing.approved" | "device.pairing.rejected" | "device.pairing.removed";
+  severity: DiagnosticSecurityEventInput["severity"];
+  authz: DeviceSessionAuthz;
+  targetDeviceId: string;
+  controlId: string;
+  attributes?: Record<string, string | number | boolean>;
+}) {
+  emitDeviceSecurityEvent({
+    action: params.action,
+    outcome: "success",
+    severity: params.severity,
+    authz: params.authz,
+    targetDeviceId: params.targetDeviceId,
+    policyId: "gateway.device-pairing",
+    decision: "allow",
+    controlId: params.controlId,
+    attributes: params.attributes,
+  });
+}
+
+function emitDeviceTokenDeniedSecurityEvent(params: {
+  action: "device.token.rotation_denied" | "device.token.revocation_denied";
+  authz: DeviceSessionAuthz;
+  targetDeviceId: string;
+  controlId: string;
+  reason: string;
+  role: string;
+}) {
+  emitDeviceSecurityEvent({
+    action: params.action,
+    outcome: "denied",
+    severity: "medium",
+    authz: params.authz,
+    targetDeviceId: params.targetDeviceId,
+    policyId: "gateway.device-token",
+    decision: "deny",
+    controlId: params.controlId,
+    reason: params.reason,
+    attributes: { role: params.role.trim() },
+  });
+}
+
+function emitDeviceTokenLifecycleSecurityEvent(params: {
+  action: "device.token.rotated" | "device.token.revoked";
+  severity: DiagnosticSecurityEventInput["severity"];
+  authz: DeviceSessionAuthz;
+  targetDeviceId: string;
+  controlId: string;
+  role: string;
+  scopeCount?: number;
+}) {
+  emitDeviceSecurityEvent({
+    action: params.action,
+    outcome: "success",
+    severity: params.severity,
+    authz: params.authz,
+    targetDeviceId: params.targetDeviceId,
+    policyId: "gateway.device-token",
+    decision: "allow",
+    controlId: params.controlId,
+    attributes: {
+      role: params.role,
+      ...(params.scopeCount !== undefined ? { scope_count: params.scopeCount } : {}),
+    },
+  });
+}
+
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond, client }) => {
@@ -244,6 +389,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.logGateway.warn(
           `device pairing approval denied request=${requestId} reason=device-ownership-mismatch`,
         );
+        emitDevicePairingDeniedSecurityEvent({
+          authz,
+          targetDeviceId: pending.deviceId,
+          controlId: "device.pair.approve",
+          reason: "device-ownership-mismatch",
+        });
         respond(
           false,
           undefined,
@@ -255,6 +406,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.logGateway.warn(
           `device pairing approval denied request=${requestId} reason=role-management-requires-admin`,
         );
+        emitDevicePairingDeniedSecurityEvent({
+          authz,
+          targetDeviceId: pending.deviceId,
+          controlId: "device.pair.approve",
+          reason: "role-management-requires-admin",
+        });
         respond(
           false,
           undefined,
@@ -269,6 +426,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     if (approved.status === "forbidden") {
+      emitDevicePairingDeniedSecurityEvent({
+        authz,
+        controlId: "device.pair.approve",
+        reason: approved.reason,
+      });
       respond(
         false,
         undefined,
@@ -279,6 +441,17 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
     );
+    emitDevicePairingLifecycleSecurityEvent({
+      action: "device.pairing.approved",
+      severity: "low",
+      authz,
+      targetDeviceId: approved.device.deviceId,
+      controlId: "device.pair.approve",
+      attributes: {
+        role_count: approved.device.roles?.length ?? (approved.device.role ? 1 : 0),
+        scope_count: approved.device.approvedScopes?.length ?? approved.device.scopes?.length ?? 0,
+      },
+    });
     context.broadcast(
       "device.pair.resolved",
       {
@@ -321,6 +494,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.logGateway.warn(
           `device pairing rejection denied request=${requestId} reason=device-ownership-mismatch`,
         );
+        emitDevicePairingDeniedSecurityEvent({
+          authz,
+          targetDeviceId: pending.deviceId,
+          controlId: "device.pair.reject",
+          reason: "device-ownership-mismatch",
+        });
         respond(
           false,
           undefined,
@@ -334,6 +513,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
+    emitDevicePairingLifecycleSecurityEvent({
+      action: "device.pairing.rejected",
+      authz,
+      targetDeviceId: rejected.deviceId,
+      controlId: "device.pair.reject",
+      severity: "low",
+    });
     context.broadcast(
       "device.pair.resolved",
       {
@@ -366,6 +552,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
       context.logGateway.warn(
         `device pairing removal denied device=${deviceId} reason=device-ownership-mismatch`,
       );
+      emitDevicePairingDeniedSecurityEvent({
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.pair.remove",
+        reason: "device-ownership-mismatch",
+      });
       respond(
         false,
         undefined,
@@ -379,6 +571,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
         context.logGateway.warn(
           `device pairing removal denied device=${deviceId} reason=role-management-requires-admin`,
         );
+        emitDevicePairingDeniedSecurityEvent({
+          authz,
+          targetDeviceId: deviceId,
+          controlId: "device.pair.remove",
+          reason: "role-management-requires-admin",
+        });
         respond(
           false,
           undefined,
@@ -393,6 +591,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
+    emitDevicePairingLifecycleSecurityEvent({
+      action: "device.pairing.removed",
+      severity: "medium",
+      authz,
+      targetDeviceId: removed.deviceId,
+      controlId: "device.pair.remove",
+    });
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled
@@ -432,6 +637,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
         role,
         reason: "device-ownership-mismatch",
       });
+      emitDeviceTokenDeniedSecurityEvent({
+        action: "device.token.rotation_denied",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.rotate",
+        reason: "device-ownership-mismatch",
+        role,
+      });
       respond(
         false,
         undefined,
@@ -445,6 +658,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
         deviceId,
         role,
         reason: "role-management-requires-admin",
+      });
+      emitDeviceTokenDeniedSecurityEvent({
+        action: "device.token.rotation_denied",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.rotate",
+        reason: "role-management-requires-admin",
+        role,
       });
       respond(
         false,
@@ -467,6 +688,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
         reason: rotated.reason,
         scope: rotated.scope,
       });
+      emitDeviceTokenDeniedSecurityEvent({
+        action: "device.token.rotation_denied",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.rotate",
+        reason: rotated.reason,
+        role,
+      });
       respond(
         false,
         undefined,
@@ -478,6 +707,15 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
     );
+    emitDeviceTokenLifecycleSecurityEvent({
+      action: "device.token.rotated",
+      severity: "medium",
+      authz,
+      targetDeviceId: deviceId,
+      controlId: "device.token.rotate",
+      role: entry.role,
+      scopeCount: entry.scopes.length,
+    });
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled
@@ -521,6 +759,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
       context.logGateway.warn(
         `device token revocation denied device=${deviceId} role=${role} reason=device-ownership-mismatch`,
       );
+      emitDeviceTokenDeniedSecurityEvent({
+        action: "device.token.revocation_denied",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.revoke",
+        reason: "device-ownership-mismatch",
+        role,
+      });
       respond(
         false,
         undefined,
@@ -534,6 +780,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
         deviceId,
         role,
         reason: "role-management-requires-admin",
+      });
+      emitDeviceTokenDeniedSecurityEvent({
+        action: "device.token.revocation_denied",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.revoke",
+        reason: "role-management-requires-admin",
+        role,
       });
       respond(
         false,
@@ -551,6 +805,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
         reason: revoked.reason,
         scope: revoked.scope,
       });
+      emitDeviceTokenDeniedSecurityEvent({
+        action: "device.token.revocation_denied",
+        authz,
+        targetDeviceId: deviceId,
+        controlId: "device.token.revoke",
+        reason: revoked.reason,
+        role,
+      });
       respond(
         false,
         undefined,
@@ -561,6 +823,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const entry = revoked.entry;
     const normalizedDeviceId = deviceId.trim();
     context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
+    emitDeviceTokenLifecycleSecurityEvent({
+      action: "device.token.revoked",
+      severity: "high",
+      authz,
+      targetDeviceId: normalizedDeviceId,
+      controlId: "device.token.revoke",
+      role: entry.role,
+    });
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled

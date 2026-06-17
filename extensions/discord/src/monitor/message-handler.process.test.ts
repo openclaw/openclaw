@@ -852,6 +852,39 @@ describe("processDiscordMessage ack reactions", () => {
     });
   });
 
+  it("records accepted mention ingress before acking and dispatching", async () => {
+    const events: string[] = [];
+    recordInboundSession.mockImplementationOnce(async () => {
+      events.push("record");
+    });
+    sendMocks.reactMessageDiscord.mockImplementationOnce(async () => {
+      events.push("ack");
+    });
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      events.push("dispatch");
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      accountId: "ops",
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "ops",
+        sessionKey: "agent:main:discord:channel:c1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(events).toEqual(["record", "ack", "dispatch"]);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
     const ctx = await createAutomaticSourceDeliveryContext({
       message: {

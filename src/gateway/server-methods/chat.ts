@@ -38,7 +38,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
+import { rewriteTranscriptEntriesInRuntimeTranscript } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -1712,7 +1712,7 @@ async function findAssistantTranscriptMessageByIdempotencyKey(
   if (!trimmedIdempotencyKey) {
     return null;
   }
-  const index = await readSessionTranscriptIndex(transcriptPath);
+  const index = await readSessionTranscriptIndex(transcriptPath, { view: "all" });
   const target = index?.entries.toReversed().find((entry) => {
     const message = entry.record.message as Record<string, unknown> | undefined;
     return message?.role === "assistant" && message.idempotencyKey === trimmedIdempotencyKey;
@@ -1777,7 +1777,7 @@ async function findSourceReplyTranscriptMirrorByMetadata(params: {
   if (!expectedText) {
     return null;
   }
-  const index = await readSessionTranscriptIndex(params.transcriptPath);
+  const index = await readSessionTranscriptIndex(params.transcriptPath, { view: "all" });
   const target = index?.entries.toReversed().find((entry) => {
     const message = entry.record.message as Record<string, unknown> | undefined;
     return (
@@ -3700,10 +3700,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
         target: () => {
-          const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-            sessionKey,
-            sessionLoadOptions,
-          );
+          const {
+            storePath: latestStorePath,
+            store: latestStore,
+            entry: latestEntry,
+          } = loadSessionEntry(sessionKey, sessionLoadOptions);
           const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
           if (!resolvedSessionId) {
             return undefined;
@@ -3712,6 +3713,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionId: resolvedSessionId,
             sessionKey,
             sessionEntry: latestEntry ?? entry,
+            sessionStore: latestStore,
             storePath: latestStorePath,
             agentId,
             config: cfg,
@@ -4741,8 +4743,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                         const rewriteTargetIds = new Set(
                           rewriteTargets.map((target) => target.messageId),
                         );
-                        const rewriteIndex =
-                          await readSessionTranscriptIndex(resolvedTranscriptPath);
+                        const rewriteIndex = await readSessionTranscriptIndex(
+                          resolvedTranscriptPath,
+                          { view: "all" },
+                        );
                         const firstRewriteEntryIndex =
                           rewriteIndex?.entries.findIndex(
                             (entryValue) =>
@@ -4759,11 +4763,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                                 allowedSourceReplyMirrorIds.has(entryLocal.id),
                             ) === true;
                         if (canRewriteSourceReplyMirrors) {
-                          const result = await rewriteTranscriptEntriesInSessionFile({
-                            sessionFile: resolvedTranscriptPath,
-                            sessionKey,
-                            agentId,
-                            config: cfg,
+                          const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+                            scope: {
+                              sessionId,
+                              sessionKey,
+                              sessionFile: resolvedTranscriptPath,
+                              agentId,
+                              ...(latestStorePath ? { storePath: latestStorePath } : {}),
+                            },
                             request: {
                               allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
                               replacements: rewriteTargets.map((target) => ({
@@ -4775,6 +4782,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                                 } as unknown as AgentMessage,
                               })),
                             },
+                            config: cfg,
                           });
                           if (result.changed) {
                             await advanceSessionTranscriptMarker({

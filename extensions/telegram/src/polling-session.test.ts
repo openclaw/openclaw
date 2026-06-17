@@ -1808,6 +1808,101 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("recovers a lone active spooled handler owned by a replaced session (#84158)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    let releaseTurn: (() => void) | undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async () => {
+      await turnDone;
+    });
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    }));
+    await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "lone active topic turn")]);
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await workerDone;
+        }),
+      };
+    });
+
+    try {
+      const firstSession = createPollingSession({
+        abortSignal: firstAbort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+          spooledUpdateHandlerTimeoutMs: 100,
+          spooledUpdateHandlerAbortGraceMs: 100,
+        },
+      });
+      const firstRunPromise = firstSession.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      firstAbort.abort();
+      await vi.advanceTimersByTimeAsync(16_000);
+      await firstRunPromise;
+
+      const secondSession = createPollingSession({
+        abortSignal: secondAbort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+          spooledUpdateHandlerTimeoutMs: 100,
+          spooledUpdateHandlerAbortGraceMs: 100,
+        },
+      });
+      const secondRunPromise = secondSession.runUntilAbort();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      await vi.waitFor(() =>
+        expect(
+          log.mock.calls.some(([line]) =>
+            String(line).includes("timed out spooled update 42 did not stop"),
+          ),
+        ).toBe(true),
+      );
+      expect(handleUpdate).toHaveBeenCalledTimes(1);
+
+      secondAbort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await secondRunPromise;
+    } finally {
+      releaseTurn?.();
+      firstAbort.abort();
+      secondAbort.abort();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("lets isolated ingress drain interleave different Telegram topic lanes", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -3224,8 +3319,13 @@ describe("TelegramPollingSession", () => {
             String(patch.lastError).includes("isolated polling spool handler timed out"),
         ),
       ).toBe(true);
-      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
-      expect(createWorker).toHaveBeenCalledTimes(2);
+      // 42 (the backlog handler) recovers first; after the restart 43 becomes a
+      // lone active handler on the same lane, hangs the same way, and is now also
+      // recovered on timeout rather than stranded with no backlog behind it (#84158).
+      // Each recovery restarts ingress, so the worker is created once more per
+      // recovered handler (initial + two restarts).
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42, 43]));
+      expect(createWorker).toHaveBeenCalledTimes(3);
 
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);

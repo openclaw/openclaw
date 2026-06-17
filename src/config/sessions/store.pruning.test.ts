@@ -266,6 +266,15 @@ describe("capEntryCount", () => {
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it("treats generated ACP bridge sessions as disposable", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
+        ...makeEntry(Date.now()),
+        chatType: "group",
+      }),
+    ).toBe(false);
+  });
+
   it("does not protect synthetic sessions just because they carry group metadata", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {

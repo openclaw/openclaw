@@ -37,8 +37,6 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
 function resolveNodeAutoReviewReason(params: {

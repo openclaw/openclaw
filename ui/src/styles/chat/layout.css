@@ -933,7 +933,15 @@
 }
 
 .agent-chat__talk-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--text);
+}
+
+.agent-chat__talk-status-text {
+  min-width: 0;
+  flex: 1;
 }
 
 .agent-chat__voice-turns {

@@ -94,6 +94,14 @@ describe("gateway startup benchmark script", () => {
     expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
   });
 
+  it("rejects malformed ps RSS samples", () => {
+    expect(testing.parseProcessRssKb("2048\n")).toBe(2048);
+    expect(testing.parseProcessRssKb("2048kb\n")).toBeNull();
+    expect(testing.parseProcessRssKb("2048 4096\n")).toBeNull();
+    expect(testing.parseProcessRssKb("0\n")).toBeNull();
+    expect(testing.parseProcessRssKb("")).toBeNull();
+  });
+
   it("classifies HTTP listen and gateway ready logs separately", () => {
     expect(
       testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),

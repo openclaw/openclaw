@@ -173,6 +173,14 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     ).toBe(3);
   });
 
+  it("rejects malformed ps RSS samples", () => {
+    expect(testing.parseProcessRssKb("4096\n")).toBe(4096);
+    expect(testing.parseProcessRssKb("4096kb\n")).toBeNull();
+    expect(testing.parseProcessRssKb("4096 8192\n")).toBeNull();
+    expect(testing.parseProcessRssKb("0\n")).toBeNull();
+    expect(testing.parseProcessRssKb("")).toBeNull();
+  });
+
   it("enables both startup and restart trace in the child gateway environment", () => {
     const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
       config: {},

@@ -415,14 +415,24 @@ async function processDiscordMessageInner(
     statusReactionsActive = true;
     void statusReactions.setQueued();
   };
-  queueInitialDiscordAckReaction({
-    enabled: statusReactionsEnabled,
-    shouldSendAckReaction,
-    ackReaction,
-    statusReactions,
-    reactionAdapter: discordAdapter,
-    target: `${messageChannelId}/${message.id}`,
-  });
+  let initialAckReactionQueued = false;
+  const queueInitialAckReactionAfterRecord = () => {
+    if (initialAckReactionQueued) {
+      return;
+    }
+    initialAckReactionQueued = true;
+    if (statusReactionsEnabled) {
+      statusReactionsActive = true;
+    }
+    queueInitialDiscordAckReaction({
+      enabled: statusReactionsEnabled,
+      shouldSendAckReaction,
+      ackReaction,
+      statusReactions,
+      reactionAdapter: discordAdapter,
+      target: `${messageChannelId}/${message.id}`,
+    });
+  };
   const processContext = await buildDiscordMessageProcessContext({
     ctx,
     text,
@@ -953,6 +963,7 @@ async function processDiscordMessageInner(
       storePath: turn.storePath,
       ctxPayload,
       recordInboundSession,
+      afterRecord: queueInitialAckReactionAfterRecord,
       dispatchReplyWithBufferedBlockDispatcher,
       dispatcherOptions: {
         ...replyPipeline,

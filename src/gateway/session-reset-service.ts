@@ -61,6 +61,7 @@ import {
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
+  extractGeneratedTranscriptSessionId,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
@@ -82,12 +83,16 @@ function resolveResetSessionFile(params: {
   agentId: string;
 }): string {
   const currentEntry = params.currentEntry;
-  // Preserve explicit session-file placement across reset while swapping the
-  // embedded session id, so linked runtimes keep writing beside old transcripts.
-  const rewrittenSessionFile = currentEntry?.sessionId
+  // Rotate generated transcript names by the file's *embedded* id, not the logical
+  // session id: a post-upgrade sessionFile can embed a stale id, so keying off
+  // currentEntry.sessionId would orphan the reset session on the old file. Explicit
+  // custom placements have no embedded id and stay preserved.
+  const rotationPreviousSessionId =
+    extractGeneratedTranscriptSessionId(currentEntry?.sessionFile) ?? currentEntry?.sessionId;
+  const rewrittenSessionFile = rotationPreviousSessionId
     ? rewriteSessionFileForNewSessionId({
-        sessionFile: currentEntry.sessionFile,
-        previousSessionId: currentEntry.sessionId,
+        sessionFile: currentEntry?.sessionFile,
+        previousSessionId: rotationPreviousSessionId,
         nextSessionId: params.nextSessionId,
       })
     : undefined;

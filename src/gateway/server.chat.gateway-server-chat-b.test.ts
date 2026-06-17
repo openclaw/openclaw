@@ -97,12 +97,24 @@ async function withGatewayChatHarness(
   }
 }
 
-async function writeMainSessionStore() {
+function testSessionFilePath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.jsonl`);
+}
+
+async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
-      main: { sessionId: "sess-main", updatedAt: Date.now() },
+      main: {
+        sessionId,
+        updatedAt: futureFixtureUpdatedAt(),
+        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
+      },
     },
   });
+}
+
+function futureFixtureUpdatedAt(): number {
+  return Date.now() + 60_000;
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -115,8 +127,12 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
-  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+async function writeMainSessionTranscript(
+  sessionDir: string,
+  lines: string[],
+  sessionId = "sess-main",
+) {
+  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
 }
 
 async function removeTempDir(dir: string): Promise<void> {
@@ -197,13 +213,14 @@ async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
   historyMaxBytes?: number;
+  sessionId?: string;
 }) {
   if (params.historyMaxBytes !== undefined) {
     setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
   }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
-  await writeMainSessionStore();
+  await writeMainSessionStore(sessionDir, params.sessionId);
   return sessionDir;
 }
 
@@ -1985,6 +2002,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-backfill";
       const originalHome = process.env.HOME;
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
@@ -2028,8 +2046,9 @@ describe("gateway server chat", () => {
         await writeSessionStore({
           entries: {
             main: {
-              sessionId: "sess-main",
-              updatedAt: Date.now(),
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
               modelProvider: "claude-cli",
               model: "claude-sonnet-4-6",
               cliSessionBindings: {
@@ -2239,6 +2258,16 @@ describe("gateway server chat", () => {
       >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+
+      await vi.waitFor(async () => {
+        const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-route",
+        });
+        expect(completed.ok).toBe(true);
+        expect(completed.payload?.status).toBe("ok");
+      }, FAST_WAIT_OPTS);
     });
   });
 
@@ -2727,11 +2756,12 @@ describe("gateway server chat", () => {
 
   test("chat.message.get returns archive-backed rows surfaced by history", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sessionId = "sess-archive-backed";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
       await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl.reset.2026-02-16T22-26-34.000Z"),
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
         [
-          JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
           JSON.stringify({
             id: "msg-archive-full-assistant",
             message: {
@@ -2850,6 +2880,21 @@ describe("gateway server chat", () => {
             timestamp: Date.now(),
           },
         }),
+        JSON.stringify({
+          id: "msg-side-delivery",
+          parentId: "msg-active",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "side delivery" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "msg-side-delivery",
+          targetId: "msg-active",
+        }),
       ]);
 
       const stale = await fetchChatMessage(ws, {
@@ -2859,12 +2904,20 @@ describe("gateway server chat", () => {
       expect(stale.ok).toBe(false);
       expect(stale.unavailableReason).toBe("not_found");
 
+      const sideDelivery = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-side-delivery",
+      });
+      expect(sideDelivery.ok).toBe(false);
+      expect(sideDelivery.unavailableReason).toBe("not_found");
+
       const active = await fetchChatMessage(ws, {
         sessionKey: "main",
         messageId: "msg-active",
       });
       expect(active.ok).toBe(true);
       expect(JSON.stringify(active.message)).toContain("active branch");
+      expect(JSON.stringify(await fetchHistoryMessages(ws))).not.toContain("side delivery");
     });
   });
 

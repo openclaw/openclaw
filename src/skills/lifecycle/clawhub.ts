@@ -72,7 +72,7 @@ type ClawHubSkillLockEntry = {
   verification?: ClawHubSkillVerificationLock;
 };
 
-export type ClawHubSkillOrigin = {
+type ClawHubSkillOrigin = {
   version: 1;
   registry: string;
   slug: string;
@@ -83,7 +83,7 @@ export type ClawHubSkillOrigin = {
   skillFile?: ClawHubSkillFileLock;
 };
 
-export type ClawHubSkillsLockfile = {
+type ClawHubSkillsLockfile = {
   version: 1;
   skills: Record<string, ClawHubSkillLockEntry>;
 };
@@ -103,6 +103,9 @@ export type ClawHubSkillStatusLink =
       installedAt: number;
       originPath: string;
       lockPath: string;
+      sourceUrl?: string;
+      artifact?: ClawHubSkillDownloadedArtifactLock;
+      skillFile?: ClawHubSkillFileLock;
     }
   | {
       status: "invalid";
@@ -126,7 +129,7 @@ type LocalSkillCardRead = LocalSkillCardStatus & {
   content?: string;
 };
 
-export type InstallClawHubSkillResult =
+type InstallClawHubSkillResult =
   | {
       ok: true;
       slug: string;
@@ -136,7 +139,7 @@ export type InstallClawHubSkillResult =
     }
   | { ok: false; error: string };
 
-export type UpdateClawHubSkillResult =
+type UpdateClawHubSkillResult =
   | {
       ok: true;
       slug: string;
@@ -189,10 +192,10 @@ type TrackedUpdateTarget =
       error: string;
     };
 
-export type ClawHubSkillVerificationResolutionSource = "installed" | "registry";
-export type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
+type ClawHubSkillVerificationResolutionSource = "installed" | "registry";
+type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
 
-export type ClawHubSkillVerificationTargetResult =
+type ClawHubSkillVerificationTargetResult =
   | {
       ok: true;
       slug: string;
@@ -212,7 +215,7 @@ export type ClawHubSkillVerificationTargetResult =
       error: string;
     };
 
-export async function readClawHubSkillsLockfile(
+async function readClawHubSkillsLockfile(
   workspaceDir: string,
 ): Promise<ClawHubSkillsLockfile> {
   const candidates = [
@@ -273,12 +276,70 @@ function normalizeOptionalStringValue(raw: unknown): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
-function readSkillDetailSourceUrl(detail: ClawHubSkillDetail | undefined): string | undefined {
-  const skill = detail?.skill;
-  if (!skill || typeof skill !== "object") {
+function asRecord(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizeGitHubRepoName(raw: unknown): string | undefined {
+  const repo = normalizeOptionalStringValue(raw);
+  if (!repo) {
     return undefined;
   }
-  return normalizeOptionalStringValue((skill as { sourceUrl?: unknown }).sourceUrl);
+  const parts = repo.split("/");
+  if (parts.length !== 2 || parts.some((part) => !/^[A-Za-z0-9._-]+$/.test(part))) {
+    return undefined;
+  }
+  return repo;
+}
+
+function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
+  const commit = normalizeOptionalStringValue(raw);
+  if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
+    return undefined;
+  }
+  return commit;
+}
+
+function buildGitHubTreeUrl(params: { repo: string; commit: string; sourcePath?: string }): string {
+  const [owner, name] = params.repo.split("/") as [string, string];
+  const pathParts = params.sourcePath ? params.sourcePath.split("/") : [];
+  const segments = [owner, name, "tree", params.commit, ...pathParts];
+  return `https://github.com/${segments.map(encodeURIComponent).join("/")}`;
+}
+
+export function readVerifiedClawHubSkillSourceUrl(raw: unknown): string | undefined {
+  const provenance = asRecord(raw);
+  // Only this ClawHub variant is server-resolved; other provenance metadata
+  // must not become a trusted source link.
+  if (provenance?.source !== "server-resolved-github-import") {
+    return undefined;
+  }
+  const repo = normalizeGitHubRepoName(provenance.repo);
+  const commit = normalizeGitHubCommitSegment(provenance.commit);
+  if (!repo || !commit) {
+    return undefined;
+  }
+  const pathValue = normalizeOptionalStringValue(provenance.path);
+  let sourcePath: string | undefined;
+  if (pathValue) {
+    try {
+      sourcePath = normalizeGitHubSourcePath(pathValue);
+    } catch {
+      return undefined;
+    }
+  }
+  return buildGitHubTreeUrl({ repo, commit, ...(sourcePath ? { sourcePath } : {}) });
+}
+
+function readInstallResolutionSourceUrl(
+  resolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined,
+): string | undefined {
+  if (resolution?.installKind !== "github") {
+    return undefined;
+  }
+  return normalizeOptionalStringValue(resolution.github.sourceUrl);
 }
 
 function buildDownloadedArtifactLock(
@@ -403,6 +464,42 @@ function normalizeOptionalSelector(value: string | undefined): string | undefine
   return trimmed ? trimmed : undefined;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizeDownloadedArtifactLock(
+  raw: unknown,
+): ClawHubSkillDownloadedArtifactLock | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Partial<ClawHubSkillDownloadedArtifactLock>;
+  if (
+    (candidate.kind === "archive" || candidate.kind === "clawpack") &&
+    isNonEmptyString(candidate.sha256) &&
+    isNonEmptyString(candidate.integrity)
+  ) {
+    return {
+      kind: candidate.kind,
+      sha256: candidate.sha256,
+      integrity: candidate.integrity,
+    };
+  }
+  return undefined;
+}
+
+function normalizeSkillFileLock(raw: unknown): ClawHubSkillFileLock | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Partial<ClawHubSkillFileLock>;
+  if (isNonEmptyString(candidate.path) && isNonEmptyString(candidate.sha256)) {
+    return { path: candidate.path, sha256: candidate.sha256 };
+  }
+  return undefined;
+}
+
 function normalizeClawHubSkillOrigin(
   raw: Partial<ClawHubSkillOrigin> | null,
 ): ClawHubSkillOrigin | null {
@@ -416,12 +513,18 @@ function normalizeClawHubSkillOrigin(
     raw.installedVersion.trim().length > 0 &&
     typeof raw.installedAt === "number"
   ) {
+    const sourceUrl = normalizeOptionalStringValue((raw as { sourceUrl?: unknown }).sourceUrl);
+    const artifact = normalizeDownloadedArtifactLock((raw as { artifact?: unknown }).artifact);
+    const skillFile = normalizeSkillFileLock((raw as { skillFile?: unknown }).skillFile);
     return {
       version: 1,
       registry: normalizeStoredRegistry(raw.registry),
       slug: raw.slug,
       installedVersion: raw.installedVersion,
       installedAt: raw.installedAt,
+      ...(sourceUrl ? { sourceUrl } : {}),
+      ...(artifact ? { artifact } : {}),
+      ...(skillFile ? { skillFile } : {}),
     };
   }
   return null;
@@ -633,10 +736,23 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
   const lockedRegistry =
     locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
+  const lockedSourceUrl = normalizeOptionalStringValue(locked.sourceUrl);
+  const lockedArtifact = normalizeDownloadedArtifactLock(locked.artifact);
+  const lockedSkillFile = normalizeSkillFileLock(locked.skillFile);
+  const provenanceMatches =
+    originRead.origin.sourceUrl === lockedSourceUrl &&
+    originRead.origin.artifact?.kind === lockedArtifact?.kind &&
+    originRead.origin.artifact?.sha256 === lockedArtifact?.sha256 &&
+    originRead.origin.artifact?.integrity === lockedArtifact?.integrity &&
+    originRead.origin.skillFile?.path === lockedSkillFile?.path &&
+    originRead.origin.skillFile?.sha256 === lockedSkillFile?.sha256;
+  // A linked status is a trust signal. Only expose provenance when both
+  // install records agree, so a one-sided origin edit cannot become trusted.
   if (
     locked.version !== originRead.origin.installedVersion ||
     locked.installedAt !== originRead.origin.installedAt ||
-    lockedRegistry !== originRegistry
+    lockedRegistry !== originRegistry ||
+    !provenanceMatches
   ) {
     return {
       status: "invalid",
@@ -659,6 +775,9 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
+    ...(lockedSourceUrl ? { sourceUrl: lockedSourceUrl } : {}),
+    ...(lockedArtifact ? { artifact: lockedArtifact } : {}),
+    ...(lockedSkillFile ? { skillFile: lockedSkillFile } : {}),
   };
 }
 
@@ -1106,10 +1225,6 @@ async function performClawHubSkillInstall(
 
       const installedAt = Date.now();
       const artifact = buildDownloadedArtifactLock(archive);
-      const sourceUrl =
-        latestResolution?.installKind === "github"
-          ? normalizeOptionalStringValue(latestResolution.github.sourceUrl)
-          : readSkillDetailSourceUrl(detail);
       const verificationVersion =
         latestResolution?.installKind === "github" && !params.version ? undefined : version;
       const [skillFile, verification] = await Promise.all([
@@ -1120,6 +1235,9 @@ async function performClawHubSkillInstall(
           baseUrl: params.baseUrl,
         }),
       ]);
+      const sourceUrl =
+        readInstallResolutionSourceUrl(latestResolution) ??
+        readVerifiedClawHubSkillSourceUrl(verification?.provenance);
       await writeClawHubSkillOrigin(install.targetDir, {
         version: 1,
         registry: resolveClawHubBaseUrl(params.baseUrl),

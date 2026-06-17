@@ -48,8 +48,6 @@ import type {
   MigrateDefaultOptions,
 } from "./migrate/types.js";
 
-export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
-
 function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
   return applyMigrationPluginSelection(
     applyMigrationSkillSelection(plan, opts.skills),

@@ -14,9 +14,9 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -67,8 +67,7 @@ export function resolveAuthProfileDatabasePath(agentDir?: string): string {
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
 export function resolveAuthProfileDatabaseFilePaths(agentDir?: string): string[] {
-  const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  return [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  return resolveSqliteDatabaseFilePaths(resolveAuthProfileDatabasePath(agentDir));
 }
 
 // Read-only probes must tolerate old/corrupt/missing rows. Coercion happens
@@ -86,11 +85,6 @@ function parseJsonCell(raw: string | null | undefined): unknown {
 
 function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
-}
-
-/** Opens the auth profile SQLite database for an agent dir. */
-export function openAuthProfileDatabase(agentDir?: string): OpenClawAgentDatabase {
-  return openOpenClawAgentDatabase(resolveAuthProfileDatabaseOptions(agentDir));
 }
 
 function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "state"): unknown {

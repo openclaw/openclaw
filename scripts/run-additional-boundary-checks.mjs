@@ -105,11 +105,11 @@ export function parseShardSpec(value) {
   if (!match) {
     throw new Error(`Invalid shard spec '${value}' (expected N/TOTAL)`);
   }
-  const index = Number.parseInt(match[1], 10);
-  const count = Number.parseInt(match[2], 10);
+  const index = Number(match[1]);
+  const count = Number(match[2]);
   if (
-    !Number.isInteger(index) ||
-    !Number.isInteger(count) ||
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(count) ||
     index < 1 ||
     count < 1 ||
     index > count

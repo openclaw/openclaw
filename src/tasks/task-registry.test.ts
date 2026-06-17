@@ -58,6 +58,8 @@ import {
 } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
+  getInspectableTaskAuditFindings,
+  getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -70,7 +72,9 @@ import {
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
-import { DEFAULT_TASK_RETENTION_MS, LOST_TASK_RETENTION_MS } from "./task-retention.js";
+
+const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -2143,6 +2147,37 @@ describe("task-registry", () => {
         status: "running",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
+  it("keeps zero-argument inspection helpers fresh", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-16T00:00:00Z"));
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-inspection-freshness",
+        task: "Inspect fresh task state",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      let listCalls = 0;
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, task]]),
+        snapshotTasks: [task],
+        listTaskRecords: () => {
+          listCalls += 1;
+          return listCalls === 1 ? [task] : [];
+        },
+      });
+
+      expect(getInspectableTaskRegistrySummary().total).toBe(1);
+      expect(getInspectableTaskAuditFindings()).toStrictEqual([]);
+      expect(listCalls).toBe(2);
     });
   });
 

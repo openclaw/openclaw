@@ -443,6 +443,8 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionKey).toBe(threadSessionKey);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     expect(result.sessionEntry.displayName).toBe(threadLabel);
+    expect(result.sessionEntry.totalTokens).toBeUndefined();
+    expect(result.sessionEntry.totalTokensFresh).toBe(false);
 
     const newSessionFile = requireString(
       result.sessionEntry.sessionFile,
@@ -512,6 +514,8 @@ describe("initSessionState thread forking", () => {
       [threadSessionKey]: {
         sessionId: "preseed-thread-session",
         updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: true,
       },
     });
 
@@ -531,6 +535,8 @@ describe("initSessionState thread forking", () => {
 
     expect(first.sessionEntry.sessionId).not.toBe("preseed-thread-session");
     expect(first.sessionEntry.forkedFromParent).toBe(true);
+    expect(first.sessionEntry.totalTokens).toBeUndefined();
+    expect(first.sessionEntry.totalTokensFresh).toBe(false);
 
     const second = await initSessionState({
       ctx: {
@@ -544,6 +550,8 @@ describe("initSessionState thread forking", () => {
 
     expect(second.sessionEntry.sessionId).toBe(first.sessionEntry.sessionId);
     expect(second.sessionEntry.forkedFromParent).toBe(true);
+    expect(second.sessionEntry.totalTokens).toBeUndefined();
+    expect(second.sessionEntry.totalTokensFresh).toBe(false);
     warn.mockRestore();
   });
 
@@ -614,6 +622,8 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     // Session file should NOT be the parent's file (it was not forked)
     expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+    expect(result.sessionEntry.totalTokens).toBe(0);
+    expect(result.sessionEntry.totalTokensFresh).toBe(true);
   });
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
@@ -848,7 +858,8 @@ describe("initSessionState RawBody", () => {
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
-    expect(result.sessionEntry.totalTokens).toBeUndefined();
+    expect(result.sessionEntry.totalTokens).toBe(0);
+    expect(result.sessionEntry.totalTokensFresh).toBe(true);
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
 
@@ -857,12 +868,14 @@ describe("initSessionState RawBody", () => {
       {
         skillsSnapshot?: unknown;
         totalTokens?: number;
+        totalTokensFresh?: boolean;
         contextTokens?: number;
         contextBudgetStatus?: unknown;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
-    expect(store[sessionKey]?.totalTokens).toBeUndefined();
+    expect(store[sessionKey]?.totalTokens).toBe(0);
+    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.contextTokens).toBeUndefined();
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
   });
@@ -2079,6 +2092,37 @@ describe("initSessionState reset policy", () => {
     });
   });
 
+  it("keeps multiline slash skill payloads on the current session", async () => {
+    const root = await makeCaseDir("openclaw-skill-multiline-session-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:skill-multiline";
+    const existingSessionId = "skill-multiline-session-id";
+    const body = "/skill demo_skill first line\nsecond line";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.triggerBodyNormalized).toBe(body);
+  });
+
   it("does not preserve a stale session for unauthorized /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-stale-unauthorized-");
@@ -3016,9 +3060,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
     expect(result.sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
     expect(result.sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
-    expect(result.sessionEntry.totalTokens).toBeUndefined();
+    expect(result.sessionEntry.totalTokens).toBe(0);
     expect(result.sessionEntry.contextTokens).toBeUndefined();
-    expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
+    expect(result.sessionEntry.totalTokensFresh).toBe(true);
   });
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
@@ -3602,6 +3646,59 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(180_000);
     expect(stored[sessionKey].outputTokens).toBe(10_000);
+  });
+
+  it("marks a fresh zero stale when a completed run has no context snapshot", async () => {
+    const storePath = await createStorePath("openclaw-usage-no-snapshot-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      modelUsed: "claude-sonnet-4-6",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(0);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+  });
+
+  it("preserves fresh post-compaction totalTokens across model-only updates", async () => {
+    const storePath = await createStorePath("openclaw-usage-no-snapshot-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 42_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      modelUsed: "claude-sonnet-4-6",
+      contextTokensUsed: 200_000,
+      preserveFreshTotalTokensOnStaleUsage: true,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
   it("accounts exhausted-run usage without committing its model", async () => {
