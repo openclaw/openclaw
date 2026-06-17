@@ -77,6 +77,7 @@ import {
   runImageUnderstandingAttachmentScenario,
   runMediaTypeCoverageScenario,
   runUnsupportedMediaSafeScenario,
+  runVoicePreflightMentionScenario,
 } from "./scenario-runtime-media.js";
 import {
   runReactionNotAReplyScenario,
@@ -108,6 +109,7 @@ import {
   runThreadNestedReplyShapeScenario,
   runThreadRootPreservationScenario,
   runToolProgressErrorScenario,
+  runToolProgressCommandPreviewScenario,
   runToolProgressMentionSafetyScenario,
   runToolProgressPreviewOptOutScenario,
   runToolProgressPreviewScenario,
@@ -234,6 +236,8 @@ export async function runMatrixQaScenario(
       return await runQuietStreamingPreviewScenario(context);
     case "matrix-room-tool-progress-preview":
       return await runToolProgressPreviewScenario(context);
+    case "matrix-room-tool-progress-command-preview":
+      return await runToolProgressCommandPreviewScenario(context);
     case "matrix-room-tool-progress-preview-opt-out":
       return await runToolProgressPreviewOptOutScenario(context);
     case "matrix-room-tool-progress-error":
@@ -248,6 +252,8 @@ export async function runMatrixQaScenario(
       return await runGeneratedImageDeliveryScenario(context);
     case "matrix-media-type-coverage":
       return await runMediaTypeCoverageScenario(context);
+    case "matrix-voice-preflight-mention":
+      return await runVoicePreflightMentionScenario(context);
     case "matrix-attachment-only-ignored":
       return await runAttachmentOnlyIgnoredScenario(context);
     case "matrix-unsupported-media-safe":

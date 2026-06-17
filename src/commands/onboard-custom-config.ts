@@ -33,7 +33,7 @@ const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
 
 /** Result of best-effort image-input inference for custom model ids. */
-export type CustomModelImageInputInference = {
+type CustomModelImageInputInference = {
   supportsImageInput: boolean;
   confidence: "known" | "unknown";
 };
@@ -189,7 +189,7 @@ export type CustomApiResult = {
 };
 
 /** Inputs used to persist a custom provider in the OpenClaw config. */
-export type ApplyCustomApiConfigParams = {
+type ApplyCustomApiConfigParams = {
   config: OpenClawConfig;
   baseUrl: string;
   modelId: string;
@@ -201,7 +201,7 @@ export type ApplyCustomApiConfigParams = {
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
-export type ParseNonInteractiveCustomApiFlagsParams = {
+type ParseNonInteractiveCustomApiFlagsParams = {
   baseUrl?: string;
   modelId?: string;
   compatibility?: string;
@@ -211,7 +211,7 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
 };
 
 /** Validated non-interactive custom API setup flags. */
-export type ParsedNonInteractiveCustomApiFlags = {
+type ParsedNonInteractiveCustomApiFlags = {
   baseUrl: string;
   modelId: string;
   compatibility: CustomApiCompatibility;
@@ -220,7 +220,7 @@ export type ParsedNonInteractiveCustomApiFlags = {
   supportsImageInput?: boolean;
 };
 
-export type CustomApiErrorCode =
+type CustomApiErrorCode =
   | "missing_required"
   | "invalid_compatibility"
   | "invalid_base_url"
@@ -239,14 +239,14 @@ export class CustomApiError extends Error {
   }
 }
 
-export type ResolveCustomProviderIdParams = {
+type ResolveCustomProviderIdParams = {
   config: OpenClawConfig;
   baseUrl: string;
   providerId?: string;
 };
 
 /** Provider id selected for a custom endpoint, with collision rename metadata. */
-export type ResolvedCustomProviderId = {
+type ResolvedCustomProviderId = {
   providerId: string;
   providerIdRenamedFrom?: string;
 };

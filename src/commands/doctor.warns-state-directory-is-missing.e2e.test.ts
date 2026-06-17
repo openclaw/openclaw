@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   callGateway,
   createDoctorRuntime,
@@ -138,10 +139,11 @@ describe("doctor command", () => {
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
-    process.env.OPENCLAW_STATE_DIR = missingDir;
-    await doctorCommand(createDoctorRuntime(), {
-      nonInteractive: true,
-      workspaceSuggestions: false,
+    await withEnvAsync({ OPENCLAW_STATE_DIR: missingDir }, async () => {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
     });
 
     const stateNote = requireTerminalNote({ messageIncludes: "state directory missing" });

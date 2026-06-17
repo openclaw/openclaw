@@ -15,6 +15,7 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import type { MentionTarget } from "./mention-target.types.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -120,7 +121,8 @@ type CreateFeishuReplyDispatcherParams = {
   chatId: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
-  /** When true, preserve typing indicator on reply target but send messages without reply metadata */
+  typingTargetMessageId?: string;
+  /** When true, omit reply metadata from visible messages while keeping typing on its target. */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
   /** True when inbound message is already inside a thread/topic context */
@@ -128,6 +130,7 @@ type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   accountId?: string;
   identity?: OutboundIdentity;
+  mentionTargets?: MentionTarget[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -141,14 +144,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     agentId,
     chatId,
     replyToMessageId,
+    typingTargetMessageId: explicitTypingTargetMessageId,
     skipReplyToInMessages,
     replyInThread,
     threadReply,
     rootId,
     accountId,
     identity,
+    mentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const allowTopLevelReplyFallback =
@@ -172,7 +178,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!(account.config.typingIndicator ?? true)) {
           return;
         }
-        if (!replyToMessageId) {
+        if (!typingTargetMessageId) {
           return;
         }
         // Skip typing indicator for old messages — likely replays after context
@@ -192,7 +198,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         typingState = await addTypingIndicator({
           cfg,
-          messageId: replyToMessageId,
+          messageId: typingTargetMessageId,
           accountId,
           runtime: params.runtime,
         });
@@ -579,7 +585,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
       await closeStreaming(options);
-      await Promise.resolve(typingCallbacks?.onIdle?.());
+      typingCallbacks?.onIdle?.();
     });
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
     return nextIdleSideEffects;
@@ -740,7 +746,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: false,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk }) => {
+              sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
                   to: chatId,
@@ -749,6 +755,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
+                  ...(info?.kind === "final" && isFirst && mentionTargets?.length
+                    ? { mentions: mentionTargets }
+                    : {}),
                 });
               },
             });

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
+  markdownToTelegramRichHtml,
   renderTelegramHtmlText,
+  sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
@@ -55,6 +57,13 @@ describe("markdownToTelegramHtml", () => {
     ).toBe(input);
   });
 
+  it("preserves Telegram expandable blockquote HTML", () => {
+    const input = "<blockquote expandable>hidden details</blockquote>";
+
+    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
+  });
+
   it("does not promote Telegram HTML tags inside code", () => {
     expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
       "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
@@ -66,8 +75,140 @@ describe("markdownToTelegramHtml", () => {
 
   it("keeps unsupported Telegram HTML variants escaped", () => {
     expect(markdownToTelegramHtml('<b class="x">bad</b>')).toBe('&lt;b class="x"&gt;bad&lt;/b&gt;');
+    expect(markdownToTelegramHtml('<blockquote cite="x">bad</blockquote>')).toBe(
+      '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;',
+    );
+    expect(markdownToTelegramHtml("<sup>1</sup>")).toBe("&lt;sup&gt;1&lt;/sup&gt;");
     expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
       '&lt;b class="x"&gt;bad&lt;/b&gt;',
+    );
+  });
+
+  it("preserves rich-only Telegram HTML tags on the rich path", () => {
+    expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
+  });
+
+  it("preserves rich table, details, quote, checklist, anchor, and math HTML", () => {
+    const input = [
+      '<a name="top"></a>',
+      "<h2>Plan</h2>",
+      '<table bordered striped><caption>Scores</caption><thead><tr><th align="left">Name</th><th align="right" colspan="2">Total</th></tr></thead><tbody><tr><td>A</td><td align="right">1</td><td>2</td></tr></tbody></table>',
+      "<details><summary>More</summary><p>Hidden</p></details>",
+      "<aside>Pull quote<cite>Source</cite></aside>",
+      '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li></ul>',
+      '<p><a href="#top">Back</a> H<sub>2</sub>O E=mc<sup>2</sup> <mark>note</mark> <tg-spoiler>secret</tg-spoiler> <tg-math>E=mc^2</tg-math></p>',
+      "<tg-math-block>\\int_0^1 x^2 dx</tg-math-block>",
+    ].join("\n");
+
+    expect(markdownToTelegramRichHtml(input)).toBe(input);
+  });
+
+  it("isolates rich media tags as blocks", () => {
+    const html = markdownToTelegramRichHtml(
+      'One <img src="https://example.com/a.jpg" alt="A"> two https://example.com/page',
+    );
+
+    expect(html).toContain(
+      '\n\n<figure><img src="https://example.com/a.jpg" alt="A"/></figure>\n\n',
+    );
+    expect(html).toContain('<a href="https://example.com/page">https://example.com/page</a>');
+    expect(html).not.toContain("&lt;img");
+    expect(html).not.toContain('<a href="https://example.com/a.jpg">');
+  });
+
+  it("escapes rich media tags without supported http sources", () => {
+    expect(markdownToTelegramRichHtml('<img src="logo.png" alt="Logo">')).toBe(
+      '&lt;img src="logo.png" alt="Logo"&gt;',
+    );
+    expect(markdownToTelegramRichHtml('<audio src="data:audio/wav;base64,x"></audio>')).toBe(
+      '&lt;audio src="data:audio/wav;base64,x"&gt;&lt;/audio&gt;',
+    );
+    expect(markdownToTelegramRichHtml('<video src="https://example.com/a.mp4"></video>')).toBe(
+      '<figure><video src="https://example.com/a.mp4"></video></figure>',
+    );
+  });
+
+  it("renders Markdown media blocks on the rich HTML fallback path", () => {
+    expect(markdownToTelegramRichHtml('![Diagram](https://example.com/a.jpg "Caption")')).toBe(
+      '<figure><img src="https://example.com/a.jpg" alt="Diagram"/><figcaption>Caption</figcaption></figure>',
+    );
+    expect(
+      markdownToTelegramRichHtml('![A "quote"](https://cdn.example/img.png?token=a&expires=b)'),
+    ).toBe(
+      '<figure><img src="https://cdn.example/img.png?token=a&amp;expires=b" alt="A &quot;quote&quot;"/></figure>',
+    );
+    expect(markdownToTelegramRichHtml("![A > B](https://example.com/a.png)")).toBe(
+      '<figure><img src="https://example.com/a.png" alt="A &gt; B"/></figure>',
+    );
+    expect(markdownToTelegramRichHtml("See ![Diagram](https://example.com/a.jpg).")).toBe(
+      'See <a href="https://example.com/a.jpg">Diagram</a>.',
+    );
+    expect(markdownToTelegramRichHtml("```\n![](https://example.com/a.jpg)\n```")).toBe(
+      "<pre><code>![](https://example.com/a.jpg)\n</code></pre>",
+    );
+  });
+
+  it("renders rich tables and falls back when they exceed Telegram's column limit", () => {
+    const table = (columns: number) =>
+      [
+        `| ${Array.from({ length: columns }, (_, index) => `H${index + 1}`).join(" | ")} |`,
+        `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
+        `| ${Array.from({ length: columns }, (_, index) => String(index + 1)).join(" | ")} |`,
+      ].join("\n");
+
+    expect(markdownToTelegramRichHtml(table(20))).toContain("<table>");
+    expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
+    expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
+    expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
+  });
+
+  it("falls back over-wide raw rich HTML tables", () => {
+    const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
+    const html = `<table><caption>Wide</caption><tbody><tr>${cells}</tr></tbody></table>`;
+    const sanitized = sanitizeTelegramRichHtml(html);
+
+    expect(sanitized).toContain("<pre><code>Wide");
+    expect(sanitized).toContain("C21");
+    expect(sanitized).not.toContain("<table>");
+  });
+
+  it("clamps raw rich HTML table colspans before fallback", () => {
+    const html = '<table><tbody><tr><td colspan="1000000000">x</td></tr></tbody></table>';
+    const sanitized = sanitizeTelegramRichHtml(html);
+
+    expect(sanitized).toContain("<pre><code>");
+    expect(sanitized.length).toBeLessThan(300);
+  });
+
+  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+
+    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
+      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
+    );
+  });
+
+  it("preserves inline markdown inside rich table cells", () => {
+    const html = markdownToTelegramRichHtml(
+      "| Name | Link |\n| --- | --- |\n| **API** | [docs](https://example.com) |",
+    );
+
+    expect(html).toContain("<td><b>API</b></td>");
+    expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
+  });
+
+  it("does not auto-linkify bare URLs when entity detection is skipped", () => {
+    expect(markdownToTelegramRichHtml("https://example.com", { skipEntityDetection: true })).toBe(
+      "https://example.com",
+    );
+    expect(
+      markdownToTelegramRichHtml("[docs](https://example.com)", { skipEntityDetection: true }),
+    ).toBe('<a href="https://example.com">docs</a>');
+  });
+
+  it("preserves Markdown heading levels in rich HTML", () => {
+    expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
+      "<h1>Title</h1>\n\n<h3>Detail</h3>",
     );
   });
 
@@ -230,6 +371,16 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
 
+  it("does not synthesize closing tags for rich void tags when chunking html", () => {
+    const chunks = splitTelegramHtmlChunks(
+      `<figure><img src="https://example.com/a.jpg"></figure><ul><li><input type="checkbox" checked>${"A".repeat(80)}</li></ul>`,
+      64,
+    );
+
+    expect(chunks.join("")).not.toContain("</img>");
+    expect(chunks.join("")).not.toContain("</input>");
+  });
+
   it("fails loudly when a leading entity cannot fit inside a chunk", () => {
     expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
   });
@@ -260,6 +411,14 @@ describe("markdownToTelegramHtml", () => {
         '<a href="https://example.com/task?id=1&amp;kind=bug">Task &lt;id&gt;</a>',
       ),
     ).toBe("Task <id> (https://example.com/task?id=1&kind=bug)");
+  });
+
+  it("preserves table cell boundaries in Telegram HTML fallback text", () => {
+    expect(
+      telegramHtmlToPlainTextFallback(
+        "<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+      ),
+    ).toBe("Name | Age\nAlice | 30");
   });
 
   it("fails loudly when tag overhead leaves no room for text", () => {

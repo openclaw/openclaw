@@ -3,7 +3,7 @@
 // Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
 // report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -434,6 +434,7 @@ async function main() {
       results,
     };
 
+    mkdirSync(path.dirname(jsonPath), { recursive: true });
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
     console.log(`[extension-memory] report: ${jsonPath}`);
@@ -449,6 +450,36 @@ async function main() {
         2,
       ),
     );
+
+    const failures = [];
+    if (report.baseline.status !== "ok") {
+      failures.push(`baseline import ${report.baseline.status}`);
+    }
+    if (report.baseline.maxRssMb === null) {
+      failures.push("baseline import did not report RSS");
+    }
+    if (report.combined !== null) {
+      if (report.combined.status !== "ok") {
+        failures.push(`combined import ${report.combined.status}`);
+      }
+      if (report.combined.maxRssMb === null) {
+        failures.push("combined import did not report RSS");
+      }
+    }
+    for (const result of report.results) {
+      if (result.status !== "ok") {
+        failures.push(`${result.dir} import ${result.status}`);
+      }
+      if (result.maxRssMb === null) {
+        failures.push(`${result.dir} import did not report RSS`);
+      }
+    }
+    if (failures.length > 0) {
+      for (const failure of failures) {
+        console.error(`[extension-memory] ${failure}`);
+      }
+      process.exitCode = 1;
+    }
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }

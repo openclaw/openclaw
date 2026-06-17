@@ -7,7 +7,11 @@ import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  clearSessionStoreCacheForTest,
+  saveSessionStore,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -130,6 +134,25 @@ let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth-nat
 let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-model-picker-ui.js").resolveDiscordNativeChoiceContext;
 
+async function saveSessionOverride(params: {
+  providerOverride: string;
+  modelOverride: string;
+}): Promise<void> {
+  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
+  await saveSessionStore(
+    STORE_PATH,
+    {
+      [SESSION_KEY]: {
+        sessionId: "main",
+        updatedAt: Date.now(),
+        providerOverride: params.providerOverride,
+        modelOverride: params.modelOverride,
+      },
+    } satisfies Record<string, SessionEntry>,
+    { skipMaintenance: true },
+  );
+}
+
 function installProviderThinkingRegistryForTest(): void {
   const registry = createEmptyPluginRegistry();
   registry.providers.push({
@@ -199,7 +222,7 @@ describe("discord native /think autocomplete", () => {
       await loadDiscordThinkAutocompleteModulesForTest());
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clearSessionStoreCacheForTest();
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
@@ -218,18 +241,10 @@ describe("discord native /think autocomplete", () => {
         : undefined,
     );
     installProviderThinkingRegistryForTest();
-    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(
-      STORE_PATH,
-      JSON.stringify({
-        [SESSION_KEY]: {
-          updatedAt: Date.now(),
-          providerOverride: "openai",
-          modelOverride: "gpt-5.4",
-        },
-      }),
-      "utf8",
-    );
+    await saveSessionOverride({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+    });
   });
 
   afterEach(() => {
@@ -318,17 +333,10 @@ describe("discord native /think autocomplete", () => {
           ? { levels: [{ id: "off" }, { id: "max" }] }
           : undefined,
     );
-    fs.writeFileSync(
-      STORE_PATH,
-      JSON.stringify({
-        [SESSION_KEY]: {
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-7",
-        },
-      }),
-      "utf8",
-    );
+    await saveSessionOverride({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+    });
     const cfg = createConfig();
     resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
     const interaction = {

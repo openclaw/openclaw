@@ -104,6 +104,7 @@ type LoadEmbeddedToolRuntimeFromPackageOptions = {
 };
 
 const lobsterRequire = createRequire(import.meta.url);
+const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
 function toEmbeddedToolRuntime(
   moduleExports: Partial<EmbeddedToolRuntime>,
@@ -230,21 +231,40 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
     throw new Error("Workflow path is not a file");
   }
   const ext = path.extname(resolved).toLowerCase();
-  if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
+  if (!workflowExts.has(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }
   return resolved;
 }
 
+function isMissingPathError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function hasWorkflowFileExtension(candidate: string) {
+  return workflowExts.has(path.extname(candidate).toLowerCase());
+}
+
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
-  if (!trimmed || trimmed.includes("|")) {
+  if (!trimmed || trimmed.includes("|") || !hasWorkflowFileExtension(trimmed)) {
     return null;
+  }
+  if (!/\s/.test(trimmed)) {
+    return await resolveWorkflowFile(trimmed, cwd);
   }
   try {
     return await resolveWorkflowFile(trimmed, cwd);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
   }
 }
 

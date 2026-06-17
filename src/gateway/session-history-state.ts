@@ -5,11 +5,12 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
 } from "./chat-display-projection.js";
+import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
   readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesAsync,
-} from "./session-utils.js";
+  readSessionMessagesWithSourceAsync,
+} from "./session-transcript-readers.js";
 
 // Session history state owns the SSE-friendly projection of transcript JSONL:
 // raw messages are projected for display, paginated by transcript seq, then
@@ -41,6 +42,7 @@ type InlineSessionHistoryAppend = {
 };
 
 type SessionHistoryTranscriptTarget = {
+  agentId?: string;
   sessionId: string;
   storePath?: string;
   sessionFile?: string;
@@ -50,6 +52,7 @@ type SessionHistoryRawSnapshot = {
   rawMessages: unknown[];
   rawTranscriptSeq?: number;
   totalRawMessages?: number;
+  transcriptPath?: string;
 };
 
 /** Computes an oversized raw transcript tail window for projected chat history. */
@@ -181,12 +184,14 @@ export class SessionHistorySseState {
   private readonly cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
+  private transcriptPath: string | undefined;
 
   static fromRawSnapshot(params: {
     target: SessionHistoryTranscriptTarget;
     rawMessages: unknown[];
     rawTranscriptSeq?: number;
     totalRawMessages?: number;
+    transcriptPath?: string;
     maxChars?: number;
     limit?: number;
     cursor?: string;
@@ -199,6 +204,7 @@ export class SessionHistorySseState {
       initialRawMessages: params.rawMessages,
       rawTranscriptSeq: params.rawTranscriptSeq,
       totalRawMessages: params.totalRawMessages,
+      transcriptPath: params.transcriptPath,
     });
   }
 
@@ -210,6 +216,7 @@ export class SessionHistorySseState {
     initialRawMessages: unknown[];
     rawTranscriptSeq?: number;
     totalRawMessages?: number;
+    transcriptPath?: string;
   }) {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
@@ -226,6 +233,7 @@ export class SessionHistorySseState {
     });
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
   }
 
   snapshot(): PaginatedSessionHistory {
@@ -322,10 +330,16 @@ export class SessionHistorySseState {
     };
   }
 
+  shouldRefreshForTranscriptPath(updatePath: string | undefined): boolean {
+    const nextPath = normalizeTranscriptPathForComparison(updatePath);
+    return Boolean(this.transcriptPath && nextPath && this.transcriptPath !== nextPath);
+  }
+
   async refreshAsync(): Promise<PaginatedSessionHistory> {
     const rawSnapshot = await this.readRawSnapshotAsync();
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
@@ -348,29 +362,44 @@ export class SessionHistorySseState {
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
     if (this.cursor === undefined && typeof this.limit === "number") {
       const snapshot = await readRecentSessionMessagesWithStatsAsync(
-        this.target.sessionId,
-        this.target.storePath,
-        this.target.sessionFile,
+        {
+          agentId: this.target.agentId,
+          sessionFile: this.target.sessionFile,
+          sessionId: this.target.sessionId,
+          storePath: this.target.storePath,
+        },
         {
           ...resolveSessionHistoryTailReadOptions(this.limit),
+          allowResetArchiveFallback: true,
         },
       );
       return {
         rawMessages: snapshot.messages,
         rawTranscriptSeq: snapshot.totalMessages,
         totalRawMessages: snapshot.totalMessages,
+        transcriptPath: snapshot.transcriptPath,
       };
     }
+    const snapshot = await readSessionMessagesWithSourceAsync(
+      {
+        agentId: this.target.agentId,
+        sessionFile: this.target.sessionFile,
+        sessionId: this.target.sessionId,
+        storePath: this.target.storePath,
+      },
+      {
+        mode: "full",
+        reason: "session history cursor pagination",
+        allowResetArchiveFallback: true,
+      },
+    );
     return {
-      rawMessages: await readSessionMessagesAsync(
-        this.target.sessionId,
-        this.target.storePath,
-        this.target.sessionFile,
-        {
-          mode: "full",
-          reason: "session history cursor pagination",
-        },
-      ),
+      rawMessages: snapshot.messages,
+      transcriptPath: snapshot.transcriptPath,
     };
   }
+}
+
+function normalizeTranscriptPathForComparison(filePath: string | undefined): string | undefined {
+  return typeof filePath === "string" ? resolveTranscriptPathForComparison(filePath) : undefined;
 }

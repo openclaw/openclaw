@@ -25,6 +25,7 @@ type MatrixQaScenarioId =
   | "matrix-room-partial-streaming-preview"
   | "matrix-room-quiet-streaming-preview"
   | "matrix-room-tool-progress-preview"
+  | "matrix-room-tool-progress-command-preview"
   | "matrix-room-tool-progress-preview-opt-out"
   | "matrix-room-tool-progress-error"
   | "matrix-room-tool-progress-mention-safety"
@@ -32,6 +33,7 @@ type MatrixQaScenarioId =
   | "matrix-room-image-understanding-attachment"
   | "matrix-room-generated-image-delivery"
   | "matrix-media-type-coverage"
+  | "matrix-voice-preflight-mention"
   | "matrix-attachment-only-ignored"
   | "matrix-unsupported-media-safe"
   | "matrix-dm-reply-shape"
@@ -421,6 +423,15 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     },
   },
   {
+    id: "matrix-room-tool-progress-command-preview",
+    timeoutMs: 60_000,
+    title: "Matrix streaming replaces command progress lines inside the preview message",
+    configOverrides: {
+      streaming: "quiet",
+      toolProfile: "coding",
+    },
+  },
+  {
     id: "matrix-room-tool-progress-preview-opt-out",
     timeoutMs: 60_000,
     title: "Matrix streaming can opt out of preview tool progress",
@@ -495,6 +506,19 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-media-type-coverage",
     timeoutMs: 90_000,
     title: "Matrix media attachments cover image, audio, video, PDF, and EPUB transport",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-voice-preflight-mention",
+    configOverrides: {
+      audio: {
+        enabled: true,
+      },
+      groupMentionPatterns: ["\\S"],
+    },
+    providerMode: "live-frontier",
+    timeoutMs: 180_000,
+    title: "Matrix voice notes can trigger mention gating through transcription",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
@@ -1225,6 +1249,7 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
   "matrix-room-image-understanding-attachment",
   "matrix-room-generated-image-delivery",
   "matrix-media-type-coverage",
+  "matrix-voice-preflight-mention",
   "matrix-attachment-only-ignored",
   "matrix-unsupported-media-safe",
   "matrix-e2ee-media-image",

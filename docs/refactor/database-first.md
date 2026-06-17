@@ -1406,22 +1406,13 @@ create` validates the written archive by default; `--no-verify` is the
   explicit `dbPath`.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
   legacy store names with write-style filesystem APIs. It also fails runtime
-  source that reintroduces transcript bridge contracts such as
-  `transcriptLocator`, `sqlite-transcript://...`, `sessionFile`, or
-  `storePath`, and scans tests for those bridge-contract names too. It also
-  bans `SessionManager.open(...)` and the old static SessionManager facades so
-  runtime and tests cannot silently re-create a file-backed session opener or
-  file-era session discovery. It also bans the old session JSONL downloader
-  hook/class from export UI. It also bans sidecar-shaped plugin-state/task
-  SQLite helper names; tests should assert `databasePath` and the shared
-  `state/openclaw.sqlite` location instead of pretending those features own
-  separate SQLite files. It also bans the old generic memory index SQL table
-  names (`meta`, `files`, `chunks`, `chunks_vec`,
-  `chunks_fts`, `embedding_cache`) in runtime source so the agent database keeps
-  its explicit `memory_index_*` schema. It also bans embedding TEXT schemas and
-  embedding JSON-array writes so vectors stay compact SQLite BLOBs. Migration,
-  doctor, import, and explicit non-session export code remain allowed. The
-  guard now also covers runtime `cache/*.json` stores, generic
+  source that reintroduces the retired transcript bridge markers
+  `transcriptLocator` or `sqlite-transcript://...`. Migration, doctor, import,
+  and explicit non-session export code remain allowed. Broader legacy contract
+  names such as `sessionFile`, `storePath`, and old `SessionManager` file-era
+  facades still have current owners and need separate migration guard work
+  before they can become a required preflight check. The guard now also covers
+  runtime `cache/*.json` stores, generic
   `thread-bindings.json` sidecars, cron state/run-log JSON, config health JSON,
   restart and lock sidecars, Voice Wake settings, plugin binding approvals,
   installed plugin index JSON, File Transfer audit JSONL, Memory Wiki activity

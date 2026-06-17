@@ -26,12 +26,14 @@ type BridgeInternals = {
   }) => Promise<void>;
   listPendingApprovals: () => unknown[];
   close: () => Promise<void>;
+  server: { server: { notification: (n: unknown) => Promise<void> } } | null;
+  sendNotification: (notification: { method: string }) => Promise<void>;
 };
 
-function makeBridge(): BridgeInternals {
+function makeBridge(verbose = false): BridgeInternals {
   return new OpenClawChannelBridge({} as never, {
     claudeChannelMode: "off",
-    verbose: false,
+    verbose,
   }) as unknown as BridgeInternals;
 }
 
@@ -193,6 +195,32 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     expect(bridge.pendingClaudePermissions.size).toBe(0);
     expect(bridge.pendingApprovals.size).toBe(0);
     expect(bridge.pendingSweepInterval).toBeNull();
+  });
+
+  test("a failed notification still emits exactly one diagnostic record with verbose off", async () => {
+    const bridge = makeBridge(false);
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    bridge.server = {
+      server: {
+        notification: () => Promise.reject(new Error("transport closed")),
+      },
+    };
+    try {
+      await bridge.sendNotification({ method: "channel/event" });
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toBe("openclaw mcp: notification channel/event failed\n");
+      expect(writes[0]).not.toContain("transport closed");
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
   });
 
   test("sweeper interval is not started before any pending entry is added", async () => {

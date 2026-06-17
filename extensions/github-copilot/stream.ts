@@ -8,6 +8,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
 
@@ -82,6 +83,13 @@ function buildCopilotRequestHeaders(
   };
 }
 
+function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
+  if (Array.isArray(payload.messages)) {
+    payload.messages = stripCopilotAssistantThinkingMessages(payload.messages);
+  }
+  applyAnthropicEphemeralCacheControlMarkers(payload);
+}
+
 export function wrapCopilotAnthropicStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
@@ -102,7 +110,7 @@ export function wrapCopilotAnthropicStream(
         ...options,
         headers: buildCopilotRequestHeaders(context, options?.headers),
       },
-      applyAnthropicEphemeralCacheControlMarkers,
+      patchCopilotAnthropicPayload,
     );
   };
 }

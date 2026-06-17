@@ -924,6 +924,40 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it("prevents allow-always bypass for flock wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/flock lockfile /bin/zsh -c 'echo warmup-ok'",
+      secondCommand: "/usr/bin/flock lockfile /bin/zsh -c 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("keeps ambiguous flock command strings out of allow-always", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "echo");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+    const { persisted } = resolvePersistedPatterns({
+      command: "/usr/bin/flock lockfile -c 'echo warmup-ok'",
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toStrictEqual([]);
+  });
+
   it("prevents allow-always bypass for macOS dispatch-wrapper chains", () => {
     if (process.platform !== "darwin") {
       return;

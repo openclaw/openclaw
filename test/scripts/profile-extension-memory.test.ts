@@ -94,6 +94,54 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+  it("creates parent directories for nested JSON report paths", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
+    try {
+      const extensionDir = path.join(root, "dist", "extensions", "simple");
+      const reportPath = path.join(root, ".artifacts", "memory", "report.json");
+      mkdirSync(extensionDir, { recursive: true });
+      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
+
+      const result = runProfileExtensionMemory(
+        ["--extension", "simple", "--skip-combined", "--concurrency", "1", "--json", reportPath],
+        root,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(readFileSync(reportPath, "utf8"));
+      expect(report.counts).toMatchObject({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when a profiled plugin import fails", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
+    try {
+      const extensionDir = path.join(root, "dist", "extensions", "broken");
+      const reportPath = path.join(root, "report.json");
+      mkdirSync(extensionDir, { recursive: true });
+      writeFileSync(
+        path.join(extensionDir, "index.js"),
+        `throw new Error("broken plugin import");\n`,
+        "utf8",
+      );
+
+      const result = runProfileExtensionMemory(
+        ["--extension", "broken", "--skip-combined", "--concurrency", "1", "--json", reportPath],
+        root,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[extension-memory] broken import fail");
+      const report = JSON.parse(readFileSync(reportPath, "utf8"));
+      expect(report.counts).toMatchObject({ fail: 1, ok: 0, timeout: 0 });
+      expect(report.results[0]).toMatchObject({ dir: "broken", status: "fail" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves spawn errors without waiting for the timeout", async () => {
     const startedAt = Date.now();
     const result = await runCase({

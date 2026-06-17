@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayDreamingSummary
+import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
@@ -22,6 +23,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -103,7 +105,10 @@ private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Setting
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
-internal fun shellBottomNavVisible(keyboardVisible: Boolean, commandOpen: Boolean): Boolean = !keyboardVisible && !commandOpen
+internal fun shellBottomNavVisible(
+  keyboardVisible: Boolean,
+  commandOpen: Boolean,
+): Boolean = !keyboardVisible && !commandOpen
 
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
@@ -111,13 +116,18 @@ fun ShellScreen(
   viewModel: MainViewModel,
   modifier: Modifier = Modifier,
 ) {
-  ClawDesignTheme {
+  val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
+  OpenClawSystemBarAppearance(lightAppearance = !shellDark)
+  ClawDesignTheme(dark = shellDark) {
     var activeTab by rememberSaveable { mutableStateOf(Tab.Overview) }
     var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.Home) }
     var returnToOverviewFromSettings by rememberSaveable { mutableStateOf(false) }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
+    var voiceScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
@@ -138,8 +148,12 @@ fun ShellScreen(
       viewModel.clearRequestedHomeDestination()
     }
 
-    LaunchedEffect(activeTab) {
-      viewModel.setVoiceScreenActive(activeTab == Tab.Voice)
+    LaunchedEffect(activeTab, runtimeInitialized) {
+      val voiceScreenActive = activeTab == Tab.Voice
+      if (voiceScreenActive || voiceScreenWasActive || runtimeInitialized) {
+        viewModel.setVoiceScreenActive(voiceScreenActive)
+      }
+      voiceScreenWasActive = voiceScreenActive
     }
 
     BackHandler(enabled = activeTab != Tab.Overview) {
@@ -213,11 +227,6 @@ fun ShellScreen(
             ProvidersModelsScreen(
               viewModel = viewModel,
               onBack = { activeTab = Tab.Overview },
-              onAddProvider = {
-                settingsRoute = SettingsRoute.Gateway
-                returnToOverviewFromSettings = false
-                activeTab = Tab.Settings
-              },
             )
           Tab.Sessions ->
             SessionsScreen(
@@ -342,7 +351,7 @@ private fun OverviewScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
@@ -455,13 +464,12 @@ private fun OverviewScreen(
                 ModuleRow("Sessions", "Conversation history", if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, Tab.Sessions),
                 ModuleRow(
                   title = "Providers & Models",
-                  subtitle = "Model setup",
+                  subtitle = "Provider readiness",
                   metadata =
                     when {
                       !isConnected -> "Offline"
                       readyProviderCount > 0 -> "$readyProviderCount ready"
-                      models.isNotEmpty() -> "${models.size} models"
-                      else -> "Setup"
+                      else -> "No ready"
                     },
                   icon = Icons.Outlined.Inventory2,
                   tab = Tab.ProvidersModels,
@@ -541,6 +549,7 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
+  expiringProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
@@ -558,13 +567,13 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (nodesDevicesSummary.pendingDevices.isNotEmpty()) {
+    if (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
       HomeAttentionRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
     } else {
       null
     },
     if (isConnected && readyProviderCount == 0) {
-      HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
+      HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.Gateway)
     } else {
       null
     },
@@ -747,7 +756,7 @@ private fun RecentSessionRowContent(
   metadata: String,
   onClick: () -> Unit,
 ) {
-  Surface(color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
+  Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
       modifier =
         Modifier
@@ -845,6 +854,7 @@ private fun SettingsShellScreen(
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
+  val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -906,7 +916,7 @@ private fun SettingsShellScreen(
               SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
               SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
               SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
-              SettingsRow("Appearance", "Dark", Icons.Default.Palette, route = SettingsRoute.Appearance),
+              SettingsRow("Appearance", appearanceThemeSummary(appearanceThemeMode), Icons.Default.Palette, route = SettingsRoute.Appearance),
               SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
               SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
             ),
@@ -988,6 +998,7 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
   val devices = summary.pairedDevices.size
   return when {
     summary.pendingDevices.isNotEmpty() -> "${summary.pendingDevices.size} pending"
+    summary.hasNodeCapabilityApprovalPending() -> "Node approval pending"
     summary.nodes.isNotEmpty() -> "$online/${summary.nodes.size} online"
     devices > 0 -> "$devices paired"
     else -> "No devices"
@@ -998,9 +1009,17 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
 private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
   when {
     summary.pendingDevices.isNotEmpty() -> false
+    summary.hasNodeCapabilityApprovalPending() -> false
     summary.nodes.any { it.connected } -> true
     summary.pairedDevices.isNotEmpty() -> true
     else -> null
+  }
+
+private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean =
+  nodes.any { node ->
+    node.approvalState == GatewayNodeApprovalState.PendingApproval ||
+      node.approvalState == GatewayNodeApprovalState.PendingReapproval ||
+      node.approvalState == GatewayNodeApprovalState.Unapproved
   }
 
 /** Summarizes channel connection state, surfacing errors before connected counts. */

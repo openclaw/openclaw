@@ -1,9 +1,6 @@
 // Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
-import {
-  isMiniMaxModelNotFoundErrorMessage,
-  isModelNotFoundErrorMessage,
-} from "./live-model-errors.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
@@ -21,6 +18,8 @@ describe("live model error helpers", () => {
     expect(
       isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
     ).toBe(true);
+    expect(isModelNotFoundErrorMessage("404 page not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
         '400 Provider returned error {"code":400,"msg":"model[Alibaba-NLP/Tongyi-DeepResearch-30B-A3B] router not found"}',
@@ -31,6 +30,12 @@ describe("live model error helpers", () => {
         "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
       ),
     ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        '{"error":{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}}',
+      ),
+    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("Not supported model some-model-id")).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
@@ -47,14 +52,14 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage('{"error":{"message":"Resource missing","code":404}}')).toBe(
       false,
     );
+    expect(isModelNotFoundErrorMessage("This model is not supported for tool calling.")).toBe(
+      false,
+    );
+    expect(isModelNotFoundErrorMessage("This model does not support image inputs.")).toBe(false);
+    expect(isModelNotFoundErrorMessage("Reasoning effort is not supported for this model.")).toBe(
+      false,
+    );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
 
-  it("detects bare minimax 404 page-not-found responses", () => {
-    expect(isMiniMaxModelNotFoundErrorMessage("404 page not found")).toBe(true);
-    expect(isMiniMaxModelNotFoundErrorMessage("Error: 404 404 page not found")).toBe(true);
-    expect(isMiniMaxModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(
-      false,
-    );
-  });
 });

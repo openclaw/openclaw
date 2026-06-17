@@ -24,6 +24,7 @@ import {
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
+import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -47,6 +48,7 @@ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
   listOfficialExternalPluginCatalogEntries,
+  getOfficialExternalPluginCatalogManifest,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
@@ -133,6 +135,35 @@ function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfi
   }
 }
 
+function addConfiguredMemoryEmbeddingProviderPluginIds(
+  ids: Set<string>,
+  cfg: OpenClawConfig,
+): void {
+  const configuredProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
+  if (configuredProviderIds.size === 0) {
+    return;
+  }
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    if (!pluginId) {
+      continue;
+    }
+    const ownedProviderIds = [
+      ...(manifest?.contracts?.embeddingProviders ?? []),
+      ...(manifest?.contracts?.memoryEmbeddingProviders ?? []),
+    ];
+    if (
+      ownedProviderIds.some((providerId) => {
+        const normalized = normalizeOptionalLowercaseString(providerId);
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      })
+    ) {
+      ids.add(pluginId);
+    }
+  }
+}
+
 function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
@@ -154,6 +185,7 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
     }
   }
   addConfiguredAgentRuntimePluginIds(ids, cfg);
+  addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
   return ids;
 }
 
@@ -1158,6 +1190,8 @@ export type RepairMissingPluginInstallsResult = {
   changes: string[];
   /** User-facing warnings for failed or skipped plugin install repairs. */
   warnings: string[];
+  /** User-facing details for repairs explicitly deferred until post-core convergence. */
+  deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
   /**
@@ -1305,6 +1339,7 @@ async function repairMissingPluginInstalls(params: {
   const officialReplacementPluginIds = new Set(officialReplacementInstallCandidates.keys());
   const changes: string[] = [];
   const warnings: string[] = [];
+  const deferredRepairDetails: string[] = [];
   const failedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
@@ -1337,9 +1372,9 @@ async function repairMissingPluginInstalls(params: {
       if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
         continue;
       }
-      changes.push(
-        `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`,
-      );
+      const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
+      changes.push(detail);
+      deferredRepairDetails.push(detail);
     }
   }
 
@@ -1514,6 +1549,7 @@ async function repairMissingPluginInstalls(params: {
   return {
     changes,
     warnings,
+    ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
     ...(failedPluginIds.size > 0
       ? {
           failedPluginIds: [...failedPluginIds].toSorted((left, right) =>

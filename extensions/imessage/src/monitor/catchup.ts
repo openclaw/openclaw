@@ -326,6 +326,7 @@ export type PerformCatchupParams = {
   now?: number;
   fetch: CatchupFetchFn;
   dispatch: CatchupDispatchFn;
+  observeSkippedFromMe?: (row: IMessageCatchupRow) => Promise<void> | void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -462,6 +463,13 @@ export async function performIMessageCatchup(
       continue;
     }
     if (row.isFromMe) {
+      try {
+        await params.observeSkippedFromMe?.(row);
+      } catch (err) {
+        params.warn?.(
+          `imessage catchup: from-me observer failed for guid=${row.guid}: ${String(err)}`,
+        );
+      }
       summary.skippedFromMe += 1;
       highWatermarkMs = Math.max(highWatermarkMs, row.date);
       highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);

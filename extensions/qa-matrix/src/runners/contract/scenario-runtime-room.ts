@@ -21,6 +21,7 @@ import {
   buildMatrixPartialStreamingPrompt,
   buildMatrixQuietStreamingPrompt,
   buildMatrixQaToken,
+  buildMatrixToolProgressCommandPrompt,
   buildMatrixToolProgressTaskContent,
   buildMatrixToolProgressErrorPrompt,
   buildMatrixToolProgressMentionSafetyPrompt,
@@ -526,6 +527,7 @@ export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioCon
       },
     },
     {
+      replacePaths: [`channels.matrix.accounts.${accountId}.groupAllowFrom`],
       restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
     },
   );
@@ -875,6 +877,8 @@ async function runMatrixToolProgressScenario(
     allowGenericProgressLine?: boolean;
     mentionSafety?: boolean;
     progressPattern: RegExp;
+    rejectProgressBodyPattern?: RegExp;
+    rejectProgressBodyMessage?: string;
     triggerBodyBuilder: (sutUserId: string, finalText: string) => string;
   },
 ) {
@@ -1119,6 +1123,14 @@ async function runMatrixToolProgressScenario(
   if (params.mentionSafety) {
     assertMatrixQaToolProgressMentionsInert(progress.event);
   }
+  if (
+    params.rejectProgressBodyPattern &&
+    params.rejectProgressBodyPattern.test(progress.event.body ?? "")
+  ) {
+    throw new Error(
+      `${params.rejectProgressBodyMessage ?? "Matrix tool progress preview body matched a rejected pattern"}: ${progress.event.body ?? "<none>"}`,
+    );
+  }
 
   const finalized =
     topLevelFinalBeforeProgress ??
@@ -1217,6 +1229,19 @@ export async function runToolProgressPreviewScenario(context: MatrixQaScenarioCo
     allowGenericProgressLine: true,
     progressPattern: /\b(?:tool:\s*)?read\s*:\s*from\b|\btool:\s*read\b/i,
     triggerBodyBuilder: buildMatrixToolProgressPrompt,
+  });
+}
+
+export async function runToolProgressCommandPreviewScenario(context: MatrixQaScenarioContext) {
+  return runMatrixToolProgressScenario(context, {
+    expectedPreviewKind: "notice",
+    finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_COMMAND"),
+    label: "tool progress command preview",
+    progressPattern: /\bcompleted\b|\bexit\s+0\b/i,
+    rejectProgressBodyPattern:
+      /`(?![^`]*\bcompleted\b)[^`]*(?:matrix-command-progress-start|print text\s*→\s*run sleep 2)[^`]*`/i,
+    rejectProgressBodyMessage: "Matrix command progress kept stale command text after completion",
+    triggerBodyBuilder: buildMatrixToolProgressCommandPrompt,
   });
 }
 

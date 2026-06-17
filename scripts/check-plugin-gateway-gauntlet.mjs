@@ -17,9 +17,12 @@ import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  collectPluginsWithRequiredEntries,
+  collectRequiredPluginEntries,
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
+  readQaSuiteSummary,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
 
@@ -70,6 +73,7 @@ export function parseArgs(argv) {
     buildTimeoutMs: 600_000,
     qaTimeoutMs: 900_000,
     allowEmpty: false,
+    failOnObservation: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION === "1",
     keepRunRoot: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT === "1",
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
@@ -171,6 +175,9 @@ export function parseArgs(argv) {
       case "--allow-empty":
         options.allowEmpty = true;
         break;
+      case "--fail-on-observation":
+        options.failOnObservation = true;
+        break;
       case "--help":
         printHelp();
         process.exit(0);
@@ -207,6 +214,7 @@ Options:
   --skip-qa                     Skip QA Lab RPC conversation runs
   --skip-slash-help             Skip CLI help probes for plugin-declared command aliases
   --allow-empty                 Allow zero-command runs when every active phase is skipped
+  --fail-on-observation         Treat RSS/CPU/wall observation rows as guard failures
   --keep-run-root               Preserve isolated HOME/state/log temp root after success
 `);
 }
@@ -228,6 +236,25 @@ function readOptionalPositiveIntEnv(name) {
 function readOptionalNonNegativeIntEnv(name) {
   const raw = process.env[name];
   return raw ? parseNonNegativeInt(raw, name) : undefined;
+}
+
+function shouldPromoteObservationGuardFailure(observation) {
+  // Setup and the first cold work command are still reported, but they are not
+  // stable enough to fail the gauntlet's steady-state regression guard.
+  return observation?.phase !== "prebuild" && observation?.coldStart !== true;
+}
+
+export function buildObservationGuardFailures(observations, enabled = false) {
+  if (!enabled) {
+    return [];
+  }
+  return observations
+    .filter((observation) => shouldPromoteObservationGuardFailure(observation))
+    .map((observation) => ({
+      kind: `observation:${observation.kind ?? "unknown"}`,
+      message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
+      observation,
+    }));
 }
 
 /**
@@ -644,8 +671,35 @@ function buildSlashHelpProbe(params) {
   };
 }
 
+async function runPluginLifecycleCommand(params) {
+  process.stderr.write(`[plugin-gauntlet] ${params.logPluginId} ${params.phase}\n`);
+  params.rows.push(
+    await runMeasuredCommand({
+      cwd: params.repoRoot,
+      env: params.env,
+      logDir: path.join(params.outputDir, "logs", "lifecycle"),
+      ...openclawCommand(params.repoRoot, ["plugins", ...params.args]),
+      label: params.label,
+      phase: `lifecycle:${params.phase}`,
+      pluginId: params.pluginId,
+      timeoutMs: params.commandTimeoutMs,
+    }),
+  );
+}
+
 async function runPluginLifecycle(params) {
   for (const plugin of params.plugins) {
+    const requiredPlugins = collectRequiredPluginEntries(params.matrix, [plugin]);
+    for (const requiredPlugin of requiredPlugins) {
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-requires-${requiredPlugin.id}-install`,
+        phase: `requires:${requiredPlugin.id}:install`,
+        args: ["install", requiredPlugin.id],
+        pluginId: requiredPlugin.id,
+      });
+    }
     const commands = [
       {
         phase: "install",
@@ -663,8 +717,8 @@ async function runPluginLifecycle(params) {
       { phase: "uninstall", args: ["uninstall", plugin.id, "--force"] },
     ];
     for (const { phase, args, alias } of commands) {
-      process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
       if (alias) {
+        process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
         params.rows.push(
           await runMeasuredCommand({
             ...buildSlashHelpProbe({
@@ -680,18 +734,24 @@ async function runPluginLifecycle(params) {
         );
         continue;
       }
-      params.rows.push(
-        await runMeasuredCommand({
-          cwd: params.repoRoot,
-          env: params.env,
-          logDir: path.join(params.outputDir, "logs", "lifecycle"),
-          ...openclawCommand(params.repoRoot, ["plugins", ...args]),
-          label: `${plugin.id}-${phase}`,
-          phase: `lifecycle:${phase}`,
-          pluginId: plugin.id,
-          timeoutMs: params.commandTimeoutMs,
-        }),
-      );
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-${phase}`,
+        phase,
+        args,
+        pluginId: plugin.id,
+      });
+    }
+    for (const requiredPlugin of requiredPlugins.toReversed()) {
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-requires-${requiredPlugin.id}-uninstall`,
+        phase: `requires:${requiredPlugin.id}:uninstall`,
+        args: ["uninstall", requiredPlugin.id, "--force"],
+        pluginId: requiredPlugin.id,
+      });
     }
   }
 }
@@ -733,6 +793,9 @@ async function runQaChunks(params) {
     const outputDir = path.join(params.outputDir, "qa-suite", chunk.label);
     const outputArg = toRepoRelativePath(params.repoRoot, outputDir);
     const pluginIds = chunk.plugins.map((plugin) => plugin.id);
+    const enabledPluginIds = collectPluginsWithRequiredEntries(params.matrix, chunk.plugins).map(
+      (plugin) => plugin.id,
+    );
     const pluginIdLabel = pluginIds.length > 0 ? pluginIds.join(",") : "<baseline>";
     process.stderr.write(
       `[plugin-gauntlet] qa chunk ${index + 1}/${chunks.length}: ${pluginIdLabel}\n`,
@@ -751,7 +814,7 @@ async function runQaChunks(params) {
         "--output-dir",
         outputArg,
         ...params.qaScenarios.flatMap((scenario) => ["--scenario", scenario]),
-        ...pluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
+        ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
       ]),
       label: `qa-${chunk.label}`,
       phase: "qa:rpc",
@@ -778,67 +841,6 @@ async function runQaChunks(params) {
   return summaries;
 }
 
-function readQaSuiteSummary(summaryPath) {
-  if (!fs.existsSync(summaryPath)) {
-    return {
-      diagnosticFailure: "qa-summary-missing",
-      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
-      summary: null,
-    };
-  }
-  try {
-    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
-    const invalidReason = validateQaSuiteSummary(summary);
-    if (invalidReason) {
-      return {
-        diagnosticFailure: "qa-summary-invalid",
-        diagnosticDetail: invalidReason,
-        summary: null,
-      };
-    }
-    if (summary.counts.failed > 0) {
-      return {
-        diagnosticFailure: "qa-summary-failed-scenarios",
-        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
-        summary,
-      };
-    }
-    return {
-      diagnosticFailure: null,
-      diagnosticDetail: null,
-      summary,
-    };
-  } catch (error) {
-    return {
-      diagnosticFailure: "qa-summary-invalid",
-      diagnosticDetail: error instanceof Error ? error.message : String(error),
-      summary: null,
-    };
-  }
-}
-
-function validateQaSuiteSummary(summary) {
-  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
-    return "QA suite summary must be a JSON object";
-  }
-  if (!Array.isArray(summary.scenarios)) {
-    return "QA suite summary missing scenarios array";
-  }
-  if (
-    !summary.counts ||
-    typeof summary.counts !== "object" ||
-    !Number.isFinite(summary.counts.total) ||
-    !Number.isFinite(summary.counts.passed) ||
-    !Number.isFinite(summary.counts.failed)
-  ) {
-    return "QA suite summary missing numeric counts";
-  }
-  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
-    return "QA suite summary missing run metadata";
-  }
-  return null;
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = path.resolve(options.repoRoot);
@@ -855,10 +857,11 @@ async function main() {
       shardIndex: options.shardIndex,
       limit: options.limit,
     });
+    const selectedPluginsWithRequired = collectPluginsWithRequiredEntries(matrix, selectedPlugins);
     const rows = [];
     const commandEnv = buildGauntletPrebuildEnv(env, {
       includePrivateQa: !options.skipQa,
-      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      buildIds: selectedPluginsWithRequired.map((plugin) => plugin.buildId),
       skipDeclarationBuild: true,
     });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
@@ -885,6 +888,7 @@ async function main() {
         repoRoot,
         outputDir: options.outputDir,
         env: commandEnv,
+        matrix,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -909,6 +913,7 @@ async function main() {
             repoRoot,
             outputDir: options.outputDir,
             env: commandEnv,
+            matrix,
             plugins: selectedPlugins,
             qaBaseline: options.qaBaseline,
             rows,
@@ -938,6 +943,7 @@ async function main() {
     const failures = rows.filter(
       (row) => row.status !== 0 || row.timedOut || row.diagnosticFailure,
     );
+    const observations = [...metricObservations, ...qaBaselineObservations, ...gatewayObservations];
     const guardFailures =
       !hasGauntletWorkRows(rows) && !options.allowEmpty
         ? [
@@ -948,6 +954,7 @@ async function main() {
             },
           ]
         : [];
+    guardFailures.push(...buildObservationGuardFailures(observations, options.failOnObservation));
     const hasFailures = failures.length > 0 || guardFailures.length > 0;
     preserveRunRoot = preserveRunRoot || hasFailures;
     let cleanupError = null;
@@ -977,6 +984,7 @@ async function main() {
         qaPluginChunkSize: options.qaPluginChunkSize,
         qaBaseline: options.qaBaseline,
         allowEmpty: options.allowEmpty,
+        failOnObservation: options.failOnObservation,
         keepRunRoot: options.keepRunRoot,
         skipLifecycle: options.skipLifecycle,
         skipQa: options.skipQa,
@@ -995,7 +1003,7 @@ async function main() {
       matrix,
       selectedPlugins,
       rows,
-      observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
+      observations,
       failures,
       guardFailures,
     };

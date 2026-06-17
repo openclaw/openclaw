@@ -99,6 +99,8 @@ export type SkillEligibilityContext = {
   };
 };
 
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 1;
+
 export type SkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
@@ -106,4 +108,5 @@ export type SkillSnapshot = {
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+  promptFormatVersion?: number;
 };

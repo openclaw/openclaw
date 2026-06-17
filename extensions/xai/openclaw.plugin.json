@@ -181,6 +181,7 @@
       ]
     },
     "x_search": {
+      "replaySafe": true,
       "authSignals": [
         {
           "provider": "xai"

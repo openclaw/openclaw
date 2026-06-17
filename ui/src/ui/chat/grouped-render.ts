@@ -5,6 +5,7 @@ import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
+import { resolveUiHourCycleOptions } from "../format.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
@@ -63,8 +64,10 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
     };
   }
 
+  const hourCycle = resolveUiHourCycleOptions();
   return {
     label: date.toLocaleString([], {
+      ...hourCycle,
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -72,6 +75,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       minute: "2-digit",
     }),
     title: date.toLocaleString([], {
+      ...hourCycle,
       weekday: "long",
       month: "long",
       day: "numeric",
@@ -1696,10 +1700,12 @@ function renderGroupedMessage(
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const reserveActionSpace = hasActions && !isToolMessage;
   const bubbleClasses = [
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     hasActions ? "has-copy" : "",
+    reserveActionSpace ? "chat-bubble--has-actions" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]

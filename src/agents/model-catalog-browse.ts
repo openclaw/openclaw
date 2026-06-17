@@ -13,27 +13,22 @@ import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.
  * Loads the model catalog shape used by browse/list commands without letting optional
  * provider discovery stall the CLI path.
  */
-export const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
+const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 /** Visible model subset requested by model browse callers. */
 export type ModelCatalogBrowseView = "default" | "configured" | "all";
 
-const modelCatalogBrowseDeps = {
-  setTimeout: globalThis.setTimeout,
-  clearTimeout: globalThis.clearTimeout,
-};
-
-/** Replaces timer hooks for deterministic timeout tests. */
-export function setModelCatalogBrowseTestDeps(
-  overrides: Partial<typeof modelCatalogBrowseDeps>,
-): void {
-  Object.assign(modelCatalogBrowseDeps, overrides);
-}
-
-/** Restores global timer hooks after catalog browse timeout tests. */
-export function restoreModelCatalogBrowseTestDeps(): void {
-  modelCatalogBrowseDeps.setTimeout = globalThis.setTimeout;
-  modelCatalogBrowseDeps.clearTimeout = globalThis.clearTimeout;
+/** True when a browse view cannot be answered from read-only cached catalog entries. */
+export function modelCatalogBrowseRequiresFullDiscovery(params: {
+  cfg: OpenClawConfig;
+  view?: ModelCatalogBrowseView;
+}): boolean {
+  const view = params.view ?? "default";
+  return (
+    view === "all" ||
+    (view === "configured" &&
+      parseConfiguredModelVisibilityEntries({ cfg: params.cfg }).providerWildcards.size > 0)
+  );
 }
 
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
@@ -52,11 +47,7 @@ export async function loadModelCatalogForBrowse(params: {
   onTimeout?: (timeoutMs: number) => void;
 }): Promise<ModelCatalogEntry[]> {
   const view = params.view ?? "default";
-  if (view === "all") {
-    return await params.loadCatalog({ readOnly: false });
-  }
-  if (parseConfiguredModelVisibilityEntries({ cfg: params.cfg }).providerWildcards.size > 0) {
-    // Wildcards depend on provider discovery; read-only cached entries can hide matching models.
+  if (modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view })) {
     return await params.loadCatalog({ readOnly: false });
   }
 
@@ -65,7 +56,7 @@ export async function loadModelCatalogForBrowse(params: {
   const timedOut = Symbol("model-catalog-browse-timeout");
   const catalogPromise = params.loadCatalog({ readOnly: true });
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = modelCatalogBrowseDeps.setTimeout(() => resolve(timedOut), timeoutMs);
+    timeout = globalThis.setTimeout(() => resolve(timedOut), timeoutMs);
     timeout.unref?.();
   });
 
@@ -80,7 +71,7 @@ export async function loadModelCatalogForBrowse(params: {
     return result;
   } finally {
     if (timeout) {
-      modelCatalogBrowseDeps.clearTimeout(timeout);
+      globalThis.clearTimeout(timeout);
     }
   }
 }

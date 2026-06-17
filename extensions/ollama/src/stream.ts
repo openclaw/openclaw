@@ -653,6 +653,13 @@ function estimateTokensFromChars(chars: number): number {
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
 }
 
+function resolveOllamaStopReason(response: OllamaChatResponse) {
+  if (response.message.tool_calls?.length) {
+    return "toolUse" as const;
+  }
+  return response.done_reason === "length" ? ("length" as const) : ("stop" as const);
+}
+
 function estimateOllamaPromptTokens(params: {
   messages: OllamaChatMessage[];
   tools: OllamaTool[];
@@ -1061,7 +1068,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: toolCalls && toolCalls.length > 0 ? "toolUse" : "stop",
+    stopReason: resolveOllamaStopReason(response),
     usage: buildUsageWithNoCost({
       input: resolveUsageCount(response.prompt_eval_count, usageFallback?.input),
       output: resolveUsageCount(response.eval_count, usageFallback?.output),
@@ -1322,17 +1329,10 @@ function createRawOllamaStreamFn(
             }
 
             accumulatedVisibleContent = nextVisibleContent;
-            const partial = buildStreamAssistantMessage({
-              model: modelInfo,
-              content: buildCurrentContent(),
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            });
             stream.push({
               type: "text_delta",
               contentIndex: textContentIndex(),
               delta,
-              partial,
             });
           };
 
@@ -1449,7 +1449,7 @@ function createRawOllamaStreamFn(
 
           stream.push({
             type: "done",
-            reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+            reason: resolveOllamaStopReason(finalResponse),
             message: assistantMessage,
           });
         } finally {

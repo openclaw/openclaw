@@ -214,6 +214,16 @@ const knownDeprecatedSurfaceMarkers = [
     file: "src/plugin-sdk/messaging-targets.ts",
     marker: "openclaw/plugin-sdk/channel-targets",
   },
+  {
+    code: "whatsapp-web-inbound-flat-message-aliases",
+    file: "extensions/whatsapp/src/inbound/types.ts",
+    marker: "DeprecatedWebInboundMessageFlatAliases",
+  },
+  {
+    code: "whatsapp-web-inbound-admission-top-level-fields",
+    file: "extensions/whatsapp/src/inbound/types.ts",
+    marker: "DeprecatedWebInboundAdmissionTopLevelFields",
+  },
 ] as const;
 
 function parseDate(date: string): Date {

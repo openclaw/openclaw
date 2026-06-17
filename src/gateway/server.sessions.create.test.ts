@@ -82,6 +82,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(sessionFile).toBe(rawStore[key]?.sessionFile);
 
   const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
+  await expect(fs.realpath(sessionFile)).resolves.toBe(await fs.realpath(transcriptPath));
   const transcript = await fs.readFile(transcriptPath, "utf-8");
   const [headerLine] = transcript.trim().split(/\r?\n/, 1);
   const header = JSON.parse(headerLine) as { type?: string; id?: string };
@@ -254,6 +255,40 @@ test("sessions.create replaces a dead main entry with a fresh session id", async
     >;
     expect(rawStore["agent:ops:main"]?.sessionId).toBe(created.payload?.sessionId);
     expect(rawStore["agent:ops:main"]?.sessionFile).not.toBe("stale.jsonl");
+  } finally {
+    testState.agentsConfig = undefined;
+  }
+});
+
+test("sessions.create rolls back the entry when transcript initialization fails", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  const blockerPath = path.join(dir, "blocked");
+  await fs.writeFile(blockerPath, "not a directory", "utf-8");
+  try {
+    await writeSessionStore({
+      agentId: "ops",
+      entries: {
+        main: {
+          sessionFile: "blocked/session-1.jsonl",
+          sessionId: "session-1",
+          updatedAt: 1,
+        },
+      },
+    });
+
+    const created = await directSessionReq("sessions.create", {
+      key: "main",
+      agentId: "ops",
+    });
+
+    expect(created.ok).toBe(false);
+    expect((created.error as { code?: string } | undefined)?.code).toBe("UNAVAILABLE");
+    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "failed to create session transcript:",
+    );
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+    expect(rawStore["agent:ops:main"]).toBeUndefined();
   } finally {
     testState.agentsConfig = undefined;
   }

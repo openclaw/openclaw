@@ -63,6 +63,14 @@ describe("createDiscordRestClient", () => {
     expect(result.account.config.retry).toEqual({ attempts: 7 });
   });
 
+  it("applies a caller timeout to a dedicated REST client", () => {
+    const cfg = { channels: { discord: { token: "discord-token" } } } as OpenClawConfig;
+
+    const result = createDiscordRestClient({ cfg, timeoutMs: 250 });
+
+    expect(result.rest.options.timeout).toBe(250);
+  });
+
   it("still fails closed when no explicit token is provided and config token is unresolved", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {

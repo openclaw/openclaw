@@ -10,14 +10,22 @@ const mocks = vi.hoisted(() => {
     clackSelect: vi.fn(),
     clackText: vi.fn(),
     clackConfirm: vi.fn(),
+    clackPassword: vi.fn(),
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
+    assertConfigPathForWrite: vi.fn(),
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
-    replaceConfigFile: vi.fn(async (params: { nextConfig: unknown }) => {
-      await writeConfigFile(params.nextConfig);
-    }),
+    replaceConfigFile: vi.fn(
+      async (params: {
+        nextConfig: unknown;
+        writeOptions?: { assertConfigPathForWrite?: () => void };
+      }) => {
+        params.writeOptions?.assertConfigPathForWrite?.();
+        await writeConfigFile(params.nextConfig);
+      },
+    ),
     resolveGatewayPort: vi.fn(),
     ensureControlUiAssetsBuilt: vi.fn(),
     createClackPrompter: vi.fn(),
@@ -46,11 +54,32 @@ vi.mock("@clack/prompts", () => ({
   select: mocks.clackSelect,
   text: mocks.clackText,
   confirm: mocks.clackConfirm,
+  password: mocks.clackPassword,
 }));
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "~/.openclaw/openclaw.json",
+  createConfigIO: () => ({
+    readConfigFileSnapshotForWrite: async () => ({
+      snapshot: await mocks.readConfigFileSnapshot(),
+      writeOptions: {
+        assertConfigPathForWrite: mocks.assertConfigPathForWrite,
+        expectedConfigPath: "/tmp/openclaw.json",
+        ownedConfigPathForWrite: "/tmp/openclaw.json",
+      },
+    }),
+  }),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: async () => ({
+    snapshot: await mocks.readConfigFileSnapshot(),
+    writeOptions: {
+      assertConfigPathForWrite: mocks.assertConfigPathForWrite,
+      envSnapshotForRestore: { SECRET: "resolved-secret" },
+      expectedConfigPath: "/tmp/openclaw.json",
+      includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
+      ownedConfigPathForWrite: "/tmp/openclaw.json",
+    },
+  }),
   writeConfigFile: mocks.writeConfigFile,
   replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
@@ -263,6 +292,7 @@ async function runWebConfigureWizard() {
 describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertConfigPathForWrite.mockImplementation(() => {});
     mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
     mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
@@ -298,6 +328,16 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure" }, createRuntime());
 
     expect(getGateway(requireWriteConfig()).mode).toBe("local");
+    const replaceParams = requireRecord(
+      mockCallArg(mocks.replaceConfigFile, "replaceConfigFile"),
+      "replace config params",
+    );
+    const writeOptions = requireRecord(replaceParams.writeOptions, "write options");
+    expect(Object.keys(writeOptions).toSorted()).toEqual([
+      "assertConfigPathForWrite",
+      "expectedConfigPath",
+      "ownedConfigPathForWrite",
+    ]);
   });
   it("keeps startup gateway hint probes bounded", async () => {
     setupBaseWizardState({
@@ -669,5 +709,35 @@ describe("runConfigureWizard", () => {
     const pluginConfig = requireRecord(githubCopilot.config, "github-copilot config");
     expect(pluginConfig.region).toBe("us-east-1");
     expect(pluginConfig.accessToken).toBe("plugin-wrote-this");
+  });
+
+  it("does not retry after config path ownership changes", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: [],
+      confirm: [],
+    });
+    mocks.assertConfigPathForWrite.mockImplementation(() => {
+      throw new ConfigMutationConflictError("config path changed since last load", {
+        currentHash: null,
+        retryable: false,
+      });
+    });
+    mocks.replaceConfigFile.mockImplementation(
+      async (params: {
+        nextConfig: unknown;
+        writeOptions?: { assertConfigPathForWrite?: () => void };
+      }) => {
+        params.writeOptions?.assertConfigPathForWrite?.();
+        await mocks.writeConfigFile(params.nextConfig);
+      },
+    );
+
+    await expect(
+      runConfigureWizard({ command: "configure", sections: ["workspace"] }, createRuntime()),
+    ).rejects.toThrow("config path changed since last load");
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
   });
 });

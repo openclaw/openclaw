@@ -15,6 +15,7 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -25,7 +26,6 @@ import {
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
-  type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
@@ -185,6 +185,7 @@ type DiscordQaScenarioResult = {
   artifactPaths?: Record<string, string>;
   id: string;
   title: string;
+  standardId?: string;
   status: "pass" | "fail";
   details: string;
   requestStartedAt?: string;
@@ -205,33 +206,6 @@ type DiscordQaRunResult = {
   summaryPath: string;
   observedMessagesPath: string;
   gatewayDebugDirPath?: string;
-  scenarios: DiscordQaScenarioResult[];
-};
-
-type DiscordQaSummary = {
-  artifacts: {
-    observedMessagesPath: string;
-    reactionTimelinesPath?: string;
-    reportPath: string;
-    summaryPath: string;
-  };
-  credentials: {
-    credentialId?: string;
-    kind: string;
-    ownerId?: string;
-    role?: QaCredentialRole;
-    source: "convex" | "env";
-  };
-  guildId: string;
-  channelId: string;
-  startedAt: string;
-  finishedAt: string;
-  cleanupIssues: string[];
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-  };
   scenarios: DiscordQaScenarioResult[];
 };
 
@@ -1302,6 +1276,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
+      standardId: params.scenario.standardId,
       status,
       details:
         status === "pass"
@@ -1691,6 +1666,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "native command registered"
@@ -1712,6 +1688,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "SUT bot joined voice channel"
@@ -1766,6 +1743,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: missing.length === 0 ? "pass" : "fail",
               details:
                 missing.length === 0
@@ -1811,6 +1789,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
+            standardId: scenario.standardId,
             status: "pass",
             details: redactPublicMetadata
               ? "reply matched"
@@ -1838,6 +1817,7 @@ export async function runDiscordQaLive(params: {
               scenarioResults.push({
                 id: scenario.id,
                 title: scenario.title,
+                standardId: scenario.standardId,
                 status: "pass",
                 details: "no reply",
               });
@@ -1847,6 +1827,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
+            standardId: scenario.standardId,
             status: "fail",
             details: formatErrorMessage(error),
           });
@@ -1879,40 +1860,29 @@ export async function runDiscordQaLive(params: {
   const publishedCleanupIssues = redactPublicMetadata
     ? redactQaLiveLaneIssues(cleanupIssues)
     : cleanupIssues;
-  const passedCount = scenarioResults.filter((entry) => entry.status === "pass").length;
-  const failedCount = scenarioResults.filter((entry) => entry.status === "fail").length;
-  const summary: DiscordQaSummary = {
-    artifacts: {
-      reportPath: path.join(outputDir, "discord-qa-report.md"),
-      summaryPath: path.join(outputDir, "discord-qa-summary.json"),
-      observedMessagesPath: path.join(outputDir, "discord-qa-observed-messages.json"),
-      ...(reactionTimelines.length > 0
-        ? { reactionTimelinesPath: path.join(outputDir, "discord-qa-reaction-timelines.json") }
-        : {}),
-    },
-    credentials: {
-      source: credentialLease.source,
-      kind: credentialLease.kind,
-      role: credentialLease.role,
-      ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
-      credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
-    },
-    guildId: redactPublicMetadata ? "<redacted>" : runtimeEnv.guildId,
-    channelId: redactPublicMetadata ? "<redacted>" : runtimeEnv.channelId,
-    startedAt,
-    finishedAt,
-    cleanupIssues: publishedCleanupIssues,
-    counts: {
-      total: scenarioResults.length,
-      passed: passedCount,
-      failed: failedCount,
-    },
-    scenarios: scenarioResults,
-  };
   const reportPath = path.join(outputDir, "discord-qa-report.md");
-  const summaryPath = path.join(outputDir, "discord-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "discord-qa-observed-messages.json");
   const reactionTimelinesPath = path.join(outputDir, "discord-qa-reaction-timelines.json");
+  const evidence = buildLiveTransportEvidenceSummary({
+    artifactPaths: [
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
+      ...(reactionTimelines.length > 0
+        ? [{ kind: "reaction-timelines", path: path.basename(reactionTimelinesPath) }]
+        : []),
+    ],
+    checks: scenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.discord.${standardId}`] : undefined,
+    })),
+    env: process.env,
+    generatedAt: finishedAt,
+    primaryModel,
+    providerMode,
+    transportId: "discord",
+  });
   await fs.writeFile(
     reportPath,
     `${renderDiscordQaMarkdown({
@@ -1928,7 +1898,7 @@ export async function runDiscordQaLive(params: {
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+  await fs.writeFile(summaryPath, `${JSON.stringify(evidence, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });

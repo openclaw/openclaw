@@ -2,4 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-exec pnpm --dir "$ROOT_DIR" exec tsx scripts/e2e/parallels/linux-smoke.ts "$@"
+cd "$ROOT_DIR"
+if command -v pnpm >/dev/null 2>&1; then
+  exec pnpm exec tsx scripts/e2e/parallels/linux-smoke.ts "$@"
+fi
+exec node --import tsx scripts/e2e/parallels/linux-smoke.ts "$@"

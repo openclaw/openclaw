@@ -631,6 +631,7 @@ read without importing the plugin runtime.
 {
   "contracts": {
     "agentToolResultMiddleware": ["openclaw", "codex"],
+    "trustedToolPolicies": ["workflow-budget"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
@@ -651,32 +652,41 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                                                        |
-| -------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for.                                |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                      |
-| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory. |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                        |
-| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                  |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                   |
-| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                     |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                      |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                      |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                             |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                            |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                         |
-| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.  |
-| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                   |
+| Field                            | Type       | What it means                                                                                                                        |
+| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
+| `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
+| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                                |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                                      |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex
 app-server-only extension factories. Bundled tool-result transforms should
 declare `contracts.agentToolResultMiddleware` and register with
-`api.registerAgentToolResultMiddleware(...)` instead. External plugins cannot
-register tool-result middleware because the seam can rewrite high-trust tool
-output before the model sees it.
+`api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use
+the same middleware seam only when explicitly enabled and only for runtimes they
+declare in `contracts.agentToolResultMiddleware`.
+
+Installed plugins that need the host-trusted pre-tool policy tier must declare
+each registered local id in `contracts.trustedToolPolicies` and be explicitly
+enabled. Bundled plugins keep the existing trusted-policy path, but installed
+plugins with undeclared policy ids are rejected before registration. Policy ids
+are scoped to the registering plugin, so two plugins may both declare and
+register `workflow-budget`; a single plugin may not register the same local id
+twice.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
 Tool discovery uses this list to load only the plugin runtimes that can own the
@@ -1268,6 +1278,7 @@ Important examples:
 | `openclaw.compat.pluginApi`                                                                | Minimum OpenClaw plugin API range required by this package, using a semver floor like `>=2026.5.27`.                                                                                 |
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
 | `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
+| `openclaw.install.requiredPlatformPackages`                                                | npm package aliases that must materialize when their lockfile platform constraints match the current host.                                                                           |
 | `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                 |
 
 Manifest metadata decides which provider/channel/setup choices appear in
@@ -1279,6 +1290,13 @@ choices. Do not move install hints into `openclaw.plugin.json`.
 registry loading for non-bundled plugin sources. Invalid values are rejected;
 newer-but-valid values skip external plugins on older hosts. Bundled source
 plugins are assumed to be co-versioned with the host checkout.
+
+`openclaw.install.requiredPlatformPackages` is for npm packages that expose
+required native binaries through optional, platform-specific aliases. List the
+bare npm package name for every supported platform alias. During npm install,
+OpenClaw verifies only the declared alias whose lockfile constraints match the
+current host. If npm reports success but omits that alias, OpenClaw retries once
+with a fresh cache and rolls back the install if the alias is still missing.
 
 `openclaw.compat.pluginApi` is enforced during package install for non-bundled
 plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the

@@ -38,6 +38,7 @@ import {
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
+  sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
@@ -156,6 +157,15 @@ function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
+function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): boolean {
+  return (
+    ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+    (ctx.state.messageToolOnlySourceReplyDelivered ||
+      ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
+      (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
+  );
+}
+
 function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
   if (ctx.blockChunker) {
     ctx.blockChunker.append(chunk);
@@ -203,7 +213,7 @@ function resolveAssistantTextChunk(params: {
   return "";
 }
 
-const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
+const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
 
 function resolveStreamVisibleText(params: {
   previousRawText: string;
@@ -216,6 +226,22 @@ function resolveStreamVisibleText(params: {
   }
   const rawText = `${params.previousRawText}${params.visibleDelta}`;
   return { rawText, visibleText: rawText.trim() };
+}
+
+function resolveTextAppendDelta(previousText: string, nextText: string): string {
+  if (!nextText) {
+    return "";
+  }
+  if (!previousText) {
+    return nextText;
+  }
+  if (nextText.startsWith(previousText)) {
+    return nextText.slice(previousText.length);
+  }
+  if (previousText.startsWith(nextText)) {
+    return "";
+  }
+  return nextText;
 }
 
 function copyPartialBlockState(
@@ -245,7 +271,7 @@ function copyPartialBlockState(
 }
 
 /** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-export function resolveSilentReplyFallbackText(params: {
+function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
@@ -449,7 +475,7 @@ function resolveStreamingReplyText(params: {
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
-export function recordPendingAssistantReplyDirectives(
+function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
 ) {
@@ -503,7 +529,7 @@ export function hasAssistantVisibleReply(params: {
 }
 
 /** Builds normalized stream payload data for assistant visible output. */
-export function buildAssistantStreamData(params: {
+function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
   replace?: boolean;
@@ -563,6 +589,7 @@ export function handleMessageUpdate(
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
+  const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantPhase = resolveAssistantMessagePhase(msg);
@@ -580,7 +607,10 @@ export function handleMessageUpdate(
   }
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
-    if (evtType === "thinking_start" || evtType === "thinking_delta") {
+    if (
+      !suppressMessageToolOnlySourceReplyOutput &&
+      (evtType === "thinking_start" || evtType === "thinking_delta")
+    ) {
       openReasoningStream(ctx);
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
@@ -595,12 +625,12 @@ export function handleMessageUpdate(
       delta: thinkingDelta,
       content: thinkingContent,
     });
-    if (ctx.state.streamReasoning) {
+    if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {
       // Prefer full partial-message thinking when available; fall back to event payloads.
       const partialThinking = extractAssistantThinking(msg);
       ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     }
-    if (evtType === "thinking_end") {
+    if (!suppressMessageToolOnlySourceReplyOutput && evtType === "thinking_end") {
       if (!ctx.state.reasoningStreamOpen) {
         openReasoningStream(ctx);
       }
@@ -647,9 +677,11 @@ export function handleMessageUpdate(
     !deliveryPhase &&
     Boolean(streamItemId) &&
     isOpenAiResponsesAssistantMessage(partialAssistant);
+  let streamItemChanged = false;
   if ((deliveryPhase || isPhasePendingOpenAiResponsesTextItem) && streamItemId) {
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
     if (previousStreamItemId && previousStreamItemId !== streamItemId) {
+      streamItemChanged = true;
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
       ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
       void ctx.params.onAssistantMessageStart?.();
@@ -671,17 +703,35 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.state.streamReasoning) {
+  if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
-  let next = shouldUsePhaseAwareBlockReply
+  const shouldReadPhaseAwarePartialText =
+    shouldUsePhaseAwareBlockReply && (streamItemChanged || evtType === "text_end" || !chunk);
+  let next = shouldReadPhaseAwarePartialText
     ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
     : "";
   let nextRawStreamText = next;
-  if (!next && deliveryPhase !== "final_answer") {
+  let shouldPersistRawStreamText = false;
+  if (shouldUsePhaseAwareBlockReply && !next && deliveryPhase === "final_answer" && chunk) {
+    visibleDelta = ctx.stripBlockTags(chunk, ctx.state.partialBlockState, {
+      final: evtType === "text_end",
+    });
+    const streamVisibleText = resolveStreamVisibleText({
+      previousRawText: ctx.state.lastStreamedAssistant ?? "",
+      visibleDelta,
+    });
+    const previousVisibleText = sanitizeAssistantVisibleStreamText(
+      ctx.state.lastStreamedAssistant ?? "",
+    ).trim();
+    next = sanitizeAssistantVisibleStreamText(streamVisibleText.rawText).trim();
+    visibleDelta = resolveTextAppendDelta(previousVisibleText, next);
+    nextRawStreamText = streamVisibleText.rawText;
+    shouldPersistRawStreamText = true;
+  } else if (!next && deliveryPhase !== "final_answer") {
     const pendingTagFragment = ctx.state.partialBlockState.pendingTagFragment;
     const shouldRecomputeFullStream = Boolean(pendingTagFragment) || REASONING_TAG_RE.test(chunk);
     if (shouldRecomputeFullStream) {
@@ -727,11 +777,19 @@ export function handleMessageUpdate(
     });
   }
   if (next) {
-    if (!wasThinking && ctx.state.partialBlockState.thinking) {
+    if (
+      !suppressMessageToolOnlySourceReplyOutput &&
+      !wasThinking &&
+      ctx.state.partialBlockState.thinking
+    ) {
       openReasoningStream(ctx);
     }
     // Detect when thinking block ends (</think> tag processed)
-    if (wasThinking && !ctx.state.partialBlockState.thinking) {
+    if (
+      !suppressMessageToolOnlySourceReplyOutput &&
+      wasThinking &&
+      !ctx.state.partialBlockState.thinking
+    ) {
       emitReasoningEnd(ctx);
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
@@ -785,7 +843,11 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistant = nextRawStreamText;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
-    if (ctx.params.silentExpected || suppressDeterministicApprovalOutput) {
+    if (
+      ctx.params.silentExpected ||
+      suppressDeterministicApprovalOutput ||
+      suppressMessageToolOnlySourceReplyOutput
+    ) {
       shouldEmit = false;
     }
 
@@ -800,11 +862,14 @@ export function handleMessageUpdate(
       ctx.emitAssistantStreamData(data, { emitPartialReply: true });
       ctx.state.emittedAssistantUpdate = true;
     }
+  } else if (shouldPersistRawStreamText) {
+    ctx.state.lastStreamedAssistant = nextRawStreamText;
   }
 
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
+    !suppressMessageToolOnlySourceReplyOutput &&
     ctx.params.onBlockReply &&
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
@@ -815,6 +880,7 @@ export function handleMessageUpdate(
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
+    !suppressMessageToolOnlySourceReplyOutput &&
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
@@ -841,6 +907,7 @@ export function handleMessageEnd(
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
+  const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
@@ -926,6 +993,7 @@ export function handleMessageEnd(
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
+    !suppressMessageToolOnlySourceReplyOutput &&
     (cleanedText || hasMedia) &&
     (!ctx.state.emittedAssistantUpdate ||
       shouldReplaceFinalStream ||
@@ -959,6 +1027,7 @@ export function handleMessageEnd(
   const shouldEmitReasoning = Boolean(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
+    !suppressMessageToolOnlySourceReplyOutput &&
     ctx.state.includeReasoning &&
     trimmedReasoning &&
     onBlockReply &&
@@ -1014,6 +1083,7 @@ export function handleMessageEnd(
   if (
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
+    !suppressMessageToolOnlySourceReplyOutput &&
     text &&
     onBlockReply &&
     (ctx.state.blockReplyBreak === "message_end" ||
@@ -1093,11 +1163,21 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (!ctx.params.silentExpected && ctx.state.streamReasoning && rawThinking) {
+  if (
+    !ctx.params.silentExpected &&
+    !suppressMessageToolOnlySourceReplyOutput &&
+    ctx.state.streamReasoning &&
+    rawThinking
+  ) {
     ctx.emitReasoningStream(rawThinking);
   }
 
-  if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
+  if (
+    !ctx.params.silentExpected &&
+    !suppressMessageToolOnlySourceReplyOutput &&
+    ctx.state.blockReplyBreak === "text_end" &&
+    onBlockReply
+  ) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 

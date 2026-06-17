@@ -14,7 +14,7 @@ export type StatefulBindingTargetSessionResult =
   | { ok: true; sessionKey: string }
   | { ok: false; sessionKey: string; error: string };
 export type StatefulBindingTargetResetResult =
-  | { ok: true }
+  | { ok: true; sessionKey?: string; sessionId?: string; storePath?: string }
   | { ok: false; skipped?: boolean; error?: string };
 
 /** Driver contract for lifecycle operations on one stateful target family. */

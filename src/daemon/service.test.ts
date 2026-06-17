@@ -40,9 +40,21 @@ describe("resolveGatewayService", () => {
     expect(service.loadedText).toBe(loadedText);
   });
 
-  it("throws for unsupported platforms", () => {
+  it("returns a read-only unsupported-platform adapter", async () => {
     setPlatform("aix");
-    expect(() => resolveGatewayService()).toThrow("Gateway service install not supported on aix");
+    const service = resolveGatewayService();
+
+    await expect(service.readCommand(process.env)).resolves.toBeNull();
+    await expect(service.isLoaded({ env: process.env })).rejects.toThrow(
+      "Gateway service install not supported on aix",
+    );
+    await expect(service.readRuntime(process.env)).resolves.toEqual({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+    await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
+      "Gateway service install not supported on aix",
+    );
   });
 
   it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {

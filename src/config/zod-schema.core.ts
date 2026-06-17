@@ -230,6 +230,7 @@ const ModelCompatSchema = z
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
@@ -347,6 +348,21 @@ const ModelMediaInputSchema = z
   })
   .strict();
 
+// Mirrors the runtime ThinkingLevelMap contract (model-registry TypeBox schema). Persisted model
+// entries carry thinkingLevelMap, so the strict config schema must accept it or updateConfig rolls back.
+const ThinkingLevelMapValueSchema = z.string().nullable();
+const ThinkingLevelMapSchema = z
+  .object({
+    off: ThinkingLevelMapValueSchema.optional(),
+    minimal: ThinkingLevelMapValueSchema.optional(),
+    low: ThinkingLevelMapValueSchema.optional(),
+    medium: ThinkingLevelMapValueSchema.optional(),
+    high: ThinkingLevelMapValueSchema.optional(),
+    xhigh: ThinkingLevelMapValueSchema.optional(),
+    max: ThinkingLevelMapValueSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -384,6 +400,7 @@ const ModelDefinitionSchema = z
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    thinkingLevelMap: ThinkingLevelMapSchema.optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
@@ -768,7 +785,9 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    jsonlDialect: z.literal("claude-stream-json").optional(),
+    jsonlDialect: z
+      .union([z.literal("claude-stream-json"), z.literal("gemini-stream-json")])
+      .optional(),
     liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
@@ -815,6 +834,31 @@ export const CliBackendSchema = z
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   normalizeStringEntries(values);
 
+/**
+ * Closed set of sender-policy/allowFrom dependency violations. Both cases drop
+ * every inbound DM at runtime, so callers surface them as config problems.
+ */
+export type DmPolicyAllowFromViolation = "open_requires_wildcard" | "allowlist_requires_entries";
+
+/**
+ * Canonical cross-field check for dmPolicy vs allowFrom. This is the single
+ * source of truth shared by the Zod schema refinements and the CLI config
+ * validator so the rule cannot drift between the two surfaces.
+ */
+export const evaluateDmPolicyAllowFromDependency = (params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+}): DmPolicyAllowFromViolation | null => {
+  const allow = normalizeAllowFrom(params.allowFrom);
+  if (params.policy === "open" && !allow.includes("*")) {
+    return "open_requires_wildcard";
+  }
+  if (params.policy === "allowlist" && allow.length === 0) {
+    return "allowlist_requires_entries";
+  }
+  return null;
+};
+
 export const requireOpenAllowFrom = (params: {
   policy?: string;
   allowFrom?: Array<string | number>;
@@ -822,11 +866,10 @@ export const requireOpenAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "open") {
-    return;
-  }
-  const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.includes("*")) {
+  if (
+    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
+    "open_requires_wildcard"
+  ) {
     return;
   }
   params.ctx.addIssue({
@@ -848,11 +891,10 @@ export const requireAllowlistAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "allowlist") {
-    return;
-  }
-  const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.length > 0) {
+  if (
+    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
+    "allowlist_requires_entries"
+  ) {
     return;
   }
   params.ctx.addIssue({
