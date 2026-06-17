@@ -473,12 +473,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/cohere:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/cerebras:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -546,6 +540,12 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/cohere:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -9244,7 +9244,7 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/api-logs': 0.219.0
-      import-in-the-middle: 3.0.1
+      import-in-the-middle: 3.0.2
       require-in-the-middle: 8.0.1
     transitivePeerDependencies:
       - supports-color
@@ -10743,7 +10743,7 @@ snapshots:
       fs-extra: 11.3.5
       node-api-headers: 1.9.0
       rc: 1.2.8
-      semver: 7.8.2
+      semver: 7.8.4
       tar: 7.5.16
       url-join: 4.0.1
       which: 6.0.1
