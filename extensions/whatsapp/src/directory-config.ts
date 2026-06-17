@@ -1,11 +1,15 @@
 // Whatsapp helper module supports directory config behavior.
 import {
+  applyDirectoryQueryAndLimit,
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,
+  type ChannelDirectoryEntry,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-config-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
+import { resolveWebAccountId } from "./active-listener.js";
+import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 
 type WhatsAppDirectoryAccount = WhatsAppAccountConfig & { accountId: string };
@@ -37,5 +41,36 @@ export async function listWhatsAppDirectoryGroupsFromConfig(params: DirectoryCon
     ...params,
     resolveAccount: resolveWhatsAppDirectoryAccount,
     resolveGroups: (account) => account.groups,
+  });
+}
+
+export async function listWhatsAppDirectoryGroupsLive(
+  params: DirectoryConfigParams,
+): Promise<ChannelDirectoryEntry[]> {
+  const accountId = resolveWebAccountId({ cfg: params.cfg, accountId: params.accountId });
+  const controller = getRegisteredWhatsAppConnectionController(accountId);
+  const sock = controller?.getCurrentSock() ?? null;
+
+  if (!sock) {
+    return listWhatsAppDirectoryGroupsFromConfig(params);
+  }
+
+  let groups: Record<string, { id: string; subject?: string } | undefined>;
+  try {
+    groups = (await sock.groupFetchAllParticipating()) ?? {};
+  } catch {
+    return listWhatsAppDirectoryGroupsFromConfig(params);
+  }
+
+  const jids = Object.keys(groups);
+  const filtered = applyDirectoryQueryAndLimit(jids, params);
+
+  return filtered.map((jid) => {
+    const meta = groups[jid];
+    return {
+      kind: "group" as const,
+      id: jid,
+      name: meta?.subject,
+    };
   });
 }
