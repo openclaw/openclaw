@@ -561,6 +561,59 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not hash replay targets after they are replaced with symlinks",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-hash-symlink-race-" },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          const outsidePath = path.join(base, "outside.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+          const plan = await captureLocalPackageOverrides({ packageRoot });
+          expect(plan).not.toBeNull();
+          await writePackageRoot(packageRoot, "2.0.0");
+          await fs.writeFile(outsidePath, "export const outside = true;\n", "utf8");
+          const realIndexPath = await fs.realpath(indexPath);
+
+          let targetReplaced = false;
+          __setFsSafeTestHooksForTest({
+            afterPreOpenLstat: async (filePath) => {
+              if (!targetReplaced && filePath === realIndexPath) {
+                targetReplaced = true;
+                await fs.rm(indexPath);
+                await fs.symlink(outsidePath, indexPath, "file");
+              }
+            },
+          });
+
+          try {
+            const result = await applyLocalPackageOverrides({
+              packageRoot,
+              plan,
+              reapply: true,
+            });
+
+            expect(targetReplaced).toBe(true);
+            expect(result.status).toBe("conflict");
+            expect(result.applied).toBe(0);
+            expect(result.conflicts).toEqual([
+              { path: "dist/index.js", reason: "target-inspection-failed" },
+            ]);
+            await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe(
+              "export const outside = true;\n",
+            );
+          } finally {
+            __setFsSafeTestHooksForTest(undefined);
+          }
+        },
+      );
+    },
+  );
+
   it.runIf(process.platform !== "win32").each(["modified", "deleted"] as const)(
     "does not reapply %s overrides over upstream mode changes",
     async (overrideKind) => {

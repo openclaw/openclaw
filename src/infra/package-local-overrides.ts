@@ -5,7 +5,7 @@ import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "./errors.js";
-import { root as openFsRoot } from "./fs-safe.js";
+import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
 import {
   collectPackageDistInventory,
   isLegacyContentInventoryCompatVersion,
@@ -258,9 +258,21 @@ async function assertLocalOverrideMutationTopology(params: {
   }
 }
 
-async function hashFileSha256(filePath: string): Promise<string> {
-  const content = await fs.readFile(filePath);
-  return createHash("sha256").update(content).digest("hex");
+async function inspectLocalOverrideTarget(params: {
+  packageFs: LocalOverridePackageRoot;
+  relativePath: string;
+  expectedSize: number;
+}): Promise<{ mode: number; sha256: string }> {
+  const target = await params.packageFs.read(params.relativePath, {
+    hardlinks: "reject",
+    maxBytes: params.expectedSize,
+    nonBlockingRead: true,
+    symlinks: "reject",
+  });
+  return {
+    mode: normalizeFileMode(target.stat.mode),
+    sha256: createHash("sha256").update(target.buffer).digest("hex"),
+  };
 }
 
 async function buildLocalOverrideInventoryEntry(params: {
@@ -933,6 +945,11 @@ async function preflightLocalOverrides(params: {
   const nextInventory = buildCurrentInventoryMap(
     await readPackageDistContentInventoryIfPresent(params.packageRoot),
   );
+  const packageFs = await openFsRoot(params.packageRoot, {
+    hardlinks: "reject",
+    nonBlockingRead: true,
+    symlinks: "reject",
+  });
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];
   const targetProbes = new Map<string, LocalPackageOverrideTargetProbe>();
   for (const change of params.plan.changes) {
@@ -976,19 +993,29 @@ async function preflightLocalOverrides(params: {
       conflicts.push({ path: change.path, reason: "target-hardlinked" });
       continue;
     }
-    let targetSha: string;
+    let targetInspection: { mode: number; sha256: string };
     try {
       // Package verification runs earlier; rehash at replay preflight so later mutations fail closed.
-      targetSha = await hashFileSha256(targetPath);
-    } catch {
-      conflicts.push({ path: change.path, reason: "target-inspection-failed" });
+      targetInspection = await inspectLocalOverrideTarget({
+        packageFs,
+        relativePath: change.path,
+        expectedSize: nextEntry.size,
+      });
+    } catch (error) {
+      conflicts.push({
+        path: change.path,
+        reason:
+          error instanceof FsSafeError && error.code === "too-large"
+            ? "target-changed"
+            : "target-inspection-failed",
+      });
       continue;
     }
     if (
       nextEntry.sha256 !== change.baseline.sha256 ||
-      targetSha !== nextEntry.sha256 ||
+      targetInspection.sha256 !== nextEntry.sha256 ||
       !fileModesHaveSameExecutableSemantics(nextEntry.mode, change.baseline.mode) ||
-      !fileModesHaveSameExecutableSemantics(targetProbe.mode, nextEntry.mode)
+      !fileModesHaveSameExecutableSemantics(targetInspection.mode, nextEntry.mode)
     ) {
       conflicts.push({ path: change.path, reason: "target-changed" });
     }
