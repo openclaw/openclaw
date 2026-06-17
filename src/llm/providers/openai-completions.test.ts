@@ -450,6 +450,116 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("applies cache_control for LiteLLM Claude models when cacheRetention is explicit", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "claude-sonnet-4-6",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.com/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        cacheRetention: "short",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Dynamic suffix",
+        },
+      ],
+    });
+  });
+
+  it("does NOT inject cache_control for LiteLLM Claude models without explicit cacheRetention", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "claude-sonnet-4-6",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.com/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // Without explicit cacheRetention, system prompt is plain text (no cache_control markers)
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nDynamic suffix",
+    });
+  });
+
+  it("does not affect non-Claude LiteLLM models regardless of cacheRetention", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "gpt-4",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.com/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        cacheRetention: "short",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // Non-Claude model on LiteLLM should not get cache_control
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nDynamic suffix",
+    });
+  });
+
   it("adds reasoning_content replay fields for Xiaomi MiMo assistant tool history", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(

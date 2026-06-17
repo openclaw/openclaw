@@ -105,6 +105,8 @@ type ResolvedOpenAICompletionsCompat = Omit<
   "cacheControlFormat"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  /** When true, cache_control markers are only injected if the caller passed explicit cacheRetention. */
+  requiresExplicitCacheConfig?: boolean;
 };
 
 type ChatCompletionInstructionMessageParam =
@@ -598,7 +600,11 @@ function buildParams(
   compat: ResolvedOpenAICompletionsCompat = getCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
-  const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  const cacheControl = getCompatCacheControl(
+    compat,
+    cacheRetention,
+    options?.cacheRetention !== undefined,
+  );
   const messages = convertMessages(model, context, compat, {
     preserveSystemPromptCacheBoundary: cacheControl !== undefined,
   });
@@ -778,8 +784,12 @@ function clampOpenAICompletionsMaxTokens(
 function getCompatCacheControl(
   compat: ResolvedOpenAICompletionsCompat,
   cacheRetention: CacheRetention,
+  hasExplicitCacheConfig: boolean,
 ): OpenAICompatCacheControl | undefined {
   if (compat.cacheControlFormat !== "anthropic" || cacheRetention === "none") {
+    return undefined;
+  }
+  if (compat.requiresExplicitCacheConfig && !hasExplicitCacheConfig) {
     return undefined;
   }
 
@@ -1338,6 +1348,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     zaiToolStream: false,
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
+    requiresExplicitCacheConfig: isLiteLLM,
     sendSessionAffinityHeaders: false,
     supportsPromptCacheKey: false,
     supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
