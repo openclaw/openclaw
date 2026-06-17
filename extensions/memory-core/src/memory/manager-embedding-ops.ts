@@ -787,12 +787,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           });
         }
         if (this.fts.enabled && this.fts.available) {
+          // Path prefix keeps filename/date tokens in FTS text for hybrid keyword ranking.
+          const ftsText = `${entry.path}\n${chunk.text}`;
           this.db
             .prepare(
               `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
                 ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+            .run(ftsText, id, entry.path, source, model, chunk.startLine, chunk.endLine);
         }
       }
       this.upsertFileRecord(entry, source);
