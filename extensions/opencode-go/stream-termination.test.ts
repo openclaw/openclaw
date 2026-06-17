@@ -110,17 +110,22 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       idleTimeoutMs: 5_000,
     });
 
-    const downstream = wrapper(
-      { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
-      {} as any,
-      {} as any,
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
+        {} as any,
+        {} as any,
+      ),
     );
     expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
 
     // Drain wrapper events in the background.
     const received: AnyEvent[] = [];
     const consumer = (async () => {
-      for await (const event of downstream!) {
+      for await (const event of downstream) {
         received.push(event);
       }
     })();
@@ -181,16 +186,21 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       idleTimeoutMs: 5_000,
     });
 
-    const downstream = wrapper(
-      { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
-      {} as any,
-      {} as any,
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
+        {} as any,
+        {} as any,
+      ),
     );
     expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
 
     const received: AnyEvent[] = [];
     const consumer = (async () => {
-      for await (const event of downstream!) {
+      for await (const event of downstream) {
         received.push(event);
       }
     })();

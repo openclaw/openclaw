@@ -199,7 +199,7 @@ export function createOpencodeGoStalledStreamWrapper(
       controller.signal,
     ]);
     const wrappedOptions = {
-      ...(callOptions ?? {}),
+      ...callOptions,
       signal: injectedSignal,
     };
 
