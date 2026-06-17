@@ -117,13 +117,11 @@ jobs:
           if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
             expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
             actual_closeout_digest="$(sha256sum "$closeout_json_path" | awk '{print $1}')"
-            if [[ "$expected_closeout_digest" =~ ^[0-9a-f]{64}$ &&
-              "$expected_closeout_digest" == "$actual_closeout_digest" ]]; then
-              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
-              exit 0
+            if [[ ! "$expected_closeout_digest" =~ ^[0-9a-f]{64}$ ||
+              "$expected_closeout_digest" != "$actual_closeout_digest" ]]; then
+              echo "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it." >&2
+              exit 1
             fi
-            echo "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it." >&2
-            exit 1
           fi
           if [[ -f "$closeout_checksum_path" ]]; then
             echo "Stable closeout evidence for $tag has a checksum without its manifest; refusing to repair it." >&2
@@ -131,12 +129,16 @@ jobs:
           fi
           if [[ -f "$closeout_json_path" ]]; then
             existing_closeout_tag="$(jq -r '.releaseTag // empty' "$closeout_json_path")"
+            existing_closeout_version="$(jq -r '.releaseVersion // empty' "$closeout_json_path")"
+            existing_closeout_release_tag_sha="$(jq -r '.releaseTagSha // empty' "$closeout_json_path")"
             existing_closeout_main_ref="$(jq -r '.mainSha // empty' "$closeout_json_path")"
             existing_closeout_full_release_validation_run_id="$(jq -r '.fullReleaseValidationRunId // empty' "$closeout_json_path")"
             existing_closeout_release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$closeout_json_path")"
             existing_closeout_rollback_drill_id="$(jq -r '.rollbackDrill.id // empty' "$closeout_json_path")"
             existing_closeout_rollback_drill_date="$(jq -r '.rollbackDrill.date // empty' "$closeout_json_path")"
             if [[ "$existing_closeout_tag" != "$tag" ||
+              "$existing_closeout_version" != "$tag_package_version" ||
+              ! "$existing_closeout_release_tag_sha" =~ ^[0-9a-f]{40}$ ||
               ! "$existing_closeout_main_ref" =~ ^[0-9a-f]{40}$ ||
               -z "$existing_closeout_full_release_validation_run_id" ||
               -z "$existing_closeout_release_publish_run_id" ||
@@ -186,10 +188,10 @@ jobs:
             echo "Stable closeout is required for $tag, but postpublish evidence does not bind $evidence_source_tag to exactly one Full Release Validation run and its Publish run." >&2
             exit 1
           fi
-          if [[ "$repair_partial_closeout" == "true" &&
+          if [[ -n "$existing_closeout_full_release_validation_run_id" &&
             ( "$existing_closeout_full_release_validation_run_id" != "$full_release_validation_run_id" ||
               "$existing_closeout_release_publish_run_id" != "$release_publish_run_id" ) ]]; then
-            echo "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to repair it." >&2
+            echo "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it." >&2
             exit 1
           fi
           if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then

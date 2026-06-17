@@ -112,6 +112,9 @@ describe("package acceptance workflow", () => {
       'if ! gh release download "$evidence_source_tag"',
     );
     const partialRepairIndex = workflow.indexOf('if [[ -f "$closeout_json_path" ]]; then');
+    const existingCloseoutEvidenceMatchIndex = workflow.indexOf(
+      'if [[ -n "$existing_closeout_full_release_validation_run_id" &&',
+    );
 
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
@@ -138,11 +141,14 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('expected_closeout_digest="$(awk');
     expect(workflow).toContain('actual_closeout_digest="$(sha256sum "$closeout_json_path"');
     expect(workflow).toContain(
+      "Stable closeout manifest for $tag is incomplete; refusing to repair it.",
+    );
+    expect(workflow).toContain(
       "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it.",
     );
     expect(workflow).toContain("repair_partial_closeout=false");
     expect(workflow).toContain(
-      "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to repair it.",
+      "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it.",
     );
     expect(workflow).toContain(
       "REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}",
@@ -154,6 +160,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("attach_or_verify \\");
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
+    expect(existingCloseoutEvidenceMatchIndex).toBeGreaterThan(evidenceReadIndex);
+    expect(workflow.slice(checksumIndex, existingCloseoutEvidenceMatchIndex)).not.toContain(
+      'echo "should_closeout=false"',
+    );
     expect(releaseVersionGateIndex).toBeGreaterThan(-1);
     expect(partialRepairIndex).toBeGreaterThan(-1);
     expect(partialRepairIndex).toBeLessThan(releaseVersionGateIndex);
