@@ -509,9 +509,11 @@ export type GatewayDirectInvokeOptIns = {
    * write tool name(s) in `gateway.tools.allow` (e.g. `["write", "edit"]`)
    * AND the request MUST come from an owner/admin sender (`senderIsOwner ===
    * true`) for each one to actually be reachable; a non-owner trusted-proxy
-   * caller (e.g. `operator.write`) is refused even when both config keys are
-   * set. Operators can enable any subset of write tools by including only
-   * those names in `allow`.
+   * caller (e.g. `operator.write`) is refused the built-in `write`/`edit` tools
+   * even when both config keys are set. The owner gate scopes only built-in
+   * host-FS materialization, so a same-named allowlisted plugin tool still
+   * resolves under the normal `gateway.tools.allow`/`deny` policy. Operators can
+   * enable any subset of write tools by including only those names in `allow`.
    *
    * Exposes host filesystem writes outside the workspace unless
    * `tools.fs.workspaceOnly` is also enabled. STRONGLY recommend

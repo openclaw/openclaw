@@ -217,8 +217,12 @@ The host-filesystem write coding tools follow the same gating pattern as `read`.
 Each tool name must appear in `gateway.tools.allow` AND the
 `directInvoke.hostFsWrite: true` opt-in must be set AND the request must come
 from an owner/admin sender (`senderIsOwner === true`, evaluated per request); any
-one missing leaves both write tools unreachable. A non-owner trusted-proxy caller
-(e.g. `operator.write`) is refused even when both config keys are set.
+one missing leaves both built-in write tools unreachable. A non-owner
+trusted-proxy caller (e.g. `operator.write`) is refused the **built-in**
+`write`/`edit` tools even when both config keys are set — as with `read`, the
+owner gate scopes only built-in host-FS materialization, so a same-named
+allowlisted plugin tool is unaffected and resolves under the normal
+`gateway.tools.allow`/`deny` policy (see _Plugin name collision_ below).
 
 ```json5
 {
@@ -242,12 +246,18 @@ Truth table (per tool name `T` ∈ `{write, edit}`):
 | no                         | no                         | —                     | ❌                                                                        |
 | yes                        | no                         | yes                   | ❌ (built-in not materialized; `dangerous_allow` audit fires — see below) |
 | no                         | yes                        | yes                   | ❌ (filtered by HTTP deny)                                                |
-| yes                        | yes                        | no                    | ❌ (owner gate — non-owner refused)                                       |
+| yes                        | yes                        | no                    | ❌ (owner gate — built-in not materialized)                               |
 | yes                        | yes                        | yes                   | ✅                                                                        |
 
 **Audit behavior:** Setting only `gateway.tools.allow: ["write"]` (without `hostFsWrite: true`) does not materialize the built-in `write` tool, but it does remove `write` from the HTTP deny list. Because a plugin tool named `write` could be independently reachable, the config audit fires `gateway.tools_invoke_http.dangerous_allow`. Set both keys together to suppress that in favour of the more specific `host_write_allow` finding.
 
-**Plugin name collision:** When both keys are set, the built-in coding tool takes precedence over any plugin with the same name (`write` or `edit`) on the direct-invoke surface.
+**Plugin name collision:** The owner gate and the dual-key opt-in apply only to
+the **built-in** `write`/`edit` coding tools. For a non-owner caller the built-in
+is never materialized, so a same-named tool from an allowlisted plugin (if any)
+is not additionally gated by `senderIsOwner` — it resolves under the normal
+`gateway.tools.allow`/`deny` policy. When all three gates hold and a plugin
+shares the name `write` or `edit` with the built-in, the built-in takes
+precedence on the direct-invoke surface.
 
 **`apply_patch` is NOT in this set.** Although `apply_patch` is in
 `DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing, the coding tool factory
