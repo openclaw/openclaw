@@ -7339,6 +7339,63 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 
+  it("forwards isReasoning final replies when the channel opts in via supportsReasoningBlocks", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix" });
+    const replyResolver = async () =>
+      [
+        { text: "thinking...", isReasoning: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { supportsReasoningBlocks: true },
+    });
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    // Both the reasoning payload and the answer reach the channel unchanged.
+    expect(finalCalls).toHaveLength(2);
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("thinking...");
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.isReasoning).toBe(true);
+    expect((finalCalls[1]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
+  });
+
+  it("forwards isReasoning block replies when the channel opts in via supportsReasoningBlocks", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "matrix" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "thinking...", isReasoning: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return { text: "The answer is 42" };
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { supportsReasoningBlocks: true },
+    });
+    // The reasoning block is now forwarded instead of suppressed.
+    expect(blockReplySentTexts).toContain("thinking...");
+    expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
   it("strips split TTS directives from streamed block text before delivery", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

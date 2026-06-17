@@ -356,7 +356,9 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const content = buildTextContent(text, relation);
+          const content = buildTextContent(text, relation, {
+            msgtype: opts.msgtype ?? MsgType.Text,
+          });
           await enrichMatrixFormattedContent({
             client,
             content,

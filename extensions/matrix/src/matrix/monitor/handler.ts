@@ -2092,7 +2092,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-            if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
+            if (
+              draftStream &&
+              info.kind !== "tool" &&
+              !payload.isCompactionNotice &&
+              // Reasoning is its own quiet m.notice lane; it must not be edited
+              // into the live answer preview (which the next answer block would
+              // overwrite). Route it straight to deliverMatrixReplies below.
+              payload.isReasoning !== true
+            ) {
               const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
               const ttsSupplement = getReplyPayloadTtsSupplement(payload);
               const fallbackPayload =
@@ -2512,7 +2520,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                           : undefined,
                         onBlockReplyQueued: draftStream
                           ? (payload, context) => {
-                              if (payload.isCompactionNotice === true) {
+                              // Reasoning and compaction notices are not answer
+                              // blocks, so they must not advance draft boundaries.
+                              if (
+                                payload.isCompactionNotice === true ||
+                                payload.isReasoning === true
+                              ) {
                                 return;
                               }
                               queueDraftBlockBoundary(payload, context);
@@ -2529,6 +2542,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                           : undefined,
                         ...buildPreviewToolProgressReplyOptions(),
                         onModelSelected,
+                        // Matrix renders reasoning as a quiet m.notice, so generic
+                        // dispatch must forward explicit isReasoning payloads to it.
+                        supportsReasoningBlocks: true,
                       },
                     });
                   } finally {

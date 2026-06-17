@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
+import { MsgType } from "../send/types.js";
 
 const sendMessageMatrixMock = vi.hoisted(() => vi.fn().mockResolvedValue({ messageId: "mx-1" }));
 const chunkMatrixTextMock = vi.hoisted(() =>
@@ -196,6 +197,48 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[0]).toBe("room:5");
     expect(sendCall(0)[1]).toBe("Visible answer");
     expect(sendOptions(0).cfg).toBe(cfg);
+  });
+
+  it("delivers an explicit isReasoning payload as an m.notice event", async () => {
+    // Explicit reasoning payloads (the runner emits these when /reasoning is on)
+    // must reach Matrix as a quiet notice, not be dropped. Raw reasoning-looking
+    // text that is NOT an explicit payload stays suppressed (covered above).
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "Reasoning: weighing options before answering", isReasoning: true },
+        { text: "The answer is 42" },
+      ],
+      roomId: "room:6",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    expect(sendCall(0)[0]).toBe("room:6");
+    expect(sendCall(0)[1]).toBe("Reasoning: weighing options before answering");
+    expect(sendOptions(0).msgtype).toBe(MsgType.Notice);
+    expect(sendCall(1)[1]).toBe("The answer is 42");
+    expect(sendOptions(1).msgtype).toBeUndefined();
+  });
+
+  it("still suppresses a raw reasoning-looking text payload that is not flagged isReasoning", async () => {
+    // A plain reply whose text merely looks like reasoning (no isReasoning flag)
+    // stays suppressed so channels cannot leak unflagged thinking text.
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "Reasoning:\n_internal deliberation" }, { text: "The answer is 42" }],
+      roomId: "room:7",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe("The answer is 42");
   });
 
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
