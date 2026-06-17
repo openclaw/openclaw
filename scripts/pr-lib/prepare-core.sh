@@ -217,8 +217,13 @@ prepare_sync_head() {
   if ! git merge-base --is-ancestor origin/main HEAD; then
     git rebase origin/main
     rebased=true
-    prepare_gates "$pr"
-    checkout_prep_branch "$pr"
+    if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+      rm -f .local/gates.env .local/prep.env
+      echo "Rebased head requires fresh exact-head hosted CI/Testbox evidence after push."
+    else
+      prepare_gates "$pr"
+      checkout_prep_branch "$pr"
+    fi
   fi
 
   local prep_head_sha
@@ -252,6 +257,19 @@ prepare_sync_head() {
 - Rebased onto origin/main: $rebased.
 - Verified PR head SHA matches local prep HEAD.
 - Verified PR head contains origin/main.
+EOF_PREP
+
+  if [ "$rebased" = "true" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+    cat >> .local/prep.md <<EOF_PREP
+- Cleared stale prepare artifacts. Wait for hosted CI/Testbox on $prep_head_sha, then run prepare-run again.
+EOF_PREP
+    echo "prepare-sync-head complete"
+    echo "prep_head_sha=$prep_head_sha"
+    echo "Hosted CI/Testbox must pass for this exact head before prepare-run can continue."
+    return
+  fi
+
+  cat >> .local/prep.md <<EOF_PREP
 - Prepare gates reran automatically when the sync rebase changed the prep head.
 EOF_PREP
 

@@ -91,6 +91,15 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   through PR-controlled scripts or synthesize prepare artifacts to bootstrap
   the change. If the current canonical gate cannot validate the new policy,
   stop for explicit maintainer direction rather than weakening that boundary.
+- In maintainer Testbox mode, use `OPENCLAW_TESTBOX=1 scripts/pr prepare-run
+  <PR>` only after the exact PR head has passed `CI` and every scheduled
+  `Blacksmith Testbox` or `Workflow Sanity` lane. This preserves the canonical
+  prepare artifacts while avoiding a redundant broad local suite. A
+  literal `CHANGELOG.md`-only head gets a clean diff check instead because
+  those workflows intentionally do not dispatch. Documentation and README
+  changes still require CI. If `merge-run` requires a mainline sync, run
+  `OPENCLAW_TESTBOX=1 scripts/pr prepare-sync-head <PR>`, wait for those hosted
+  gates on the newly pushed SHA, then run `prepare-run` again.
 - Generate the changelog before every beta, beta rerun, stable release, or
   stable rerun, before version/tag preparation. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if

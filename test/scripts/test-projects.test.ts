@@ -621,6 +621,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/openclaw-npm-postpublish-verify.ts",
         ["test/openclaw-npm-postpublish-verify.test.ts"],
       ],
+      ["scripts/verify-pr-hosted-gates.mjs", ["test/scripts/verify-pr-hosted-gates.test.ts"]],
       [
         "scripts/postinstall-bundled-plugins.mjs",
         ["test/scripts/postinstall-bundled-plugins.test.ts"],
