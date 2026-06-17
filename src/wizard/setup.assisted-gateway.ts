@@ -201,12 +201,13 @@ async function probeVerifiedExistingGateway(params: {
   config: OpenClawConfig;
   settings: GatewayWizardSettings;
 }): Promise<boolean> {
-  const invalidAuth = canSafelyProbeInvalidAuth(params)
-    ? buildInvalidProbeAuth(params.settings, params.auth)
-    : undefined;
-  // Existing Gateway reuse requires proving that invalid shared-secret auth is
-  // rejected. Fail closed when the rate-limit policy makes that probe unsafe.
-  if (!invalidAuth) {
+  const invalidAuth =
+    params.settings.authMode !== "none" && canSafelyProbeInvalidAuth(params)
+      ? buildInvalidProbeAuth(params.settings, params.auth)
+      : undefined;
+  // Shared-secret Gateway reuse requires proving that invalid auth is rejected.
+  // Fail closed when the rate-limit policy makes that probe unsafe.
+  if (params.settings.authMode !== "none" && !invalidAuth) {
     return false;
   }
   // Do not let cached device credentials prove a listener that rejects the
@@ -231,6 +232,9 @@ async function probeVerifiedExistingGateway(params: {
     })
   ) {
     return false;
+  }
+  if (!invalidAuth) {
+    return true;
   }
   const invalid = await probeGateway({
     url: params.url,

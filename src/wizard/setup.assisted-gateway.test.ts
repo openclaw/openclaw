@@ -183,6 +183,45 @@ describe("agent-assisted Gateway runtime", () => {
     expect(waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
+  it("reuses a verified existing Gateway configured without auth", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        config: {
+          gateway: {
+            auth: { mode: "none" },
+          },
+        },
+      },
+    });
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: {
+        gateway: {
+          auth: { mode: "none" },
+        },
+      },
+      settings: {
+        ...settings,
+        authMode: "none",
+        gatewayToken: undefined,
+      },
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(false);
+    expect(probeGateway).toHaveBeenCalledOnce();
+    expect(probeGateway.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        auth: {},
+        detailLevel: "full",
+      }),
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("reuses a verified existing Gateway whose omitted settings use runtime defaults", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
     probeGateway
