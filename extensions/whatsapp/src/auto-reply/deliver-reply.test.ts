@@ -677,27 +677,23 @@ describe("deliverWebReply", () => {
     vi.clearAllMocks();
     const msg = makeMsg();
     // Two media items: first load succeeds and sends, second load succeeds but send fails.
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
+    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce({
       buffer: Buffer.from("img1"),
       contentType: "image/jpeg",
       kind: "image",
     });
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
+    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce({
       buffer: Buffer.from("img2"),
       contentType: "image/jpeg",
       kind: "image",
     });
     // First sendMedia resolves; second sendMedia rejects.
-    (
-      msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "media-first-ok"));
-    (
-      msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
-    ).mockRejectedValueOnce(new Error("upload failed"));
+    (msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+      createAcceptedWhatsAppSendResult("media", "media-first-ok"),
+    );
+    (msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("upload failed"),
+    );
 
     await deliverWebReply({
       replyResult: {

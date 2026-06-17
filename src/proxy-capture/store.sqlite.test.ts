@@ -43,21 +43,24 @@ describe("DebugProxyCaptureStore", () => {
     "file:%3Amemory:?cache=shared",
     "file:proxy-capture?mode=memory&cache=shared",
     "file:proxy-capture?mode=memory#ignored",
-  ])("keeps SQLite memory path %s off the filesystem", (dbPath) => {
-    const mkdirSync = vi.spyOn(fs, "mkdirSync");
-    const openSync = vi.spyOn(fs, "openSync");
-    const existsSync = vi.spyOn(fs, "existsSync");
+  ])(
+    "keeps SQLite memory path %s off the filesystem",
+    (dbPath) => {
+      const mkdirSync = vi.spyOn(fs, "mkdirSync");
+      const openSync = vi.spyOn(fs, "openSync");
+      const existsSync = vi.spyOn(fs, "existsSync");
 
-    const store = new DebugProxyCaptureStore(dbPath, "unused");
-    try {
-      expect(store.db.prepare("PRAGMA database_list").get()).toMatchObject({ file: "" });
-      expect(mkdirSync).not.toHaveBeenCalled();
-      expect(openSync).not.toHaveBeenCalled();
-      expect(existsSync).not.toHaveBeenCalled();
-    } finally {
-      store.close();
-    }
-  });
+      const store = new DebugProxyCaptureStore(dbPath, "unused");
+      try {
+        expect(store.db.prepare("PRAGMA database_list").get()).toMatchObject({ file: "" });
+        expect(mkdirSync).not.toHaveBeenCalled();
+        expect(openSync).not.toHaveBeenCalled();
+        expect(existsSync).not.toHaveBeenCalled();
+      } finally {
+        store.close();
+      }
+    },
+  );
 
   it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-failed-open-"));
