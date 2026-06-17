@@ -49,11 +49,3 @@ export function pluginScanExistsSync(targetPath: string): boolean {
   cache.set(targetPath, result);
   return result;
 }
-
-/** Test-only: clears any leaked active scan caches. */
-export function __resetPluginScanExistenceCacheForTest(): void {
-  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
-    throw new Error("__resetPluginScanExistenceCacheForTest is only available in tests");
-  }
-  scanExistenceCacheStack.length = 0;
-}

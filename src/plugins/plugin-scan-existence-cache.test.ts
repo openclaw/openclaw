@@ -4,10 +4,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadBundleManifest, detectBundleManifestFormat } from "./bundle-manifest.js";
 import {
-  __resetPluginScanExistenceCacheForTest,
   pluginScanExistsSync,
   withPluginScanExistenceCache,
 } from "./plugin-scan-existence-cache.js";
@@ -21,7 +20,6 @@ function makeTempDir(prefix: string): string {
 }
 
 afterEach(() => {
-  __resetPluginScanExistenceCacheForTest();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -105,10 +103,6 @@ describe("pluginScanExistsSync", () => {
 });
 
 describe("bundle manifest scan uses the existence cache", () => {
-  beforeEach(() => {
-    __resetPluginScanExistenceCacheForTest();
-  });
-
   function buildClaudeBundlePlugin(root: string): void {
     fs.mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
     fs.writeFileSync(
@@ -129,39 +123,27 @@ describe("bundle manifest scan uses the existence cache", () => {
     const root = makeTempDir("claude-bundle-");
     buildClaudeBundlePlugin(root);
 
+    // Run a detect + load pair and count fs.existsSync calls under a spy.
+    const detectAndLoad = (): void => {
+      const format = detectBundleManifestFormat(root);
+      if (format) {
+        loadBundleManifest({ rootDir: root, bundleFormat: format });
+      }
+    };
+    const countExistsSyncCalls = (run: () => void): number => {
+      const spy = vi.spyOn(fs, "existsSync");
+      try {
+        run();
+        return spy.mock.calls.length;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
     // Baseline: no scan cache → detect and load re-probe the same marker paths.
-    let uncachedCalls = 0;
-    {
-      const spy = vi.spyOn(fs, "existsSync");
-      try {
-        const format = detectBundleManifestFormat(root);
-        if (format) {
-          loadBundleManifest({ rootDir: root, bundleFormat: format });
-        }
-        uncachedCalls = spy.mock.calls.length;
-      } finally {
-        spy.mockRestore();
-      }
-    }
-
-    __resetPluginScanExistenceCacheForTest();
-
+    const uncachedCalls = countExistsSyncCalls(detectAndLoad);
     // Same workload, but the detect + load pair shares one scan cache.
-    let cachedCalls = 0;
-    {
-      const spy = vi.spyOn(fs, "existsSync");
-      try {
-        withPluginScanExistenceCache(() => {
-          const format = detectBundleManifestFormat(root);
-          if (format) {
-            loadBundleManifest({ rootDir: root, bundleFormat: format });
-          }
-        });
-        cachedCalls = spy.mock.calls.length;
-      } finally {
-        spy.mockRestore();
-      }
-    }
+    const cachedCalls = countExistsSyncCalls(() => withPluginScanExistenceCache(detectAndLoad));
 
     // Both paths must still produce a valid claude bundle manifest.
     const manifest = withPluginScanExistenceCache(() => {
