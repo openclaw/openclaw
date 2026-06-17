@@ -862,4 +862,41 @@ describe("applySkillEnvOverrides", () => {
       }
     });
   });
+
+  it("resolves snapshot env overrides by skillKey when name differs from skillKey", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "",
+      skills: [
+        {
+          name: "Pretty Weather",
+          skillKey: "weather",
+          primaryEnv: "WEATHER_API_KEY",
+        },
+      ],
+    };
+
+    const config: OpenClawConfig = {
+      skills: {
+        entries: {
+          weather: {
+            apiKey: "weather-secret", // pragma: allowlist secret
+          },
+        },
+      },
+    };
+
+    withClearedEnv(["WEATHER_API_KEY"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        config,
+      });
+
+      try {
+        expect(process.env.WEATHER_API_KEY).toBe("weather-secret");
+      } finally {
+        restore();
+        expect(process.env.WEATHER_API_KEY).toBeUndefined();
+      }
+    });
+  });
 });
