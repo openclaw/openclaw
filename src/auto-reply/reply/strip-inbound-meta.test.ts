@@ -71,13 +71,15 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
   });
 
-  it("strips all six known sentinel types", () => {
+  it("strips all known sentinel types", () => {
     const sentinels = [
       "Conversation info (untrusted metadata):",
       "Sender (untrusted metadata):",
       "Thread starter (untrusted, for context):",
+      "Reply chain of current user message (untrusted, nearest first):",
       "Reply target of current user message (untrusted, for context):",
       "Forwarded message context (untrusted metadata):",
+      "Location (untrusted metadata):",
       "Chat history since last reply (untrusted, for context):",
     ];
     for (const sentinel of sentinels) {

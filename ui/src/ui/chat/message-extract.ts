@@ -3,26 +3,27 @@ import { stripInternalRuntimeContext } from "../../../../src/agents/internal-run
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
+import { normalizeStringEntries } from "../string-coerce.ts";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   const withoutInternalContext = stripInternalRuntimeContext(text);
   if (role === "assistant") {
-    return stripThinkingTags(withoutInternalContext);
+    return stripThinkingTags(stripInboundMetadata(withoutInternalContext));
   }
-  return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
-    : stripEnvelope(withoutInternalContext);
+  return stripInboundMetadata(stripEnvelope(withoutInternalContext));
 }
 
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
+  // Skip custom/display messages (e.g. runtime context with display: false)
+  if (role === "custom" && m.display === false) {
+    return null;
+  }
   const raw =
     role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
   if (!raw) {
