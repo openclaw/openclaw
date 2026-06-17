@@ -24,11 +24,15 @@ export interface OpencodeGoStalledStreamWrapperOptions {
 }
 
 /**
- * Default idle window used in production. Tuned to be far above normal
- * delayed usage-only chunk gaps (sub-second) and far below the runtime's
- * stuck-session recovery (~622s) so provider-owned termination wins.
+ * Default idle window used in production. Matches the runtime's shared
+ * `DEFAULT_LLM_IDLE_TIMEOUT_MS` (120s) so non-cron interactive runs see
+ * no behavior change versus the existing watchdog, while cron runs — for
+ * which the runtime disables its idle watchdog entirely
+ * (`resolveLlmIdleTimeoutMs` returns 0 when `trigger === "cron"` and no
+ * explicit timeout is set) — finally get a provider-owned termination
+ * well before the ~622s stuck-session recovery kicks in.
  */
-export const OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT = 30_000;
+export const OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT = 120_000;
 
 function isOpencodeGoModel(model: unknown, providerId: string): boolean {
   return Boolean(model) && typeof model === "object"
