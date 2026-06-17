@@ -1173,7 +1173,7 @@ interface ConfigEphemeralState {
 
 function createConfigEphemeralState(): ConfigEphemeralState {
   return {
-    rawRevealed: false,
+    rawRevealed: true,
     rawDiffOpen: false,
     envRevealed: false,
     validityDismissed: false,

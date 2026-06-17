@@ -642,7 +642,7 @@ describe("config view", () => {
     expect(onSearchChange).toHaveBeenCalledWith("");
   });
 
-  it("keeps sensitive raw config hidden until reveal before editing", () => {
+  it("shows raw config visible by default when entering raw mode", () => {
     const onRawChange = vi.fn();
     const { container } = renderConfigView({
       formMode: "raw",
@@ -660,24 +660,33 @@ describe("config view", () => {
       queryRequired(container, ".config-raw-field .pill", HTMLElement)
         .textContent?.replace(/\s+/g, " ")
         .trim(),
-    ).toBe("1 secret redacted");
+    ).toBe("1 secret visible");
+    expect(container.querySelector(".config-raw-field .callout.info")).toBeNull();
+
+    const textarea = queryRequired(container, "textarea", HTMLTextAreaElement);
+    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
+
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    expect(revealButton.getAttribute("title")).toBe("Hide sensitive values");
+    expect(revealButton.getAttribute("aria-pressed")).toBe("true");
+
+    // Toggle to hide sensitive values
+    revealButton.click();
+    expect(container.querySelector("textarea")).toBeNull();
     expect(
       queryRequired(container, ".config-raw-field .callout.info", HTMLElement)
         .textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("1 sensitive value hidden. Use the reveal button above to edit the raw config.");
-    expect(container.querySelector("textarea")).toBeNull();
-
-    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
     expect(revealButton.getAttribute("title")).toBe("Reveal sensitive values");
-    expect(revealButton.getAttribute("aria-pressed")).toBe("false");
-    revealButton.click();
 
-    const textarea = queryRequired(container, "textarea", HTMLTextAreaElement);
-    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    // Toggle back to reveal
+    revealButton.click();
+    const textareaAfter = queryRequired(container, "textarea", HTMLTextAreaElement);
+    expect(textareaAfter.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
+    textareaAfter.value = textareaAfter.value.replace("supersecret", "updatedsecret");
+    textareaAfter.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onRawChange).toHaveBeenCalledWith(textareaAfter.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {
@@ -758,7 +767,7 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe("[1 item]");
   });
 
-  it("redacts sensitive values in raw pending changes until raw values are revealed", () => {
+  it("redacts sensitive values in raw pending changes after toggle", () => {
     const container = document.createElement("div");
     const props: ConfigProps = {
       ...baseProps(),
@@ -805,18 +814,20 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe(
       "channels.discord.token.id",
     );
+    // Default is revealed (rawRevealed = true)
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"TOKEN_BEFORE"');
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"TOKEN_AFTER"');
+
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    revealButton.click();
+    // After toggle, values should be redacted
+
     expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
       "[redacted - click reveal to view]",
     );
     expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
       "[redacted - click reveal to view]",
     );
-
-    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
-    revealButton.click();
-
-    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"TOKEN_BEFORE"');
-    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"TOKEN_AFTER"');
   });
 
   it("resets raw reveal state when the config context changes", () => {
@@ -850,8 +861,7 @@ describe("config view", () => {
     const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
-    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
-    revealButton.click();
+    // Default is revealed (rawRevealed = true)
     const revealedItem = queryRequired(container, ".config-diff__item", HTMLElement);
     expect(revealedItem.querySelector(".config-diff__path")?.textContent?.trim()).toBe("token");
     expect(revealedItem.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
@@ -861,6 +871,14 @@ describe("config view", () => {
       '"TOKEN_A_AFTER"',
     );
 
+    // Toggle to hide
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    revealButton.click();
+    expect(revealedItem.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
+
+    // Switch config context → raw reveal resets to default (visible again)
     props.configPath = "/tmp/openclaw-b.json5";
     props.raw = '{\n  token: "TOKEN_B_AFTER"\n}\n';
     props.originalRaw = '{\n  token: "TOKEN_B_BEFORE"\n}\n';
@@ -876,29 +894,23 @@ describe("config view", () => {
       queryRequired(container, ".config-raw-field .pill", HTMLElement)
         .textContent?.replace(/\s+/g, " ")
         .trim(),
-    ).toBe("1 secret redacted");
-    expect(
-      queryRequired(container, ".config-raw-field .callout.info", HTMLElement)
-        .textContent?.replace(/\s+/g, " ")
-        .trim(),
-    ).toBe("1 sensitive value hidden. Use the reveal button above to edit the raw config.");
-    expect(container.querySelector("textarea")).toBeNull();
+    ).toBe("1 secret visible");
+    expect(container.querySelector(".config-raw-field .callout.info")).toBeNull();
+    expect(container.querySelector("textarea")).not.toBeNull();
     const nextDetails = queryRequired(container, ".config-diff", HTMLDetailsElement);
     expect(nextDetails.open).toBe(false);
 
     nextDetails.open = true;
     nextDetails.dispatchEvent(new Event("toggle"));
-    const redactedItem = queryRequired(container, ".config-diff__item", HTMLElement);
-    expect(redactedItem.querySelector(".config-diff__path")?.textContent?.trim()).toBe("token");
-    expect(redactedItem.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
-      "[redacted - click reveal to view]",
+    const newItem = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(newItem.querySelector(".config-diff__path")?.textContent?.trim()).toBe("token");
+    expect(newItem.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      '"TOKEN_B_BEFORE"',
     );
-    expect(redactedItem.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
-      "[redacted - click reveal to view]",
-    );
+    expect(newItem.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"TOKEN_B_AFTER"');
   });
 
-  it("redacts raw diff values under leaf wildcard sensitive hints when keys contain dots", () => {
+  it("shows raw diff values by default under leaf wildcard sensitive hints when keys contain dots", () => {
     const container = document.createElement("div");
     const props: ConfigProps = {
       ...baseProps(),
@@ -941,12 +953,9 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe(
       "integrations.foo.bar.credential",
     );
-    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
-      "[redacted - click reveal to view]",
-    );
-    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
-      "[redacted - click reveal to view]",
-    );
+    // Default is revealed (rawRevealed = true)
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"TOKEN_BEFORE"');
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"TOKEN_AFTER"');
   });
 
   it("removes the raw pending changes panel after raw changes clear", () => {
