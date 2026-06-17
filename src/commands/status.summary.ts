@@ -419,6 +419,10 @@ export async function getStatusSummary(
           agentId,
           sessionKey: key,
         });
+        const costUsd =
+          typeof entry?.estimatedCostUsd === "number" && Number.isFinite(entry.estimatedCostUsd)
+            ? entry.estimatedCostUsd
+            : undefined;
 
         return {
           agentId,
@@ -439,6 +443,7 @@ export async function getStatusSummary(
           outputTokens: entry?.outputTokens,
           cacheRead: entry?.cacheRead,
           cacheWrite: entry?.cacheWrite,
+          costUsd,
           totalTokens: total ?? null,
           totalTokensFresh,
           remainingTokens: remaining,

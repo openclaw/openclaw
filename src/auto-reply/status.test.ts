@@ -1949,18 +1949,21 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("💵 Cost: $0.0000");
   });
 
+  type TranscriptUsageForStatusTest = {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost?: { total: number };
+  };
+
   function writeTranscriptUsageLog(params: {
     dir: string;
     agentId: string;
     sessionId: string;
     model?: string;
-    usage: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      totalTokens: number;
-    };
+    usage: TranscriptUsageForStatusTest | TranscriptUsageForStatusTest[];
   }) {
     const logPath = path.join(
       params.dir,
@@ -1971,18 +1974,21 @@ describe("buildStatusMessage", () => {
       `${params.sessionId}.jsonl`,
     );
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    const usages = Array.isArray(params.usage) ? params.usage : [params.usage];
     fs.writeFileSync(
       logPath,
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            model: params.model ?? "claude-opus-4-6",
-            usage: params.usage,
-          },
-        }),
-      ].join("\n"),
+      usages
+        .map((usage) =>
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              model: params.model ?? "claude-opus-4-6",
+              usage,
+            },
+          }),
+        )
+        .join("\n"),
       "utf-8",
     );
   }
@@ -2042,6 +2048,45 @@ describe("buildStatusMessage", () => {
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("uses cumulative transcript-backed cost when the session log includes one", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-transcript-cost";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          usage: [
+            {
+              input: 10,
+              output: 20,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 30,
+              cost: { total: 0.0021 },
+            },
+            {
+              input: 5,
+              output: 10,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 15,
+              cost: { total: 0.0042 },
+            },
+          ],
+        });
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cost: $0.0063");
       },
       { prefix: "openclaw-status-" },
     );

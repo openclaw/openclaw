@@ -295,6 +295,7 @@ const readUsageFromSessionLog = (
       promptTokens: number;
       total: number;
       totalTokensFresh: boolean;
+      costUsd?: number;
       model?: string;
     }
   | undefined => {
@@ -319,17 +320,15 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const snapshot = readRecentSessionUsageFromTranscript(
-      {
-        agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
-        sessionEntry,
-        sessionFile: logPath,
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      256 * 1024,
-    );
+    const transcriptScope = {
+      agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      sessionEntry,
+      sessionFile: logPath,
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    const snapshot = readRecentSessionUsageFromTranscript(transcriptScope, 256 * 1024);
     if (!snapshot) {
       return undefined;
     }
@@ -348,6 +347,10 @@ const readUsageFromSessionLog = (
         ? `${snapshot.modelProvider}/${snapshot.model}`
         : snapshot.modelProvider
       : snapshot.model;
+    const costUsd =
+      typeof snapshot.costUsd === "number" && Number.isFinite(snapshot.costUsd)
+        ? snapshot.costUsd
+        : undefined;
 
     return {
       input,
@@ -357,6 +360,7 @@ const readUsageFromSessionLog = (
       promptTokens,
       total,
       totalTokensFresh: snapshot.totalTokensFresh === true,
+      ...(costUsd !== undefined ? { costUsd } : {}),
       model,
     };
   } catch {
@@ -637,6 +641,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
+  let transcriptCostUsd: number | undefined;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   // Undefined freshness is legacy, not stale: keep persisted totals for /status,
   // but let a fresh transcript prompt snapshot replace them when available.
@@ -702,6 +707,9 @@ export function buildStatusMessage(args: StatusArgs): string {
       }
       if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
         cacheWrite = logUsage.cacheWrite;
+      }
+      if (typeof logUsage.costUsd === "number" && Number.isFinite(logUsage.costUsd)) {
+        transcriptCostUsd = logUsage.costUsd;
       }
     }
   }
@@ -1039,7 +1047,12 @@ export function buildStatusMessage(args: StatusArgs): string {
         cost: costConfig,
       })
     : undefined;
-  const costLabel = hasUsage ? formatUsd(cost) : undefined;
+  const costLabel =
+    transcriptCostUsd !== undefined
+      ? formatUsd(transcriptCostUsd)
+      : hasUsage
+        ? formatUsd(cost)
+        : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";

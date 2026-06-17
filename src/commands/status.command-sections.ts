@@ -11,6 +11,7 @@ import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
+import { formatUsd } from "../utils/usage-format.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
@@ -355,6 +356,7 @@ export function buildStatusSessionsRows(params: {
     Model: sess.model ?? "unknown",
     Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
+    Cost: formatUsd(sess.costUsd) ?? params.muted("—"),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
       : {}),

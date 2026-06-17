@@ -72,8 +72,8 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 Use these in chat:
 
 - `/status` → **emoji-rich status card** with the session model, context usage,
-  last response input/output tokens, and **estimated cost** when local pricing is
-  configured for the active model.
+  last response input/output tokens, and cost when transcript usage provides an
+  explicit total or local pricing is configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
@@ -83,7 +83,8 @@ Use these in chat:
 Other surfaces:
 
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
-- **CLI:** `openclaw status --usage` and `openclaw channels list` show
+- **CLI:** `openclaw status` shows recent sessions with any persisted session
+  cost, while `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
   Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
   OpenAI Codex, MiniMax, Xiaomi, and z.ai.
