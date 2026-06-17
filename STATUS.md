@@ -7,17 +7,20 @@
 
 ## Last Session
 
-- **Date**: 2026-06-17 (Per-user profile Phase 3 shipped to prod: app_profile injection + CI gate)
+- **Date**: 2026-06-17 (Per-user profile Phase 3 shipped to prod: app_profile injection + CI gate; **first-turn fix #71** rolled the same day)
 - **What changed**:
   - **Gateway PR #68** (`feat/app-profile-context`): inject each app-user's `app_profile` section into the agent context every turn as a synthetic `APP_PROFILE.md` bootstrap file, so `life` always knows the user without being reminded. New `src/agents/app-profile-context.ts` (fail-closed marker extractor, UTF-8 byte-safe 2 KB clamp, app-session-only via `isAppUserSession` + `resolveAppUserId`); 3-line wire in `src/agents/bootstrap-files.ts` (after hook overrides, before the context-file budget clamp; compaction-safe). 14/14 vitest; resolved per-run so no cross-user leak.
   - **Gateway PR #69** (`fix/tsgo-type-errors`): greened the `check` (tsgo + oxlint) and `check-docs` (markdownlint + link-check) CI gates so openclaw PRs stop needing `--admin`. `chat.ts` typed to the real `AssistantContentBlock[]` union (one commented boundary cast, no `any`); 3 test-mock fixes; unused import + 3 redundant type-args dropped; doc lint/link fixes.
   - **Gateway image `v2026.06.17.1`** (sourceSha `50f6c2d6f`): built from `main`, pushed to Artifact Registry, pinned to **`life` only** on 2ndClaw via single-agent recreate (fleet untouched per the staged-boot rule). Rollback ref `v2026.06.13.1` (`docker.env.bak.pre-v2026.06.17.1`).
   - **`life` `workspace/AGENTS.md`**: added the `app_profile` writable section + maintenance rules (sections 4/5) so the agent keeps a concise running brief (`name` / `call_them` / `summary`). Host-only, effective next turn (`AGENTS.md.bak.pre-app-profile-prose`).
   - **Phase 2 (`app.havaya` #24)**: confirmed already auto-deployed on merge (Coolify webhook); the home greeting reads the name from the per-user file.
+  - **Gateway PR #71** (`fix/app-profile-first-turn`): the injection missed the FIRST turn of every new session. `appUserId` is read from the persisted session entry, but `chat.send` only writes it onto an EXISTING entry (`updateSessionStoreEntry` no-ops when missing), so a brand-new session's first message ran with no `APP_PROFILE.md` and the agent asked the user's name (every page refresh / new chat hit this; from turn 2 on it worked). Added `appUserIdFromSessionKey()` fallback in `app-profile-context.ts` (derives the id from the session key — second-to-last `:`-segment after `:app:` — when the entry lacks it; read-only, same-user, leaves the shared `resolveAppUserId` / workspace-jail / writer untouched). Also braced this file's guard-returns → repo-wide `pnpm lint` now green (it was the only lint-dirty file). 22/22 vitest; merged without `--admin`.
+  - **Gateway image `v2026.06.17.2`** (sourceSha `d4ae21509`): built from `main`, pinned to **`life` only** on 2ndClaw via single-agent recreate (fleet untouched). Rollback ref `v2026.06.17.1` (`docker.env.bak.pre-v2026.06.17.2`).
 - **Validation**:
   - `pnpm check` + `pnpm check:docs` green on #69; `app-profile-context` 14/14 vitest; image build compiled clean.
   - Prod smoke: `life` recreated on `v2026.06.17.1`, boots healthy (gateway `:18789`, graphiti mcp ready, telegram up); public-chat smoke returned a coherent in-persona reply. 2 of 4 live user files already carry a seeded `app_profile` `name:` marker.
-- **Follow-ups**: register release `v2026.06.17.1` (sourceSha `50f6c2d6f`) via the dashboard `/api/platform/releases` (bookkeeping; optional dashboard step, prior rolls skipped it without harm).
+  - **#71 fix prod-verified**: reproduced the bug (fresh-session first "Hi" → "what's your name?"), then after rolling `v2026.06.17.2` a fresh-session first "Hi" greeted "היי לירן" (by name) without asking; `life` re-verified healthy on `v2026.06.17.2`.
+- **Follow-ups**: register releases `v2026.06.17.1` (`50f6c2d6f`) and `v2026.06.17.2` (`d4ae21509`) via the dashboard `/api/platform/releases` (bookkeeping; optional dashboard step, prior rolls skipped it without harm).
 
 ## Last Session (prev)
 
