@@ -47,12 +47,18 @@ const main = async () => {
 
   const bwsBin =
     process.env.BWS_BIN && process.env.BWS_BIN.trim() ? process.env.BWS_BIN.trim() : "bws";
+  const bwsEnv = {
+    BWS_ACCESS_TOKEN: process.env.BWS_ACCESS_TOKEN,
+    PATH: process.env.PATH || "",
+  };
+  // Self-hosted Bitwarden needs the API base URL; forward it when present so the
+  // bws CLI targets the configured server instead of the public default.
+  if (process.env.BWS_SERVER_URL) {
+    bwsEnv.BWS_SERVER_URL = process.env.BWS_SERVER_URL;
+  }
   const raw = execFileSync(bwsBin, ["secret", "list"], {
     encoding: "utf8",
-    env: {
-      BWS_ACCESS_TOKEN: process.env.BWS_ACCESS_TOKEN,
-      PATH: process.env.PATH || "",
-    },
+    env: bwsEnv,
     maxBuffer: 1024 * 1024,
     timeout: 15_000,
   });
