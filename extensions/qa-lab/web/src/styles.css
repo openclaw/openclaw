@@ -2089,6 +2089,28 @@ button.evidence-matrix-cell {
   background: var(--bg-app);
 }
 
+.evidence-artifact-deferred {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.evidence-artifact-preview-shell {
+  border-top: 1px solid var(--border);
+}
+
+.evidence-artifact-preview-shell summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .evidence-artifact-preview {
   max-height: 340px;
   overflow: auto;

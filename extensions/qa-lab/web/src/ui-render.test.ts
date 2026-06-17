@@ -102,6 +102,26 @@ describe("QA Lab UI evidence render", () => {
                   preview: null,
                   source: "ux-matrix:web-ui:first-run",
                 },
+                {
+                  error: null,
+                  exists: true,
+                  href: "/api/evidence/artifact?artifactPath=recording.gif",
+                  kind: "motion-preview-gif",
+                  mediaKind: "image",
+                  path: "recording.gif",
+                  preview: null,
+                  source: "ux-matrix:web-ui:first-run",
+                },
+                {
+                  error: null,
+                  exists: true,
+                  href: "/api/evidence/artifact?artifactPath=recording.webm",
+                  kind: "video",
+                  mediaKind: "video",
+                  path: "recording.webm",
+                  preview: null,
+                  source: "ux-matrix:web-ui:first-run",
+                },
               ],
               coverage: [{ id: "ui.control", role: "primary" }],
               failureReason: null,
@@ -166,6 +186,10 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
+    expect(html).toContain("Open media artifact");
+    expect(html).toContain("Open video artifact");
+    expect(html).not.toContain('src="/api/evidence/artifact?artifactPath=recording.gif"');
+    expect(html).not.toContain("<video controls");
     expect(html).not.toContain('data-evidence-entry-id="null"');
   });
 });

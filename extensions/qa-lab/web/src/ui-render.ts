@@ -1696,14 +1696,28 @@ function renderEvidenceArtifactBody(artifact: EvidenceArtifactView): string {
   if (!artifact.exists || !artifact.href) {
     return `<div class="empty-state">Artifact unavailable: ${esc(artifact.error ?? "missing")}</div>`;
   }
-  if (artifact.mediaKind === "image") {
+  const isInlineScreenshot =
+    artifact.mediaKind === "image" && artifact.kind.toLowerCase().includes("screenshot");
+  if (isInlineScreenshot) {
     return `<a href="${esc(artifact.href)}" target="_blank" rel="noreferrer"><img src="${esc(artifact.href)}" alt="${esc(artifact.kind)} artifact" loading="lazy" /></a>`;
   }
+  if (artifact.mediaKind === "image") {
+    return `<div class="evidence-artifact-deferred">
+      <span>Media preview is deferred to keep the evidence view responsive.</span>
+      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open media artifact</a>
+    </div>`;
+  }
   if (artifact.mediaKind === "video") {
-    return `<video controls src="${esc(artifact.href)}"></video>`;
+    return `<div class="evidence-artifact-deferred">
+      <span>Video preview is deferred to keep the evidence view responsive.</span>
+      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open video artifact</a>
+    </div>`;
   }
   if (artifact.preview !== null) {
-    return `<pre class="report-pre evidence-artifact-preview">${esc(artifact.preview)}</pre>`;
+    return `<details class="evidence-artifact-preview-shell">
+      <summary>Preview ${esc(artifact.kind)}</summary>
+      <pre class="report-pre evidence-artifact-preview">${esc(artifact.preview)}</pre>
+    </details>`;
   }
   return `<a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noreferrer">Open artifact</a>`;
 }
