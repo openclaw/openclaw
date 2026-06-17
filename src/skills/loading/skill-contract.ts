@@ -1,9 +1,6 @@
 // Skill contract types describe loaded skill metadata, sources, and prompt surfaces.
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
-export type SourceScope = "user" | "project" | "temporary";
-export type SourceOrigin = "package" | "top-level";
-
 export interface Skill {
   name: string;
   description: string;
@@ -17,23 +14,7 @@ export interface Skill {
   source: string;
 }
 
-export function createSyntheticSourceInfo(
-  path: string,
-  options: {
-    source: string;
-    scope?: SourceScope;
-    origin?: SourceOrigin;
-    baseDir?: string;
-  },
-): SourceInfo {
-  return {
-    path,
-    source: options.source,
-    scope: options.scope ?? "temporary",
-    origin: options.origin ?? "top-level",
-    baseDir: options.baseDir,
-  };
-}
+export { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 
 function escapeXml(str: string): string {
   return str

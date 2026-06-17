@@ -60,6 +60,7 @@ vi.mock("../../infra/fs-safe.js", () => ({
 
 const {
   installSkillFromClawHub,
+  readVerifiedClawHubSkillSourceUrl,
   resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
@@ -385,7 +386,9 @@ describe("skills-clawhub", () => {
 
   it("persists the source URL from server-resolved verification provenance", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-source-");
-    const sourceUrl = "https://github.com/openclaw/skills/tree/def456/agentreceipt";
+    const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
+    const verifiedSourceUrl =
+      "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
     fetchClawHubSkillDetailMock.mockResolvedValueOnce({
       skill: {
         slug: "agentreceipt",
@@ -411,7 +414,7 @@ describe("skills-clawhub", () => {
         url: sourceUrl,
         repo: "openclaw/skills",
         ref: "main",
-        commit: "def456",
+        commit: "0123456789abcdef0123456789abcdef01234567",
         path: "agentreceipt",
         importedAt: 4,
       },
@@ -440,7 +443,7 @@ describe("skills-clawhub", () => {
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
       expect(lock.skills.agentreceipt).toMatchObject({
-        sourceUrl,
+        sourceUrl: verifiedSourceUrl,
         verification: {
           provenance: {
             source: "server-resolved-github-import",
@@ -448,7 +451,7 @@ describe("skills-clawhub", () => {
             url: sourceUrl,
             repo: "openclaw/skills",
             ref: "main",
-            commit: "def456",
+            commit: "0123456789abcdef0123456789abcdef01234567",
             path: "agentreceipt",
             importedAt: 4,
           },
@@ -460,10 +463,39 @@ describe("skills-clawhub", () => {
           "utf8",
         ),
       ) as Record<string, unknown>;
-      expect(origin.sourceUrl).toBe(sourceUrl);
+      expect(origin.sourceUrl).toBe(verifiedSourceUrl);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("requires a full commit SHA before promoting verified source provenance", () => {
+    const baseProvenance = {
+      source: "server-resolved-github-import",
+      repo: "openclaw/skills",
+      path: "agentreceipt",
+    };
+
+    expect(
+      readVerifiedClawHubSkillSourceUrl({
+        ...baseProvenance,
+        commit: "0123456789abcdef0123456789abcdef01234567",
+      }),
+    ).toBe(
+      "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt",
+    );
+    expect(
+      readVerifiedClawHubSkillSourceUrl({
+        ...baseProvenance,
+        commit: "main",
+      }),
+    ).toBeUndefined();
+    expect(
+      readVerifiedClawHubSkillSourceUrl({
+        ...baseProvenance,
+        commit: "0123456",
+      }),
+    ).toBeUndefined();
   });
 
   it("does not treat detail metadata as verified source provenance", async () => {
