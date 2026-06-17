@@ -90,20 +90,23 @@ Important boundary notes:
 
 Gateway HTTP also applies a hard deny list by default (even if session policy allows the tool):
 
-| Tool             | Reason                                                    |
-| ---------------- | --------------------------------------------------------- |
-| `exec`           | Direct command execution (RCE surface)                    |
-| `spawn`          | Arbitrary child process creation (RCE surface)            |
-| `shell`          | Shell command execution (RCE surface)                     |
-| `fs_write`       | Arbitrary file mutation on the host                       |
-| `fs_delete`      | Arbitrary file deletion on the host                       |
-| `fs_move`        | Arbitrary file move/rename on the host                    |
-| `apply_patch`    | Patch application can rewrite arbitrary files             |
-| `sessions_spawn` | Session orchestration; spawning agents remotely is RCE    |
-| `sessions_send`  | Cross-session message injection                           |
-| `cron`           | Persistent automation control plane                       |
-| `gateway`        | Gateway control plane; prevents reconfiguration via HTTP  |
-| `nodes`          | Node command relay can reach `system.run` on paired hosts |
+| Tool             | Reason                                                                                                                                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exec`           | Direct command execution (RCE surface)                                                                                                                                                                         |
+| `spawn`          | Arbitrary child process creation (RCE surface)                                                                                                                                                                 |
+| `shell`          | Shell command execution (RCE surface)                                                                                                                                                                          |
+| `read`           | Host filesystem read; opt-in via dual-key `gateway.tools.directInvoke.hostFsRead: true` AND `gateway.tools.allow: ["read"]` (see "Opt-in: coding tool `read` over direct-invoke" below)                        |
+| `write`          | Canonical workspace write tool; opt-in via dual-key `gateway.tools.directInvoke.hostFsWrite: true` AND `gateway.tools.allow: ["write"]` (see "Opt-in: coding tools `write` / `edit` over direct-invoke" below) |
+| `edit`           | Canonical workspace edit tool; same dual-key opt-in as `write`                                                                                                                                                 |
+| `fs_write`       | Arbitrary file mutation on the host                                                                                                                                                                            |
+| `fs_delete`      | Arbitrary file deletion on the host                                                                                                                                                                            |
+| `fs_move`        | Arbitrary file move/rename on the host                                                                                                                                                                         |
+| `apply_patch`    | Patch application can rewrite arbitrary files                                                                                                                                                                  |
+| `sessions_spawn` | Session orchestration; spawning agents remotely is RCE                                                                                                                                                         |
+| `sessions_send`  | Cross-session message injection                                                                                                                                                                                |
+| `cron`           | Persistent automation control plane                                                                                                                                                                            |
+| `gateway`        | Gateway control plane; prevents reconfiguration via HTTP                                                                                                                                                       |
+| `nodes`          | Node command relay can reach `system.run` on paired hosts                                                                                                                                                      |
 
 `cron`, `gateway`, and `nodes` are also owner-only: even outside this default deny list, non-owner callers cannot invoke them on this surface.
 
@@ -165,13 +168,15 @@ materialization; a same-named allowlisted plugin tool, if any, is unaffected and
 resolves under the normal `gateway.tools.allow`/`deny` policy (see _Plugin name
 collision_ below):
 
-| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | sender is owner/admin | built-in `read` reachable                   |
-| ------------------------------- | ------------------------- | --------------------- | ------------------------------------------- |
-| no                              | no                        | —                     | ❌                                          |
-| yes                             | no                        | yes                   | ❌ (tool not materialized)                  |
-| no                              | yes                       | yes                   | ❌ (filtered by HTTP deny)                  |
-| yes                             | yes                       | no                    | ❌ (owner gate — built-in not materialized) |
-| yes                             | yes                       | yes                   | ✅                                          |
+| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | sender is owner/admin | built-in `read` reachable                                                 |
+| ------------------------------- | ------------------------- | --------------------- | ------------------------------------------------------------------------- |
+| no                              | no                        | —                     | ❌                                                                        |
+| yes                             | no                        | yes                   | ❌ (built-in not materialized; `dangerous_allow` audit fires — see below) |
+| no                              | yes                       | yes                   | ❌ (filtered by HTTP deny)                                                |
+| yes                             | yes                       | no                    | ❌ (owner gate — built-in not materialized)                               |
+| yes                             | yes                       | yes                   | ✅                                                                        |
+
+**Audit behavior:** Setting only `gateway.tools.allow: ["read"]` (without `hostFsRead: true`) does not materialize the built-in `read` tool, but it does remove `read` from the HTTP deny list. Because a plugin tool named `read` could be independently reachable, the config audit fires `gateway.tools_invoke_http.dangerous_allow`. To suppress that warning in favour of the more specific `host_read_allow` finding, set both keys together.
 
 **Plugin name collision:** The owner gate and the dual-key opt-in apply only to
 the **built-in** `read` coding tool. For a non-owner caller the built-in is never
@@ -189,9 +194,70 @@ whenever both keys are set — regardless of `tools.fs.workspaceOnly` — so the
 exposure is always visible in audit output; workspace confinement is the
 recommended remediation, not a condition that silences the warning.
 
-Only the `read` tool is exposed via this mechanism. Mutating coding primitives
-(`write`/`edit`/`apply_patch`/`exec`/`process`) remain unavailable on the
-direct-invoke surface in this release.
+### Opt-in: coding tools `write` / `edit` over direct-invoke
+
+The host-filesystem write coding tools follow the same gating pattern as `read`.
+Each tool name must appear in `gateway.tools.allow` AND the
+`directInvoke.hostFsWrite: true` opt-in must be set AND the request must come
+from an owner/admin sender (`senderIsOwner === true`, evaluated per request); any
+one missing leaves both write tools unreachable. A non-owner trusted-proxy caller
+(e.g. `operator.write`) is refused even when both config keys are set.
+
+```json5
+{
+  gateway: {
+    tools: {
+      // (1) Per-tool names you want enabled (subset of write/edit).
+      allow: ["write", "edit"],
+      // (2) Single class-level opt-in for the entire write family.
+      directInvoke: {
+        hostFsWrite: true,
+      },
+    },
+  },
+}
+```
+
+Truth table (per tool name `T` ∈ `{write, edit}`):
+
+| `tools.allow` includes `T` | `directInvoke.hostFsWrite` | sender is owner/admin | `T` reachable on direct-invoke                                            |
+| -------------------------- | -------------------------- | --------------------- | ------------------------------------------------------------------------- |
+| no                         | no                         | —                     | ❌                                                                        |
+| yes                        | no                         | yes                   | ❌ (built-in not materialized; `dangerous_allow` audit fires — see below) |
+| no                         | yes                        | yes                   | ❌ (filtered by HTTP deny)                                                |
+| yes                        | yes                        | no                    | ❌ (owner gate — non-owner refused)                                       |
+| yes                        | yes                        | yes                   | ✅                                                                        |
+
+**Audit behavior:** Setting only `gateway.tools.allow: ["write"]` (without `hostFsWrite: true`) does not materialize the built-in `write` tool, but it does remove `write` from the HTTP deny list. Because a plugin tool named `write` could be independently reachable, the config audit fires `gateway.tools_invoke_http.dangerous_allow`. Set both keys together to suppress that in favour of the more specific `host_write_allow` finding.
+
+**Plugin name collision:** When both keys are set, the built-in coding tool takes precedence over any plugin with the same name (`write` or `edit`) on the direct-invoke surface.
+
+**`apply_patch` is NOT in this set.** Although `apply_patch` is in
+`DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing, the coding tool factory
+does not currently produce an `apply_patch` entry for the direct-invoke surface.
+Including `"apply_patch"` in `gateway.tools.allow` has no effect on built-in
+direct-invoke behavior, but it does remove the name from the HTTP deny list and
+will trigger `gateway.tools_invoke_http.dangerous_allow` (a same-named plugin
+could be reachable). The factory wiring is deferred to a future PR.
+
+**Security:** When enabled, write-class tools can mutate any file the gateway
+process can open, **outside the configured workspace** unless
+`tools.fs.workspaceOnly: true` is set. Strongly recommend pairing
+`directInvoke.hostFsWrite: true` with `tools.fs.workspaceOnly: true`. The
+config audit (`gateway.tools_invoke_http.host_write_allow`) warns whenever both
+keys are set — regardless of `tools.fs.workspaceOnly` — so the exposure is
+always visible in audit output; workspace confinement is the recommended
+remediation, not a condition that silences the warning. The finding escalates
+from warn to critical when `gateway.bind` is non-loopback.
+
+### NOT yet exposed: `exec` / `process` / `spawn` / `shell`
+
+RCE-class tools (`exec`, `process`, `spawn`, `shell`) remain unavailable on the
+direct-invoke surface. They require a distinct owner/admin enforcement model
+that is deferred to a separate follow-up PR. The `gateway.tools.allow` knob
+alone (even paired with a hypothetical opt-in flag) is insufficient because a
+trusted-proxy caller with `operator.write` could otherwise reach them without
+operator-level intent.
 
 To help group policies resolve context, you can optionally set:
 

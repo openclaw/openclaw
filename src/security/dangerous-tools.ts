@@ -13,7 +13,15 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "spawn",
   // Shell command execution — immediate RCE surface
   "shell",
-  // Arbitrary file mutation on the host
+  // Canonical workspace write tool — arbitrary file mutation on the host;
+  // opt-in via BOTH `gateway.tools.allow: ["write"]` AND
+  // `gateway.tools.directInvoke.hostFsWrite: true`.
+  "write",
+  // Canonical workspace edit tool — arbitrary file mutation on the host;
+  // opt-in via BOTH `gateway.tools.allow: ["edit"]` AND
+  // `gateway.tools.directInvoke.hostFsWrite: true`.
+  "edit",
+  // Arbitrary file mutation on the host (legacy/alternate name)
   "fs_write",
   // Arbitrary file deletion on the host
   "fs_delete",
