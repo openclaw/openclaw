@@ -556,7 +556,9 @@ function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
   }
   const rewrite = (bind: string): string => {
     const firstColon = bind.indexOf(":");
-    if (firstColon <= 0) return bind;
+    if (firstColon <= 0) {
+      return bind;
+    }
     const source = bind.slice(0, firstColon);
     const rest = bind.slice(firstColon);
     return rewriteHostPath(source, cfg.hostMountPrefixMap) + rest;
