@@ -144,9 +144,44 @@ type NpmRegistryAttestation = {
   predicateType?: string;
 };
 
-type VerifyNpmProvenanceBundle = (bundle: unknown) => Promise<void>;
+type NpmProvenanceVerificationPolicy = {
+  certificateIdentityURI: string;
+  certificateIssuer: string;
+};
+
+type VerifyNpmProvenanceBundle = (
+  bundle: unknown,
+  policy: NpmProvenanceVerificationPolicy,
+) => Promise<void>;
+
+type NpmProvenanceStatement = {
+  predicate?: {
+    buildDefinition?: {
+      externalParameters?: {
+        workflow?: {
+          path?: string;
+          ref?: string;
+          repository?: string;
+        };
+      };
+    };
+    runDetails?: {
+      builder?: {
+        id?: string;
+      };
+    };
+  };
+  subject?: Array<{
+    digest?: Record<string, string>;
+    name?: string;
+  }>;
+};
 
 const NPM_PROVENANCE_PREDICATE_TYPE = "https://slsa.dev/provenance/v1";
+const NPM_PROVENANCE_REPOSITORY = "https://github.com/openclaw/openclaw";
+const NPM_PROVENANCE_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
+const NPM_PROVENANCE_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com";
+const NPM_PROVENANCE_BUILDER_ID = "https://github.com/actions/runner/github-hosted";
 const NPM_REGISTRY_REQUEST_TIMEOUT_MS = 30_000;
 const NPM_REGISTRY_PROVENANCE_ATTEMPTS = 30;
 const NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS = 10_000;
@@ -195,8 +230,47 @@ export function verifyNpmRegistrySignatures(params: {
   );
 }
 
-async function verifySigstoreNpmProvenanceBundle(bundle: unknown): Promise<void> {
-  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0]);
+function resolveNpmProvenanceVerificationPolicy(
+  statement: NpmProvenanceStatement,
+  version: string,
+): NpmProvenanceVerificationPolicy {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+  const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
+  const workflowRef = workflow?.ref;
+  const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  const isTrustedRef =
+    workflowRef === "refs/heads/main" ||
+    workflowRef === expectedReleaseRef ||
+    (parsedVersion.channel === "alpha" &&
+      /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
+        workflowRef ?? "",
+      ));
+
+  if (
+    workflow?.repository !== NPM_PROVENANCE_REPOSITORY ||
+    workflow?.path !== NPM_PROVENANCE_WORKFLOW_PATH ||
+    !isTrustedRef ||
+    statement.predicate?.runDetails?.builder?.id !== NPM_PROVENANCE_BUILDER_ID
+  ) {
+    throw new Error(
+      `npm provenance attestation does not bind ${version} to the trusted OpenClaw GitHub release workflow.`,
+    );
+  }
+
+  return {
+    certificateIssuer: NPM_PROVENANCE_CERTIFICATE_ISSUER,
+    certificateIdentityURI: `${NPM_PROVENANCE_REPOSITORY}/${NPM_PROVENANCE_WORKFLOW_PATH}@${workflowRef}`,
+  };
+}
+
+async function verifySigstoreNpmProvenanceBundle(
+  bundle: unknown,
+  policy: NpmProvenanceVerificationPolicy,
+): Promise<void> {
+  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0], policy);
 }
 
 export async function verifyNpmProvenanceAttestation(params: {
@@ -212,6 +286,7 @@ export async function verifyNpmProvenanceAttestation(params: {
   );
   const verifyBundle = params.verifyBundle ?? verifySigstoreNpmProvenanceBundle;
   let verificationError: unknown;
+  let policyError: unknown;
 
   for (const attestation of params.attestations) {
     if (attestation.predicateType !== NPM_PROVENANCE_PREDICATE_TYPE) {
@@ -222,20 +297,24 @@ export async function verifyNpmProvenanceAttestation(params: {
       continue;
     }
     try {
-      const statement = JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as {
-        subject?: Array<{
-          digest?: Record<string, string>;
-          name?: string;
-        }>;
-      };
+      const statement = JSON.parse(
+        Buffer.from(payload, "base64").toString("utf8"),
+      ) as NpmProvenanceStatement;
       if (
         statement.subject?.some(
           (subject) =>
             subject.name === expectedSubject && subject.digest?.sha512 === expectedSha512,
         )
       ) {
+        let policy: NpmProvenanceVerificationPolicy;
         try {
-          await verifyBundle(attestation.bundle);
+          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version);
+        } catch (error) {
+          policyError = error;
+          continue;
+        }
+        try {
+          await verifyBundle(attestation.bundle, policy);
           return;
         } catch (error) {
           verificationError = error;
@@ -250,6 +329,10 @@ export async function verifyNpmProvenanceAttestation(params: {
     throw new Error(
       `npm provenance attestation failed Sigstore verification for ${params.packageName}@${params.version}: ${formatErrorMessage(verificationError)}`,
     );
+  }
+
+  if (policyError) {
+    throw policyError;
   }
 
   throw new Error(

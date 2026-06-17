@@ -24,6 +24,15 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   fails, the parent cancels the remaining child matrix and prints the failed
   job summary. Inspect that first red job instead of waiting for unrelated
   matrix tails.
+- In a sparse worktree or Testbox source sync, first confirm `package.json`,
+  `pnpm-lock.yaml`, and every source path the selected check reads. If any are
+  absent, that checkout cannot validate a release dependency or Docker lane:
+  stop and use the repo remote changed gate or a full task worktree. When the
+  inputs are present and a release fix changes `package.json` or
+  `pnpm-lock.yaml`, rebuild only the task-owned disposable box with
+  `pnpm install --frozen-lockfile`, then run an explicit `require.resolve()`
+  probe before Docker or focused tests. Do not weaken the lockfile or label
+  sparse-checkout failures as product/Docker failures.
 
 ## Preflight
 

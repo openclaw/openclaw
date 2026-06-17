@@ -70,6 +70,22 @@ describe("npm registry provenance verification", () => {
         },
       },
     ],
+    predicate: {
+      buildDefinition: {
+        externalParameters: {
+          workflow: {
+            repository: "https://github.com/openclaw/openclaw",
+            path: ".github/workflows/openclaw-npm-release.yml",
+            ref: "refs/heads/release/2026.3.23",
+          },
+        },
+      },
+      runDetails: {
+        builder: {
+          id: "https://github.com/actions/runner/github-hosted",
+        },
+      },
+    },
   };
 
   it("verifies an npm registry signature against the matching public key", () => {
@@ -95,7 +111,14 @@ describe("npm registry provenance verification", () => {
     ).not.toThrow();
   });
 
-  it("requires a valid Sigstore verification for the exact SLSA provenance attestation", async () => {
+  it("requires a trusted GitHub release identity for the exact SLSA provenance attestation", async () => {
+    let verificationPolicy:
+      | {
+          certificateIdentityURI: string;
+          certificateIssuer: string;
+        }
+      | undefined;
+
     await expect(
       verifyNpmProvenanceAttestation({
         packageName,
@@ -111,9 +134,16 @@ describe("npm registry provenance verification", () => {
             },
           },
         ],
-        verifyBundle: async () => undefined,
+        verifyBundle: async (_bundle, policy) => {
+          verificationPolicy = policy;
+        },
       }),
     ).resolves.toBeUndefined();
+    expect(verificationPolicy).toEqual({
+      certificateIssuer: "https://token.actions.githubusercontent.com",
+      certificateIdentityURI:
+        "https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/release/2026.3.23",
+    });
 
     await expect(
       verifyNpmProvenanceAttestation({
@@ -139,6 +169,49 @@ describe("npm registry provenance verification", () => {
         verifyBundle: async () => undefined,
       }),
     ).rejects.toThrow("does not match");
+  });
+
+  it("rejects matching provenance from an untrusted source before Sigstore verification", async () => {
+    let verificationCalls = 0;
+
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    predicate: {
+                      ...provenancePayload.predicate,
+                      buildDefinition: {
+                        externalParameters: {
+                          workflow: {
+                            ...provenancePayload.predicate.buildDefinition.externalParameters
+                              .workflow,
+                            ref: "refs/heads/feature/untrusted",
+                          },
+                        },
+                      },
+                    },
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        verifyBundle: async () => {
+          verificationCalls += 1;
+        },
+      }),
+    ).rejects.toThrow("does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow");
+    expect(verificationCalls).toBe(0);
   });
 
   it("rejects a matching provenance payload when Sigstore cannot verify its bundle", async () => {

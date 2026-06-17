@@ -47,6 +47,14 @@ function readReleaseAssets(release) {
     : [];
 }
 
+function isCloseoutEvidenceAsset(assetName, tag) {
+  const releaseVersion = tag.slice(1);
+  return (
+    assetName === `openclaw-${releaseVersion}-stable-main-closeout.json` ||
+    assetName === `openclaw-${releaseVersion}-stable-main-closeout.json.sha256`
+  );
+}
+
 function verifyRollbackDrill(params, errors) {
   if (!params.rollbackDrillId?.trim()) {
     errors.push("rollback drill id is required.");
@@ -154,10 +162,12 @@ export function verifyStableMainCloseout(params) {
         id: params.rollbackDrillId,
         date: params.rollbackDrillDate,
       },
-      githubReleaseAssets: readReleaseAssets(params.release).map((asset) => ({
-        name: asset.name,
-        digest: typeof asset.digest === "string" ? asset.digest : null,
-      })),
+      githubReleaseAssets: readReleaseAssets(params.release)
+        .filter((asset) => !isCloseoutEvidenceAsset(asset.name, params.tag))
+        .map((asset) => ({
+          name: asset.name,
+          digest: typeof asset.digest === "string" ? asset.digest : null,
+        })),
     },
   };
 }

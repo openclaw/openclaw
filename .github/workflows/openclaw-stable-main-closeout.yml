@@ -39,6 +39,14 @@ jobs:
       should_closeout: ${{ steps.inputs.outputs.should_closeout }}
       tag: ${{ steps.inputs.outputs.tag }}
     steps:
+      - name: Checkout pushed main
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Resolve published stable release evidence
         id: inputs
         env:
@@ -69,35 +77,46 @@ jobs:
             exit 1
           fi
           release_asset_version="${tag#v}"
-          evidence_asset="openclaw-${release_asset_version}-postpublish-evidence.json"
-          closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
-          evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
-          mkdir -p "$evidence_dir"
-          if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$evidence_asset" --dir "$evidence_dir"; then
-            if [[ "$EVENT_NAME" == "push" ]]; then
-              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Release $tag has no immutable postpublish evidence asset $evidence_asset." >&2
-            exit 1
+          release_package_version="$release_asset_version"
+          if [[ "$release_package_version" =~ ^(.+)-[0-9]+$ ]]; then
+            release_package_version="${BASH_REMATCH[1]}"
           fi
+          evidence_asset="openclaw-${release_asset_version}-postpublish-evidence.json"
+          evidence_checksum_asset="${evidence_asset}.sha256"
+          closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
           if [[ "$EVENT_NAME" == "push" ]] && gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
             --json assets | jq -e --arg name "$closeout_asset" 'any(.assets[]?; .name == $name)' \
             | grep -qx true; then
             echo "should_closeout=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            main_version="$(jq -r '.version // empty' package.json)"
+            if [[ "$main_version" != "$release_package_version" ]]; then
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
+          mkdir -p "$evidence_dir"
+          if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$evidence_asset" --pattern "$evidence_checksum_asset" --dir "$evidence_dir"; then
+            echo "Stable closeout is required for $tag, but its immutable postpublish evidence asset is missing." >&2
+            exit 1
+          fi
           evidence_path="$evidence_dir/$evidence_asset"
+          if ! (
+            cd "$evidence_dir"
+            sha256sum --strict --status -c "$evidence_checksum_asset"
+          ); then
+            echo "Postpublish evidence checksum failed for $tag." >&2
+            exit 1
+          fi
           evidence_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
           full_release_validation_run_id="$(jq -r '[.workflowRuns[]? | select(.label == "Full Release Validation") | .id] | if length == 1 then .[0] else empty end' "$evidence_path")"
           release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$evidence_path")"
           if [[ "$evidence_tag" != "$tag" || -z "$full_release_validation_run_id" || -z "$release_publish_run_id" ]]; then
-            if [[ "$EVENT_NAME" == "push" ]]; then
-              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Postpublish evidence does not bind $tag to exactly one Full Release Validation run and its Publish run." >&2
+            echo "Stable closeout is required for $tag, but postpublish evidence does not bind it to exactly one Full Release Validation run and its Publish run." >&2
             exit 1
           fi
           if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then

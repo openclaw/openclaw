@@ -71,6 +71,20 @@ describe("stable release closeout", () => {
     });
     const replay = verifyStableMainCloseout({
       ...validCloseoutParams,
+      release: {
+        ...release,
+        assets: [
+          ...release.assets,
+          {
+            name: "openclaw-2026.6.8-stable-main-closeout.json",
+            digest: `sha256:${"d".repeat(64)}`,
+          },
+          {
+            name: "openclaw-2026.6.8-stable-main-closeout.json.sha256",
+            digest: `sha256:${"e".repeat(64)}`,
+          },
+        ],
+      },
       nowMs: Date.parse("2026-06-18T00:00:00Z"),
     });
 

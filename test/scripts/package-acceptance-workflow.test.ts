@@ -11,6 +11,7 @@ const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/ac
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
@@ -98,6 +99,27 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
 }
 
 describe("package acceptance workflow", () => {
+  it("verifies immutable postpublish evidence before stable closeout reads it", () => {
+    const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
+    const checksumIndex = workflow.indexOf(
+      'sha256sum --strict --status -c "$evidence_checksum_asset"',
+    );
+    const evidenceReadIndex = workflow.indexOf('evidence_tag="$(jq -r');
+    const releaseVersionGateIndex = workflow.indexOf(
+      'if [[ "$main_version" != "$release_package_version" ]]; then',
+    );
+    const evidenceDownloadIndex = workflow.indexOf('if ! gh release download "$tag"');
+
+    expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
+    expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
+    expect(workflow).toContain('release_package_version="${BASH_REMATCH[1]}"');
+    expect(workflow).toContain("Stable closeout is required for $tag");
+    expect(checksumIndex).toBeGreaterThan(-1);
+    expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
+    expect(releaseVersionGateIndex).toBeGreaterThan(-1);
+    expect(evidenceDownloadIndex).toBeGreaterThan(releaseVersionGateIndex);
+  });
+
   it("keeps pnpm version selection sourced from packageManager", () => {
     const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
       packageManager?: string;
