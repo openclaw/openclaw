@@ -9,7 +9,7 @@ import { DEFAULT_GATEWAY_PORT, resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { defaultGatewayBindMode } from "../gateway/net.js";
+import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
@@ -138,6 +138,17 @@ function buildInvalidProbeAuth(
   return undefined;
 }
 
+function canSafelyProbeInvalidAuth(params: { url: string; config: OpenClawConfig }): boolean {
+  if (params.config.gateway?.auth?.rateLimit?.exemptLoopback === false) {
+    return false;
+  }
+  try {
+    return isLoopbackAddress(new URL(params.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 async function probeVerifiedExistingGateway(params: {
   url: string;
   auth: GatewayProbeAuth;
@@ -167,7 +178,9 @@ async function probeVerifiedExistingGateway(params: {
   ) {
     return false;
   }
-  const invalidAuth = buildInvalidProbeAuth(params.settings, params.auth);
+  const invalidAuth = canSafelyProbeInvalidAuth(params)
+    ? buildInvalidProbeAuth(params.settings, params.auth)
+    : undefined;
   if (!invalidAuth) {
     return true;
   }

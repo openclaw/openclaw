@@ -150,6 +150,79 @@ describe("setup migration import freshness", () => {
     expect(result).toEqual({ fresh: true, reasons: [] });
   });
 
+  it("allows an official source-linked migration provider install after a cancelled import", async () => {
+    const root = await makeTempRoot();
+    const result = await inspectSetupMigrationFreshness({
+      baseConfig: {
+        plugins: {
+          entries: {
+            codex: { enabled: true },
+          },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath: "/tmp/openclaw-extensions/codex",
+            },
+          },
+        },
+      },
+      stateDir: path.join(root, "state"),
+      workspaceDir: path.join(root, "workspace"),
+    });
+
+    expect(result).toEqual({ fresh: true, reasons: [] });
+  });
+
+  it.each([
+    {
+      name: "custom npm",
+      record: {
+        source: "npm" as const,
+        spec: "@example/codex",
+        installPath: "/tmp/openclaw-extensions/codex",
+      },
+    },
+    {
+      name: "path",
+      record: {
+        source: "path" as const,
+        sourcePath: "/tmp/custom-codex",
+        installPath: "/tmp/custom-codex",
+      },
+    },
+    {
+      name: "community ClawHub",
+      record: {
+        source: "clawhub" as const,
+        spec: "clawhub:@openclaw/codex",
+        installPath: "/tmp/openclaw-extensions/codex",
+        clawhubPackage: "@openclaw/codex",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "community" as const,
+      },
+    },
+  ])("rejects a $name install record for a migration provider", async ({ record }) => {
+    const root = await makeTempRoot();
+
+    await expect(
+      inspectSetupMigrationFreshness({
+        baseConfig: {
+          plugins: {
+            entries: {
+              codex: { enabled: true },
+            },
+            installs: {
+              codex: record,
+            },
+          },
+        },
+        stateDir: path.join(root, "state"),
+        workspaceDir: path.join(root, "workspace"),
+      }),
+    ).resolves.toMatchObject({ fresh: false });
+  });
+
   it("rejects configured migration providers and unrelated plugins", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");

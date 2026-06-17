@@ -7,7 +7,12 @@ import {
   type OnboardingPluginInstallEntry,
 } from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "../plugins/official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
@@ -120,7 +125,22 @@ function hasMeaningfulConfig(config: OpenClawConfig): boolean {
       return Object.keys(entryRecord).length !== 1 || entryRecord.enabled !== true;
     }) ||
     installs.some(([pluginId, record]) => {
-      return !retryablePluginIds.has(pluginId) || !record || typeof record !== "object";
+      if (
+        !retryablePluginIds.has(pluginId) ||
+        !record ||
+        typeof record !== "object" ||
+        Array.isArray(record)
+      ) {
+        return true;
+      }
+      const installRecord = record as PluginInstallRecord;
+      if (typeof installRecord.installPath !== "string" || !installRecord.installPath.trim()) {
+        return true;
+      }
+      return !(
+        resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record: installRecord }) ||
+        resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record: installRecord })
+      );
     })
   );
 }

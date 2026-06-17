@@ -12,6 +12,7 @@ const killProcessTree = vi.hoisted(() => vi.fn());
 const detach = vi.hoisted(() => vi.fn());
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() => vi.fn(() => [] as number[]));
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn(() => "loopback"));
+const isLoopbackAddress = vi.hoisted(() => vi.fn((host: string) => host === "127.0.0.1"));
 const resolveSetupSecretInputString = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -42,6 +43,7 @@ vi.mock("../config/paths.js", () => ({
 
 vi.mock("../gateway/net.js", () => ({
   defaultGatewayBindMode,
+  isLoopbackAddress,
 }));
 
 vi.mock("../process/kill-tree.js", () => ({
@@ -185,6 +187,41 @@ describe("agent-assisted Gateway runtime", () => {
     });
 
     expect(result.temporary).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("does not consume a non-exempt auth failure budget when verifying an existing Gateway", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        config: {
+          gateway: {
+            auth: {
+              mode: "token",
+              rateLimit: { maxAttempts: 1, exemptLoopback: false },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            rateLimit: { maxAttempts: 1, exemptLoopback: false },
+          },
+        },
+      },
+      settings,
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(false);
+    expect(probeGateway).toHaveBeenCalledOnce();
     expect(spawn).not.toHaveBeenCalled();
   });
 
