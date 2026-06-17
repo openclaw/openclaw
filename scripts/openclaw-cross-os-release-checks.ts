@@ -29,6 +29,7 @@ import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { root as openFsRoot } from "@openclaw/fs-safe/root";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
@@ -833,6 +834,24 @@ function assertSafePackageDistInventoryWriteRoots(packageRoot) {
   }
 }
 
+function assertSafePackageDistInventoryWriteDestination(packageRoot, relativePath) {
+  try {
+    const stats = lstatSync(join(packageRoot, relativePath));
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink > 1) {
+      throw new Error(`unsafe package dist inventory write destination: ${relativePath}`);
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function writePackageDistInventoryMetadata(packageFs, packageRoot, relativePath, content) {
+  assertSafePackageDistInventoryWriteDestination(packageRoot, relativePath);
+  await packageFs.write(relativePath, content, { mode: 0o644 });
+}
+
 function isPackagedDistPath(relativePath) {
   if (!relativePath.startsWith("dist/")) {
     return false;
@@ -907,13 +926,18 @@ export async function writePackageDistInventoryForCandidate(params) {
   assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   mkdirSync(dirname(inventoryPath), { recursive: true });
   assertSafePackageDistInventoryWriteRoots(params.sourceDir);
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
-  const contentInventoryPath = join(params.sourceDir, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
-  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
-  writeFileSync(
-    contentInventoryPath,
+  const packageFs = await openFsRoot(params.sourceDir, { mkdir: true });
+  await writePackageDistInventoryMetadata(
+    packageFs,
+    params.sourceDir,
+    PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+    `${JSON.stringify(inventory, null, 2)}\n`,
+  );
+  await writePackageDistInventoryMetadata(
+    packageFs,
+    params.sourceDir,
+    PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
     `${JSON.stringify(buildPackageDistContentInventory(params.sourceDir, inventory), null, 2)}\n`,
-    "utf8",
   );
 }
 

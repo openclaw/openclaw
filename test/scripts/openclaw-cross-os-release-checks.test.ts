@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1750,6 +1751,56 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32").each([
+    {
+      kind: "symlink",
+      relativePath: "dist/postinstall-inventory.json",
+    },
+    {
+      kind: "symlink",
+      relativePath: "dist/postinstall-content-inventory.json",
+    },
+    {
+      kind: "hardlink",
+      relativePath: "dist/postinstall-inventory.json",
+    },
+    {
+      kind: "hardlink",
+      relativePath: "dist/postinstall-content-inventory.json",
+    },
+  ])("rejects an unsafe $kind candidate inventory destination at $relativePath", async (params) => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-inventory-destination-"));
+    const outsidePath = `${packageRoot}-outside.json`;
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        "utf8",
+      );
+      writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+      writeFileSync(outsidePath, "outside sentinel\n", "utf8");
+      const destinationPath = join(packageRoot, params.relativePath);
+      if (params.kind === "symlink") {
+        symlinkSync(outsidePath, destinationPath);
+      } else {
+        linkSync(outsidePath, destinationPath);
+      }
+
+      await expect(
+        writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        }),
+      ).rejects.toThrow(`unsafe package dist inventory write destination: ${params.relativePath}`);
+
+      expect(readFileSync(outsidePath, "utf8")).toBe("outside sentinel\n");
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+      rmSync(outsidePath, { force: true });
     }
   });
 
