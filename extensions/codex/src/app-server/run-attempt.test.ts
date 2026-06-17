@@ -2165,8 +2165,19 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("older next-step anchor: keep the handoff checklist", Date.now()),
+    );
     sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
     sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
+    for (let index = 0; index < 8; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `continuity filler ${index}: ${"x".repeat(4_000)}`,
+          Date.now() + 2 + index,
+        ),
+      );
+    }
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "make the default webpage openclaw";
@@ -2185,6 +2196,7 @@ describe("runCodexAppServerAttempt", () => {
       "";
 
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("older next-step anchor: keep the handoff checklist");
     expect(inputText).toContain("we are fixing the Opik default project");
     expect(inputText).toContain("Opik default project context");
     expect(inputText).toContain("Current user request:");
@@ -4787,11 +4799,28 @@ describe("runCodexAppServerAttempt", () => {
     }
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
-      userMessage("post-binding user context", bindingUpdatedAt + 1_000),
+      userMessage(
+        "pre-binding native-owned context: keep the original plan",
+        bindingUpdatedAt - 2_000,
+      ),
+    );
+    sessionManager.appendMessage(
+      userMessage(
+        "post-binding user context: resume the release checklist",
+        bindingUpdatedAt + 1_000,
+      ),
     );
     sessionManager.appendMessage(
       assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
     );
+    for (let index = 0; index < 8; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `post-binding continuity filler ${index}: ${"x".repeat(4_000)}`,
+          bindingUpdatedAt + 3_000 + index,
+        ),
+      );
+    }
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -4835,7 +4864,8 @@ describe("runCodexAppServerAttempt", () => {
     const inputText =
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
-    expect(inputText).toContain("post-binding user context");
+    expect(inputText).toContain("pre-binding native-owned context: keep the original plan");
+    expect(inputText).toContain("post-binding user context: resume the release checklist");
     expect(inputText).toContain("post-binding assistant context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-1");
