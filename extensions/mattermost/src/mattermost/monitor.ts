@@ -38,7 +38,6 @@ import {
   updateMattermostPost,
   type MattermostClient,
   type MattermostPost,
-  type MattermostThreadResponse,
   type MattermostUser,
 } from "./client.js";
 import { createMattermostDraftStream } from "./draft-stream.js";
@@ -1583,7 +1582,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 const entries: HistoryEntry[] = [];
                 for (const pid of thread.order) {
                   const p = thread.posts[pid];
-                  if (!p || p.id === post.id) continue;
+                  if (!p || p.id === post.id) {
+                    continue;
+                  }
                   const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
                   entries.push({
                     sender: user?.username ? `@${user.username}` : (p.user_id ?? "unknown"),
