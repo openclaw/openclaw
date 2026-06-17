@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -301,6 +302,116 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+  });
+
+  it("deduplicates identical final replies while preserving distinct finals", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [
+        { text: "generated image", mediaUrl: "file:///tmp/generated.png" },
+        { text: "generated image", mediaUrl: "file:///tmp/generated.png" },
+        { text: "follow-up note" },
+      ],
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, {
+      text: "generated image",
+      mediaUrl: "file:///tmp/generated.png",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, {
+      text: "follow-up note",
+    });
+  });
+
+  it("keeps final replies with different delivery presentation", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [
+        { text: "audio", mediaUrl: "file:///tmp/audio.ogg", audioAsVoice: true },
+        { text: "audio", mediaUrl: "file:///tmp/audio.ogg", audioAsVoice: false },
+      ],
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps final replies with different reply threading explicitness", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const explicitReply = setReplyPayloadMetadata(
+      { text: "threaded", replyToId: "message-1" },
+      { replyToIdExplicit: true },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [{ text: "threaded", replyToId: "message-1" }, explicitReply],
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps final replies with different reply threading flags", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [
+        { text: "threaded", replyToCurrent: true },
+        { text: "threaded", replyToCurrent: false },
+      ],
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps final replies with different transcript mirror identities", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const firstMirror = setReplyPayloadMetadata(
+      { text: "mirrored source reply" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:test:session",
+          idempotencyKey: "source-reply:first",
+        },
+      },
+    );
+    const secondMirror = setReplyPayloadMetadata(
+      { text: "mirrored source reply" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:test:session",
+          idempotencyKey: "source-reply:second",
+        },
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [firstMirror, secondMirror],
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
   });
 
   it("delivers a generated final reply before queued follow-up admission", async () => {

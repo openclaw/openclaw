@@ -203,6 +203,33 @@ function isDispatchReplyOperationAbortedError(
   return error instanceof DispatchReplyOperationAbortedError;
 }
 
+function createFinalReplyDispatchKey(payload: ReplyPayload): string {
+  const reply = resolveSendableOutboundReplyParts(payload);
+  const metadata = getReplyPayloadMetadata(payload);
+  return JSON.stringify({
+    text: reply.trimmedText,
+    mediaList: reply.mediaUrls,
+    trustedLocalMedia: payload.trustedLocalMedia === true,
+    sensitiveMedia: payload.sensitiveMedia === true,
+    presentation: payload.presentation ?? null,
+    delivery: payload.delivery ?? null,
+    interactive: payload.interactive ?? null,
+    btwQuestion: payload.btw?.question ?? null,
+    replyToId: payload.replyToId ?? null,
+    replyToTag: payload.replyToTag === true,
+    replyToCurrent: payload.replyToCurrent === true,
+    metadata: metadata ?? null,
+    audioAsVoice: payload.audioAsVoice === true,
+    spokenText: payload.spokenText ?? null,
+    ttsSupplement: payload.ttsSupplement ?? null,
+    isError: payload.isError === true,
+    isCompactionNotice: payload.isCompactionNotice === true,
+    isFallbackNotice: payload.isFallbackNotice === true,
+    isStatusNotice: isReplyPayloadStatusNotice(payload),
+    channelData: payload.channelData ?? null,
+  });
+}
+
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const activeSignals: AbortSignal[] = [];
   for (const signal of signals) {
@@ -3261,6 +3288,7 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    const deliveredFinalPayloadKeys = new Set<string>();
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -3296,6 +3324,11 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      const finalPayloadKey = createFinalReplyDispatchKey(reply);
+      if (deliveredFinalPayloadKeys.has(finalPayloadKey)) {
+        continue;
+      }
+      deliveredFinalPayloadKeys.add(finalPayloadKey);
       attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
