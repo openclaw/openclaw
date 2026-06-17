@@ -516,8 +516,8 @@ async function fetchWithSsrFGuardInternal(
         isTrustedEnvProxyMode &&
         !dispatcherPolicy &&
         shouldUseEnvHttpProxyForUrl(parsedUrl.toString());
-      // When NO_PROXY excludes the URL in trusted env-proxy mode, go direct
-      // (bypass proxy). Without this, the request falls through to SSRF or
+      // When the no-proxy env exclusion applies in trusted env-proxy mode, go direct
+      // go direct (bypass proxy). Without this, the request falls through to
       // the global EnvHttpProxyAgent dispatcher — both of which route local
       // addresses through the proxy or block them outright.
       const canUseDirectNoProxy =
@@ -544,7 +544,18 @@ async function fetchWithSsrFGuardInternal(
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseDirectNoProxy) {
-        dispatcher = createHttp1Agent(undefined, timeoutMs);
+        // Resolve DNS pinning for no-proxy excluded URLs so the direct
+        // dispatcher still pins to resolved addresses. If resolution fails
+        // (e.g. for local IPs), fall back to a bare direct agent.
+        try {
+          const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+            lookupFn: params.lookupFn,
+            policy: policyForUrl,
+          });
+          dispatcher = createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
+        } catch {
+          dispatcher = createHttp1Agent(undefined, timeoutMs);
+        }
       } else if (canUseManagedProxy) {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
