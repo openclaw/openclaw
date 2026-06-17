@@ -107,6 +107,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
+  readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
