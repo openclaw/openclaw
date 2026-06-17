@@ -219,10 +219,15 @@ function hasUnsafeExtractedAncestor(candidate, root) {
   let current = resolvedRoot;
   for (const part of relativePath.split(path.sep).slice(0, -1)) {
     current = path.join(current, part);
-    if (!fs.existsSync(current)) {
-      return false;
+    let stats;
+    try {
+      stats = fs.lstatSync(current);
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        return false;
+      }
+      throw error;
     }
-    const stats = fs.lstatSync(current);
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
       return true;
     }
@@ -251,6 +256,10 @@ function collectUnsafeExtractedDistTreeErrors() {
     }
   };
   for (const { label, root } of roots) {
+    if (hasUnsafeExtractedAncestor(root, extractDir)) {
+      treeErrors.push(`unsafe extracted dist root: ${label}`);
+      continue;
+    }
     let stats;
     try {
       stats = fs.lstatSync(root);

@@ -791,6 +791,32 @@ describe("check-openclaw-package-tarball", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked package ancestors before traversing dist",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-package-ancestor-symlink-test-"));
+      try {
+        const outsideRoot = join(root, "outside-package");
+        mkdirSync(join(outsideRoot, "dist"), { recursive: true });
+        symlinkSync("missing-target.js", join(outsideRoot, "dist", "sensitive-external-name.js"));
+        symlinkSync(outsideRoot, join(root, "package"));
+        const tarball = join(root, "openclaw.tgz");
+        const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
+          encoding: "utf8",
+        });
+        expect(pack.status, pack.stderr).toBe(0);
+
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("unsafe extracted dist root: package/dist");
+        expect(result.stderr).not.toContain("sensitive-external-name.js");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects broken symlinked dist parents", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-package-broken-dist-symlink-test-"));
     try {
