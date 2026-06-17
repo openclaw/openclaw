@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { prepareClawRouterRequestModel } from "./provider-catalog.js";
 
@@ -18,10 +19,7 @@ function withBearerAuthorization(
   return next;
 }
 
-export function wrapClawRouterProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
-  const underlying = ctx.streamFn;
+function createClawRouterStreamWrapper(underlying: StreamFn | undefined): StreamFn | undefined {
   if (!underlying) {
     return undefined;
   }
@@ -39,4 +37,14 @@ export function wrapClawRouterProviderStream(
       options,
     );
   };
+}
+
+export function createClawRouterStreamFn(): StreamFn {
+  return createClawRouterStreamWrapper(streamSimple) as StreamFn;
+}
+
+export function wrapClawRouterProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  return createClawRouterStreamWrapper(ctx.streamFn);
 }

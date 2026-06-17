@@ -13,7 +13,7 @@ import {
   normalizeClawRouterApiBaseUrl,
   normalizeClawRouterResolvedModel,
 } from "./provider-catalog.js";
-import { wrapClawRouterProviderStream } from "./stream.js";
+import { createClawRouterStreamFn, wrapClawRouterProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "clawrouter";
 const ENV_VAR = "CLAWROUTER_API_KEY";
@@ -99,6 +99,7 @@ export default definePluginEntry({
         const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
+      createStreamFn: createClawRouterStreamFn,
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
       wrapSimpleCompletionStreamFn: wrapClawRouterProviderStream,
       wrapStreamFn: wrapClawRouterProviderStream,
