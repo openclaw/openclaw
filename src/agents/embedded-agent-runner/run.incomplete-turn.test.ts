@@ -3102,6 +3102,217 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("treats a no-tool turn with an explicit NO_REPLY as silent (system_event silence path)", () => {
+    // A system_event turn runs in message-tool-only delivery with a silent prompt, so the
+    // agent emits an explicit NO_REPLY. hasOnlySilentAssistantReply handles that without
+    // consulting the post-tool guard — no guard bypass is required.
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    // hasOnlySilentAssistantReply matches the explicit NO_REPLY and returns silent
+    // directly — it never consults the post-tool/side-effect guards, so no bypass is
+    // needed for legitimate system_event silence.
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+  });
+
+  it("still warns on a post-mutating-tool empty turn (post-tool guard intact)", () => {
+    // A genuine post-mutating-tool empty turn (provider returned nothing, no NO_REPLY)
+    // must still be treated as an incomplete turn — the guard is preserved.
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats a mutating-tool turn with an explicit NO_REPLY as intentional silence", () => {
+    // The core incident: agent edits SKILL.md (mutating tool, hadPotentialSideEffects=true)
+    // then emits an explicit NO_REPLY. The token is deliberate — honour it.
+    // Implicit empty turns after mutating tools still warn (tested separately).
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      toolMetas: [{ toolName: "exec" }], // replaySafe defaults to false → hadPotentialSideEffects=true
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+  });
+
+  it("still warns on an aborted turn even when it emitted an explicit NO_REPLY", () => {
+    // aborted=true means something external stopped the run — the agent did not
+    // deliberately signal silence; defer to the caller to handle the abort.
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: true, // ← abort overrides explicit silence
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("still warns on an implicit empty turn after a mutating tool (safety preserved)", () => {
+    // IMPLICIT empty (no token, provider returned nothing) after a mutating tool.
+    // This is an ambiguous failure — the agent did not explicitly signal silence.
+    // The side-effects guard fires and the caller should surface the warning.
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }], // mutating tool → hadPotentialSideEffects=true
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("still warns when lastToolError is present even with an explicit NO_REPLY", () => {
+    // lastToolError is a genuine failure signal — the agent did not finish cleanly.
+    // An explicit NO_REPLY in assistantTexts does not override a real tool failure.
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      toolMetas: [{ toolName: "exec" }],
+      lastToolError: { toolName: "exec", error: "exit code 1" },
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("still warns when clientToolCalls is present even with an explicit NO_REPLY", () => {
+    // clientToolCalls means the run handed off to client-side execution — not a clean end.
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      clientToolCalls: [{ name: "bash", params: {} }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("still warns when a session spawn was accepted even with an explicit NO_REPLY", () => {
+    // acceptedSessionSpawns is a handoff signal — the agent delegated to a sub-session.
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      acceptedSessionSpawns: [{ runId: "sub-run-1", childSessionKey: "child-key-1" }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
   it("returns NO_REPLY without retrying clean empty assistant turns when silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
