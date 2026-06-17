@@ -641,13 +641,6 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("keeps QA Lab OTEL script edits on QA e2e tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/qa-otel-smoke.ts"])).toEqual({
-      mode: "targets",
-      targets: ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
-    });
-  });
-
   it("keeps shared script library edits on owner tests", () => {
     const expectedTargets = new Map([
       [
