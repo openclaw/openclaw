@@ -1,0 +1,49 @@
+{
+  "id": "adorbis",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["adorbis"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "adorbis-native",
+      "hosts": ["api.adorbistech.com"]
+    }
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "adorbis",
+        "envVars": ["ADORBIS_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "adorbis",
+      "method": "api-key",
+      "choiceId": "adorbis-api-key",
+      "choiceLabel": "Adorbis AI API key",
+      "choiceHint": "Sovereign OpenAI-compatible gateway",
+      "groupId": "adorbis",
+      "groupLabel": "Adorbis AI",
+      "groupHint": "Sovereign multi-vendor AI gateway",
+      "optionKey": "adorbisApiKey",
+      "cliFlag": "--adorbis-api-key",
+      "cliOption": "--adorbis-api-key <key>",
+      "cliDescription": "Adorbis AI API key",
+      "onboardingScopes": ["text-inference"]
+    }
+  ],
+  "modelCatalog": {
+    "discovery": {
+      "adorbis": "refreshable"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
