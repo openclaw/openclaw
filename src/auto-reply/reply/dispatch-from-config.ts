@@ -1295,7 +1295,8 @@ export async function dispatchReplyFromConfig(
   // Inherited sessions_send routes carry thread ids only when the stored route
   // proves the thread came from an explicit target, not session normalization.
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
-  const inboundAudio = hasInboundAudio(ctx);
+  const inboundAudio =
+    hasInboundAudio(ctx) || sessionStoreEntry.entry?.steeredInboundAudio === true;
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;

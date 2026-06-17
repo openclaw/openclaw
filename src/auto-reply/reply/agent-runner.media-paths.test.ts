@@ -434,6 +434,35 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
+  it("propagates steered inbound audio metadata to session entry", async () => {
+    const sessionEntry: Record<string, unknown> = {
+      sessionId: "test",
+      updatedAt: Date.now(),
+    };
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isStreaming: true,
+        sessionEntry: sessionEntry as Parameters<typeof runReplyAgent>[0]["sessionEntry"],
+        followupRun: {
+          ...createMockFollowupRun({ prompt: "generate chart" }),
+          currentInboundAudio: true,
+        } as unknown as FollowupRun,
+      }),
+    );
+
+    expect(sessionEntry.steeredInboundAudio).toBe(true);
+  });
+
   it("queues active prompts in followup mode without steering", async () => {
     await runReplyAgent(
       makeRunReplyAgentParams({

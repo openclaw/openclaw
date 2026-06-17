@@ -296,6 +296,12 @@ export type SessionEntry = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
+  /**
+   * Set to true when steer mode injects an audio inbound into an active session
+   * run. Allows downstream dispatch to detect that the session consumed audio
+   * even though the original dispatch ctx was text-only.
+   */
+  steeredInboundAudio?: true;
   /** Hash of the latest assistant reply that was sent through `/tts latest`. */
   lastTtsReadLatestHash?: string;
   /** Timestamp (ms) when `/tts latest` last sent audio for this session. */

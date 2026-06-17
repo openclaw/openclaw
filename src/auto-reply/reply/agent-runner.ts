@@ -1267,6 +1267,11 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
+      // Propagate steered inbound metadata so downstream dispatch can detect
+      // audio in the session even when the original dispatch ctx was text-only.
+      if (followupRun.currentInboundAudio && activeSessionEntry) {
+        activeSessionEntry.steeredInboundAudio = true;
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
