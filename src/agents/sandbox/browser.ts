@@ -23,6 +23,7 @@ import {
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import { splitSandboxBindSpec } from "./bind-spec.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -59,6 +60,7 @@ import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
   formatReadOnlyWorkspaceSkillMountHashState,
+  resolveProtectedContainerPaths,
   resolveReadOnlyWorkspaceSkillMounts,
   SANDBOX_MOUNT_FORMAT_VERSION,
 } from "./workspace-mounts.js";
@@ -363,7 +365,12 @@ export async function ensureSandboxBrowser(params: {
       includeReadOnlyWorkspaceSkillMounts: false,
     });
     if (browserDockerCfg.binds?.length) {
+      const protectedPaths = resolveProtectedContainerPaths(readOnlyWorkspaceSkillMounts);
       for (const bind of browserDockerCfg.binds) {
+        const spec = splitSandboxBindSpec(bind);
+        if (spec && protectedPaths.has(spec.container)) {
+          continue;
+        }
         args.push("-v", bind);
       }
     }

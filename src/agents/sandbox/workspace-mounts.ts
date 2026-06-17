@@ -78,7 +78,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
   const materializedSkillsWorkspaceDir =
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
+    params.skillsWorkspaceDir ??
+    resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
@@ -116,6 +117,13 @@ export function formatReadOnlyWorkspaceSkillMountHashState(
   mounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): string[] {
   return mounts.map((mount) => `${mount.hostPath}:${mount.containerPath}:ro`);
+}
+
+/** Returns the set of protected container destination paths from read-only skill mounts. */
+export function resolveProtectedContainerPaths(
+  mounts: readonly ReadOnlyWorkspaceSkillMount[],
+): Set<string> {
+  return new Set(mounts.map((mount) => mount.containerPath));
 }
 
 /** Appends Docker `-v` args for read-only skill mounts. */
