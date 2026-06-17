@@ -63,7 +63,7 @@ describe("reactivateCompletedSubagentSession", () => {
     });
   });
 
-  it("threads the follow-up task into the replacement so restart redispatch rewraps the new prompt instead of the stale original", async () => {
+  it("threads the exact follow-up task into the replacement so restart redispatch rewraps the new prompt instead of the stale original", async () => {
     // Regression for the ClawSweeper P2 finding on #77539: the helper-level
     // task override reaches active steer, descendant wake, and orphan
     // recovery, but the completed-session reactivation sibling path used by
@@ -100,7 +100,7 @@ describe("reactivateCompletedSubagentSession", () => {
       nextRunId: "run-next",
       fallback: latestEndedRun,
       runTimeoutSeconds: 0,
-      task: "follow-up prompt text",
+      task: "  follow-up prompt text  ",
     });
   });
 

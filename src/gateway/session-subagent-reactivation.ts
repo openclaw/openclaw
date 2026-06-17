@@ -33,12 +33,13 @@ export async function reactivateCompletedSubagentSession(params: {
     return false;
   }
   const { replaceSubagentRunAfterSteer } = await loadSessionSubagentReactivationRuntime();
-  const trimmedTask = params.task?.trim();
+  const task = params.task;
+  const hasTask = typeof task === "string" && task.trim().length > 0;
   return replaceSubagentRunAfterSteer({
     previousRunId: existing.runId,
     nextRunId: runId,
     fallback: existing,
     runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
-    ...(trimmedTask ? { task: trimmedTask } : {}),
+    ...(hasTask ? { task } : {}),
   });
 }
