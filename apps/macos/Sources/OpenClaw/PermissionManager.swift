@@ -159,7 +159,7 @@ enum PermissionManager {
             }
             return false
         }
-        let status = cachedLocationManager.authorizationStatus
+        let status = self.cachedLocationManager.authorizationStatus
         switch status {
         case .authorizedAlways, .authorizedWhenInUse, .authorized:
             return true
@@ -221,7 +221,7 @@ enum PermissionManager {
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
 
             case .location:
-                let status = cachedLocationManager.authorizationStatus
+                let status = self.cachedLocationManager.authorizationStatus
                 results[cap] = CLLocationManager.locationServicesEnabled()
                     && self.isLocationAuthorized(status: status, requireAlways: false)
             }
