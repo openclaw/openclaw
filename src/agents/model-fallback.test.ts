@@ -470,16 +470,24 @@ function createOverrideFailureRun(params: {
 function makeSingleProviderStore(params: {
   provider: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
+  credentialType?: "api_key" | "token";
 }): AuthProfileStore {
   const profileId = `${params.provider}:default`;
   return {
     version: AUTH_STORE_VERSION,
     profiles: {
-      [profileId]: {
-        type: "api_key",
-        provider: params.provider,
-        key: "test-key",
-      },
+      [profileId]:
+        params.credentialType === "token"
+          ? {
+              type: "token",
+              provider: params.provider,
+              token: "test-token",
+            }
+          : {
+              type: "api_key",
+              provider: params.provider,
+              key: "test-key",
+            },
     },
     usageStats: {
       [profileId]: params.usageStat,
@@ -500,12 +508,15 @@ async function expectSkippedUnavailableProvider(params: {
   providerPrefix: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
   expectedReason: string;
+  credentialType?: "api_key" | "token";
+  expectedAuthMode?: "token";
 }) {
   const provider = `${params.providerPrefix}-${crypto.randomUUID()}`;
   const cfg = makeProviderFallbackCfg(provider);
   const primaryStore = makeSingleProviderStore({
     provider,
     usageStat: params.usageStat,
+    credentialType: params.credentialType,
   });
   // Include fallback provider profile so the fallback is attempted (not skipped as no-profile).
   const store: AuthProfileStore = {
@@ -531,6 +542,7 @@ async function expectSkippedUnavailableProvider(params: {
   expect(result.result).toBe("ok");
   expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
+  expect(result.attempts[0]?.authMode).toBe(params.expectedAuthMode);
 }
 
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
@@ -1492,6 +1504,7 @@ describe("runWithModelFallback", () => {
       payloads: [],
       meta: {
         durationMs: 1,
+        replayInvalid: true,
         toolSummary: {
           calls: 1,
           tools: ["mcp_write"],
@@ -1574,6 +1587,11 @@ describe("runWithModelFallback", () => {
       ],
       meta: {
         durationMs: 1,
+        error: {
+          kind: "incomplete_turn",
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+        },
       },
     };
 
@@ -2007,6 +2025,30 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.reason).toBe("billing");
   });
 
+  it("preserves auth mode metadata in fallback attempts", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("credit balance too low", {
+          reason: "billing",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          authMode: "oauth",
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.attempts[0]?.authMode).toBe("oauth");
+  });
+
   it("falls back on OpenRouter API-key budget limit errors", async () => {
     const cfg = makeCfg({
       agents: {
@@ -2204,6 +2246,8 @@ describe("runWithModelFallback", () => {
         failureCounts: { rate_limit: 4 },
       },
       expectedReason: "billing",
+      credentialType: "token",
+      expectedAuthMode: "token",
     });
   });
 

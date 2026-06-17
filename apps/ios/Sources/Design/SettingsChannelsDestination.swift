@@ -332,65 +332,6 @@ struct SettingsChannelsDestination: View {
     }
 }
 
-struct SettingsChannelsScreen: View {
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
-    let gatewayAction: (() -> Void)?
-
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, gatewayAction: (() -> Void)? = nil) {
-        self.headerLeadingAction = headerLeadingAction
-        self.gatewayAction = gatewayAction
-    }
-
-    var body: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    self.header
-                    SettingsChannelsDestination(showsSummaryCard: false)
-                }
-                .padding(.top, 18)
-                .padding(.bottom, OpenClawProMetric.bottomScrollInset)
-            }
-        }
-        .navigationTitle("Channels")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if let headerLeadingAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Channels / Integrations")
-                    .font(.title3.weight(.semibold))
-                Text("Message routing and external channel clients.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            self.gatewayPill
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    @ViewBuilder
-    private var gatewayPill: some View {
-        if let gatewayAction {
-            Button(action: gatewayAction) {
-                OpenClawGatewayCompactPill()
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Opens Settings / Gateway")
-        } else {
-            OpenClawGatewayCompactPill()
-        }
-    }
-}
-
 private struct SettingsChannelRow: View {
     let entry: SettingsChannelEntry
     let canAdmin: Bool

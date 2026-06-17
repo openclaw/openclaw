@@ -753,6 +753,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
         pendingFinalDeliveryAttemptCount: undefined,
         pendingFinalDeliveryLastError: undefined,
         pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
         updatedAt: Date.now(),
       };
     },
@@ -1605,10 +1606,12 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const routedReplyAccountId = routeReplyChannel
+  const shouldPrepareRoutedReplyDelivery = shouldRouteToOriginating && Boolean(routeReplyChannel);
+  const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
     : undefined;
-  const routedReplyDelivery = routeReplyChannel
+  const routedReplyAccountId = shouldPrepareRoutedReplyDelivery ? replyContextAccountId : undefined;
+  const routedReplyDelivery = shouldPrepareRoutedReplyDelivery
     ? createReplyDeliveryContext(
         resolveReplyToMode(cfg, routeReplyChannel, routedReplyAccountId, replyRoute.chatType),
         replyRoute.chatType,
@@ -1629,7 +1632,7 @@ export async function dispatchReplyFromConfig(
       sessionKey: acpDispatchSessionKey,
       workspaceDir,
       messageProvider: deliveryChannel,
-      accountId: routedReplyAccountId,
+      accountId: replyContextAccountId,
       groupId,
       groupChannel: ctx.GroupChannel,
       groupSpace: ctx.GroupSpace,
@@ -2499,7 +2502,7 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              originatingAccountId: routedReplyAccountId,
+              originatingAccountId: replyContextAccountId,
               originatingThreadId: routeReplyThreadId,
               originatingChatType: replyRoute.chatType,
               shouldSendToolSummaries,
@@ -2736,10 +2739,12 @@ export async function dispatchReplyFromConfig(
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
+      allowWhenToolSummariesHidden?: boolean;
       requiresToolSummaryVisibility?: boolean;
     }) =>
       options?.requiresToolSummaryVisibility === true &&
-      params.replyOptions?.suppressDefaultToolProgressMessages === true;
+      (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
+        options.allowWhenToolSummariesHidden === true);
     let hasPendingDirectBlockReplyDelivery = false;
     const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
       if (!hasPendingDirectBlockReplyDelivery) {
@@ -2752,6 +2757,7 @@ export async function dispatchReplyFromConfig(
       await waitForReplyDispatcherIdle(dispatcher, abortSignal);
     };
     const shouldForwardProgressCallback = (options?: {
+      allowWhenToolSummariesHidden?: boolean;
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
     }) => {
@@ -2772,6 +2778,7 @@ export async function dispatchReplyFromConfig(
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
       options?: {
+        allowWhenToolSummariesHidden?: boolean;
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
@@ -2884,6 +2891,8 @@ export async function dispatchReplyFromConfig(
             ),
             onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
@@ -3209,7 +3218,7 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              originatingAccountId: routedReplyAccountId,
+              originatingAccountId: replyContextAccountId,
               originatingThreadId: routeReplyThreadId,
               originatingChatType: replyRoute.chatType,
               shouldSendToolSummaries,
@@ -3297,11 +3306,15 @@ export async function dispatchReplyFromConfig(
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      throwIfDispatchOperationAborted();
+      // The final reply already shipped, so clear the durable pending-final
+      // bookkeeping before honoring a late abort. A stuck-session recovery abort
+      // racing this window (#89115) otherwise strands pendingFinalDelivery=true,
+      // and the get-reply redelivery short-circuit then silently blocks all inbound.
       await clearPendingFinalDeliveryAfterSuccess({
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
       });
+      throwIfDispatchOperationAborted();
     }
 
     if (!suppressDelivery) {

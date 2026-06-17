@@ -21,9 +21,12 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-/** Return whether a plugin package is marked for npm publishing. */
+/** Return whether a plugin package publishes through an artifact release workflow. */
 export function isPublishablePluginPackage(packageJson) {
-  return packageJson.openclaw?.release?.publishToNpm === true;
+  return (
+    packageJson.openclaw?.release?.publishToNpm === true ||
+    packageJson.openclaw?.release?.publishToClawHub === true
+  );
 }
 
 function normalizePackageEntry(value) {
@@ -93,7 +96,7 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-/** List extension package dirs whose package metadata enables npm publishing. */
+/** List extension package dirs whose package metadata enables artifact publishing. */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");

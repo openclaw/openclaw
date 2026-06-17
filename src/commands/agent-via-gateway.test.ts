@@ -349,6 +349,23 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("uses an agent-scoped --to value as the gateway session selector", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: sessionKey }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.sessionKey).toBe(sessionKey);
+      expect(params.to).toBeUndefined();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
     await withTempStore(async ({ store }) => {
       const fastConfig = {

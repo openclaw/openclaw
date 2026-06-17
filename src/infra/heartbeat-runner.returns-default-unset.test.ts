@@ -14,7 +14,11 @@ import {
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type HeartbeatDeps,
@@ -292,9 +296,7 @@ beforeAll(async () => {
 
   const discordPlugin = createOutboundTestPlugin({
     id: "discord",
-    outbound: {
-      deliveryMode: "direct",
-    },
+    outbound: createDirectOutboundTestAdapter({ channel: "discord" }),
   });
 
   testRegistry = createTestRegistry([
@@ -706,6 +708,7 @@ describe("runHeartbeatOnce", () => {
     options?: {
       nowMs?: number;
       getReplyFromConfig?: HeartbeatDeps["getReplyFromConfig"];
+      listActiveEmbeddedRunSessionKeys?: HeartbeatDeps["listActiveEmbeddedRunSessionKeys"];
     },
   ): HeartbeatDeps => ({
     whatsapp: sendWhatsApp,
@@ -714,6 +717,9 @@ describe("runHeartbeatOnce", () => {
     webAuthExists: async () => true,
     hasActiveWebListener: () => true,
     ...(options?.getReplyFromConfig ? { getReplyFromConfig: options.getReplyFromConfig } : null),
+    ...(options?.listActiveEmbeddedRunSessionKeys
+      ? { listActiveEmbeddedRunSessionKeys: options.listActiveEmbeddedRunSessionKeys }
+      : null),
   });
 
   it("skips when agent heartbeat is not enabled", async () => {
@@ -729,6 +735,33 @@ describe("runHeartbeatOnce", () => {
     if (res.status === "skipped") {
       expect(res.reason).toBe("disabled");
     }
+  });
+
+  it.each([
+    ["the heartbeat main session", (cfg: OpenClawConfig) => resolveMainSessionKey(cfg)],
+    ["another session for the same agent", () => "agent:main:telegram:alerts"],
+  ])("retries instead of dispatching while %s has an embedded run", async (_name, activeKey) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+    };
+    const replySpy = vi.fn().mockResolvedValue({ text: "heartbeat reply" });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, {
+        getReplyFromConfig: replySpy,
+        listActiveEmbeddedRunSessionKeys: () => [activeKey(cfg)],
+      }),
+    });
+
+    expect(res).toEqual({ status: "skipped", reason: "requests-in-flight" });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
   it("skips outside active hours", async () => {

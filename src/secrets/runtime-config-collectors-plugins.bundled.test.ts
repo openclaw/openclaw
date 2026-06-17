@@ -1,4 +1,5 @@
 /** Tests bundled plugin config secret collectors. */
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -100,6 +101,63 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
         "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
         "plugins.entries.voice-call.config.twilio.authToken",
+      ],
+      warnings: [],
+    });
+  });
+
+  it("collects google-meet realtime provider SecretRefs from its installed manifest", () => {
+    const googleMeetPluginDir = fileURLToPath(
+      new URL("../../extensions/google-meet", import.meta.url),
+    );
+    const config = {
+      plugins: {
+        load: { paths: [googleMeetPluginDir] },
+        entries: {
+          "google-meet": {
+            enabled: true,
+            config: {
+              realtime: {
+                providers: {
+                  google: {
+                    apiKey: envRef("GEMINI_API_KEY"),
+                  },
+                  openai: {
+                    apiKey: envRef("OPENAI_API_KEY"),
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      resolvePluginConfigContractsById({
+        config,
+        env: {},
+        pluginIds: ["google-meet"],
+      }).get("google-meet")?.configContracts.secretInputs?.paths,
+    ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
+    const context = createResolverContext({
+      sourceConfig: config,
+      env: {},
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["google-meet", "config"]]),
+    });
+
+    expect({
+      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
+      warnings: context.warnings,
+    }).toEqual({
+      assignments: [
+        "plugins.entries.google-meet.config.realtime.providers.google.apiKey",
+        "plugins.entries.google-meet.config.realtime.providers.openai.apiKey",
       ],
       warnings: [],
     });

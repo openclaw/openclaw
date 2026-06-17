@@ -17,7 +17,7 @@ import type { EmbeddedRunTrigger } from "./params.js";
 /**
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
-export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
+const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
 
 /**
  * Detects loopback / private-network / `.local` base URLs. Local providers

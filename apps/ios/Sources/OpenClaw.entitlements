@@ -3,7 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>development</string>
+	<string>$(OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT)</string>
 </dict>
 </plist>
-

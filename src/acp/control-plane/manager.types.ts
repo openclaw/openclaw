@@ -103,7 +103,7 @@ export type AcpRunTurnInput = {
   ) => Promise<AcpTurnSaveHookResult | false | void> | AcpTurnSaveHookResult | false | void;
 };
 
-export type AcpTurnLifecycleEvent = {
+type AcpTurnLifecycleEvent = {
   type: "prompt_submitted";
   at: number;
 };

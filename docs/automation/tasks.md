@@ -360,7 +360,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and sessions">
-    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Sessions are conversation context; tasks are activity tracking on top of that.
+    A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Its `agentId` identifies the agent executing the work, while the requester and owner fields preserve launch and control context. Sessions are conversation context; tasks are activity tracking on top of that.
   </Accordion>
   <Accordion title="Tasks and agent runs">
     A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status - you do not need to manage the lifecycle manually.

@@ -89,6 +89,7 @@ function resolveMatrixMentionPrefixCandidates(params: {
   append(localpart ? `@${localpart}` : null);
   append(params.displayName);
   append(params.displayName ? `@${params.displayName}` : null);
+  append(params.displayName ? `@[${params.displayName}]` : null);
 
   return candidates;
 }
@@ -158,6 +159,7 @@ function isVisibleMentionLabel(params: {
     localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
     params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
+    params.displayName ? extractVisibleMentionText(`@[${params.displayName}]`) : null,
   ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }

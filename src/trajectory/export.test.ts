@@ -660,6 +660,308 @@ describe("exportTrajectoryBundle", () => {
     ]);
   });
 
+  it("exports supported current-version linear transcripts in file order", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-linear",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "linear-user",
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("hello"),
+        },
+        {
+          type: "message",
+          id: "linear-assistant",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          message: assistantMessage([{ type: "text", text: "done" }]),
+        },
+        {
+          type: "metadata",
+          id: "linear-metadata",
+          parentId: "linear-assistant",
+          payload: { source: "plugin" },
+        },
+        {
+          type: "message",
+          id: "side-assistant",
+          parentId: "linear-assistant",
+          timestamp: "2026-04-01T05:46:42.000Z",
+          message: assistantMessage([{ type: "text", text: "side" }]),
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-assistant",
+          targetId: "linear-assistant",
+          appendParentId: "linear-metadata",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-linear",
+      workspaceDir: tmpDir,
+    });
+
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.manifest.leafId).toBe("linear-assistant");
+    expect(JSON.stringify(bundle.events)).not.toContain("side");
+  });
+
+  it("exports the branch selected by a terminal leaf control", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("active"),
+        },
+        {
+          type: "message",
+          id: "inactive-tail",
+          parentId: "active-tail",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          message: assistantMessage([{ type: "text", text: "side delivery" }]),
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "inactive-tail",
+          timestamp: "2026-04-01T05:46:42.000Z",
+          targetId: "active-tail",
+          appendParentId: null,
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(eventTypes(bundle.events)).toEqual(["user.message"]);
+    expect(bundle.manifest.leafId).toBe("active-tail");
+    expect(JSON.stringify(bundle.events)).not.toContain("side delivery");
+  });
+
+  it("normalizes an active descendant whose source parent is a leaf control", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("active"),
+        },
+        {
+          type: "message",
+          id: "inactive-tail",
+          parentId: "active-tail",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          message: assistantMessage([{ type: "text", text: "side delivery" }]),
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "inactive-tail",
+          timestamp: "2026-04-01T05:46:42.000Z",
+          targetId: "active-tail",
+        },
+        {
+          type: "message",
+          id: "replacement",
+          parentId: "active-leaf",
+          timestamp: "2026-04-01T05:46:43.000Z",
+          message: assistantMessage([{ type: "text", text: "replacement" }]),
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.events.find((event) => event.entryId === "replacement")?.parentEntryId).toBe(
+      "active-tail",
+    );
+    expect(JSON.stringify(bundle.events)).not.toContain("active-leaf");
+    expect(JSON.stringify(bundle.events)).not.toContain("side delivery");
+  });
+
+  it("does not export append-parent history from an explicitly empty branch", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-empty",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "inactive-root",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("inactive"),
+        },
+        {
+          type: "leaf",
+          id: "empty-leaf",
+          parentId: "inactive-root",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          targetId: null,
+          appendParentId: null,
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: "inactive-root",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-empty",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.events).toEqual([]);
+    expect(bundle.manifest.transcriptEventCount).toBe(0);
+  });
+
+  it("traverses opaque append parents while exporting the active branch", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        },
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("active"),
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: "active-root",
+        },
+        {
+          type: "message",
+          id: "side-delivery",
+          parentId: "active-root",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          message: assistantMessage([{ type: "text", text: "side delivery" }]),
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-delivery",
+          timestamp: "2026-04-01T05:46:42.000Z",
+          targetId: "active-root",
+          appendParentId: "plugin-metadata",
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: "plugin-metadata",
+          timestamp: "2026-04-01T05:46:43.000Z",
+          message: assistantMessage([{ type: "text", text: "active tail" }]),
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.manifest.leafId).toBe("active-tail");
+    expect(JSON.stringify(bundle.events)).toContain("active tail");
+    expect(JSON.stringify(bundle.events)).not.toContain("side delivery");
+    expect(bundle.events.find((event) => event.entryId === "active-tail")?.parentEntryId).toBe(
+      "active-root",
+    );
+  });
+
   it("stops cyclic transcript branch export instead of hanging", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

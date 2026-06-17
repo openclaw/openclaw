@@ -132,10 +132,8 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
-    // Reasoning-only streams should not expose typing until visible text exists.
-    if (!hasRenderableText) {
-      return;
-    }
+    // Reasoning deltas are the signal to show typing in thinking mode,
+    // even before any visible assistant text has arrived.
     await typing.startTypingLoop();
     typing.refreshTypingTtl();
   };

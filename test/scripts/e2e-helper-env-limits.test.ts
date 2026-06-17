@@ -170,6 +170,15 @@ describe("e2e helper numeric env limits", () => {
     expect(result.stderr).toContain("invalid OPENCLAW_HTTP_PROBE_TIMEOUT_MS: 8000ms");
   });
 
+  it("rejects loose Open WebUI HTTP probe expected statuses", () => {
+    const result = runScript(httpProbePath, ["http://127.0.0.1:9", "2e2"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "expected status must be lt500 or a decimal HTTP status. Got: 2e2",
+    );
+  });
+
   it("keeps Open WebUI HTTP probe status checks working with strict timeouts", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(204).end();
@@ -177,6 +186,22 @@ describe("e2e helper numeric env limits", () => {
     const url = await listen(server);
     try {
       const result = await runScriptAsync(httpProbePath, [url, "204"], {
+        OPENCLAW_HTTP_PROBE_TIMEOUT_MS: "500",
+      });
+
+      expect(result.status).toBe(0);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("keeps Open WebUI HTTP probe lt500 status checks working", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(404).end();
+    });
+    const url = await listen(server);
+    try {
+      const result = await runScriptAsync(httpProbePath, [url, "lt500"], {
         OPENCLAW_HTTP_PROBE_TIMEOUT_MS: "500",
       });
 

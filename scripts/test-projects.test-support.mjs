@@ -400,6 +400,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/ci-check-testbox.yml",
     ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
@@ -566,6 +567,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
+  ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+  ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/openclaw-npm-postpublish-verify.ts", ["test/openclaw-npm-postpublish-verify.test.ts"]],
   ["scripts/openclaw-npm-release-check.ts", ["test/openclaw-npm-release-check.test.ts"]],
@@ -586,6 +589,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/tsdown-build.mjs", ["test/scripts/tsdown-build.test.ts"]],
   ["scripts/verify.mjs", ["test/scripts/verify.test.ts"]],
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
+  ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
@@ -1760,6 +1764,10 @@ function resolveSiblingTestTarget(changedPath, cwd) {
   return fs.existsSync(path.join(cwd, sibling)) ? sibling : null;
 }
 
+function shouldCombineSiblingTestWithImportGraph(changedPath) {
+  return changedPath.startsWith("test/helpers/");
+}
+
 function shouldRouteChangedTargetWithoutImportGraph(changedPath) {
   return (
     changedPath.endsWith(".live.test.ts") ||
@@ -1778,7 +1786,7 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
     return [changedPath];
   }
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
-  if (siblingTest) {
+  if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
     return [siblingTest];
   }
   if (BROAD_ONLY_TEST_HELPERS.has(changedPath)) {
@@ -1795,10 +1803,10 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
       forceFull: options.forceFullImportGraph === true,
     });
     if (affectedTests.length > 0) {
-      return affectedTests;
+      return siblingTest ? uniqueOrdered([siblingTest, ...affectedTests]) : affectedTests;
     }
   }
-  return null;
+  return siblingTest ? [siblingTest] : null;
 }
 
 function isDeletedChangedTestTarget(changedPath, cwd) {

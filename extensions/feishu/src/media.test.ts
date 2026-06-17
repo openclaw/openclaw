@@ -953,4 +953,36 @@ describe("downloadMessageResourceFeishu", () => {
       await fs.rm(tempHome, { recursive: true, force: true });
     }
   });
+
+  it("recovers CJK filenames from the inbound message payload fallback", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-media-"));
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    try {
+      process.env.HOME = tempHome;
+      messageResourceGetMock.mockResolvedValueOnce({
+        getReadableStream: () => Readable.from([Buffer.from("a,b\n1,2\n")]),
+        headers: { "content-type": "text/csv" },
+      });
+
+      const result = await saveMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_stream_msg_cjk",
+        fileKey: "file_key_stream_cjk",
+        type: "file",
+        maxBytes: 1024,
+        originalFilename: latin1LookingFileName,
+      });
+
+      expect(result.saved.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
 });

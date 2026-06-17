@@ -4,10 +4,16 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
+
+const decodeWindowsTextFileBufferMock = vi.hoisted(() => vi.fn(() => ""));
+
+vi.mock("../../../infra/windows-encoding.js", () => ({
+  decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
+}));
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -20,6 +26,10 @@ function textContent(
 }
 
 describe("read tool", () => {
+  beforeEach(() => {
+    decodeWindowsTextFileBufferMock.mockReset();
+  });
+
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
@@ -99,5 +109,72 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it("uses the shared Windows decoder for local filesystem reads", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-encoding-"));
+    const filePath = path.join(tempDir, "legacy.txt");
+    const legacyBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+    decodeWindowsTextFileBufferMock.mockReturnValueOnce("decoded legacy text");
+
+    try {
+      await fs.writeFile(filePath, legacyBytes);
+      const tool = createReadToolDefinition(tempDir);
+      const result = await tool.execute(
+        "call-1",
+        { path: "legacy.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(decodeWindowsTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
+      expect(textContent(result)).toBe("decoded legacy text");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves injected read operation decoding owner-controlled", async () => {
+    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => bytes,
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "legacy.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+    expect(textContent(result)).toBe(bytes.toString("utf8"));
+  });
+
+  it("uses an injected backend decoder when declared", async () => {
+    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        decodeText: ({ buffer, absolutePath }) => `${absolutePath}:${buffer.toString("hex")}`,
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => bytes,
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "legacy.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+    expect(textContent(result)).toBe("/workspace/legacy.txt:c4e3bac3");
   });
 });

@@ -1160,6 +1160,20 @@ describe("connectGateway", () => {
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
   });
 
+  it("refreshes an open Talk catalog after hello", async () => {
+    const host = createHost();
+    const fetchRealtimeTalkCatalog = vi.fn(async () => undefined);
+    Object.assign(host, {
+      realtimeTalkOptionsOpen: true,
+      fetchRealtimeTalkCatalog,
+    });
+
+    connectGateway(host);
+    requireGatewayClient().emitHello();
+
+    await vi.waitFor(() => expect(fetchRealtimeTalkCatalog).toHaveBeenCalledOnce());
+  });
+
   it("falls back from restored unconfigured agent sessions before refreshing chat", async () => {
     const host = createHost();
     host.tab = "chat";

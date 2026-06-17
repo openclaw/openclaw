@@ -32,7 +32,7 @@ export type AuthProfileEligibilityReasonCode =
   | "mode_mismatch";
 
 /** Eligibility decision for one auth profile candidate. */
-export type AuthProfileEligibility = {
+type AuthProfileEligibility = {
   eligible: boolean;
   reasonCode: AuthProfileEligibilityReasonCode;
 };

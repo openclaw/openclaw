@@ -24,7 +24,7 @@ export type ProviderModelIdNormalizationOptions = {
   manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
 };
 
-export type ManifestModelIdNormalizationProvider = {
+type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
   prefixWhenBare?: string;
@@ -34,7 +34,7 @@ export type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
-export type ManifestModelIdNormalizationRecord = {
+type ManifestModelIdNormalizationRecord = {
   modelIdNormalization?: {
     providers?: Record<string, ManifestModelIdNormalizationProvider>;
   };

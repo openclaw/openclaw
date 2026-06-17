@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/ios-release-prepare.sh --build-number 7 [--team-id TEAMID]
+
+Optional custom relay:
+  OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com \
+    scripts/ios-release-prepare.sh --build-number 7 [--team-id TEAMID]
+
+Prepares local App Store release inputs without touching local signing overrides:
+- reads apps/ios/version.json and writes apps/ios/build/Version.xcconfig
+- writes apps/ios/build/AppStoreRelease.xcconfig with canonical bundle IDs
+- configures the release build for relay-backed APNs registration
+- configures manual App Store distribution signing with pinned provisioning profiles
+- regenerates apps/ios/OpenClaw.xcodeproj via xcodegen
+EOF
+}
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IOS_DIR="${ROOT_DIR}/apps/ios"
+BUILD_DIR="${IOS_DIR}/build"
+RELEASE_XCCONFIG="${IOS_DIR}/build/AppStoreRelease.xcconfig"
+TEAM_HELPER="${ROOT_DIR}/scripts/ios-team-id.sh"
+VERSION_HELPER="${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
+IOS_VERSION_HELPER="${ROOT_DIR}/scripts/ios-version.ts"
+VERSION_SYNC_HELPER="${ROOT_DIR}/scripts/ios-sync-versioning.ts"
+RELEASE_SIGNING_HELPER="${ROOT_DIR}/scripts/ios-release-signing.mjs"
+CANONICAL_TEAM_ID="FWJYW4S8P8"
+
+BUILD_NUMBER=""
+TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
+DEFAULT_IOS_PUSH_RELAY_BASE_URL="https://ios-push-relay.openclaw.ai"
+PUSH_RELAY_BASE_URL="${OPENCLAW_PUSH_RELAY_BASE_URL:-${IOS_PUSH_RELAY_BASE_URL:-${DEFAULT_IOS_PUSH_RELAY_BASE_URL}}}"
+PUSH_RELAY_BASE_URL_XCCONFIG=""
+IOS_VERSION=""
+RELEASE_SIGNING_XCCONFIG=""
+
+prepare_build_dir() {
+  if [[ -L "${BUILD_DIR}" ]]; then
+    echo "Refusing to use symlinked build directory: ${BUILD_DIR}" >&2
+    exit 1
+  fi
+
+  mkdir -p "${BUILD_DIR}"
+}
+
+write_generated_file() {
+  local output_path="$1"
+  local tmp_file=""
+
+  if [[ -e "${output_path}" && -L "${output_path}" ]]; then
+    echo "Refusing to overwrite symlinked file: ${output_path}" >&2
+    exit 1
+  fi
+
+  tmp_file="$(mktemp "${output_path}.XXXXXX")"
+  cat >"${tmp_file}"
+  mv -f "${tmp_file}" "${output_path}"
+}
+
+validate_push_relay_base_url() {
+  local value="$1"
+
+  if [[ "${value}" =~ [[:space:]] ]]; then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: whitespace is not allowed." >&2
+    exit 1
+  fi
+
+  if [[ "${value}" == *'$'* || "${value}" == *'('* || "${value}" == *')'* || "${value}" == *'='* ]]; then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: contains forbidden xcconfig characters." >&2
+    exit 1
+  fi
+
+  if [[ ! "${value}" =~ ^https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?(/[A-Za-z0-9._~!&*+,;:@%/-]*)?$ ]]; then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: expected https://host[:port][/path]." >&2
+    exit 1
+  fi
+
+  local port="${BASH_REMATCH[2]:-}"
+  if [[ -n "${port}" ]] && (( 10#${port} > 65535 )); then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: port must be between 1 and 65535." >&2
+    exit 1
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --)
+      shift
+      ;;
+    --build-number)
+      BUILD_NUMBER="${2:-}"
+      shift 2
+      ;;
+    --team-id)
+      TEAM_ID="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "${BUILD_NUMBER}" ]]; then
+  echo "Missing required --build-number." >&2
+  usage
+  exit 1
+fi
+
+if [[ -z "${TEAM_ID}" ]]; then
+  TEAM_ID="$(IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 bash "${TEAM_HELPER}" --require-canonical)"
+fi
+
+if [[ -z "${TEAM_ID}" ]]; then
+  echo "Could not resolve Apple Team ID. Set IOS_DEVELOPMENT_TEAM or sign into Xcode." >&2
+  exit 1
+fi
+
+if [[ "${TEAM_ID}" != "${CANONICAL_TEAM_ID}" ]]; then
+  echo "iOS App Store release must use canonical OpenClaw Team ID ${CANONICAL_TEAM_ID}; got ${TEAM_ID}." >&2
+  exit 1
+fi
+
+validate_push_relay_base_url "${PUSH_RELAY_BASE_URL}"
+
+# `.xcconfig` treats `//` as a comment opener. Break the URL with a helper setting
+# so Xcode still resolves it back to `https://...` at build time.
+PUSH_RELAY_BASE_URL_XCCONFIG="$(
+  printf '%s' "${PUSH_RELAY_BASE_URL}" \
+    | sed 's#//#$(OPENCLAW_URL_SLASH)$(OPENCLAW_URL_SLASH)#g'
+)"
+
+prepare_build_dir
+
+(
+  cd "${ROOT_DIR}" && node --import tsx "${VERSION_SYNC_HELPER}" --check
+)
+
+IOS_VERSION="$(cd "${ROOT_DIR}" && node --import tsx "${IOS_VERSION_HELPER}" --field canonicalVersion)"
+if [[ -z "${IOS_VERSION}" ]]; then
+  echo "Unable to resolve iOS version from ${ROOT_DIR}/apps/ios/version.json." >&2
+  exit 1
+fi
+
+RELEASE_SIGNING_XCCONFIG="$(cd "${ROOT_DIR}" && node "${RELEASE_SIGNING_HELPER}" --mode xcconfig)"
+if [[ -z "${RELEASE_SIGNING_XCCONFIG}" ]]; then
+  echo "Unable to resolve App Store release signing profile settings." >&2
+  exit 1
+fi
+
+(
+  bash "${VERSION_HELPER}" --build-number "${BUILD_NUMBER}"
+)
+
+write_generated_file "${RELEASE_XCCONFIG}" <<EOF
+// Auto-generated by scripts/ios-release-prepare.sh.
+// Local App Store release override; do not commit.
+${RELEASE_SIGNING_XCCONFIG}
+OPENCLAW_DEVELOPMENT_TEAM = ${TEAM_ID}
+OPENCLAW_IOS_SELECTED_TEAM = ${TEAM_ID}
+OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
+OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share
+OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
+OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
+OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp.extension
+OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT = production
+OPENCLAW_PUSH_TRANSPORT = relay
+OPENCLAW_PUSH_DISTRIBUTION = official
+OPENCLAW_URL_SLASH = /
+OPENCLAW_PUSH_RELAY_BASE_URL = ${PUSH_RELAY_BASE_URL_XCCONFIG}
+OPENCLAW_PUSH_APNS_ENVIRONMENT = production
+EOF
+
+(
+  cd "${IOS_DIR}"
+  xcodegen generate
+)
+
+echo "Prepared iOS App Store release: version=${IOS_VERSION} build=${BUILD_NUMBER} team=${TEAM_ID}"
+echo "XCODE_XCCONFIG_FILE=${RELEASE_XCCONFIG}"

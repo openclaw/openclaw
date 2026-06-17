@@ -854,6 +854,21 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
+  if (
+    params.openclawScenarioStatus === "fail" ||
+    params.codexScenarioStatus === "fail" ||
+    !isRuntimeParityCellPassable(params.openclaw) ||
+    !isRuntimeParityCellPassable(params.codex)
+  ) {
+    return {
+      drift: "failure-mode",
+      driftDetails:
+        params.openclawScenarioStatus === params.codexScenarioStatus
+          ? "at least one runtime failed"
+          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
+    };
+  }
+
   const toolCallShapeDetails = compareToolCallShape(
     params.openclaw.toolCalls,
     params.codex.toolCalls,
@@ -884,21 +899,6 @@ function classifyRuntimeParityCells(params: {
     return {
       drift: "structural",
       driftDetails: `transcript/final-text structure differs (${openclawTranscriptLines} lines vs ${codexTranscriptLines})`,
-    };
-  }
-
-  if (
-    params.openclawScenarioStatus === "fail" ||
-    params.codexScenarioStatus === "fail" ||
-    !isRuntimeParityCellPassable(params.openclaw) ||
-    !isRuntimeParityCellPassable(params.codex)
-  ) {
-    return {
-      drift: "failure-mode",
-      driftDetails:
-        params.openclawScenarioStatus === params.codexScenarioStatus
-          ? "at least one runtime failed"
-          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
     };
   }
 
