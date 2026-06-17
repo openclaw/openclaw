@@ -792,7 +792,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
                 ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+            .run(`${entry.path}\n${chunk.text}`, id, entry.path, source, model, chunk.startLine, chunk.endLine);
         }
       }
       this.upsertFileRecord(entry, source);

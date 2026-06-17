@@ -1,4 +1,5 @@
 // Memory Core tests cover hybrid plugin behavior.
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
@@ -101,5 +102,30 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1);
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
+  });
+
+  it("fts5 matches hyphenated path tokens when path is included in indexed text", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE VIRTUAL TABLE test_fts USING fts5(text, id UNINDEXED)");
+
+    db.prepare("INSERT INTO test_fts (text, id) VALUES (?, ?)").run(
+      "memory/2026-06-17-1649.md\nSome content about tokens",
+      "chunk-1",
+    );
+    db.prepare("INSERT INTO test_fts (text, id) VALUES (?, ?)").run(
+      "memory/2026-06-17-1701.md\nDifferent content here",
+      "chunk-2",
+    );
+
+    const query = buildFtsQuery("2026-06-17-1649");
+    expect(query).not.toBeNull();
+
+    const rows = db.prepare("SELECT id FROM test_fts WHERE test_fts MATCH ?").all(query!) as Array<{
+      id: string;
+    }>;
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain("chunk-1");
+
+    db.close();
   });
 });
