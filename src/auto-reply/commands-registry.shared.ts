@@ -658,7 +658,6 @@ export function buildBuiltinChatCommands(
     }),
     defineChatCommand({
       key: "usage",
-      nativeName: "usage",
       description: "Usage footer or cost summary.",
       textAlias: "/usage",
       category: "options",
