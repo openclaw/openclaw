@@ -65,6 +65,7 @@ import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import { buildCompactSubagentRoleContext } from "./subagent-role-context.js";
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
@@ -1452,6 +1453,16 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
   });
+  if (params.lightContext === true && targetAgentId !== requesterAgentId) {
+    const roleContext = await buildCompactSubagentRoleContext({
+      config: cfg,
+      targetAgentId,
+      targetWorkspaceDir: spawnedWorkspaceDir,
+    });
+    if (roleContext?.text) {
+      childSystemPrompt = `${childSystemPrompt}\n\n${roleContext.text}`;
+    }
+  }
 
   let retainOnSessionKeep = false;
   let attachmentsReceipt:

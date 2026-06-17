@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 // Subagent spawn tests cover target policy, session patching, runtime model
 // persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -230,6 +232,90 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.agentId).toBe("worker");
     expect(registerInput.requesterSessionKey).toBe("global");
     expect(registerInput.requesterAgentId).toBe("main");
+  });
+
+  it("adds compact target role context for cross-agent lightweight subagents", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-role-"));
+    const mainWorkspace = path.join(tempDir, "main");
+    const argusWorkspace = path.join(tempDir, "argus");
+    await fs.mkdir(mainWorkspace, { recursive: true });
+    await fs.mkdir(argusWorkspace, { recursive: true });
+    await fs.writeFile(
+      path.join(argusWorkspace, "AGENTS.md"),
+      [
+        "# AGENTS.md - Argus Workspace",
+        "",
+        "## Identity",
+        "- Name: Argus",
+        "- Role: Research & Intelligence Lead",
+        "",
+        "## Mission",
+        "Argus researches and synthesizes intelligence. Argus does not execute code or deploy services.",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(argusWorkspace, "IDENTITY.md"),
+      "# IDENTITY.md\n\n- Name: Argus\n",
+      "utf8",
+    );
+
+    try {
+      hoisted.configOverride = createConfigOverride({
+        session: {
+          scope: "global",
+        },
+        agents: {
+          defaults: {
+            workspace: mainWorkspace,
+          },
+          list: [
+            {
+              id: "main",
+              workspace: mainWorkspace,
+              subagents: {
+                allowAgents: ["argus"],
+              },
+            },
+            {
+              id: "argus",
+              name: "Argus",
+              description: "Research lane",
+              workspace: argusWorkspace,
+            },
+          ],
+        },
+      });
+
+      const result = await spawnSubagentDirect(
+        {
+          task: "What is your lane?",
+          agentId: "argus",
+          lightContext: true,
+        },
+        {
+          agentSessionKey: "global",
+          requesterAgentIdOverride: "main",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(result.childSessionKey).toMatch(/^agent:argus:subagent:/);
+      const agentRequest = gatewayRequest("agent");
+      const agentParams = requireRecord(agentRequest.params);
+      expect(agentParams.bootstrapContextMode).toBe("lightweight");
+      expect(agentParams.extraSystemPrompt).toEqual(
+        expect.stringContaining("## Target Agent Role Context"),
+      );
+      expect(agentParams.extraSystemPrompt).toEqual(
+        expect.stringContaining("Research & Intelligence Lead"),
+      );
+      expect(agentParams.extraSystemPrompt).toEqual(
+        expect.stringContaining("does not execute code or deploy services"),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
