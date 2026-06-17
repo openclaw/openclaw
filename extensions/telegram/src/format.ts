@@ -146,12 +146,92 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   return out.join("\n");
 }
 
+/**
+ * Pre-processes markdown text to escape patterns that Telegram renders
+ * incorrectly when converting markdown to HTML.
+ *
+ * Handles:
+ * 1. `#` at line start followed by digit (e.g. `#12345`) — these are not
+ *    real headings but markdown-parsers treat them as such.
+ * 2. `$` followed by digit or uppercase letter (e.g. `$100`, `$USD`) —
+ *    can trigger unintended italic/variable rendering in Telegram.
+ */
+export function escapeTelegramProblematicMarkdown(text: string): string {
+  if (!text) return text;
+  return (
+    text
+      // Escape # at line-start followed by digit: "#12345" → "\#12345"
+      // Only when there's no space between # and digit (real headings like "# Title" are fine)
+      .replace(/^([ \t]*)#(\d)/gm, "$1\\#$2")
+      // Escape $ followed by digit/uppercase that's NOT inside backticks
+      // (simple heuristic: wrap in backtick-escape)
+      .replace(/(^|[^`\\])\$(\d|[A-Z]{2,})/gm, "$1\\$$2")
+  );
+}
+
+/**
+ * Lint markdown text for patterns that may render poorly in Telegram.
+ * Returns array of human-readable warning strings (empty if clean).
+ */
+export function lintTelegramMarkdown(text: string): string[] {
+  const warnings: string[] = [];
+  if (!text) return warnings;
+
+  // Check for $ followed by digit/uppercase not inside backticks
+  const segments = text.split("`");
+  for (let i = 0; i < segments.length; i += 2) {
+    // Even-indexed segments are outside backticks
+    const seg = segments[i] ?? "";
+    const dollarHits = [...seg.matchAll(/\$(\d|[A-Z]{2,})/g)];
+    for (const hit of dollarHits) {
+      const ctx = seg.slice(Math.max(0, hit.index! - 10), hit.index! + hit[0].length + 10);
+      warnings.push(
+        `\`$\` followed by digit/uppercase may trigger Telegram variable rendering: \`...${ctx}...\` — consider wrapping in backticks`,
+      );
+    }
+  }
+
+  // Check for inline **bold** mixed with regular text on same line
+  const lines = text.split("\n");
+  for (const line of lines) {
+    const boldRanges: Array<[number, number]> = [];
+    const re = /\*\*([^*]+)\*\*/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(line)) !== null) {
+      boldRanges.push([m.index, m.index + m[0].length]);
+    }
+    if (boldRanges.length > 0) {
+      const withoutBold =
+        line.slice(0, boldRanges[0]![0]) +
+        line.slice(boldRanges[boldRanges.length - 1]![1]);
+      if (withoutBold.trim().length > 0) {
+        warnings.push(
+          `Inline bold mixed with regular text may cause font-size inconsistency in Telegram: "${line.trim().slice(0, 80)}"`,
+        );
+      }
+    }
+  }
+
+  // Check for # at line start followed by digit
+  const hashLines = text.split("\n");
+  for (const line of hashLines) {
+    if (/^[ \t]*#\d/.test(line)) {
+      warnings.push(
+        `Line starts with \`#\` followed by digit, may render as heading in Telegram: "${line.trim().slice(0, 80)}"`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
 export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
   const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+  const preprocessed = escapeTelegramProblematicMarkdown(markdown ?? "");
+  const ir = markdownToIR(preserveTelegramListBoundarySpacing(preprocessed), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
@@ -974,7 +1054,8 @@ export function markdownToTelegramRichHtml(
   options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
 ): string {
   const tableMode = options.tableMode ?? "block";
-  const normalized = normalizeTelegramRichMarkdownMedia(markdown ?? "");
+  const preprocessed = escapeTelegramProblematicMarkdown(markdown ?? "");
+  const normalized = normalizeTelegramRichMarkdownMedia(preprocessed);
   const { ir, tables } = markdownToIRWithMeta(
     preserveTelegramListBoundarySpacing(normalized.markdown),
     {
@@ -1284,7 +1365,8 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+  const preprocessed = escapeTelegramProblematicMarkdown(markdown ?? "");
+  const ir = markdownToIR(preserveTelegramListBoundarySpacing(preprocessed), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",

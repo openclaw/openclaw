@@ -1,6 +1,8 @@
 // Telegram tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  escapeTelegramProblematicMarkdown,
+  lintTelegramMarkdown,
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
@@ -448,6 +450,92 @@ describe("markdownToTelegramHtml", () => {
       expect(containsLoneSurrogate(chunk.html)).toBe(false);
       expect(containsLoneSurrogate(chunk.text)).toBe(false);
     }
+  });
+});
+
+describe("escapeTelegramProblematicMarkdown", () => {
+  it("escapes # at line start followed by digit", () => {
+    expect(escapeTelegramProblematicMarkdown("#12345")).toBe("\\#12345");
+    expect(escapeTelegramProblematicMarkdown("  #12345")).toBe("  \\#12345");
+  });
+
+  it("does not escape # followed by space (real heading)", () => {
+    expect(escapeTelegramProblematicMarkdown("# Title")).toBe("# Title");
+    expect(escapeTelegramProblematicMarkdown("## Section")).toBe("## Section");
+  });
+
+  it("escapes $ followed by digits", () => {
+    const result = escapeTelegramProblematicMarkdown("Entry $731.38 / TP");
+    expect(result).toContain("\\$731");
+  });
+
+  it("handles multi-line input", () => {
+    const input = ["Stocks: Entry $731.38", "#12345 feedback", "# Normal heading"].join("\n");
+    const result = escapeTelegramProblematicMarkdown(input);
+    expect(result).toContain("\\#12345");
+    expect(result).toContain("\\$731");
+    expect(result).toContain("# Normal heading");
+  });
+
+  it("handles empty/null input", () => {
+    expect(escapeTelegramProblematicMarkdown("")).toBe("");
+  });
+});
+
+describe("lintTelegramMarkdown", () => {
+  it("warns about $ followed by digits outside backticks", () => {
+    const warnings = lintTelegramMarkdown("Cost is $100 plus tax");
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it("does not warn about $ inside backticks", () => {
+    const warnings = lintTelegramMarkdown("Cost is `$100` plus tax");
+    expect(warnings.filter((w) => w.includes("$100"))).toHaveLength(0);
+  });
+
+  it("warns about inline bold mixed with regular text", () => {
+    const warnings = lintTelegramMarkdown("A: warning **entered**, B: watching");
+    expect(warnings.some((w) => w.includes("bold"))).toBe(true);
+  });
+
+  it("does not warn about bold-only lines", () => {
+    const warnings = lintTelegramMarkdown("**Warning: critical issue**");
+    expect(warnings.some((w) => w.includes("bold"))).toBe(false);
+  });
+
+  it("warns about hash at line start followed by digit", () => {
+    const warnings = lintTelegramMarkdown("#12345 feedback");
+    expect(warnings.some((w) => w.includes("#"))).toBe(true);
+  });
+
+  it("returns empty array for clean text", () => {
+    expect(lintTelegramMarkdown("Hello world, this is clean text.")).toEqual([]);
+  });
+});
+
+describe("markdownToTelegramHtml escape integration", () => {
+  it("preserves #digit at line start as literal text", () => {
+    const result = markdownToTelegramHtml("#12345 issue reference");
+    expect(result).toContain("#12345");
+  });
+
+  it("preserves $digit in output", () => {
+    const result = markdownToTelegramHtml("Cost $100 today");
+    expect(result).toContain("$100");
+  });
+});
+
+describe("markdownToTelegramRichHtml escape integration", () => {
+  it("prevents #digit from becoming H1 in rich mode", () => {
+    const result = markdownToTelegramRichHtml("#12345 issue reference");
+    expect(result).not.toMatch(/<h1[^>]*>/);
+    expect(result).toContain("#12345");
+  });
+
+  it("preserves real headings in rich mode", () => {
+    const result = markdownToTelegramRichHtml("# Actual Heading");
+    expect(result).toMatch(/<h1[^>]*>/);
+    expect(result).toContain("Actual Heading");
   });
 });
 
