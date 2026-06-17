@@ -1053,6 +1053,9 @@ export class TelegramPollingSession {
         }).then(
           (updateId) => {
             ackSpooledUpdate(message.requestId, { ok: true, updateId });
+            // Wake the drain immediately so the newly spooled update is
+            // routed without waiting for the next periodic drain timer tick.
+            void drainOnce();
           },
           (err: unknown) => {
             ackSpooledUpdate(message.requestId, {

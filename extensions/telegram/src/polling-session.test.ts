@@ -4099,6 +4099,89 @@ describe("TelegramPollingSession", () => {
     expect(transport1.close).toHaveBeenCalled();
     expect(transport2.close).toHaveBeenCalled();
   });
+
+  it("drains spool immediately after worker writes an update, not waiting for the periodic timer", async () => {
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const handleUpdate = vi.fn(async () => undefined);
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    let onMessage: WorkerMessageListener | undefined;
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const ackSpooledUpdate = vi.fn();
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((listener: WorkerMessageListener) => {
+        onMessage = listener;
+        return () => undefined;
+      }),
+      ackSpooledUpdate,
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          // Use a very large drain interval so the periodic timer never
+          // fires during this test. The drain must be woken by the worker
+          // write path itself.
+          drainIntervalMs: 600_000,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(onMessage).toBeDefined());
+
+      const writeStart = Date.now();
+      onMessage?.({
+        type: "update",
+        requestId: "wake-1",
+        update: { update_id: 100, message: { text: "wake drain test" } },
+        queued: 1,
+      });
+
+      await vi.waitFor(() =>
+        expect(handleUpdate).toHaveBeenCalledWith({
+          update_id: 100,
+          message: { text: "wake drain test" },
+        }),
+      );
+      const elapsed = Date.now() - writeStart;
+      // The drain should complete well within 5 seconds. If the fix is
+      // missing and the drain only fires on the periodic timer, this would
+      // take at least 600_000 ms.
+      expect(elapsed).toBeLessThan(5_000);
+
+      await vi.waitFor(() =>
+        expect(ackSpooledUpdate).toHaveBeenCalledWith("wake-1", { ok: true, updateId: 100 }),
+      );
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      abort.abort();
+      await runPromise;
+    } finally {
+      abort.abort();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
