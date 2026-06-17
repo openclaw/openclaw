@@ -2522,6 +2522,82 @@ describe("systemd service install and uninstall", () => {
     }
   });
 
+  it("installSystemdService retires a marker-owned custom system unit when the gateway port comes from the install options environment", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      findSystemGatewayServicesMock.mockResolvedValueOnce([
+        {
+          platform: "linux",
+          label: "openclaw-alt-port.service",
+          detail: "unit: /etc/systemd/system/openclaw-alt-port.service",
+          scope: "system",
+          marker: "openclaw",
+        },
+      ]);
+      mockSystemUnitFiles({
+        "/etc/systemd/system/openclaw-alt-port.service": renderCustomGatewayUnit({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+          OPENCLAW_PROFILE: "default",
+          OPENCLAW_GATEWAY_PORT: "28888",
+        }),
+      });
+      execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
+        const joined = args.join(" ");
+        if (joined === "--user status" || joined === "--user daemon-reload") {
+          cb(null, "", "");
+          return;
+        }
+        if (
+          joined === "--user enable openclaw-gateway.service" ||
+          joined === "--user restart openclaw-gateway.service"
+        ) {
+          cb(null, "", "");
+          return;
+        }
+        if (joined === "is-active --quiet openclaw-alt-port.service") {
+          cb(null, "", "");
+          return;
+        }
+        if (joined === "is-enabled openclaw-alt-port.service") {
+          cb(null, "enabled\n", "");
+          return;
+        }
+        if (joined === "disable --now openclaw-alt-port.service") {
+          cb(null, "", "");
+          return;
+        }
+        cb(null, "", "");
+      });
+
+      const { write, stdout } = createWritableStreamMock();
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "28888",
+        },
+      });
+
+      const output = write.mock.calls.map(([value]) => String(value)).join("\n");
+      expect(output).toContain("Retired conflicting systemd service");
+      expect(output).toContain("openclaw-alt-port.service");
+      expect(execFileMock).toHaveBeenCalledTimes(7);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("removes newly staged user unit files when system unit retirement fails", async () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
     const home = path.join(tempHomeRoot, "home");

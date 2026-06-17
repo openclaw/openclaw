@@ -1396,7 +1396,9 @@ async function restoreRetiredSystemUnitAfterUserActivationFailure(
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const liveSystemUnit = await readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(args.env);
+  const conflictCheckEnv = args.environment ? { ...args.env, ...args.environment } : args.env;
+  const liveSystemUnit =
+    await readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(conflictCheckEnv);
   const artifactSnapshots = await readSystemdUserInstallArtifactSnapshots(args.env);
   const { unitPath, backedUp } = await writeSystemdUnit(args);
   await reloadSystemdUserManager(args.env);
