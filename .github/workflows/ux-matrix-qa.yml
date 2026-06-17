@@ -1,0 +1,71 @@
+name: UX Matrix QA
+
+on:
+  pull_request:
+    paths:
+      - "extensions/qa-lab/**"
+      - "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml"
+      - "scripts/ux-matrix/**"
+      - "taxonomy.yaml"
+      - "ui/src/test-helpers/control-ui-e2e.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/actions/setup-node-env/**"
+      - ".github/workflows/ux-matrix-qa.yml"
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Git ref to validate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  ux-matrix-local:
+    name: UX Matrix QA evidence
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target_ref || github.ref }}
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Ensure Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
+      - name: Run UX Matrix QA Lab scenario
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --scenario ux-matrix-evidence-dashboard \
+            --output-dir .artifacts/qa-e2e/ux-matrix \
+            --concurrency 1 \
+            --fast
+
+      - name: List UX Matrix evidence artifacts
+        if: always()
+        run: find .artifacts/qa-e2e/ux-matrix -maxdepth 8 -type f | sort || true
+
+      - name: Upload UX Matrix QA evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ux-matrix-qa-evidence
+          path: .artifacts/qa-e2e/ux-matrix/
+          if-no-files-found: warn

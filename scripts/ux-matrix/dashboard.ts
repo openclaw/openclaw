@@ -469,23 +469,25 @@ function runnerPlanForCell(cell: Pick<MatrixCell, "stage" | "surface">): RunnerP
   if (cell.surface === "web-ui") {
     return {
       availability: "local",
-      command: "pnpm ux:matrix -- --once --recording-ms <ms>",
+      command:
+        "pnpm openclaw qa suite --provider-mode mock-openai --scenario ux-matrix-evidence-dashboard --output-dir .artifacts/qa-e2e/ux-matrix --concurrency 1 --fast",
       labels: ["local-mac", "ubuntu-24.04", "blacksmith-4vcpu-ubuntu-2404"],
       lane: "web-ui-playwright",
       notes:
-        "Runs the mocked Control UI through Playwright and emits screenshots, video, GIF, logs, and machine validation.",
-      workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+        "Runs the QA Lab UX Matrix script scenario through Playwright and emits screenshots, video, GIF, logs, and machine validation.",
+      workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
     };
   }
   if (cell.surface === "cli") {
     return {
       availability: "local",
-      command: "pnpm ux:matrix -- --once --recording-ms <ms>",
+      command:
+        "pnpm openclaw qa suite --provider-mode mock-openai --scenario ux-matrix-evidence-dashboard --output-dir .artifacts/qa-e2e/ux-matrix --concurrency 1 --fast",
       labels: ["local-mac", "ubuntu-24.04", "windows-2025", "macos-15"],
       lane: "cli-status",
       notes:
-        "Runs Node CLI entrypoint and isolated gateway-status recovery probes without launching heavyweight app surfaces.",
-      workflow: "qa/scenarios/ui/ux-matrix-evidence-dashboard.yaml",
+        "Runs the QA Lab UX Matrix script scenario and imports the Node CLI entrypoint and isolated gateway-status recovery probes.",
+      workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
     };
   }
   if (cell.surface === "tui") {
@@ -1630,8 +1632,10 @@ async function runMatrix(options: RunnerOptions): Promise<RunSummary> {
     `node --import tsx scripts/ux-matrix/dashboard.ts --once --recording-ms ${options.recordingMs}`,
     `node --import tsx scripts/ux-matrix/dashboard.ts --port <port> --recording-ms ${options.recordingMs}`,
     `POST /api/runs`,
-    "local lane: mocked Control UI via ui/src/test-helpers/control-ui-e2e.ts",
-    "local lane: CLI version and isolated gateway status recovery via scripts/run-node.mjs",
+    "QA Lab runner lane: pnpm openclaw qa suite --provider-mode mock-openai --scenario ux-matrix-evidence-dashboard --output-dir .artifacts/qa-e2e/ux-matrix --concurrency 1 --fast",
+    "GitHub runner lane: .github/workflows/ux-matrix-qa.yml#ux-matrix-local",
+    "producer lane: mocked Control UI via ui/src/test-helpers/control-ui-e2e.ts",
+    "producer lane: CLI version and isolated gateway status recovery via scripts/run-node.mjs",
     "CI lane: TUI PTY via .github/workflows/tui-pty.yml",
     "CI lane: Android via .github/workflows/ci.yml#android",
     "CI lane: Apple simulator/macOS/watch surfaces via .github/workflows/ci.yml macOS jobs",
