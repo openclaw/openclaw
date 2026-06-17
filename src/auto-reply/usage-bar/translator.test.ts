@@ -149,7 +149,8 @@ describe("usage-bar end-to-end with buildUsageContract", () => {
       },
       "discord",
     );
-    expect(contract.context.used_tokens).toBe(0);
-    expect(contract.context.pct_used).toBe(0);
+    const ctx = contract.context as { used_tokens: number; pct_used: number | undefined };
+    expect(ctx.used_tokens).toBe(0);
+    expect(ctx.pct_used).toBe(0);
   });
 });
