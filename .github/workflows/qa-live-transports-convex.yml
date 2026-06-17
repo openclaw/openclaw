@@ -14,6 +14,11 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      smoke_scenario:
+        description: Optional smoke-ci Crabline scenario id
+        required: false
+        default: dm-chat-baseline
+        type: string
       discord_scenario:
         description: Optional comma-separated Discord scenario ids
         required: false
@@ -568,6 +573,90 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-telegram-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+  run_smoke_ci_crabline:
+    name: Run smoke-ci profile through Crabline with Convex leases
+    needs: [authorize_actor, validate_selected_ref]
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 45
+    environment: qa-live-shared
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: pnpm build
+
+      - name: Run smoke-ci Crabline profile slice
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_CREDENTIAL_ROLE: ci
+          OPENCLAW_QA_CREDENTIAL_SOURCE: convex
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          INPUT_SMOKE_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_scenario || 'dm-chat-baseline' }}
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/smoke-ci-crabline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scenario="$(printf '%s' "${INPUT_SMOKE_SCENARIO:-dm-chat-baseline}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ -z "${scenario}" ]]; then
+            scenario="dm-chat-baseline"
+          fi
+
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa run \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --qa-profile smoke-ci \
+            --category channel-framework.conversation-routing-and-delivery \
+            --scenario "${scenario}" \
+            --provider-mode mock-openai \
+            --fast
+
+      - name: Upload smoke-ci Crabline artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-smoke-ci-crabline-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn

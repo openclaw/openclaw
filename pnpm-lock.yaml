@@ -1400,8 +1400,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0(@chat-adapter/shared@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3))
       crabline:
-        specifier: github:openclaw/crabline#01a2a2e41f982920ae434cff5aa1a0647e4d16c4
-        version: https://codeload.github.com/openclaw/crabline/tar.gz/01a2a2e41f982920ae434cff5aa1a0647e4d16c4(@beeper/chat-adapter-matrix@0.1.0(@opentelemetry/api@1.9.1)(zod@4.4.3))(@chat-adapter/discord@4.30.0(zod@4.4.3))(@chat-adapter/gchat@4.30.0(zod@4.4.3))(@chat-adapter/shared@4.30.0(zod@4.4.3))(@chat-adapter/slack@4.30.0(zod@4.4.3))(@chat-adapter/state-memory@4.30.0(zod@4.4.3))(@chat-adapter/teams@4.30.0(zod@4.4.3))(@chat-adapter/telegram@4.30.0(zod@4.4.3))(@chat-adapter/whatsapp@4.30.0(zod@4.4.3))(@larksuite/vercel-chat-adapter@0.1.2(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-imessage@0.1.1(chat@4.30.0(zod@4.4.3))(typescript@6.0.3)(zod@4.4.3))(chat-adapter-mattermost@1.1.3(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-zalo@0.1.0(@chat-adapter/shared@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3)))(chat@4.30.0(zod@4.4.3))
+        specifier: github:openclaw/crabline#ee1189ad966e9e8d7eea9e38b3ca5965ff48d93c
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/ee1189ad966e9e8d7eea9e38b3ca5965ff48d93c(@beeper/chat-adapter-matrix@0.1.0(@opentelemetry/api@1.9.1)(zod@4.4.3))(@chat-adapter/discord@4.30.0(zod@4.4.3))(@chat-adapter/gchat@4.30.0(zod@4.4.3))(@chat-adapter/shared@4.30.0(zod@4.4.3))(@chat-adapter/slack@4.30.0(zod@4.4.3))(@chat-adapter/state-memory@4.30.0(zod@4.4.3))(@chat-adapter/teams@4.30.0(zod@4.4.3))(@chat-adapter/telegram@4.30.0(zod@4.4.3))(@chat-adapter/whatsapp@4.30.0(zod@4.4.3))(@larksuite/vercel-chat-adapter@0.1.2(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-imessage@0.1.1(chat@4.30.0(zod@4.4.3))(typescript@6.0.3)(zod@4.4.3))(chat-adapter-mattermost@1.1.3(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-zalo@0.1.0(@chat-adapter/shared@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3)))(chat@4.30.0(zod@4.4.3))
       openclaw:
         specifier: 2026.5.28
         version: 2026.5.28
@@ -5467,8 +5467,8 @@ packages:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/01a2a2e41f982920ae434cff5aa1a0647e4d16c4:
-    resolution: {gitHosted: true, integrity: sha512-g0RsGPfc7Zg0XckVcjIxJeMcuSVIW3SNhG5hAifWQ2+B+Hc4ZA+udM8DFlqK91ie0lEYI6hTOLKQ3fOXaHUJDA==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/01a2a2e41f982920ae434cff5aa1a0647e4d16c4}
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/ee1189ad966e9e8d7eea9e38b3ca5965ff48d93c:
+    resolution: {gitHosted: true, integrity: sha512-1XoaBbL7NpZi370uM7qU+2dPkdVOx8KRSIR5OvSIqbeHSBpKAyta0b6u2sgvnUKmNxTJqXRkt990wm9iVOL+Yw==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/ee1189ad966e9e8d7eea9e38b3ca5965ff48d93c}
     version: 0.1.0
     engines: {node: '>=22'}
     hasBin: true
@@ -9360,7 +9360,7 @@ snapshots:
 
   '@copilotkit/aimock@1.27.3(vitest@4.1.8)':
     optionalDependencies:
-      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))
+      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@create-markdown/preview@2.0.3(shiki@4.1.0)':
     optionalDependencies:
@@ -11591,9 +11591,9 @@ snapshots:
       obug: 2.1.2
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))
+      vitest: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/browser-playwright@4.1.8)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     optionalDependencies:
-      '@vitest/browser': 4.1.8(vite@8.0.16(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))(vitest@4.1.8)
+      '@vitest/browser': 4.1.8(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.8)
 
   '@vitest/expect@4.1.8':
     dependencies:
@@ -12222,7 +12222,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/01a2a2e41f982920ae434cff5aa1a0647e4d16c4(@beeper/chat-adapter-matrix@0.1.0(@opentelemetry/api@1.9.1)(zod@4.4.3))(@chat-adapter/discord@4.30.0(zod@4.4.3))(@chat-adapter/gchat@4.30.0(zod@4.4.3))(@chat-adapter/shared@4.30.0(zod@4.4.3))(@chat-adapter/slack@4.30.0(zod@4.4.3))(@chat-adapter/state-memory@4.30.0(zod@4.4.3))(@chat-adapter/teams@4.30.0(zod@4.4.3))(@chat-adapter/telegram@4.30.0(zod@4.4.3))(@chat-adapter/whatsapp@4.30.0(zod@4.4.3))(@larksuite/vercel-chat-adapter@0.1.2(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-imessage@0.1.1(chat@4.30.0(zod@4.4.3))(typescript@6.0.3)(zod@4.4.3))(chat-adapter-mattermost@1.1.3(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-zalo@0.1.0(@chat-adapter/shared@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3)))(chat@4.30.0(zod@4.4.3)):
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/ee1189ad966e9e8d7eea9e38b3ca5965ff48d93c(@beeper/chat-adapter-matrix@0.1.0(@opentelemetry/api@1.9.1)(zod@4.4.3))(@chat-adapter/discord@4.30.0(zod@4.4.3))(@chat-adapter/gchat@4.30.0(zod@4.4.3))(@chat-adapter/shared@4.30.0(zod@4.4.3))(@chat-adapter/slack@4.30.0(zod@4.4.3))(@chat-adapter/state-memory@4.30.0(zod@4.4.3))(@chat-adapter/teams@4.30.0(zod@4.4.3))(@chat-adapter/telegram@4.30.0(zod@4.4.3))(@chat-adapter/whatsapp@4.30.0(zod@4.4.3))(@larksuite/vercel-chat-adapter@0.1.2(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-imessage@0.1.1(chat@4.30.0(zod@4.4.3))(typescript@6.0.3)(zod@4.4.3))(chat-adapter-mattermost@1.1.3(chat@4.30.0(zod@4.4.3))(zod@4.4.3))(chat-adapter-zalo@0.1.0(@chat-adapter/shared@4.30.0(zod@4.4.3))(chat@4.30.0(zod@4.4.3)))(chat@4.30.0(zod@4.4.3)):
     dependencies:
       commander: 14.0.3
       picocolors: 1.1.1

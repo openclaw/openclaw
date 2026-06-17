@@ -137,6 +137,7 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;
   category?: string;
+  scenarioIds?: string[];
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
@@ -699,9 +700,34 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const scenarioBySourcePath = new Map(
     scenarioPack.scenarios.map((scenario) => [scenario.sourcePath, scenario] as const),
   );
-  const taxonomyScenarios = uniqueStrings(categories.flatMap((category) => category.scenarioRefs))
+  const taxonomyScenariosForCategories = uniqueStrings(
+    categories.flatMap((category) => category.scenarioRefs),
+  )
     .map((scenarioRef) => scenarioBySourcePath.get(scenarioRef))
     .filter((scenario): scenario is NonNullable<typeof scenario> => scenario !== undefined);
+  const requestedScenarioIds = uniqueStrings(
+    (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
+  );
+  const taxonomyScenarios =
+    requestedScenarioIds.length === 0
+      ? taxonomyScenariosForCategories
+      : taxonomyScenariosForCategories.filter((scenario) =>
+          requestedScenarioIds.includes(scenario.id),
+        );
+  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
+    );
+  }
+  const matchedScenarioIds = new Set(taxonomyScenarios.map((scenario) => scenario.id));
+  const missingScenarioIds = requestedScenarioIds.filter(
+    (scenarioId) => !matchedScenarioIds.has(scenarioId),
+  );
+  if (missingScenarioIds.length > 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
+    );
+  }
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
@@ -817,12 +843,18 @@ function qaScorecardCategoryMatchesRunProfile(
 function formatQaRunProfileNoMatchMessage(
   opts: Pick<QaProfileCommandOptions, "profile" | "surface" | "category">,
 ) {
+  return `qa run did not find taxonomy categories for ${formatQaRunProfileFilterList(opts)}.`;
+}
+
+function formatQaRunProfileFilterList(
+  opts: Pick<QaProfileCommandOptions, "profile" | "surface" | "category">,
+) {
   const filters = [
     `--qa-profile ${opts.profile}`,
     opts.surface?.trim() ? `--surface ${opts.surface.trim()}` : null,
     opts.category?.trim() ? `--category ${opts.category.trim()}` : null,
   ].filter((filter): filter is string => filter !== null);
-  return `qa run did not find taxonomy categories for ${filters.join(" ")}.`;
+  return filters.join(" ");
 }
 
 async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<T>): Promise<T> {

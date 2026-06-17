@@ -182,6 +182,7 @@ export type QaTransportAdapter = {
     accountId?: string | null;
   }) => Promise<unknown>;
   createReportNotes: (params: QaTransportReportParams) => string[];
+  cleanup?: () => Promise<void>;
 };
 
 export abstract class QaStateBackedTransportAdapter implements QaTransportAdapter {

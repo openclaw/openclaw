@@ -40,6 +40,7 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
+    scenario?: QaProfileCommandOptions["scenarioIds"];
     evidenceMode?: QaProfileCommandOptions["evidenceMode"];
     excludeTestExecutionEvidence?: boolean;
   };
@@ -48,6 +49,7 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "outputDir", flag: "--output-dir" },
   { optionName: "surface", flag: "--surface" },
   { optionName: "category", flag: "--category" },
+  { optionName: "scenario", flag: "--scenario" },
   { optionName: "evidenceMode", flag: "--evidence-mode" },
   { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
   { optionName: "transport", flag: "--transport" },
@@ -399,6 +401,12 @@ export function registerQaLabCli(program: Command) {
     .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
     .option(
+      "--scenario <id>",
+      "Limit --qa-profile to a scenario id (repeatable)",
+      collectString,
+      [],
+    )
+    .option(
       "--evidence-mode <mode>",
       "Set profile qa-evidence.json mode: full or slim",
       parseQaEvidenceModeOption,
@@ -432,6 +440,7 @@ export function registerQaLabCli(program: Command) {
         profile: opts.qaProfile,
         surface: opts.surface,
         category: opts.category,
+        scenarioIds: opts.scenario,
         evidenceMode: resolveQaEvidenceModeOptions(opts),
         transportId: opts.transport,
         providerMode: opts.providerMode,

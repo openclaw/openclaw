@@ -433,6 +433,7 @@ describe("qa cli runtime", () => {
         profile: "smoke-ci",
         surface: "agent-runtime-and-provider-execution",
         category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        scenarioIds: ["dm-chat-baseline"],
         transportId: "qa-channel",
         fastMode: true,
         concurrency: 2,
@@ -455,8 +456,7 @@ describe("qa cli runtime", () => {
         channelDriver: "crabline",
         smokeArtifactPath: "crabline-channel-smoke.json",
       });
-      expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
-      expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
+      expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
         evidenceMode?: unknown;
@@ -525,6 +525,20 @@ describe("qa cli runtime", () => {
       }),
     ).rejects.toThrow(
       "qa run did not find taxonomy categories for --qa-profile smoke-ci --surface unknown-surface.",
+    );
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("rejects qa profile scenario filters outside the selected taxonomy categories", async () => {
+    await expect(
+      runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        profile: "smoke-ci",
+        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        scenarioIds: ["not-a-real-scenario"],
+      }),
+    ).rejects.toThrow(
+      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --category agent-runtime-and-provider-execution.agent-turn-execution --scenario not-a-real-scenario.",
     );
     expect(runQaSuite).not.toHaveBeenCalled();
   });

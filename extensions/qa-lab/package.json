@@ -30,7 +30,7 @@
     "chat-adapter-imessage": "^0.1.1",
     "chat-adapter-mattermost": "^1.1.3",
     "chat-adapter-zalo": "^0.1.0",
-    "crabline": "github:openclaw/crabline#01a2a2e41f982920ae434cff5aa1a0647e4d16c4",
+    "crabline": "github:openclaw/crabline#ee1189ad966e9e8d7eea9e38b3ca5965ff48d93c",
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
