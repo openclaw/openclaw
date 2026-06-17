@@ -110,7 +110,7 @@ FOUND_NTFY=0
 FOUND_PHONE=0
 
 while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$line" = "ExecStart=/home/admin/openclaw/scripts/auth-monitor.sh" ]; then
+    if [[ "$line" =~ ^[[:space:]]*ExecStart=.*$ ]]; then
         printf '%s\n' "$RENDERED_EXEC_START"
         FOUND_EXEC_START=1
     elif [[ "$line" =~ ^[[:space:]]*#?[[:space:]]*Environment=NOTIFY_NTFY=.*$ ]]; then
@@ -125,7 +125,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$SERVICE_TEMP" > "$SERVICE_RENDERED"
 
 if [ "$FOUND_EXEC_START" -ne 1 ]; then
-    echo "ERROR: ExecStart placeholder not found in $SERVICE_TEMP" >&2
+    echo "ERROR: ExecStart line not found in $SERVICE_TEMP" >&2
     exit 1
 fi
 if [ "$FOUND_NTFY" -ne 1 ]; then
