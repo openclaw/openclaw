@@ -980,6 +980,28 @@ describe("plugins cli update", () => {
     expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
   });
 
+  it("syncs official catalog specs when --all is used", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex@2026.6.8-beta.1",
+      resolvedName: "@openclaw/codex",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: true,
+      outcomes: [],
+    });
+    primeUpdateConfigSnapshot({ config });
+
+    await runPluginsCommand(["plugins", "update", "--all"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.pluginIds).toEqual(["codex"]);
+    expect(updateParams.syncOfficialPluginInstalls).toBe(true);
+  });
+
   it("writes updated config when updater reports changes", async () => {
     const cfg = {
       plugins: {

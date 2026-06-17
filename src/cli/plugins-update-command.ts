@@ -260,6 +260,7 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
+          syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
           logger,
           onIntegrityDrift: async (drift) => {
