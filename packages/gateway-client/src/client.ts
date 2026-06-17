@@ -500,10 +500,11 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    env: opts.env,
     configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
   });
 }
