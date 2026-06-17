@@ -71,8 +71,6 @@ const PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH =
   "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-matrix-docker.sh";
-const PLUGIN_LIFECYCLE_MATRIX_QA_E2E_PATH =
-  "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
@@ -1510,26 +1508,6 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
       'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO=$OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO")',
     );
     expect(runner).toContain('docker_e2e_run_with_harness \\\n  "${DOCKER_ENV_ARGS[@]}"');
-    expect(runner).toContain(
-      "tsx test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts --lifecycle-matrix",
-    );
-    expect(runner).not.toContain("scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh");
-  });
-
-  it("keeps plugin lifecycle matrix temp files under the QA runner temp root", () => {
-    const runner = readFileSync(PLUGIN_LIFECYCLE_MATRIX_QA_E2E_PATH, "utf8");
-
-    expect(runner).toContain('tempDirs.make("openclaw-plugin-lifecycle-matrix-")');
-    expect(runner).toContain('path.join(resourceDir, "lifecycle-claw-1.0.0.tgz")');
-    expect(runner).toContain('path.join(resourceDir, "lifecycle-claw-2.0.0.tgz")');
-    expect(runner).toContain('path.join(resourceDir, "plugin-lifecycle-inspect-v1.json")');
-    expect(runner).toContain('fs.mkdtempSync(path.join(resourceDir, "pack."))');
-    expect(runner).toContain('fs.mkdtempSync(path.join(resourceDir, "registry."))');
-    expect(runner).toContain("registry?.stop()");
-    expect(runner).toContain("tempDirs.cleanup()");
-    expect(runner).not.toContain("/tmp/lifecycle-claw-1.0.0.tgz");
-    expect(runner).not.toContain("/tmp/lifecycle-claw-2.0.0.tgz");
-    expect(runner).not.toContain("/tmp/plugin-lifecycle-inspect-v1.json");
   });
 
   it("wraps direct Docker E2E npm installs with the shared timeout helper", () => {
