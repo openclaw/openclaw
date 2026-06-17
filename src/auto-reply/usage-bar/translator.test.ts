@@ -137,4 +137,19 @@ describe("usage-bar end-to-end with buildUsageContract", () => {
     ];
     expect(renderUsageBar(tpl(pieces), contract)).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
   });
+
+  it("returns used_tokens 0 for fresh session with contextUsedTokens 0", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "openai",
+        model: "claude-opus-4-6",
+        contextTokenBudget: 272000,
+        contextUsedTokens: 0,
+        usage: {},
+      },
+      "discord",
+    );
+    expect(contract.context.used_tokens).toBe(0);
+    expect(contract.context.pct_used).toBe(0);
+  });
 });
