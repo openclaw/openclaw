@@ -18,6 +18,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
+import {
+  registerTaskCompletionRoute,
+  resolveTaskCompletionRoute,
+  retireTaskCompletionRoute,
+} from "../infra/task-completion-route.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -911,6 +916,28 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
   return undefined;
 }
 
+// Bound direct text completion output to a concise head/tail preview so
+// requester transcript writes are not lock-amplified. Constants are local;
+// promotion to config is a follow-up if operators request it.
+const DIRECT_TEXT_COMPLETION_MAX_CHARS = 4_000;
+const DIRECT_TEXT_COMPLETION_HEAD_CHARS = 2_600;
+const DIRECT_TEXT_COMPLETION_TAIL_CHARS = 1_000;
+
+function capDirectTextContent(content: string): string {
+  if (content.length <= DIRECT_TEXT_COMPLETION_MAX_CHARS) {
+    return content;
+  }
+  const omitted =
+    content.length - DIRECT_TEXT_COMPLETION_HEAD_CHARS - DIRECT_TEXT_COMPLETION_TAIL_CHARS;
+  return [
+    content.slice(0, DIRECT_TEXT_COMPLETION_HEAD_CHARS).trimEnd(),
+    "",
+    `[OpenClaw truncated ${omitted} chars from this background completion. Put long outputs in reports/agent_artifacts and return the path.]`,
+    "",
+    content.slice(-DIRECT_TEXT_COMPLETION_TAIL_CHARS).trimStart(),
+  ].join("\n");
+}
+
 function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent[] | undefined) {
   return (
     events?.some(
@@ -936,9 +963,9 @@ async function deliverTextCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = resolveTextCompletionDirectFallback(params.internalEvents);
+  const rawContent = resolveTextCompletionDirectFallback(params.internalEvents);
   if (
-    !content ||
+    !rawContent ||
     !params.deliveryTarget.deliver ||
     !params.deliveryTarget.channel ||
     !params.deliveryTarget.to ||
@@ -946,6 +973,7 @@ async function deliverTextCompletionDirect(params: {
   ) {
     return undefined;
   }
+  const content = capDirectTextContent(rawContent);
   const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   try {
@@ -1249,6 +1277,32 @@ async function sendSubagentAnnounceDirectly(params: {
           threadId: effectiveDirectOrigin?.threadId,
         })
       : { deliver: false };
+
+    // Register the resolved delivery target in the durable task-completion
+    // routes registry so that the active-requester-wake-failure + transcript-
+    // lock fallback (see below) can recover a routable target after process
+    // restart or when the in-memory requester session entry has lost its
+    // deliveryContext. Idempotent on the same taskId; safe to call repeatedly
+    // across delivery attempts that share directIdempotencyKey.
+    if (
+      deliveryTarget.deliver &&
+      deliveryTarget.channel &&
+      deliveryTarget.to &&
+      params.expectsCompletionMessage
+    ) {
+      try {
+        registerTaskCompletionRoute({
+          taskId: `subagent:${params.directIdempotencyKey}`,
+          source: "subagent",
+          channel: deliveryTarget.channel,
+          to: deliveryTarget.to,
+          accountId: deliveryTarget.accountId,
+          threadId: deliveryTarget.threadId,
+        });
+      } catch {
+        // Best-effort: registry failure must not block the main delivery path.
+      }
+    }
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
       : undefined;
@@ -1383,6 +1437,49 @@ async function sendSubagentAnnounceDirectly(params: {
           wakeOutcome,
         )}`,
       );
+    }
+    // Route-registry fallback: when the active requester wake has failed AND
+    // the in-memory deliveryTarget is missing (channel/to), try the durable
+    // task-completion routes registry for a routable target registered
+    // earlier in the same call. This handles the "channel not found" failure
+    // mode (closes the gap that #92076 identified). Only fires for subagent
+    // completion + direct-message target shape; cron paths use their own
+    // fallback in isolated-agent/run.ts.
+    if (
+      activeRequesterWakeFailed &&
+      params.expectsCompletionMessage &&
+      isSubagentCompletion &&
+      !deliveryTarget.deliver
+    ) {
+      const route = resolveTaskCompletionRoute(`subagent:${params.directIdempotencyKey}`);
+      if (route && route.channel && route.to) {
+        const routeAsTarget = {
+          channel: route.channel,
+          to: route.to,
+          threadId: route.threadId,
+        };
+        // Match the direct-message gate that deliverTextCompletionDirect
+        // would apply, so we don't accidentally route to a non-direct target
+        // (e.g. a group/thread) the registry picked up from a stale record.
+        if (isDirectMessageDeliveryTarget(routeAsTarget, canonicalRequesterSessionKey)) {
+          const routeDelivery = await deliverTextCompletionDirect({
+            cfg,
+            requesterSessionKey: params.requesterSessionKey,
+            directIdempotencyKey: params.directIdempotencyKey,
+            deliveryTarget: {
+              deliver: true,
+              channel: route.channel,
+              to: route.to,
+              accountId: route.accountId,
+              threadId: route.threadId,
+            },
+            internalEvents: params.internalEvents,
+          });
+          if (routeDelivery) {
+            return routeDelivery;
+          }
+        }
+      }
     }
     if (
       params.expectsCompletionMessage &&
@@ -1651,6 +1748,17 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "direct",
       error: summarizeDeliveryError(err),
     };
+  } finally {
+    // Always retire the registered route so the registry does not accumulate
+    // unretired rows for completed subagent runs. Idempotent: safe even if
+    // register was never called (no-op when no row exists).
+    if (params.expectsCompletionMessage) {
+      try {
+        retireTaskCompletionRoute(`subagent:${params.directIdempotencyKey}`);
+      } catch {
+        // Best-effort: registry failure must not mask the return value.
+      }
+    }
   }
 }
 

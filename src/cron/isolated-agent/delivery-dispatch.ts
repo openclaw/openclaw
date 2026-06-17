@@ -32,6 +32,10 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import {
+  registerTaskCompletionRoute,
+  retireTaskCompletionRoute,
+} from "../../infra/task-completion-route.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
@@ -768,6 +772,30 @@ async function retryTransientDirectCronDelivery<T>(params: {
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
+  // Register the resolved delivery target in the durable task-completion
+  // routes registry. If the in-memory session entry's deliveryContext is
+  // later lost (e.g. the entry was overwritten between cron prep and
+  // announce deliverer runs, #92460), the registry remains as the
+  // authoritative fallback. Idempotent on the same taskId.
+  if (params.resolvedDelivery.ok) {
+    try {
+      const threadId =
+        params.resolvedDelivery.threadId == null
+          ? undefined
+          : String(params.resolvedDelivery.threadId);
+      registerTaskCompletionRoute({
+        taskId: params.runSessionKey,
+        source: "cron",
+        channel: params.resolvedDelivery.channel,
+        to: params.resolvedDelivery.to,
+        accountId: params.resolvedDelivery.accountId,
+        threadId,
+      });
+    } catch {
+      // Best-effort: registry failure must not block the main delivery path.
+    }
+  }
+
   const sourceDeliverySatisfied = params.sourceDeliveryOutcome.satisfiesSourceDelivery;
   const verifiedMessageToolDelivery = params.sourceDeliveryOutcome.verifiedMessageToolDelivery;
   let summary = params.summary;
@@ -807,6 +835,11 @@ export async function dispatchCronDelivery(
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;
     await cleanupDirectCronSessionIfNeeded();
+    try {
+      retireTaskCompletionRoute(params.runSessionKey);
+    } catch {
+      // Best-effort: registry failure must not mask the return value.
+    }
     return params.withRunSession({
       status: "ok",
       summary,
@@ -1099,6 +1132,11 @@ export async function dispatchCronDelivery(
       return await deliverViaDirect(delivery, options);
     } finally {
       await cleanupDirectCronSessionIfNeeded();
+      try {
+        retireTaskCompletionRoute(params.runSessionKey);
+      } catch {
+        // Best-effort: registry failure must not mask the return value.
+      }
     }
   };
 
