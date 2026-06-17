@@ -1012,10 +1012,11 @@ describe("gateway startup reconciliation", () => {
     await fs.writeFile(keptTranscript, "{}\n", "utf-8");
     const aged = new Date(Date.now() - 600_000);
     await fs.utimes(orphanTranscript, aged, aged);
+    const runtimeConfig: OpenClawConfig = { session: {} };
 
     const runtimeConfigSpy = vi
       .spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig")
-      .mockReturnValue({ session: {} } as never);
+      .mockReturnValue(runtimeConfig);
     const resolveStorePathSpy = vi
       .spyOn(sessionStoreRuntimeModule, "resolveStorePath")
       .mockImplementation(((
@@ -1057,21 +1058,23 @@ describe("gateway startup reconciliation", () => {
         getCron: () => harness.cron,
       });
 
-      const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
-        skipCache: true,
-      }) as Record<string, unknown>;
-      expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-orphan");
-      expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-light-live");
-      expect(updatedStore).toHaveProperty("agent:main:kept-session");
+      await vi.waitFor(async () => {
+        const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
+          skipCache: true,
+        }) as Record<string, unknown>;
+        expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-orphan");
+        expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-light-live");
+        expect(updatedStore).toHaveProperty("agent:main:kept-session");
 
-      await expectPathMissing(orphanTranscript);
-      const sessionFiles = await fs.readdir(sessionsDir);
-      const archivedOrphans = sessionFiles.filter((file) =>
-        file.startsWith("orphan-dreaming.jsonl.deleted."),
-      );
-      expect(archivedOrphans).not.toEqual([]);
-      expect(sessionFiles).toContain("live-dreaming.jsonl");
-      expect(sessionFiles).toContain("still-live.jsonl");
+        await expectPathMissing(orphanTranscript);
+        const sessionFiles = await fs.readdir(sessionsDir);
+        const archivedOrphans = sessionFiles.filter((file) =>
+          file.startsWith("orphan-dreaming.jsonl.deleted."),
+        );
+        expect(archivedOrphans).not.toEqual([]);
+        expect(sessionFiles).toContain("live-dreaming.jsonl");
+        expect(sessionFiles).toContain("still-live.jsonl");
+      });
       expectLogContains(logger.info, "dreaming cleanup scrubbed");
     } finally {
       await triggerGatewayStop(onMock).catch(() => undefined);
