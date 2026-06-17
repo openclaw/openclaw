@@ -138,6 +138,7 @@ type SessionRecoveryDiagnosticEvent = Extract<
   { type: "session.recovery.requested" | "session.recovery.completed" }
 >;
 type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
+type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
 type TrustedSpanAliasOwner = { kind: "run"; id: string };
 
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
@@ -1044,7 +1045,7 @@ function assignOtelSecurityEventAttributes(
 
 function securitySeverityText(
   severity: Extract<DiagnosticEventPayload, { type: "security.event" }>["severity"],
-): LogRecord["severityText"] {
+): SecuritySeverityText {
   switch (severity) {
     case "critical":
       return "FATAL";
