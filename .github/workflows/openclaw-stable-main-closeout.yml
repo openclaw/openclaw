@@ -123,7 +123,7 @@ jobs:
               exit 1
             fi
           fi
-          if [[ -f "$closeout_checksum_path" ]]; then
+          if [[ -f "$closeout_checksum_path" && ! -f "$closeout_json_path" ]]; then
             echo "Stable closeout evidence for $tag has a checksum without its manifest; refusing to repair it." >&2
             exit 1
           fi

@@ -144,6 +144,9 @@ describe("package acceptance workflow", () => {
       "Stable closeout manifest for $tag is incomplete; refusing to repair it.",
     );
     expect(workflow).toContain(
+      'if [[ -f "$closeout_checksum_path" && ! -f "$closeout_json_path" ]]; then',
+    );
+    expect(workflow).toContain(
       "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it.",
     );
     expect(workflow).toContain("repair_partial_closeout=false");
