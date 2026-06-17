@@ -37,6 +37,7 @@ vi.mock("./views/chat.ts", () => ({
     chatProps.current = props;
     return html`<div data-testid="chat">${props.composerControls}</div>`;
   },
+  resetChatViewState: vi.fn(),
 }));
 
 vi.mock("./app-render.helpers.ts", async (importOriginal) => {

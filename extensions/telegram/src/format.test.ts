@@ -424,4 +424,47 @@ describe("markdownToTelegramHtml", () => {
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });
+
+  it("does not split an astral char across the chunk boundary", () => {
+    // Emoji surrogate pair straddles index 10 (limit): high at 9, low at 10.
+    const input = `${"A".repeat(9)}😀${"B".repeat(20)}`;
+    const chunks = splitTelegramHtmlChunks(input, 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(input);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk)).toBe(false);
+    }
+  });
+
+  it("keeps an astral char whole when a positive limit starts on its pair", () => {
+    expect(splitTelegramHtmlChunks("A😀B", 1)).toEqual(["A", "😀", "B"]);
+  });
+
+  it("keeps astral chars whole in rendered Markdown chunks", () => {
+    const chunks = markdownToTelegramChunks("A😀B", 1);
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["A", "😀", "B"]);
+    for (const chunk of chunks) {
+      expect(containsLoneSurrogate(chunk.html)).toBe(false);
+      expect(containsLoneSurrogate(chunk.text)).toBe(false);
+    }
+  });
 });
+
+function containsLoneSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    const isHigh = code >= 0xd800 && code <= 0xdbff;
+    const isLow = code >= 0xdc00 && code <= 0xdfff;
+    if (isHigh) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (isLow) {
+      return true;
+    }
+  }
+  return false;
+}

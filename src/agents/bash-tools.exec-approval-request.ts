@@ -42,7 +42,7 @@ function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpans
 }
 
 /** Gateway payload fields used to register or wait for an exec approval decision. */
-export type RequestExecApprovalDecisionParams = {
+type RequestExecApprovalDecisionParams = {
   id: string;
   command?: string;
   commandArgv?: string[];

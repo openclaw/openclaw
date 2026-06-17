@@ -34,6 +34,13 @@ const legacyTranscriptWriterNames = new Set([
   "emitSessionTranscriptUpdate",
   "rewriteTranscriptEntriesInSessionFile",
 ]);
+const sessionCreateLifecycleWriterNames = new Set([
+  "applySessionStoreEntryPatch",
+  "saveSessionStore",
+  "updateSessionStore",
+  "updateSessionStoreEntry",
+  "ensureSessionTranscriptFile",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
@@ -238,6 +245,39 @@ export function findTranscriptWriterBoundaryViolations(content, fileName = "sour
   );
 }
 
+export function findGatewaySessionCreateLifecycleViolations(content, fileName = "source.ts") {
+  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const violations = [];
+
+  const visitCreateHandler = (node) => {
+    if (ts.isCallExpression(node)) {
+      const calleeName = propertyAccessName(node.expression);
+      if (calleeName && sessionCreateLifecycleWriterNames.has(calleeName)) {
+        violations.push({
+          line: toLine(sourceFile, node.expression),
+          reason: `calls legacy sessions.create lifecycle writer "${calleeName}"`,
+        });
+      }
+    }
+    ts.forEachChild(node, visitCreateHandler);
+  };
+
+  const visit = (node) => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      ts.isStringLiteralLike(node.name) &&
+      node.name.text === "sessions.create"
+    ) {
+      visitCreateHandler(node.initializer);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return violations;
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const readSourceRoots = resolveSourceRoots(repoRoot, [
@@ -287,7 +327,20 @@ export async function main() {
       !migratedTranscriptWriterFiles.has(normalizeRelativePath(path.relative(repoRoot, filePath))),
     findViolations: findTranscriptWriterBoundaryViolations,
   });
-  const violations = [...readViolations, ...writeViolations, ...transcriptWriterViolations];
+  const sessionCreateLifecycleViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
+    skipFile: (filePath) =>
+      normalizeRelativePath(path.relative(repoRoot, filePath)) !==
+      "src/gateway/server-methods/sessions.ts",
+    findViolations: findGatewaySessionCreateLifecycleViolations,
+  });
+  const violations = [
+    ...readViolations,
+    ...writeViolations,
+    ...transcriptWriterViolations,
+    ...sessionCreateLifecycleViolations,
+  ];
 
   if (violations.length === 0) {
     console.log("session accessor boundary guard passed.");

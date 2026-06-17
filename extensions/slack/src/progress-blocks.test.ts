@@ -372,7 +372,6 @@ describe("native Slack progress stream chunks", () => {
           kind: "command-output",
           icon: "🛠️",
           label: "Bash",
-          detail: "completed",
           status: "completed",
           text: "🛠️ completed",
           toolName: "bash",

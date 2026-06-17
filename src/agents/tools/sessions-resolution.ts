@@ -88,8 +88,6 @@ export function resolveCurrentSessionClientAlias(params: {
   return requesterKey;
 }
 
-export { listSpawnedSessionKeys };
-
 export async function isRequesterSpawnedSessionVisible(params: {
   requesterSessionKey: string;
   targetSessionKey: string;
@@ -190,7 +188,7 @@ export function shouldResolveSessionIdInput(value: string): boolean {
   return looksLikeSessionId(value) || !looksLikeSessionKey(value);
 }
 
-export type SessionReferenceResolution =
+type SessionReferenceResolution =
   | {
       ok: true;
       key: string;
@@ -199,7 +197,7 @@ export type SessionReferenceResolution =
     }
   | { ok: false; status: "error" | "forbidden"; error: string };
 
-export type VisibleSessionReferenceResolution =
+type VisibleSessionReferenceResolution =
   | {
       ok: true;
       key: string;
@@ -507,8 +505,6 @@ export async function resolveVisibleSessionReference(params: {
   }
   return { ok: true, key: resolvedKey, displayKey };
 }
-
-export const normalizeOptionalKey: (value?: string) => string | undefined = normalizeOptionalString;
 
 export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {

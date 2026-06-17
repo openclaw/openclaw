@@ -64,20 +64,20 @@ export type GatewaySessionPresentationRow = Pick<
 >;
 
 /** ACP session controls and modes shown to the client. */
-export type SessionPresentation = {
+type SessionPresentation = {
   configOptions: SessionConfigOption[];
   modes: SessionModeState;
 };
 
 /** ACP session metadata plus lineage information. */
-export type SessionMetadata = {
+type SessionMetadata = {
   title?: string | null;
   updatedAt?: string | null;
   _meta?: AcpSessionLineageMeta;
 };
 
 /** Context/token usage snapshot for ACP clients that expose progress meters. */
-export type SessionUsageSnapshot = {
+type SessionUsageSnapshot = {
   size: number;
   used: number;
 };

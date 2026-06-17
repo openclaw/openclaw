@@ -325,7 +325,11 @@ export async function runCodexAppServerSideQuestion(
           execPolicy,
           execReviewerAgentId: sessionAgentId,
           internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
-          autoApprove: shouldAutoApproveCodexAppServerApprovals({ approvalPolicy, sandbox }),
+          autoApprove: shouldAutoApproveCodexAppServerApprovals({
+            approvalPolicy,
+            networkProxy: modelScopedAppServer.networkProxy,
+            sandbox,
+          }),
           signal: runAbortController.signal,
         });
       }
@@ -416,7 +420,11 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
     const threadConfig =
-      mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
+      mergeCodexThreadConfigs(
+        nativeHookRelayConfig,
+        runtimeThreadConfig,
+        modelScopedAppServer.networkProxy?.configPatch,
+      ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
         client,
@@ -428,7 +436,7 @@ export async function runCodexAppServerSideQuestion(
           cwd,
           approvalPolicy,
           approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-          sandbox,
+          ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
           ...(serviceTier ? { serviceTier } : {}),
           config: threadConfig,
           developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,

@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHttpWebhookUrl } from "../../../cron/webhook-url.js";
 
-export type LegacyNotifyMigrationOutcome = {
+type LegacyNotifyMigrationOutcome = {
   changed: boolean;
   warnings: string[];
 };

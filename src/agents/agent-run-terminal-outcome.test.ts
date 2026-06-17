@@ -2,17 +2,20 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
-  isHardAgentRunTimeoutPhase,
   mergeAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
 
 describe("agent run terminal outcome", () => {
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
-    expect(isHardAgentRunTimeoutPhase("preflight")).toBe(true);
-    expect(isHardAgentRunTimeoutPhase("provider")).toBe(true);
-    expect(isHardAgentRunTimeoutPhase("post_turn")).toBe(true);
-    expect(isHardAgentRunTimeoutPhase("queue")).toBe(false);
-    expect(isHardAgentRunTimeoutPhase("gateway_draining")).toBe(false);
+    expect(
+      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(
+        (timeoutPhase) =>
+          buildAgentRunTerminalOutcome({
+            status: "timeout",
+            timeoutPhase,
+          }).reason,
+      ),
+    ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
   });
 
   it("keeps queue and gateway draining timeouts non-sticky", () => {

@@ -30,7 +30,7 @@ type SessionInfoEntry = Extract<SessionEntry, { type: "session_info" }>;
 type SessionMessageEntry = Extract<SessionEntry, { type: "message" }>;
 type ThinkingLevelChangeEntry = Extract<SessionEntry, { type: "thinking_level_change" }>;
 
-export type TranscriptLeafControlEntry = {
+type TranscriptLeafControlEntry = {
   type: "leaf";
   id: string;
   parentId: string | null;

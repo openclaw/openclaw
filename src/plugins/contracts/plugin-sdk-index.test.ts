@@ -98,6 +98,8 @@ describe("plugin-sdk exports", () => {
   it("keeps the root runtime surface intentionally small", async () => {
     const runtimeExports = await readIndexRuntimeExports();
     expect([...runtimeExports].toSorted()).toEqual([
+      "ContextEngineRuntimeSettingsUnavailableError",
+      "ContextEngineRuntimeSettingsUnsupportedError",
       "assertContextEngineHostSupport",
       "buildMemorySystemPromptAddition",
       "delegateCompactionToRuntime",

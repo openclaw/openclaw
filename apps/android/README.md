@@ -53,6 +53,16 @@ pnpm android:version:pin -- --from-gateway
 pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
 ```
 
+Release-owner signing sync:
+
+```bash
+pnpm android:release:signing:plan
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
+```
+
+The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+
 Generate raw Google Play screenshots:
 
 ```bash
@@ -64,7 +74,7 @@ pnpm android:screenshots
 - Play build: `openclaw-<version>-play-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
-`pnpm android:bundle:release` is an alias for the same archive helper.
+`pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 

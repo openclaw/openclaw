@@ -1172,7 +1172,9 @@ describe("scripts/changed-lanes", () => {
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG.md",
+      "apps/android/CHANGELOG.md",
       "apps/android/Config/Version.properties",
+      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/ios/Config/Version.xcconfig",

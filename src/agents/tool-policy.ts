@@ -31,7 +31,7 @@ export type PluginToolGroups = {
 };
 
 /** Analysis of an allowlist after matching core and plugin tool ids. */
-export type AllowlistResolution = {
+type AllowlistResolution = {
   policy: ToolPolicyLike | undefined;
   unknownAllowlist: string[];
   pluginOnlyAllowlist: boolean;
@@ -146,7 +146,7 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
 }
 
 /** Expands group:plugins and plugin-id entries into concrete plugin tool names. */
-export function expandPluginGroups(
+function expandPluginGroups(
   list: string[] | undefined,
   groups: PluginToolGroups,
 ): string[] | undefined {

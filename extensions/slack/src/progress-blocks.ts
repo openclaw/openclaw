@@ -80,7 +80,7 @@ function legacyLineDetail(line: ChannelProgressDraftLine, maxChars: number): str
 
 function lineTaskTitle(line: ChannelProgressDraftLine, maxLineChars: number): string {
   const label = line.label.replace(/\s+/g, " ").trim() || line.toolName || line.kind || "Update";
-  const detail = lineDetailParts(line).join(" · ");
+  const detail = lineDetailParts(line).join(" · ") || line.status?.trim();
   const fallback = line.text.replace(/\s+/g, " ").trim();
   if (detail) {
     return compactTitle(`${label} — ${compactDetail(detail, maxLineChars)}`);

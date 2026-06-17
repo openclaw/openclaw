@@ -305,8 +305,35 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-    expectToolLoopBlockedResult(result, "CRITICAL");
+    await withDiagnosticEvents(async (emitted, flush) => {
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      await flush();
+      expectToolLoopBlockedResult(result, "CRITICAL");
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        reason: "tool-loop",
+        policy: {
+          id: "tool-loop-detection",
+          decision: "deny",
+          reason: "tool-loop",
+        },
+        control: {
+          id: "tool-loop-detection",
+          family: "authorization",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+    });
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -824,6 +851,59 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("emits a security event for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        severity: "medium",
+        reason: "plugin-before-tool-call",
+        actor: { kind: "agent" },
+        target: {
+          kind: "tool",
+          name: "read",
+        },
+        policy: {
+          id: "plugin-before-tool-call",
+          decision: "deny",
+          reason: "plugin-before-tool-call",
+        },
+        control: {
+          id: "before-tool-call",
+          family: "approval",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+      expect(securityEvent?.eventId).toBeTypeOf("string");
+      expect(JSON.stringify(securityEvent)).not.toContain("/tmp/file");
+      expect(emitted.some((event) => event.type === "tool.execution.blocked")).toBe(true);
+    });
+  });
+
   it("does not let hostile thrown values break diagnostic error emission", async () => {
     const hostileError = new Proxy(
       {},
@@ -913,6 +993,8 @@ describe("before_tool_call loop detection behavior", () => {
         type: "tool.execution.started",
       });
       expect(started.paramsSummary).toEqual({ kind: "object" });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[1]).toBe(params);
     });
   });
 });

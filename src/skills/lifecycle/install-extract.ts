@@ -14,7 +14,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { hasBinary } from "../loading/config.js";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 
-export type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
+type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
 type TarPreflightResult = {
   entries: string[];
   metadata: ReturnType<typeof parseTarVerboseMetadata>;

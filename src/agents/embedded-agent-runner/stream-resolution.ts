@@ -268,4 +268,3 @@ function wrapEmbeddedAgentStreamFn(
     });
   };
 }
-export { testing as __testing };

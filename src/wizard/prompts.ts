@@ -19,7 +19,7 @@ export type WizardMultiSelectParams<T = string> = {
   searchable?: boolean;
 };
 
-export type WizardTextParams = {
+type WizardTextParams = {
   message: string;
   initialValue?: string;
   placeholder?: string;
@@ -29,7 +29,7 @@ export type WizardTextParams = {
   sensitive?: boolean;
 };
 
-export type WizardConfirmParams = {
+type WizardConfirmParams = {
   message: string;
   initialValue?: boolean;
 };

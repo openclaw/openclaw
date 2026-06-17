@@ -42,8 +42,7 @@ run_logged_print_heartbeat() {
   fi
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
-  "$@" >"$log_file" 2>&1 &
-  local command_pid=$!
+  local command_pid=""
   local cleanup_done=0
   local previous_int_trap
   local previous_term_trap
@@ -52,6 +51,9 @@ run_logged_print_heartbeat() {
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
   terminate_heartbeat_command() {
+    if [ -z "$command_pid" ]; then
+      return 0
+    fi
     kill -TERM "$command_pid" 2>/dev/null || true
     local grace_seconds="${OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS:-30}"
     if ! [[ "$grace_seconds" =~ ^[0-9]+$ ]] || [ "$grace_seconds" -lt 1 ]; then
@@ -106,6 +108,8 @@ run_logged_print_heartbeat() {
   trap 'cleanup_heartbeat_command 130' INT
   trap 'cleanup_heartbeat_command 143' TERM
   trap 'cleanup_heartbeat_command 129' HUP
+  "$@" >"$log_file" 2>&1 &
+  command_pid=$!
   local started_at="$SECONDS"
   local next_heartbeat=$interval_seconds
   local status=0

@@ -1386,7 +1386,11 @@
                   "clawhub/api",
                   "clawhub/http-api",
                   "clawhub/acceptable-usage",
-                  "clawhub/content-rights"
+                  "clawhub/moderation",
+                  "clawhub/security",
+                  "clawhub/security-audits",
+                  "clawhub/content-rights",
+                  "clawhub/plugin-validation-fixes"
                 ]
               }
             ]
@@ -1413,6 +1417,7 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",

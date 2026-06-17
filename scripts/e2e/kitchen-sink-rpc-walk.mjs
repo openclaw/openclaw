@@ -1677,15 +1677,20 @@ async function samplePosixProcessWithDescendants(pid, run) {
     const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
-    const rows = parsePosixProcessRows(stdout);
-    if (!rows) {
+    const snapshot = parsePosixProcessRows(stdout);
+    if (!snapshot) {
       return null;
     }
+    const { malformedRows, rows } = snapshot;
     const selected = rows.find((row) => row.processId === safePid);
     if (!selected) {
       return null;
     }
-    return formatPosixProcessTreeSample(selected, collectPosixProcessTree(rows, safePid));
+    const treeRows = collectPosixProcessTree(rows, safePid);
+    if (hasMalformedProcessTreeRows(malformedRows, treeRows)) {
+      return null;
+    }
+    return formatPosixProcessTreeSample(selected, treeRows);
   } catch {
     return null;
   }
@@ -1700,13 +1705,16 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
-    const rows = parsePosixProcessRows(stdout);
-    if (!rows) {
+    const snapshot = parsePosixProcessRows(stdout);
+    if (!snapshot) {
       return null;
     }
-    const descendants = collectPosixProcessTree(rows, safePid).filter(
-      (row) => row.processId !== safePid,
-    );
+    const { malformedRows, rows } = snapshot;
+    const rootTreeRows = collectPosixProcessTree(rows, safePid);
+    if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
+      return null;
+    }
+    const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
     const commandMatches = descendants.filter((row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
@@ -1736,6 +1744,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
 
 function parsePosixProcessRows(stdout) {
   const rows = [];
+  const malformedRows = [];
   for (const line of stdout.split(/\r?\n/u)) {
     const match = line.match(/^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/u);
     if (!match) {
@@ -1754,7 +1763,11 @@ function parsePosixProcessRows(stdout) {
       !Number.isInteger(parentProcessId) ||
       !Number.isInteger(rssKb)
     ) {
-      return null;
+      malformedRows.push({
+        pidRaw,
+        ppidRaw,
+      });
+      continue;
     }
     rows.push({
       processId,
@@ -1764,7 +1777,7 @@ function parsePosixProcessRows(stdout) {
       command: command ?? "",
     });
   }
-  return rows;
+  return { malformedRows, rows };
 }
 
 function parseStrictNonNegativeDecimal(raw) {
@@ -1818,6 +1831,32 @@ function collectPosixProcessTree(rows, rootPid) {
     }
   }
   return collected;
+}
+
+function hasMalformedProcessTreeRows(malformedRows, treeRows) {
+  if (malformedRows.length === 0 || treeRows.length === 0) {
+    return false;
+  }
+  const treePids = new Set(treeRows.map((row) => row.processId));
+  return malformedRows.some(
+    (row) =>
+      rawProcessTokenMatchesTree(row.pidRaw, treePids) ||
+      rawProcessTokenMatchesTree(row.ppidRaw, treePids),
+  );
+}
+
+function rawProcessTokenMatchesTree(raw, treePids) {
+  const text = String(raw ?? "").trim();
+  for (const pid of treePids) {
+    const pidText = String(pid);
+    if (text === pidText) {
+      return true;
+    }
+    if (text.startsWith(pidText) && !/\d/u.test(text.at(pidText.length) ?? "")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function selectPeakRssProcess(rows) {

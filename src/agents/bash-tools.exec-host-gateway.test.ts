@@ -4,6 +4,11 @@
  * follow-ups, and gateway approval result routing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../infra/diagnostic-events.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -109,6 +114,7 @@ const runExecProcessMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
 );
+const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() => vi.fn(() => false));
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -163,7 +169,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   enforceStrictInlineEvalApprovalBoundary: enforceStrictInlineEvalApprovalBoundaryMock,
   resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
   sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
-  shouldResolveExecApprovalUnavailableInline: vi.fn(() => false),
+  shouldResolveExecApprovalUnavailableInline: shouldResolveExecApprovalUnavailableInlineMock,
 }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
@@ -223,12 +229,26 @@ function requireApprovalFollowupInput(
   return call[0];
 }
 
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
 describe("processGatewayAllowlist", () => {
   beforeAll(async () => {
     ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
   });
 
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReturnValue(null);
@@ -277,6 +297,8 @@ describe("processGatewayAllowlist", () => {
     recordAllowlistMatchesUseMock.mockReset();
     resolveApprovalDecisionOrUndefinedMock.mockReset();
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+    shouldResolveExecApprovalUnavailableInlineMock.mockReset();
+    shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(false);
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -372,6 +394,143 @@ describe("processGatewayAllowlist", () => {
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("emits security events for gateway exec approval requests and denials", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "user-denied",
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({
+        command: "deploy --token raw-secret-value",
+        turnSourceChannel: "webchat",
+        agentId: "agent-1",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.deniedResult?.details.status).toBe("failed");
+    expect(captured.events).toHaveLength(2);
+    expect(captured.events[0]).toMatchObject({
+      action: "exec.approval.requested",
+      outcome: "success",
+      severity: "low",
+      category: "approval",
+      actor: { kind: "agent" },
+      target: { kind: "tool", name: "system.exec", owner: "gateway" },
+      policy: { id: "exec.approval", decision: "ask" },
+      control: { id: "exec.approval", family: "approval" },
+      attributes: {
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        segment_count: 1,
+        has_agent_id: true,
+      },
+    });
+    expect(captured.events[1]).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      severity: "medium",
+      reason: "user-denied",
+      policy: { id: "exec.approval", decision: "deny", reason: "user-denied" },
+      attributes: {
+        decision: "deny",
+        has_agent_id: true,
+      },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("deploy");
+    expect(serialized).not.toContain("raw-secret-value");
+    expect(serialized).not.toContain("agent-1");
+  });
+
+  it("emits a denied security event for inline unavailable approval denials", async () => {
+    shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(true);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "user-denied",
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
+      approvedByAsk: false,
+      deniedReason: "user-denied",
+    });
+    const captured = captureSecurityEvents();
+
+    try {
+      await expect(
+        runGatewayAllowlist({
+          command: "deploy --token raw-secret-value",
+          agentId: "agent-1",
+        }),
+      ).rejects.toThrow("denied");
+    } finally {
+      captured.stop();
+    }
+
+    expect(captured.events).toHaveLength(2);
+    expect(captured.events[1]).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      severity: "medium",
+      reason: "user-denied",
+      policy: { id: "exec.approval", decision: "deny", reason: "user-denied" },
+      attributes: {
+        has_agent_id: true,
+      },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("deploy");
+    expect(serialized).not.toContain("raw-secret-value");
+    expect(serialized).not.toContain("agent-1");
+  });
+
+  it("emits an approved security event for inline unavailable approval approvals", async () => {
+    shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(true);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({
+        command: "echo ok",
+        agentId: "agent-1",
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!).toEqual({
+      execCommandOverride: undefined,
+      allowWithoutEnforcedCommand: true,
+    });
+    expect(captured.events).toHaveLength(2);
+    expect(captured.events[1]).toMatchObject({
+      action: "exec.approval.approved",
+      outcome: "success",
+      severity: "medium",
+      policy: { id: "exec.approval", decision: "allow" },
+      attributes: {
+        has_agent_id: true,
+      },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain("agent-1");
   });
 
   it("auto-reviews simple read-only approval misses without prompting", async () => {

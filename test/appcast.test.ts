@@ -26,6 +26,11 @@ describe("canonicalSparkleBuildFromVersion", () => {
     expect(canonicalSparkleBuildFromVersion("2026.6.5-beta.0")).toBeNull();
     expect(canonicalSparkleBuildFromVersion("2026.6.5-beta.9007199254740993")).toBeNull();
   });
+
+  it("rejects unsafe numeric release parts and build floors", () => {
+    expect(canonicalSparkleBuildFromVersion("2026.6.9007199254740993")).toBeNull();
+    expect(canonicalSparkleBuildFromVersion("2026.6.90071992547410")).toBeNull();
+  });
 });
 
 function parseItems(appcast: string): AppcastItem[] {

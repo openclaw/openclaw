@@ -48,6 +48,7 @@ import type {
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
   CodexDynamicToolDiagnosticTerminalType,
+  CodexDynamicToolFunctionSpec,
   CodexDynamicToolSpec,
   JsonValue,
 } from "./protocol.js";
@@ -201,20 +202,16 @@ export function createCodexDynamicToolBridge(params: {
     ...(params.directToolNames ?? []),
   ]);
   return {
-    availableSpecs: availableTools.map((entry) =>
-      createCodexDynamicToolSpec({
-        entry,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
-    ),
-    specs: registeredSpecTools.map((entry) =>
-      createCodexDynamicToolSpec({
-        entry,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
-    ),
+    availableSpecs: createCodexDynamicToolSpecs({
+      entries: availableTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    }),
+    specs: createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    }),
     telemetry,
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
@@ -502,23 +499,40 @@ function wrapProjectedCodexDynamicTools(
   return { tools: wrappedTools, quarantinedTools };
 }
 
-function createCodexDynamicToolSpec(params: {
-  entry: ProjectedCodexDynamicTool;
+function createCodexDynamicToolSpecs(params: {
+  entries: readonly ProjectedCodexDynamicTool[];
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
-}): CodexDynamicToolSpec {
-  const base = {
+}): CodexDynamicToolSpec[] {
+  const specs: CodexDynamicToolSpec[] = [];
+  const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
+  for (const entry of params.entries) {
+    const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
+    if (params.loading === "direct" || params.directToolNames.has(entry.name)) {
+      specs.push(functionSpec);
+      continue;
+    }
+    namespaceTools.push({ ...functionSpec, deferLoading: true });
+  }
+  if (namespaceTools.length > 0) {
+    specs.push({
+      type: "namespace",
+      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      description: "",
+      tools: namespaceTools,
+    });
+  }
+  return specs;
+}
+
+function createCodexDynamicToolFunctionSpec(params: {
+  entry: ProjectedCodexDynamicTool;
+}): CodexDynamicToolFunctionSpec {
+  return {
+    type: "function",
     name: params.entry.name,
     description: params.entry.description,
     inputSchema: params.entry.inputSchema,
-  };
-  if (params.loading === "direct" || params.directToolNames.has(params.entry.name)) {
-    return base;
-  }
-  return {
-    ...base,
-    namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-    deferLoading: true,
   };
 }
 

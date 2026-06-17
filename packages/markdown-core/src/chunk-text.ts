@@ -43,6 +43,23 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
 }
 
 /**
+ * Keeps UTF-16 chunk boundaries from separating a supplementary-plane character.
+ * A one-unit positive limit still needs to emit an entire surrogate pair.
+ */
+export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
+  if (
+    end >= text.length ||
+    text.charCodeAt(end - 1) < 0xd800 ||
+    text.charCodeAt(end - 1) > 0xdbff ||
+    text.charCodeAt(end) < 0xdc00 ||
+    text.charCodeAt(end) > 0xdfff
+  ) {
+    return end;
+  }
+  return end - 1 > start ? end - 1 : end + 1;
+}
+
+/**
  * Splits plain text into size-bounded chunks at readable boundaries.
  *
  * Returns the original text as one chunk when the limit is non-positive.
@@ -66,7 +83,11 @@ export function chunkText(text: string, limit: number): string[] {
     // Prefer block boundaries, then spaces, then a hard size cut when no
     // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;
-    const end = breakOffset > 0 ? cursor + breakOffset : windowEnd;
+    const end = avoidTrailingHighSurrogateBreak(
+      text,
+      cursor,
+      breakOffset > 0 ? cursor + breakOffset : windowEnd,
+    );
     chunks.push(text.slice(cursor, end));
     cursor = end;
     while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {

@@ -41,7 +41,7 @@ import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 
 /** Resolved command session identity plus backing store metadata. */
-export type SessionResolution = {
+type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: SessionEntry;

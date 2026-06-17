@@ -5,8 +5,8 @@
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-export type TerminalToolPresentation = { text: string };
-export type TerminalToolPresentationFormatter = (
+type TerminalToolPresentation = { text: string };
+type TerminalToolPresentationFormatter = (
   params: unknown,
   result: AgentToolResult<unknown>,
 ) => TerminalToolPresentation | undefined;

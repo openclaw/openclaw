@@ -1,3 +1,4 @@
+import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
 // Markdown Core module implements render aware chunking behavior.
 import {
   chunkMarkdownIR,
@@ -127,10 +128,11 @@ function findLargestChunkTextLengthWithinRenderedLimit<TRendered>(
   // Rendered length is not guaranteed to be monotonic after escaping/link or
   // file-reference rewriting, so test exact candidates from longest to shortest.
   for (let candidateLength = currentTextLength - 1; candidateLength >= 1; candidateLength -= 1) {
-    const candidate = sliceMarkdownIR(chunk, 0, candidateLength);
+    const safeCandidateLength = avoidTrailingHighSurrogateBreak(chunk.text, 0, candidateLength);
+    const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
     const rendered = options.renderChunk(candidate);
     if (options.measureRendered(rendered) <= renderedLimit) {
-      return candidateLength;
+      return safeCandidateLength;
     }
   }
   return 0;
@@ -215,7 +217,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   if (lastAnyWhitespaceBreak > start) {
     return resolveWhitespaceBreak(lastAnyWhitespaceBreak, lastAnyWhitespaceRunStart);
   }
-  return maxEnd;
+  return avoidTrailingHighSurrogateBreak(text, start, maxEnd);
 }
 
 function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {

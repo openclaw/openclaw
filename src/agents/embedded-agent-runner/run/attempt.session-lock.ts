@@ -860,7 +860,7 @@ export type EmbeddedAttemptSessionFileOwner = {
   release(): void;
 };
 
-export class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
+class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
   constructor(sessionFile: string, timeoutMs: number) {
     super(`timed out waiting for embedded session file owner after ${timeoutMs}ms: ${sessionFile}`);
     this.name = "EmbeddedAttemptSessionFileOwnerTimeoutError";
