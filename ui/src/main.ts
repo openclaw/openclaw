@@ -32,7 +32,9 @@ function syncDocumentPublicAssetLinks() {
   setDocumentLinkHref('link[rel="icon"][type="image/svg+xml"]', "favicon.svg");
   setDocumentLinkHref('link[rel="icon"][type="image/png"]', "favicon-32.png");
   setDocumentLinkHref('link[rel="apple-touch-icon"]', "apple-touch-icon.png");
-  setDocumentLinkHref('link[rel="manifest"]', "manifest.webmanifest");
+  // manifest.webmanifest is served inline via the bootstrap config and set
+  // dynamically with a Blob URL in loadControlUiBootstrapConfig() to avoid a
+  // separate HTTP request that may be blocked by an intermediate auth proxy.
 }
 
 function setDocumentLinkHref(

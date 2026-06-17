@@ -22,4 +22,10 @@ export type ControlUiBootstrapConfig = {
   chatMessageMaxWidth?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";
+  /**
+   * Raw JSON content of manifest.webmanifest, served inline so the browser
+   * can construct a local Blob URL instead of making a separate HTTP request
+   * that may be blocked by an intermediate auth proxy (e.g. oauth2-proxy).
+   */
+  manifestWebmanifest?: string;
 };

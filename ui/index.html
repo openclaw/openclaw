@@ -8,7 +8,12 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!--
+      manifest.webmanifest is served inline via the bootstrap config to avoid a
+      separate HTTP request that can be blocked by intermediate auth proxies
+      (e.g. oauth2-proxy).  The link element is created dynamically with a Blob
+      URL in loadControlUiBootstrapConfig().
+    -->
     <script>
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };

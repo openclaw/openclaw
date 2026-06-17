@@ -954,6 +954,31 @@ export async function handleControlUiHttpRequest(
           resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
         )
       : controlUiAvatarResolutionMeta(null);
+
+    // Read manifest.webmanifest inline so the browser can construct a local
+    // Blob URL and avoid a separate HTTP request that may be blocked by an
+    // intermediate auth proxy (e.g. oauth2-proxy serving a 403).
+    let manifestWebmanifest: string | undefined;
+    try {
+      const manifestRoot =
+        opts?.root?.kind === "resolved" || opts?.root?.kind === "bundled"
+          ? opts.root.path
+          : resolveControlUiRootSync({
+              moduleUrl: import.meta.url,
+              argv1: process.argv[1],
+              cwd: process.cwd(),
+            });
+      if (manifestRoot) {
+        const manifestPath = path.resolve(manifestRoot, "manifest.webmanifest");
+        if (fs.existsSync(manifestPath)) {
+          manifestWebmanifest = fs.readFileSync(manifestPath, "utf8");
+        }
+      }
+    } catch {
+      // manifest is optional; skip silently so the bootstrap config
+      // remains available even when assets are not yet built.
+    }
+
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -980,6 +1005,7 @@ export async function handleControlUiHttpRequest(
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
       timeFormat: config?.agents?.defaults?.timeFormat,
+      manifestWebmanifest,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

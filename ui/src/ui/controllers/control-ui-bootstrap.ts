@@ -137,6 +137,31 @@ export async function loadControlUiBootstrapConfig(
         ? parsed.chatMessageMaxWidth
         : null;
     setUiTimeFormatPreference(parsed.timeFormat);
+
+    // Serve manifest.webmanifest via a Blob URL constructed from the inline
+    // bootstrap config content.  This avoids a separate HTTP request that would
+    // be intercepted by an intermediate auth proxy (e.g. oauth2-proxy) and
+    // return 403.  Falls back to the static `/manifest.webmanifest` URL when
+    // the server didn't include inline content.
+    if (parsed.manifestWebmanifest) {
+      try {
+        const blob = new Blob([parsed.manifestWebmanifest], {
+          type: "application/manifest+json",
+        });
+        const blobUrl = URL.createObjectURL(blob);
+        let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+        if (!link) {
+          link = document.createElement("link");
+          link.rel = "manifest";
+          document.head.appendChild(link);
+        }
+        link.href = blobUrl;
+      } catch {
+        // Blob URL constructor unavailable; the static manifest URL on the
+        // link element (set via syncDocumentPublicAssetLinks) will be used
+        // as a fallback.
+      }
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }
