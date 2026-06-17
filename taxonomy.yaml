@@ -164,7 +164,7 @@ surfaces:
         id: gateway-rpc-apis-and-events
         features:
           - name: Health APIs
-            coverageIds: [health-apis]
+            coverageIds: [gateway.health, health-apis]
             description: '`health` and `status` RPCs.'
           - name: Identity and presence APIs
             coverageIds: [identity-and-presence-apis]
@@ -504,7 +504,7 @@ surfaces:
         id: websocket-connection
         features:
           - name: WebSocket transport
-            coverageIds: [websocket-transport]
+            coverageIds: [gateway.smoke, websocket-transport]
             description: WebSocket transport with JSON text frames.
           - name: Connect challenge
             coverageIds: [connect-challenge]
@@ -516,7 +516,7 @@ surfaces:
             coverageIds: [protocol-version-negotiation]
             description: Protocol range negotiation (`minProtocol`/`maxProtocol`).
           - name: hello-ok snapshot
-            coverageIds: [hello-ok-snapshot]
+            coverageIds: [gateway.protocol, hello-ok-snapshot]
             description: 'Required `hello-ok` payload structure: server identity, negotiated auth, feature discovery, snapshot, and policy limits.'
           - name: Startup retry
             coverageIds: [startup-retry]
