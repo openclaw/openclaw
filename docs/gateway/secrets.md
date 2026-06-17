@@ -335,8 +335,9 @@ the config fields that accept SecretRefs.
     - `BWS_ACCESS_TOKEN` available to the Gateway service.
     - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws`
       binary path.
-    - Self-hosted Bitwarden only: `BWS_SERVER_URL` passed to the resolver so the
-      `bws` CLI targets your server instead of the public default.
+    - Self-hosted Bitwarden only: include `BWS_SERVER_URL` in `passEnv` so the exec
+      provider forwards it to the resolver; the resolver then passes it to the
+      `bws` CLI. Omit it for Bitwarden cloud.
 
     ```json5
     {
@@ -345,8 +346,7 @@ the config fields that accept SecretRefs.
           bws: {
             source: "exec",
             command: "/usr/local/bin/openclaw-bws-resolver.mjs",
-            // Add "BWS_SERVER_URL" for self-hosted Bitwarden instances.
-            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN"],
+            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN", "BWS_SERVER_URL"],
             jsonOnly: true,
           },
         },
