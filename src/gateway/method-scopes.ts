@@ -40,6 +40,26 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   TALK_SECRETS_SCOPE,
 ];
 
+function findPluginMethodDescriptor(method: string) {
+  // Plugin descriptors may live in any active surface (active, http route, channel);
+  // look across all of them so plugin-declared scopes reach the resolver regardless
+  // of which surface a request happened to enter. Without this, plugin methods whose
+  // descriptors are only present in the http-route or channel registry fall through
+  // to the admin-scope default in authorizeOperatorScopesForMethod.
+  const state = getPluginRegistryState();
+  return (
+    state?.activeRegistry?.gatewayMethodDescriptors?.find(
+      (descriptor) => descriptor.name === method,
+    ) ??
+    state?.httpRoute?.registry?.gatewayMethodDescriptors?.find(
+      (descriptor) => descriptor.name === method,
+    ) ??
+    state?.channel?.registry?.gatewayMethodDescriptors?.find(
+      (descriptor) => descriptor.name === method,
+    )
+  );
+}
+
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Core descriptors are authoritative, then reserved namespace policy, then active plugin
   // descriptors. Node/dynamic sentinels are intentionally excluded from operator scopes.
@@ -51,10 +71,7 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
-    (descriptor) => descriptor.name === method,
-  );
-  const pluginScope = pluginDescriptor?.scope;
+  const pluginScope = findPluginMethodDescriptor(method)?.scope;
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 
