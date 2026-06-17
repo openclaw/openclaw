@@ -9,9 +9,9 @@ import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult =
   | {
-      ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
-    }
+    ok: true;
+    matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
+  }
   | { ok: false; reason: string };
 
 function parseOrigin(
@@ -23,9 +23,22 @@ function parseOrigin(
   }
   try {
     const url = new URL(trimmed);
+    const host = normalizeLowercaseStringOrEmpty(url.host);
+    const protocol = normalizeLowercaseStringOrEmpty(url.protocol);
+    const origin =
+      url.origin && url.origin !== "null"
+        ? normalizeLowercaseStringOrEmpty(url.origin)
+        : protocol && host
+          ? `${protocol}//${host}`
+          : "";
+
+    if (!origin) {
+      return null;
+    }
+
     return {
-      origin: normalizeLowercaseStringOrEmpty(url.origin),
-      host: normalizeLowercaseStringOrEmpty(url.host),
+      origin,
+      host,
       hostname: normalizeLowercaseStringOrEmpty(url.hostname),
     };
   } catch {
