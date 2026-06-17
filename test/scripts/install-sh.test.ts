@@ -299,6 +299,7 @@ describe("install.sh", () => {
       is_alpine_linux() { return 1; }
       apt-get() { :; }
       download_file() { :; }
+      validate_downloaded_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       ui_error() { printf 'error:%s\\n' "$*"; }
@@ -338,6 +339,7 @@ describe("install.sh", () => {
       is_alpine_linux() { return 1; }
       apt-get() { :; }
       download_file() { :; }
+      validate_downloaded_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       ui_error() { printf 'error:%s\\n' "$*"; }
