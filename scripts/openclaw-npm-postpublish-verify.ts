@@ -331,8 +331,13 @@ export async function verifyNpmProvenanceAttestation(params: {
     );
   }
 
-  if (policyError) {
+  if (policyError instanceof Error) {
     throw policyError;
+  }
+  if (policyError) {
+    throw new Error(
+      `npm provenance attestation policy evaluation failed for ${params.packageName}@${params.version}: ${formatErrorMessage(policyError)}`,
+    );
   }
 
   throw new Error(
