@@ -169,9 +169,9 @@ export function markdownToTelegramHtml(
       ? supportedHtml
       : supportedHtml
           .replace(/<blockquote>/g, "<b>")
-          .replace(/</blockquote>/g, "</b>")
+          .replace(/<\/blockquote>/g, "</b>")
           .replace(/<h([1-6])>/g, "<b>")
-          .replace(/</h([1-6])>/g, "</b>");
+          .replace(/<\/h([1-6])>/g, "</b>");
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
     return wrapFileReferencesInHtml(legacyHtml);

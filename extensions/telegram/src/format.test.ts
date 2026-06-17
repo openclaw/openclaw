@@ -49,7 +49,7 @@ describe("markdownToTelegramHtml", () => {
       "<pre><code>oauth2: invalid_grant</code></pre>",
     ].join("\n");
 
-    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(markdownToTelegramHtml(input, { richMode: true })).toBe(input);
     expect(
       markdownToTelegramChunks(input, 4096)
         .map((chunk) => chunk.html)
@@ -60,7 +60,7 @@ describe("markdownToTelegramHtml", () => {
   it("preserves Telegram expandable blockquote HTML", () => {
     const input = "<blockquote expandable>hidden details</blockquote>";
 
-    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(markdownToTelegramHtml(input, { richMode: true })).toBe(input);
     expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
   });
 
@@ -222,26 +222,26 @@ describe("markdownToTelegramHtml", () => {
   });
 
   it("renders blockquotes as native Telegram blockquote tags", () => {
-    const res = markdownToTelegramHtml("> Quote");
+    const res = markdownToTelegramHtml("> Quote", { richMode: true });
     expect(res).toContain("<blockquote>");
     expect(res).toContain("Quote");
     expect(res).toContain("</blockquote>");
   });
 
   it("renders blockquotes with inline formatting", () => {
-    const res = markdownToTelegramHtml("> **bold** quote");
+    const res = markdownToTelegramHtml("> **bold** quote", { richMode: true });
     expect(res).toContain("<blockquote>");
     expect(res).toContain("<b>bold</b>");
     expect(res).toContain("</blockquote>");
   });
 
   it("renders multiline blockquotes as a single Telegram blockquote", () => {
-    const res = markdownToTelegramHtml("> first\n> second");
+    const res = markdownToTelegramHtml("> first\n> second", { richMode: true });
     expect(res).toBe("<blockquote>first\nsecond</blockquote>");
   });
 
   it("renders separated quoted paragraphs as distinct blockquotes", () => {
-    const res = markdownToTelegramHtml("> first\n\n> second");
+    const res = markdownToTelegramHtml("> first\n\n> second", { richMode: true });
     expect(res).toContain("<blockquote>first");
     expect(res).toContain("<blockquote>second</blockquote>");
     expect(res.match(/<blockquote>/g)).toHaveLength(2);
