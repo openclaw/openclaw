@@ -743,12 +743,11 @@ export function handleMessageUpdate(
       const recomputedRawText = ctx.stripBlockTags(ctx.state.deltaBuffer, recomputeState, {
         final: evtType === "text_end",
       });
-      const previousRawText = ctx.state.lastStreamedAssistant ?? "";
-      const isFullStreamReplacement = !recomputedRawText.startsWith(previousRawText);
-      next = recomputedRawText.trim();
-      visibleDelta = isFullStreamReplacement
-        ? recomputedRawText
-        : recomputedRawText.slice(previousRawText.length);
+      const previousVisibleText = sanitizeAssistantVisibleStreamText(
+        ctx.state.lastStreamedAssistant ?? "",
+      ).trim();
+      next = sanitizeAssistantVisibleStreamText(recomputedRawText).trim();
+      visibleDelta = resolveTextAppendDelta(previousVisibleText, next);
       nextRawStreamText = recomputedRawText;
       copyPartialBlockState(ctx.state.partialBlockState, recomputeState);
     } else {
@@ -767,7 +766,11 @@ export function handleMessageUpdate(
           previousRawText: ctx.state.lastStreamedAssistant ?? "",
           visibleDelta,
         });
-        next = streamVisibleText.visibleText;
+        const previousVisibleText = sanitizeAssistantVisibleStreamText(
+          ctx.state.lastStreamedAssistant ?? "",
+        ).trim();
+        next = sanitizeAssistantVisibleStreamText(streamVisibleText.rawText).trim();
+        visibleDelta = resolveTextAppendDelta(previousVisibleText, next);
         nextRawStreamText = streamVisibleText.rawText;
       }
     }

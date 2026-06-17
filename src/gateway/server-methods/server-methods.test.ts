@@ -899,6 +899,34 @@ describe("sanitizeChatHistoryMessages", () => {
       },
     ]);
   });
+
+  it("strips raw Harmony browser scaffolding from assistant history text blocks", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: [
+              "MIXED-BEFORE",
+              'commentary to=functions.browser code {"action":"status"}',
+              'commentary to=functions.browser.commentary code {"action":"status"}',
+              "MIXED-AFTER",
+            ].join("\n"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "MIXED-BEFORE\nMIXED-AFTER" }],
+        timestamp: 1,
+      },
+    ]);
+  });
 });
 
 describe("projectRecentChatDisplayMessages", () => {

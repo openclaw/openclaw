@@ -374,6 +374,53 @@ describe("handleMessageUpdate text signatures", () => {
     });
   });
 
+  it("strips namespaced Harmony browser scaffolding from plain streaming deltas", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+
+    const createNonPhaseEvent = (text: string, delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "stop",
+            provider: "test",
+            model: "local",
+            usage: {},
+            timestamp: 0,
+          },
+        },
+      }) as never;
+
+    handleMessageUpdate(
+      context,
+      createNonPhaseEvent(
+        [
+          "MIXED-BEFORE",
+          'commentary to=functions.browser code {"action":"status"}',
+          "MIXED-AFTER",
+        ].join("\n"),
+        [
+          "MIXED-BEFORE",
+          'commentary to=functions.browser code {"action":"status"}',
+          "MIXED-AFTER",
+        ].join("\n"),
+      ),
+    );
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "MIXED-BEFORE\nMIXED-AFTER", delta: "MIXED-BEFORE\nMIXED-AFTER" },
+      },
+    ]);
+  });
+
   it("uses full partial text for suffix deltas after a suppressed commentary item", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
