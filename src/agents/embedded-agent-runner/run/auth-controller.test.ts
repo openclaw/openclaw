@@ -35,6 +35,7 @@ vi.mock("../../model-auth.js", async () => {
   };
 });
 
+import { RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS } from "../../runtime-auth-refresh.js";
 import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
@@ -746,6 +747,67 @@ describe("createEmbeddedRunAuthController", () => {
       expect(harness.runtimeModel.headers?.["api-key"]).toBe(backupHeader);
       const storedBackupApiKey = setRuntimeApiKey.mock.calls.at(-1)?.[1];
       expectProtectedRuntimeValue(storedBackupApiKey, "backup-runtime-api-key");
+      controller.stopRuntimeAuthRefreshTimer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the in-flight refresh handle when a refresh hangs past the hard deadline", async () => {
+    // Regression for the rh-bot gateway freeze: a provider auth hook that never
+    // settles left `refreshInFlight` pending forever, and every later model turn
+    // deadlocked at `await refreshInFlight`. The hard deadline must force the
+    // handle to settle so the single-flight cannot wedge the whole gateway.
+    vi.useFakeTimers();
+    try {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: "source-api-key",
+        mode: "api-key",
+        profileId: "default",
+        source: "env",
+      });
+
+      let call = 0;
+      mocks.prepareProviderRuntimeAuth.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) {
+          // Initial exchange resolves so a refresh gets scheduled (expiry soon).
+          return {
+            apiKey: "runtime-api-key",
+            baseUrl: "https://runtime.example.com/v1",
+            request: {
+              auth: { mode: "header", headerName: "api-key", value: "runtime-token" },
+            },
+            expiresAt: Date.now() + 60_000,
+          };
+        }
+        // Every scheduled refresh hangs forever — the provider auth hook wedge.
+        return new Promise(() => {});
+      });
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: ["default"],
+      });
+
+      await controller.initializeAuthProfile();
+
+      // Fire the scheduled refresh (min delay 5s); it hangs, so the handle is set.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const inflight = getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight;
+      expect(typeof inflight?.then).toBe("function");
+
+      // Before the fix this stayed pending forever. The hard deadline rejects it.
+      const rejection = expect(inflight).rejects.toThrow(/exceeded hard deadline/);
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS);
+      await rejection;
+      // The wedged handle is no longer the active in-flight handle.
+      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).not.toBe(inflight);
+
       controller.stopRuntimeAuthRefreshTimer();
     } finally {
       vi.useRealTimers();
