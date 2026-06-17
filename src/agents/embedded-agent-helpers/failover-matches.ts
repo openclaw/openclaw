@@ -107,6 +107,12 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
+    // Local provider model availability (LM Studio, Ollama, etc.) — model not
+    // loaded / still loading is a transient unavailability (#93931).
+    /\bmodel\b(?:[\s\w.-]+)?(?:is\s+)?not\s+(?:loaded|ready|available|running|found\s+on\s+this\s+server)\b/i,
+    /\bno\s+model\s+(?:loaded|available|running)\b/i,
+    // Chinese local model unavailability messages
+    /模型(?:未加载|加载中|未就绪|不可用)/,
   ],
   serverError: [
     "an error occurred while processing",
