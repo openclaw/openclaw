@@ -913,6 +913,8 @@ describe("before_tool_call loop detection behavior", () => {
         type: "tool.execution.started",
       });
       expect(started.paramsSummary).toEqual({ kind: "object" });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[1]).toBe(params);
     });
   });
 });
