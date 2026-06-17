@@ -37,6 +37,18 @@ describe("resolveCronExecutionRetryHint", () => {
     });
   });
 
+  it("classifies cron pre-execution watchdog failures as timeout retries", () => {
+    for (const message of [
+      "cron: isolated agent setup timed out before runner start",
+      "cron: isolated agent run stalled before execution start",
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
+        retryable: true,
+        category: "timeout",
+      });
+    }
+  });
+
   it("does not classify bare 5xx-looking numbers as server_error", () => {
     for (const message of [
       "context limit 512 exceeded",
