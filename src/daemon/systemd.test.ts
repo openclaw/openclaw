@@ -119,6 +119,39 @@ const createWritableStreamMock = () => {
   };
 };
 
+function mockSystemUnitFiles(files: Record<string, string>) {
+  vi.spyOn(fs, "readFile").mockImplementation(async (pathArg) => {
+    const p = pathLikeToString(pathArg);
+    const content = files[p];
+    if (content !== undefined) {
+      return content;
+    }
+    throw Object.assign(new Error(`ENOENT: no such file or directory, open '${p}'`), {
+      code: "ENOENT",
+    });
+  });
+}
+
+function renderCustomGatewayUnit(
+  environment: Record<string, string>,
+  options: { environmentFiles?: string[] } = {},
+): string {
+  const environmentLines = Object.entries(environment).map(
+    ([key, value]) => `Environment=${key}=${value}`,
+  );
+  const environmentFileLines = (options.environmentFiles ?? []).map(
+    (environmentFile) => `EnvironmentFile=${environmentFile}`,
+  );
+  return [
+    "[Service]",
+    "WorkingDirectory=/tmp/openclaw-custom-unit",
+    ...environmentFileLines,
+    ...environmentLines,
+    "ExecStart=/usr/bin/openclaw gateway run",
+    "",
+  ].join("\n");
+}
+
 function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
   const [call] = write.mock.calls;
   if (!call) {
@@ -646,11 +679,291 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         marker: "openclaw",
       },
     ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
     const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
     expect(result).toEqual({
       scope: "system",
       unitName: "openclaw.service",
       unitPath: "/etc/systemd/system/openclaw.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope ignores marker-owned custom system units with a different profile", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-staging.service",
+        detail: "unit: /etc/systemd/system/openclaw-staging.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-staging.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "staging",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope matches OPENCLAW_PROFILE=Default with the current default profile", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-default.service",
+        detail: "unit: /etc/systemd/system/openclaw-default.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-default.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "Default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-default.service",
+      unitPath: "/etc/systemd/system/openclaw-default.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope matches current OPENCLAW_GATEWAY_PORT=127.0.0.1:18789 with candidate port 18789", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-loopback.service",
+        detail: "unit: /etc/systemd/system/openclaw-loopback.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-loopback.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789",
+    });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-loopback.service",
+      unitPath: "/etc/systemd/system/openclaw-loopback.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope ignores marker-owned custom system units with a different gateway port", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-alt-port.service",
+        detail: "unit: /etc/systemd/system/openclaw-alt-port.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-alt-port.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "28888",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_GATEWAY_PORT: "18789",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope ignores marker-owned custom system units with a different OPENCLAW_CONFIG_PATH", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-alt-config.service",
+        detail: "unit: /etc/systemd/system/openclaw-alt-config.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-alt-config.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/other-config.json",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_CONFIG_PATH: "/etc/openclaw/current-config.json",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope ignores marker-owned custom system units missing OPENCLAW_PROFILE", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-missing-profile.service",
+        detail: "unit: /etc/systemd/system/openclaw-missing-profile.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-missing-profile.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope ignores marker-owned custom system units missing OPENCLAW_GATEWAY_PORT", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-missing-port.service",
+        detail: "unit: /etc/systemd/system/openclaw-missing-port.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-missing-port.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope merges EnvironmentFile OPENCLAW_CONFIG_PATH and OPENCLAW_GATEWAY_PORT for custom identity", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-env-file.service",
+        detail: "unit: /etc/systemd/system/openclaw-env-file.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-env-file.service": renderCustomGatewayUnit(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+          OPENCLAW_PROFILE: "default",
+        },
+        { environmentFiles: ["/etc/openclaw/gateway.env"] },
+      ),
+      "/etc/openclaw/gateway.env": [
+        "OPENCLAW_CONFIG_PATH=/etc/openclaw/current-config.json",
+        "OPENCLAW_GATEWAY_PORT=[::1]:18789",
+      ].join("\n"),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({
+      HOME: TEST_MANAGED_HOME,
+      OPENCLAW_CONFIG_PATH: "/etc/openclaw/current-config.json",
+      OPENCLAW_GATEWAY_PORT: "18789",
+    });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-env-file.service",
+      unitPath: "/etc/systemd/system/openclaw-env-file.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope skips mismatched custom units and selects a matching marker-owned system unit", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-staging.service",
+        detail: "unit: /etc/systemd/system/openclaw-staging.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+      {
+        platform: "linux",
+        label: "openclaw-default.service",
+        detail: "unit: /etc/systemd/system/openclaw-default.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw-staging.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "staging",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+      "/etc/systemd/system/openclaw-default.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw-default.service",
+      unitPath: "/etc/systemd/system/openclaw-default.service",
     });
   });
 
@@ -665,6 +978,14 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         marker: "openclaw",
       },
     ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
       cb(null, "", "");
@@ -695,6 +1016,14 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         marker: "openclaw",
       },
     ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
@@ -746,6 +1075,14 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         marker: "openclaw",
       },
     ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["is-enabled", "openclaw.service"]);
       cb(null, "enabled\n", "");
@@ -764,6 +1101,14 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         marker: "openclaw",
       },
     ]);
+    mockSystemUnitFiles({
+      "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "18789",
+      }),
+    });
     mockEffectiveUid(1000);
     const { stdout, write } = createWritableStreamMock();
     await expect(
@@ -1991,6 +2336,14 @@ describe("systemd service install and uninstall", () => {
           marker: "openclaw",
         },
       ]);
+      mockSystemUnitFiles({
+        "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+          OPENCLAW_PROFILE: "default",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        }),
+      });
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
           expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
@@ -2036,6 +2389,72 @@ describe("systemd service install and uninstall", () => {
         "openclaw.service (/etc/systemd/system/openclaw.service)",
       );
       expect(execFileMock).toHaveBeenCalledTimes(7);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("installSystemdService does not retire a profile-mismatched marker-owned custom system unit during user install", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      findSystemGatewayServicesMock.mockResolvedValueOnce([
+        {
+          platform: "linux",
+          label: "openclaw-staging.service",
+          detail: "unit: /etc/systemd/system/openclaw-staging.service",
+          scope: "system",
+          marker: "openclaw",
+        },
+      ]);
+      mockSystemUnitFiles({
+        "/etc/systemd/system/openclaw-staging.service": renderCustomGatewayUnit({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+          OPENCLAW_PROFILE: "staging",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        }),
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      const output = write.mock.calls.map(([value]) => String(value)).join("\n");
+      expect(output).not.toContain("Retired conflicting systemd service");
+      expect(execFileMock.mock.calls.some(([, args]) => args[0] === "disable")).toBe(false);
+      expect(execFileMock).toHaveBeenCalledTimes(4);
     } finally {
       vi.restoreAllMocks();
       await fs.rm(tempHomeRoot, { recursive: true, force: true });
@@ -2224,6 +2643,14 @@ describe("systemd service install and uninstall", () => {
           marker: "openclaw",
         },
       ]);
+      mockSystemUnitFiles({
+        "/etc/systemd/system/openclaw.service": renderCustomGatewayUnit({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+          OPENCLAW_PROFILE: "default",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        }),
+      });
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
           expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);

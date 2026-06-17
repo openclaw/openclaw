@@ -128,7 +128,92 @@ type SystemdUserInstallArtifactSnapshot = {
   mode: number | null;
 };
 
-async function findMarkerOwnedSystemSystemdUnit(): Promise<{
+function normalizeOpenClawGatewayProfile(value: string | undefined): string {
+  const profile = value?.trim();
+  if (!profile || profile.toLowerCase() === "default") {
+    return "default";
+  }
+  return profile;
+}
+
+function readOpenClawGatewayPortValue(value: string | undefined): string | null {
+  const raw = value?.trim();
+  if (!raw) {
+    return null;
+  }
+  const bracketHostPort = /^\[[^\]]+\]:(\d+)$/.exec(raw);
+  if (bracketHostPort) {
+    return bracketHostPort[1] ?? null;
+  }
+  const lastColon = raw.lastIndexOf(":");
+  if (lastColon !== -1 && raw.indexOf(":") === lastColon) {
+    return raw.slice(lastColon + 1).trim() || null;
+  }
+  return raw;
+}
+
+function normalizeOpenClawGatewayPort(value: string | undefined): number | null {
+  const portValue = readOpenClawGatewayPortValue(value);
+  if (!portValue) {
+    return null;
+  }
+  const port = parseStrictPositiveInteger(portValue);
+  return port === undefined || port > 65535 ? null : port;
+}
+
+function normalizeOpenClawConfigPath(value: string | undefined): string | null {
+  const raw = value?.trim();
+  return raw ? path.posix.normalize(toPosixPath(raw)) : null;
+}
+
+function openClawConfigPathsMatch(
+  current: string | undefined,
+  candidate: string | undefined,
+): boolean {
+  const currentPath = normalizeOpenClawConfigPath(current);
+  const candidatePath = normalizeOpenClawConfigPath(candidate);
+  if (!currentPath && !candidatePath) {
+    return true;
+  }
+  return Boolean(currentPath && candidatePath && currentPath === candidatePath);
+}
+
+async function isSameOpenClawGatewaySystemdIdentity(params: {
+  env: GatewayServiceEnv;
+  unitPath: string;
+}): Promise<boolean> {
+  const config = await readSystemdServiceCommandConfigFromUnitPath(params);
+  const environment = config?.environment;
+  if (!environment) {
+    return false;
+  }
+  if (
+    environment.OPENCLAW_SERVICE_MARKER?.trim() !== "openclaw" ||
+    environment.OPENCLAW_SERVICE_KIND?.trim() !== "gateway"
+  ) {
+    return false;
+  }
+  if (!environment.OPENCLAW_PROFILE?.trim() || !environment.OPENCLAW_GATEWAY_PORT?.trim()) {
+    return false;
+  }
+  if (
+    normalizeOpenClawGatewayProfile(environment.OPENCLAW_PROFILE) !==
+    normalizeOpenClawGatewayProfile(params.env.OPENCLAW_PROFILE)
+  ) {
+    return false;
+  }
+  const candidatePort = normalizeOpenClawGatewayPort(environment.OPENCLAW_GATEWAY_PORT);
+  const currentPort = normalizeOpenClawGatewayPort(params.env.OPENCLAW_GATEWAY_PORT ?? "18789");
+  if (candidatePort === null || currentPort === null || candidatePort !== currentPort) {
+    return false;
+  }
+  return openClawConfigPathsMatch(
+    params.env.OPENCLAW_CONFIG_PATH,
+    environment.OPENCLAW_CONFIG_PATH,
+  );
+}
+
+async function findMarkerOwnedSystemSystemdUnit(env: GatewayServiceEnv): Promise<{
   unitName: string;
   unitPath: string;
 } | null> {
@@ -152,7 +237,10 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
     }
     const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
     const unitPath = match?.[1]?.trim();
-    if (unitPath) {
+    if (!unitPath) {
+      continue;
+    }
+    if (await isSameOpenClawGatewaySystemdIdentity({ env, unitPath })) {
       return { unitName: svc.label, unitPath };
     }
   }
@@ -236,7 +324,7 @@ export async function findInstalledSystemdGatewayScope(
   if (selected?.scope === "system") {
     return selected;
   }
-  const owned = await findMarkerOwnedSystemSystemdUnit();
+  const owned = await findMarkerOwnedSystemSystemdUnit(env);
   if (!owned) {
     return selected;
   }
@@ -251,10 +339,11 @@ export { enableSystemdUserLinger, readSystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
-export async function readSystemdServiceExecStart(
-  env: GatewayServiceEnv,
-): Promise<GatewayServiceCommandConfig | null> {
-  const unitPath = resolveSystemdUnitPath(env);
+async function readSystemdServiceCommandConfigFromUnitPath(params: {
+  env: GatewayServiceEnv;
+  unitPath: string;
+}): Promise<GatewayServiceCommandConfig | null> {
+  const { env, unitPath } = params;
   try {
     const content = await fs.readFile(unitPath, "utf8");
     let execStart = "";
@@ -312,6 +401,15 @@ export async function readSystemdServiceExecStart(
   } catch {
     return null;
   }
+}
+
+export async function readSystemdServiceExecStart(
+  env: GatewayServiceEnv,
+): Promise<GatewayServiceCommandConfig | null> {
+  return await readSystemdServiceCommandConfigFromUnitPath({
+    env,
+    unitPath: resolveSystemdUnitPath(env),
+  });
 }
 
 function buildEnvironmentValueSources(
@@ -908,7 +1006,7 @@ async function readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(
       return canonical;
     }
   }
-  const owned = await findMarkerOwnedSystemSystemdUnit();
+  const owned = await findMarkerOwnedSystemSystemdUnit(env);
   if (!owned) {
     return null;
   }
