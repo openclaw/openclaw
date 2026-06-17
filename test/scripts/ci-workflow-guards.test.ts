@@ -1,7 +1,11 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+
+const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -15,7 +19,31 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
+function findUnpinnedExternalWorkflowActions(): string[] {
+  const violations: string[] = [];
+  for (const workflowName of readdirSync(".github/workflows").filter((name) =>
+    /\.ya?ml$/u.test(name),
+  )) {
+    const workflowPath = `.github/workflows/${workflowName}`;
+    for (const [index, line] of readFileSync(workflowPath, "utf8").split("\n").entries()) {
+      const uses = line.match(/^\s*(?:-\s*)?uses:\s*([^#\s]+)/u)?.[1];
+      if (!uses || uses.startsWith("./") || uses.startsWith("docker://")) {
+        continue;
+      }
+      const at = uses.lastIndexOf("@");
+      if (at < 1 || !/^[a-f0-9]{40}$/u.test(uses.slice(at + 1))) {
+        violations.push(`${workflowPath}:${index + 1}: ${uses}`);
+      }
+    }
+  }
+  return violations;
+}
+
 describe("ci workflow guards", () => {
+  it("pins every external GitHub Actions workflow reference to a full commit SHA", () => {
+    expect(findUnpinnedExternalWorkflowActions()).toEqual([]);
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -270,9 +298,9 @@ describe("ci workflow guards", () => {
     expect(stepNames.indexOf("Run built artifact checks")).toBeLessThan(
       stepNames.indexOf("Save dist build cache"),
     );
-    expect(restoreStep.uses).toBe("actions/cache/restore@v5");
+    expect(restoreStep.uses).toBe(CACHE_V5);
     expect(buildDistStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
-    expect(saveStep.uses).toBe("actions/cache/save@v5");
+    expect(saveStep.uses).toBe("actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae");
     expect(saveStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
     expect(saveStep.with.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
     expect(restoreStep.with.path).toContain("dist/");
@@ -323,7 +351,7 @@ describe("ci workflow guards", () => {
     const checkoutStep = timingJob.steps.find(
       (step) => step.name === "Checkout timing summary helper",
     );
-    expect(checkoutStep.uses).toBe("actions/checkout@v6");
+    expect(checkoutStep.uses).toBe(CHECKOUT_V6);
     expect(checkoutStep.with.ref).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}",
     );
@@ -337,7 +365,7 @@ describe("ci workflow guards", () => {
     expect(writeStep.run).toContain('cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"');
 
     const uploadStep = timingJob.steps.find((step) => step.name === "Upload CI timing summary");
-    expect(uploadStep.uses).toBe("actions/upload-artifact@v7");
+    expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
     expect(uploadStep.with).toMatchObject({
       name: "ci-timings-summary",
       path: "ci-timings-summary.txt",

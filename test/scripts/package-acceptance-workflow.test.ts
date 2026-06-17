@@ -24,6 +24,9 @@ const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
+const SETUP_NODE_V6 = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
+const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 
 type WorkflowStep = {
   "continue-on-error"?: boolean | string;
@@ -145,7 +148,7 @@ describe("package acceptance workflow", () => {
     expect(hydrate.if).toBe(
       "${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}",
     );
-    expect(workflowStep(hydrate, "Setup Node.js").uses).toBe("actions/setup-node@v6");
+    expect(workflowStep(hydrate, "Setup Node.js").uses).toBe(SETUP_NODE_V6);
     expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
@@ -184,7 +187,7 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
     expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
-    expect(workflowStep(hydrateWindowsDaemon, "Setup Node.js").uses).toBe("actions/setup-node@v6");
+    expect(workflowStep(hydrateWindowsDaemon, "Setup Node.js").uses).toBe(SETUP_NODE_V6);
     const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
@@ -1357,7 +1360,7 @@ describe("package artifact reuse", () => {
     expect(currentRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
       name: "Download package-under-test artifact",
-      uses: "actions/download-artifact@v8",
+      uses: DOWNLOAD_ARTIFACT_V8,
       with: {
         name: "${{ inputs.package_artifact_name }}",
         path: ".artifacts/telegram-package-under-test",
@@ -1366,7 +1369,7 @@ describe("package artifact reuse", () => {
     expect(releaseRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
       name: "Download package-under-test artifact from release run",
-      uses: "actions/download-artifact@v8",
+      uses: DOWNLOAD_ARTIFACT_V8,
       with: {
         "github-token": "${{ github.token }}",
         name: "${{ inputs.package_artifact_name }}",
@@ -1462,7 +1465,7 @@ describe("package artifact reuse", () => {
 
       const uploadStep = workflowStep(job, "Upload advisory status");
       expect(uploadStep.if, jobName).toBe("always()");
-      expect(uploadStep.uses, jobName).toBe("actions/upload-artifact@v7");
+      expect(uploadStep.uses, jobName).toBe(UPLOAD_ARTIFACT_V7);
       expect(uploadStep.with?.name, jobName).toContain("release-check-status-");
       expect(uploadStep.with?.path, jobName).toMatch(
         /^\.artifacts\/release-check-status\/.+\.env$/u,
@@ -1474,7 +1477,7 @@ describe("package artifact reuse", () => {
     expect(summary.permissions?.actions).toBe("read");
     const downloadStep = workflowStep(summary, "Download advisory status artifacts");
     expect(downloadStep["continue-on-error"]).toBe(true);
-    expect(downloadStep.uses).toBe("actions/download-artifact@v8");
+    expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     expect(downloadStep.with?.pattern).toBe("release-check-status-*");
     expect(downloadStep.with?.["merge-multiple"]).toBe(true);
 

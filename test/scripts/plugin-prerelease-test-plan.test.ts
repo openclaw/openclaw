@@ -11,6 +11,9 @@ import {
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mjs";
 
+const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
@@ -280,7 +283,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@v6",
+          uses: CHECKOUT_V6,
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
@@ -457,7 +460,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       if: "always()",
       name: "Upload plugin inspector advisory artifacts",
-      uses: "actions/upload-artifact@v7",
+      uses: UPLOAD_ARTIFACT_V7,
       with: {
         "if-no-files-found": "warn",
         name: "plugin-inspector-advisory",
