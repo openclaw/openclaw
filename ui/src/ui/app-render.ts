@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
@@ -42,7 +43,7 @@ import {
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
+import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { copyToClipboard } from "./chat/clipboard.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";

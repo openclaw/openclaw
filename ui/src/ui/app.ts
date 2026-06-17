@@ -2,6 +2,10 @@ import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 // Control UI module implements app behavior.
 import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
+import {
+  loadCron as loadCronInternal,
+  loadOverview as loadOverviewInternal,
+} from "../app/active-route.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import type { Tab } from "../routes/route-registry.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
@@ -62,8 +66,6 @@ import {
 import {
   applySettings as applySettingsInternal,
   applyLocalUserIdentity as applyLocalUserIdentityInternal,
-  loadCron as loadCronInternal,
-  loadOverview as loadOverviewInternal,
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,

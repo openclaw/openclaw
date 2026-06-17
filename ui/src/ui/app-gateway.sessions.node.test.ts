@@ -11,6 +11,11 @@ const handleSessionOperationEventMock = vi.fn();
 const recordFirstAssistantChatTimingMock = vi.fn();
 const switchChatSessionMock = vi.fn();
 
+vi.mock("../app/active-route.ts", () => ({
+  loadCron: vi.fn(),
+  refreshActiveRoute: vi.fn(),
+}));
+
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   CHAT_SESSIONS_REFRESH_LIMIT: 25,
@@ -46,8 +51,6 @@ vi.mock("./app-chat.ts", () => ({
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
-  loadCron: vi.fn(),
-  refreshActiveTab: vi.fn(),
   setLastActiveSessionKey: vi.fn(),
 }));
 vi.mock("./app-render.helpers.ts", () => ({
@@ -103,6 +106,7 @@ const { addExecApproval } = await vi.importActual<typeof import("./controllers/e
 );
 
 afterAll(() => {
+  vi.doUnmock("../app/active-route.ts");
   vi.doUnmock("./app-chat.ts");
   vi.doUnmock("./app-settings.ts");
   vi.doUnmock("./app-render.helpers.ts");

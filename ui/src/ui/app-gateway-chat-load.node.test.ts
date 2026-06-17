@@ -4,7 +4,7 @@ import type { Tab } from "../routes/route-registry.ts";
 import { connectGateway } from "./app-gateway.ts";
 import type { GatewayConnectTiming, GatewayHelloOk } from "./gateway.ts";
 
-const refreshActiveTabMock = vi.hoisted(() =>
+const refreshActiveRouteMock = vi.hoisted(() =>
   vi.fn(async (_host?: unknown, _opts?: unknown) => undefined),
 );
 const refreshChatAvatarMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -36,6 +36,11 @@ function createDeferred() {
   });
   return { promise, reject, resolve };
 }
+
+vi.mock("../app/active-route.ts", () => ({
+  loadCron: vi.fn(),
+  refreshActiveRoute: refreshActiveRouteMock,
+}));
 
 vi.mock("./gateway.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gateway.ts")>();
@@ -114,8 +119,6 @@ vi.mock("./app-chat.ts", () => ({
 
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
-  loadCron: vi.fn(),
-  refreshActiveTab: refreshActiveTabMock,
   setLastActiveSessionKey: vi.fn(),
   syncUrlWithSessionKey: syncUrlWithSessionKeyMock,
 }));
@@ -164,6 +167,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 }));
 
 afterAll(() => {
+  vi.doUnmock("../app/active-route.ts");
   vi.doUnmock("./gateway.ts");
   vi.doUnmock("./app-chat.ts");
   vi.doUnmock("./app-settings.ts");
@@ -252,7 +256,7 @@ function eventPayloads(
 
 beforeEach(() => {
   gatewayClients.length = 0;
-  refreshActiveTabMock.mockClear();
+  refreshActiveRouteMock.mockClear();
   refreshChatAvatarMock.mockClear();
   loadControlUiBootstrapConfigMock.mockClear();
   loadAgentsMock.mockClear();
@@ -274,19 +278,19 @@ describe("connectGateway chat load startup work", () => {
     client.emitHello();
 
     await vi.waitFor(() =>
-      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+      expect(refreshActiveRouteMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
     await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
 
     agentsList.resolve();
     await agentsList.promise;
     await Promise.resolve();
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips agents.list when the startup chat refresh returns agents", async () => {
-    refreshActiveTabMock.mockImplementationOnce(async (target: unknown) => {
+    refreshActiveRouteMock.mockImplementationOnce(async (target: unknown) => {
       (target as { agentsList: unknown }).agentsList = {
         agents: [{ id: "main", name: "Main" }],
         defaultId: "main",
@@ -299,11 +303,11 @@ describe("connectGateway chat load startup work", () => {
     client.emitHello();
 
     await vi.waitFor(() =>
-      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+      expect(refreshActiveRouteMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
     await Promise.resolve();
     expect(loadAgentsMock).not.toHaveBeenCalled();
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not let slow startup bootstrap block the first chat refresh", async () => {
@@ -315,7 +319,7 @@ describe("connectGateway chat load startup work", () => {
     client.emitHello();
 
     await vi.waitFor(() =>
-      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+      expect(refreshActiveRouteMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
     await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
 
@@ -346,7 +350,7 @@ describe("connectGateway chat load startup work", () => {
     client.emitHello();
 
     await vi.waitFor(() =>
-      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+      expect(refreshActiveRouteMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
     await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
 
@@ -355,7 +359,7 @@ describe("connectGateway chat load startup work", () => {
         applyIdentity: false,
       }),
     );
-    expect(refreshActiveTabMock.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(refreshActiveRouteMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadControlUiBootstrapConfigMock.mock.invocationCallOrder[0],
     );
     expect(loadAssistantIdentityMock).toHaveBeenCalledWith(host);
@@ -383,15 +387,15 @@ describe("connectGateway chat load startup work", () => {
     });
 
     await vi.waitFor(() =>
-      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+      expect(refreshActiveRouteMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
     await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
 
     agentsList.resolve();
     await agentsList.promise;
     await Promise.resolve();
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
   });
 
   it("waits for agents.list when a stale agent session may need fallback", async () => {
@@ -428,12 +432,12 @@ describe("connectGateway chat load startup work", () => {
     });
 
     await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
-    expect(refreshActiveTabMock).not.toHaveBeenCalled();
+    expect(refreshActiveRouteMock).not.toHaveBeenCalled();
 
     agentsList.resolve();
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() => expect(refreshActiveRouteMock).toHaveBeenCalledWith(host));
     expect(host.sessionKey).toBe("agent:new-default:main");
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
   });
 
   it("waits for agents.list before refreshing selected-global chat", async () => {
@@ -471,12 +475,12 @@ describe("connectGateway chat load startup work", () => {
     });
 
     await vi.waitFor(() => expect(loadAgentsMock).toHaveBeenCalledWith(host));
-    expect(refreshActiveTabMock).not.toHaveBeenCalled();
+    expect(refreshActiveRouteMock).not.toHaveBeenCalled();
 
     agentsList.resolve();
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() => expect(refreshActiveRouteMock).toHaveBeenCalledWith(host));
     expect(host.sessionKey).toBe("global");
-    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(refreshActiveRouteMock).toHaveBeenCalledTimes(1);
   });
 
   it("lets the active chat refresh own avatar loading on initial chat hello", async () => {
@@ -485,7 +489,7 @@ describe("connectGateway chat load startup work", () => {
     client.emitHello();
 
     await vi.waitFor(() =>
-      expect(refreshActiveTabMock).toHaveBeenCalledWith(host, { chatStartup: true }),
+      expect(refreshActiveRouteMock).toHaveBeenCalledWith(host, { chatStartup: true }),
     );
     expect(refreshChatAvatarMock).not.toHaveBeenCalled();
   });
@@ -495,7 +499,7 @@ describe("connectGateway chat load startup work", () => {
 
     client.emitHello();
 
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() => expect(refreshActiveRouteMock).toHaveBeenCalledWith(host));
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(host);
   });
 
@@ -504,7 +508,7 @@ describe("connectGateway chat load startup work", () => {
 
     client.emitHello();
 
-    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    await vi.waitFor(() => expect(refreshActiveRouteMock).toHaveBeenCalledWith(host));
     expect(loadNodesMock).not.toHaveBeenCalled();
     expect(loadDevicesMock).not.toHaveBeenCalled();
   });
