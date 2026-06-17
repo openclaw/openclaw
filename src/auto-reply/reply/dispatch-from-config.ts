@@ -1304,7 +1304,7 @@ export async function dispatchReplyFromConfig(
     sessionStoreEntry.storePath &&
     sessionStoreEntry.sessionKey
   ) {
-    updateSessionStoreEntry({
+    await updateSessionStoreEntry({
       storePath: sessionStoreEntry.storePath,
       sessionKey: sessionStoreEntry.sessionKey,
       skipMaintenance: true,

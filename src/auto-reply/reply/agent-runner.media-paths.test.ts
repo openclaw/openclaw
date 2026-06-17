@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-agent-runner/runs.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -468,60 +469,66 @@ describe("runReplyAgent media path normalization", () => {
       await import("../../config/sessions/store-writer-state.js");
     const { loadSessionStore } = await import("../../config/sessions.js");
     const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "steered-audio-test-"));
-    cleanupPaths.push(tmpDir);
-    const storePath = path.join(tmpDir, "store.json");
-    const sessionKey = "test-audio-session";
+    const { withTempDir } = await import("../../test-helpers/temp-dir.js");
 
-    // Pre-populate a session entry in the store so updateSessionEntry has something
-    // to merge into.
-    const preExistingEntry: Record<string, unknown> = {
-      sessionId: "test-audio",
-      updatedAt: Date.now(),
-    };
-    await writeFile(storePath, JSON.stringify({ [sessionKey]: preExistingEntry }), "utf-8");
-    clearSessionStoreCacheForTest();
+    await withTempDir({ prefix: "steered-audio-test-" }, async (tmpDir) => {
+      const storePath = path.join(tmpDir, "store.json");
+      const sessionKey = "test-audio-session";
 
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
-      queued: true,
-      sessionId,
-      target: "embedded_run",
-      gatewayHealth: "live",
-    }));
+      // Pre-populate a session entry in the store so updateSessionEntry has something
+      // to merge into.
+      const preExistingEntry: Record<string, unknown> = {
+        sessionId: "test-audio",
+        updatedAt: Date.now(),
+      };
+      await writeFile(storePath, JSON.stringify({ [sessionKey]: preExistingEntry }), "utf-8");
+      clearSessionStoreCacheForTest();
 
-    await runReplyAgent(
-      makeRunReplyAgentParams({
-        resolvedQueue: { mode: "steer" } as QueueSettings,
-        shouldSteer: true,
-        shouldFollowup: true,
-        isStreaming: true,
-        sessionKey,
-        storePath,
-        sessionStore: { [sessionKey]: preExistingEntry } as Record<string, unknown>,
-        sessionEntry: preExistingEntry as Parameters<typeof runReplyAgent>[0]["sessionEntry"],
-        followupRun: {
-          ...createMockFollowupRun({ prompt: "generate chart" }),
-          currentInboundAudio: true,
-        } as unknown as FollowupRun,
-      }),
-    );
+      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(
+        async (sessionId: string) => ({
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+        }),
+      );
 
-    // Verify the flag was persisted through the session store path, not only
-    // on the local object.
-    clearSessionStoreCacheForTest();
-    const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted[sessionKey]?.steeredInboundAudio).toBe(true);
+      await runReplyAgent(
+        makeRunReplyAgentParams({
+          resolvedQueue: { mode: "steer" } as QueueSettings,
+          shouldSteer: true,
+          shouldFollowup: true,
+          isStreaming: true,
+          sessionKey,
+          storePath,
+          sessionStore: {
+            [sessionKey]: preExistingEntry,
+          } as unknown as Record<string, SessionEntry>,
+          sessionEntry: preExistingEntry as Parameters<typeof runReplyAgent>[0]["sessionEntry"],
+          followupRun: {
+            ...createMockFollowupRun({ prompt: "generate chart" }),
+            currentInboundAudio: true,
+          } as unknown as FollowupRun,
+        }),
+      );
 
-    // Simulate the dispatch consuming the flag (the same clear step added
-    // to dispatch-from-config.ts).
-    await updateSessionEntry(
-      { storePath, sessionKey },
-      () => ({ steeredInboundAudio: undefined }),
-      { skipMaintenance: true, takeCacheOwnership: true },
-    );
-    clearSessionStoreCacheForTest();
-    const afterClear = loadSessionStore(storePath, { skipCache: true });
-    expect(afterClear[sessionKey]?.steeredInboundAudio).toBeUndefined();
+      // Verify the flag was persisted through the session store path, not only
+      // on the local object.
+      clearSessionStoreCacheForTest();
+      const persisted = loadSessionStore(storePath, { skipCache: true });
+      expect(persisted[sessionKey]?.steeredInboundAudio).toBe(true);
+
+      // Simulate the dispatch consuming the flag (the same clear step added
+      // to dispatch-from-config.ts).
+      await updateSessionEntry(
+        { storePath, sessionKey },
+        () => ({ steeredInboundAudio: undefined }),
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+      clearSessionStoreCacheForTest();
+      const afterClear = loadSessionStore(storePath, { skipCache: true });
+      expect(afterClear[sessionKey]?.steeredInboundAudio).toBeUndefined();
+    });
   });
 
   it("queues active prompts in followup mode without steering", async () => {
