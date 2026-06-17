@@ -270,7 +270,7 @@ describe("agent-assisted Gateway runtime", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("does not consume a non-exempt auth failure budget when verifying an existing Gateway", async () => {
+  it("rejects existing Gateway reuse when auth enforcement cannot be probed safely", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
     probeGateway.mockResolvedValueOnce({
       ok: true,
@@ -287,21 +287,22 @@ describe("agent-assisted Gateway runtime", () => {
       },
     });
 
-    const result = await ensureAgentAssistedGatewayRuntime({
-      config: {
-        gateway: {
-          auth: {
-            mode: "token",
-            rateLimit: { maxAttempts: 1, exemptLoopback: false },
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {
+          gateway: {
+            auth: {
+              mode: "token",
+              rateLimit: { maxAttempts: 1, exemptLoopback: false },
+            },
           },
         },
-      },
-      settings,
-      prompter: createWizardPrompter(),
-    });
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
 
-    expect(result.temporary).toBe(false);
-    expect(probeGateway).toHaveBeenCalledOnce();
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 
