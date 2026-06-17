@@ -362,11 +362,11 @@ async function runCliAgentWithLifecycleInternal(
   const fastModeStartedAtMs = params.runParams.fastModeStartedAtMs ?? startedAt;
   const fastModeAutoOnSeconds =
     params.runParams.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
-  const fastModeAutoProgressState: FastModeAutoProgressState =
-    params.runParams.fastModeAutoProgressState ?? {
-      offAnnounced: false,
-      resetAnnounced: false,
-    };
+  const fastModeAutoProgressState: FastModeAutoProgressState = params.runParams
+    .fastModeAutoProgressState ?? {
+    offAnnounced: false,
+    resetAnnounced: false,
+  };
   const emitFastModeAutoProgress = async (payload: {
     enabled: boolean;
     elapsedSeconds: number;
@@ -473,9 +473,7 @@ async function runCliAgentWithLifecycleInternal(
   try {
     const rawResult = await runCliAgent({
       ...params.runParams,
-      classifyCommentaryText:
-        params.runParams.classifyCommentaryText ?? Boolean(params.onCommentaryText),
-      emitCommentaryText: Boolean(params.onCommentaryText),
+      emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),
     });
     const restartAbortReason = params.runParams.abortSignal?.reason;
     if (isAgentRunRestartAbortReason(restartAbortReason)) {
