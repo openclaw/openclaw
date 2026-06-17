@@ -74,6 +74,27 @@ describe("native command auth in groups", () => {
     expect(notAuthCalls).toHaveLength(0);
   });
 
+  it("authorizes native commands from a per-group open policy override", async () => {
+    const { handlers, sendMessage } = setup({
+      telegramCfg: {
+        groupPolicy: "allowlist",
+      } as TelegramAccountConfig,
+      groupConfig: {
+        groupPolicy: "open",
+      },
+      useAccessGroups: true,
+    });
+
+    const ctx = createTelegramGroupCommandContext({
+      username: "random",
+    });
+
+    await handlers.status?.(ctx);
+
+    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
+    expect(notAuthCalls).toHaveLength(0);
+  });
+
   it("does not authorize group native commands from the DM allowlist store", async () => {
     const { handlers, sendMessage } = setup({
       storeAllowFrom: ["12345"],
