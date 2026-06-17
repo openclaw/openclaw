@@ -360,6 +360,14 @@ function resolveMainSessionCronDeliveryContext(
   state: CronServiceState,
   job: CronJob,
 ): DeliveryContext | undefined {
+  // #94164: When a cron job explicitly sets delivery.mode=none, its session has
+  // opted out of delivery participation. Never resolve a delivery context for
+  // it so the retry path cannot select it as a fallback delivery vehicle.
+  const hasExplicitDelivery = job.delivery && typeof job.delivery === "object";
+  const rawMode = hasExplicitDelivery ? (job.delivery as { mode?: unknown }).mode : undefined;
+  if (typeof rawMode === "string" && rawMode.toLowerCase() === "none") {
+    return undefined;
+  }
   const targetSessionKey = job.sessionKey?.trim();
   if (!targetSessionKey) {
     return undefined;

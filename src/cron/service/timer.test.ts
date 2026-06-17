@@ -124,6 +124,58 @@ describe("cron service timer seam coverage", () => {
     });
   });
 
+  it("suppresses delivery context resolution for cron jobs with explicit delivery.mode=none (#94164)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    const job = {
+      ...createDueMainJob({ now, wakeMode: "now" }),
+      sessionKey: "agent:main-pr-router:main",
+      state: { runningAtMs: now },
+      delivery: { mode: "none" as const },
+    };
+    const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
+    const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
+    await fs.writeFile(
+      sessionStorePath,
+      JSON.stringify({
+        "agent:main-pr-router:main": {
+          lastChannel: "discord",
+          lastTo: "channel-1",
+          lastAccountId: "default",
+        },
+      }),
+      "utf8",
+    );
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      resolveSessionStorePath: () => sessionStorePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runHeartbeatOnce,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const result = await executeJobCore(state, job);
+
+    expect(result).toMatchObject({ status: "ok", sessionKey: cronRunSessionKey });
+    // delivery.mode=none should suppress deliveryContext
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
+      agentId: undefined,
+      sessionKey: cronRunSessionKey,
+      contextKey: "cron:main-heartbeat-job",
+    });
+    // deliveryContext must not be present when delivery.mode=none
+    const callArgs = enqueueSystemEvent.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(callArgs?.deliveryContext).toBeUndefined();
+  });
+
   it("persists the next schedule and hands off next-heartbeat main jobs", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
