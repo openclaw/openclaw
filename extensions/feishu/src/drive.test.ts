@@ -151,7 +151,7 @@ describe("registerFeishuDriveTools", () => {
           {
             token: "file_1",
             name: "Roadmap",
-            type: "22",
+            type: "docx",
             url: "https://example.test/file_1",
             created_time: "1710000000",
             modified_time: "1710000100",
@@ -204,7 +204,7 @@ describe("registerFeishuDriveTools", () => {
         {
           token: "file_1",
           name: "Roadmap",
-          type: 22,
+          type: "docx",
           url: "https://example.test/file_1",
           created_time: "1710000000",
           modified_time: "1710000100",
@@ -223,7 +223,7 @@ describe("registerFeishuDriveTools", () => {
       .mockResolvedValueOnce({
         code: 0,
         data: {
-          files: [{ token: "other_file", name: "Other", type: "22" }],
+          files: [{ token: "other_file", name: "Other", type: "file" }],
           has_more: true,
           next_page_token: "cursor_2",
         },
@@ -235,7 +235,7 @@ describe("registerFeishuDriveTools", () => {
             {
               token: "target_file",
               name: "Target",
-              type: "22",
+              type: "docx",
               url: "https://example.test/target_file",
               created_time: "1710000200",
               modified_time: "1710000300",
@@ -284,7 +284,7 @@ describe("registerFeishuDriveTools", () => {
     expect(result.details).toEqual({
       token: "target_file",
       name: "Target",
-      type: "22",
+      type: "docx",
       url: "https://example.test/target_file",
       created_time: "1710000200",
       modified_time: "1710000300",
