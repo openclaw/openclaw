@@ -2895,11 +2895,11 @@ describe("cron service timer regressions", () => {
           async ({
             abortSignal,
             onExecutionStarted,
-            onExecutionPhase,
+            _onExecutionPhase,
           }: {
             abortSignal?: AbortSignal;
             onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+            _onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
           }) => {
             onExecutionStarted?.({
               jobId: "isolated-pre-model-timeout-74803",
