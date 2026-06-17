@@ -185,8 +185,13 @@ function buildRoutedModel(
     upstreamModel = model.upstream;
   } else {
     const googleRoute =
-      supportsCapability(model, "llm.generate", "llm.stream") &&
-      findNativeRoute(provider, "google.generate_content");
+      supportsCapability(model, "llm.stream") &&
+      provider.routes.find(
+        (route) =>
+          route.methods.includes("POST") &&
+          route.requestFormat === "google.generate_content" &&
+          route.path.includes(":streamGenerateContent"),
+      );
     const googleBaseUrl = googleRoute
       ? googleNativeBaseUrl(rootUrl, provider, googleRoute)
       : undefined;

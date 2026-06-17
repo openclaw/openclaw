@@ -67,12 +67,18 @@ const CATALOG = {
           requestFormat: "google.generate_content",
           responseFormat: "google.generate_content",
         },
+        {
+          path: "/v1beta/models/${model}:streamGenerateContent",
+          methods: ["POST"],
+          requestFormat: "google.generate_content",
+          responseFormat: "google.generate_content",
+        },
       ],
       models: [
         {
           id: "google/gemini-default",
           upstream: "gemini",
-          capabilities: ["llm.generate"],
+          capabilities: ["llm.generate", "llm.stream"],
         },
       ],
     },
@@ -198,6 +204,23 @@ describe("clawrouter provider catalog", () => {
     const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("authorization")).toBe("Bearer clawrouter-test-key");
+  });
+
+  it("does not advertise Gemini models without an explicit streaming route", async () => {
+    const generateOnlyCatalog = structuredClone(CATALOG);
+    generateOnlyCatalog.providers[2].routes = generateOnlyCatalog.providers[2].routes.filter(
+      (route) => !route.path.includes(":streamGenerateContent"),
+    );
+    generateOnlyCatalog.providers[2].models[0].capabilities = ["llm.generate"];
+    const { fetchGuard } = buildFetchGuard(generateOnlyCatalog);
+
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "clawrouter-test-key",
+      baseUrl: "https://clawrouter.example",
+      fetchGuard,
+    });
+
+    expect(provider.models.map((model) => model.id)).not.toContain("google/gemini-default");
   });
 
   it("keeps credential-scoped route metadata isolated on each catalog result", async () => {
