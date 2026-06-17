@@ -191,6 +191,23 @@
       }
     },
     {
+      "name": "@openclaw/xmemo-memory",
+      "description": "OpenClaw memory plugin backed by XMemo cloud memory",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "xmemo-memory",
+          "label": "XMemo Cloud Memory"
+        },
+        "install": {
+          "npmSpec": "@openclaw/xmemo-memory",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/llama-cpp-provider",
       "description": "OpenClaw llama.cpp embedding provider plugin",
       "source": "official",
