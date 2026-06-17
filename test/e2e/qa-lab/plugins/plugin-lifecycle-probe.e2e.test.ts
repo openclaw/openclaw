@@ -1,15 +1,14 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
-import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os, { tmpdir } from "node:os";
+import fs, { mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 
 function makeTempDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-lifecycle-probe-"));
-  tempDirs.push(dir);
-  return dir;
+  return tempDirs.make("openclaw-plugin-lifecycle-probe-");
 }
 
 type ProbeEnv = Pick<NodeJS.ProcessEnv, "HOME" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR">;
@@ -219,11 +218,7 @@ if (isProbeCli) {
 } else {
   const { afterEach, describe, expect, it } = await import("vitest");
 
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  afterEach(tempDirs.cleanup);
 
   describe("plugin lifecycle matrix probe", () => {
     it("accepts inspect JSON for an enabled loaded plugin", async () => {
