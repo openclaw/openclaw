@@ -618,4 +618,75 @@ describe("qa test file scenario runner", () => {
     );
     expect(evidence.profile).toBe("smoke-ci");
   });
+
+  it("keeps producer artifacts outside the repo root absolute instead of emitting ../ paths", async () => {
+    const repoRoot = await makeTempRepo("qa-script-external-artifact-");
+    const externalArtifact = path.join(os.tmpdir(), "qa-external-artifact.png");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-external"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => {
+        const scenarioOutputDir = path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-script-external",
+          "scenario-script",
+        );
+        await fs.mkdir(scenarioOutputDir, { recursive: true });
+        await fs.writeFile(
+          path.join(scenarioOutputDir, "qa-evidence.json"),
+          `${JSON.stringify({
+            kind: "openclaw.qa.evidence-summary",
+            schemaVersion: 2,
+            generatedAt: "2026-06-14T00:00:00.000Z",
+            evidenceMode: "full",
+            entries: [
+              {
+                test: {
+                  kind: "script-producer-check",
+                  id: "script-producer.web-ui.smoke",
+                  title: "Script producer: web-ui smoke",
+                  source: { path: "scripts/evidence-producer.ts" },
+                },
+                coverage: [{ id: "ui.control", role: "primary" }],
+                execution: {
+                  runner: "evidence-producer-script",
+                  environment: { ref: "scenario-ref", os: "darwin", nodeVersion: "v24.0.0" },
+                  provider: {
+                    id: "script-producer",
+                    live: false,
+                    model: { name: null, ref: null },
+                    fixture: "mocked-script-evidence",
+                  },
+                  packageSource: { kind: "source-checkout", sha: "abc123" },
+                  artifacts: [
+                    {
+                      kind: "screenshot",
+                      path: externalArtifact,
+                      source: "script-producer:web-ui:smoke",
+                    },
+                  ],
+                },
+                result: { status: "pass", timing: { wallMs: 1 } },
+              },
+            ],
+          })}\n`,
+          "utf8",
+        );
+        return { exitCode: 0, stdout: "script pass\n", stderr: "" };
+      },
+      env: { OPENCLAW_QA_REF: "scenario-ref" } as NodeJS.ProcessEnv,
+    });
+
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+    const artifactPath = evidence.entries[0]?.execution?.artifacts[0]?.path;
+    expect(artifactPath).toBe(path.normalize(externalArtifact));
+    expect(artifactPath?.includes("..")).toBe(false);
+  });
 });

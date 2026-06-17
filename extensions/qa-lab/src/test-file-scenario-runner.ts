@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { toRepoRelativePath } from "./cli-paths.js";
+import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError } from "./errors.js";
 import {
   buildPlaywrightEvidenceSummary,
@@ -448,7 +448,9 @@ async function readJsonFileIfExists(filePath: string): Promise<unknown> {
 }
 
 // Producer artifact paths follow one convention: relative paths resolve against the
-// qa-evidence.json directory, absolute paths are taken as-is. Both normalize to repo-relative.
+// qa-evidence.json directory, absolute paths are taken as-is. Paths under the repo root
+// become repo-relative; paths outside it stay absolute so downstream consumers never see
+// `../` segments that would read as path traversal.
 function resolveScriptProducerArtifactPath(params: {
   evidenceDir: string;
   repoRoot: string;
@@ -457,7 +459,8 @@ function resolveScriptProducerArtifactPath(params: {
   const absolutePath = path.isAbsolute(params.artifactPath)
     ? params.artifactPath
     : path.join(params.evidenceDir, params.artifactPath);
-  return toRepoRelativePath(params.repoRoot, absolutePath);
+  const repoRelativePath = toRepoRelativePath(params.repoRoot, absolutePath);
+  return isRepoRootRelativeRef(repoRelativePath) ? repoRelativePath : path.normalize(absolutePath);
 }
 
 function normalizeScriptProducerEvidence(params: {
