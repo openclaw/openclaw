@@ -498,6 +498,15 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/security-sensitive-guard.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/security-sensitive-guard-workflow.test.ts"],
+    });
+  });
+
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
     for (const workflowPath of [
       ".github/workflows/ci-check-testbox.yml",
@@ -568,6 +577,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/dependency-changes-report.mjs"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/dependency-changes-report.test.ts"],
+    });
+
+    expect(resolveChangedTestTargetPlan(["scripts/github/security-sensitive-guard.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/security-sensitive-guard-script.test.ts"],
     });
 
     expect(
@@ -948,6 +962,18 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
         includePatterns: ["test/scripts/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the src scripts test root to the tooling shard", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/scripts"], process.cwd())).toEqual([]);
+    expect(buildVitestRunPlans(["src/scripts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/scripts/**/*.test.ts"],
         watchMode: false,
       },
     ]);
@@ -1697,6 +1723,24 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.commands-light.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-json-runtime.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the full commands test root to both command shards", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/commands"])).toEqual([]);
+    expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.commands-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
         watchMode: false,
       },
     ]);

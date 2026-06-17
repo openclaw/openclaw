@@ -500,10 +500,11 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    env: opts.env,
     configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
   });
 }
@@ -1598,7 +1599,14 @@ export class GatewayClient {
       });
       signal?.addEventListener("abort", abortHandler, { once: true });
     });
-    this.ws.send(JSON.stringify(frame));
+    try {
+      this.ws.send(JSON.stringify(frame));
+    } catch (error) {
+      const pending = this.pending.get(id);
+      this.pending.delete(id);
+      pending?.cleanup?.();
+      throw error;
+    }
     return p;
   }
 }

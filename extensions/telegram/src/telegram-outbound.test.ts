@@ -43,6 +43,17 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.chunker?.(text, 4000)).toEqual([text]);
   });
 
+  it("keeps astral characters whole at positive configured chunk limits", () => {
+    clearTelegramRuntime();
+
+    expect(telegramOutbound.chunker?.("A😀B", 1)).toEqual(["A", "😀", "B"]);
+    expect(telegramOutbound.chunker?.("A😀B", 1, { formatting: { parseMode: "HTML" } })).toEqual([
+      "A",
+      "😀",
+      "B",
+    ]);
+  });
+
   it("preserves markdown tables for the configured delivery renderer", () => {
     clearTelegramRuntime();
     const text = ["| Name | Value |", "|------|-------|", "| A | 1 |"].join("\n");
