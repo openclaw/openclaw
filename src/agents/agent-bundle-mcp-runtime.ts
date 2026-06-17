@@ -415,6 +415,8 @@ async function disposeSession(session: BundleMcpSession) {
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
+  // Session MCP fingerprints only invalidate in-memory runtime catalogs.
+  // Algorithm changes can cause one cache miss, but no persisted state migration.
   return crypto.createHash("sha256").update(JSON.stringify(servers)).digest("hex");
 }
 

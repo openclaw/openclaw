@@ -1488,6 +1488,9 @@ process.on("SIGINT", shutdown);`,
     );
 
     expect(runtimeA).not.toBe(runtimeB);
+    expect(runtimeA.configFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(runtimeB.configFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(runtimeA.configFingerprint).not.toBe(runtimeB.configFingerprint);
     const contentA = resultA.content[0];
     const contentB = resultB.content[0];
     if (contentA?.type !== "text" || contentB?.type !== "text") {
