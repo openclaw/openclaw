@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
-import { clearMcpOAuthCredentials, createMcpOAuthClientProvider } from "./mcp-oauth.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  clearMcpOAuthCredentials,
+  createMcpOAuthClientProvider,
+  readMcpOAuthCredentialsStatus,
+} from "./mcp-oauth.js";
 
 describe("MCP OAuth provider", () => {
   it("stores token state under the OpenClaw state directory with restricted permissions", async () => {
@@ -16,6 +20,7 @@ describe("MCP OAuth provider", () => {
         await expect(provider.tokens()).resolves.toEqual({
           access_token: "access",
           token_type: "Bearer",
+          obtained_at: expect.any(Number),
         });
 
         const tokenDir = `${home}/.openclaw/mcp-oauth`;
@@ -28,6 +33,47 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("records token expiry metadata when OAuth responses include expires_in", async () => {
+    await withTempHome(
+      async () => {
+        const before = Math.floor(Date.now() / 1000);
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+
+        await provider.saveTokens({
+          access_token: "access",
+          refresh_token: "refresh",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+
+        const tokens = (await provider.tokens()) as { obtained_at?: number; expires_at?: number };
+        expect(tokens?.obtained_at).toBeGreaterThanOrEqual(before);
+        expect(tokens?.expires_at).toBeGreaterThanOrEqual(before + 3600);
+        await expect(
+          readMcpOAuthCredentialsStatus({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          }),
+        ).resolves.toMatchObject({
+          hasTokens: true,
+          tokenExpiresAt: expect.any(Number),
+          requiresReauthorization: false,
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-expiry-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,
@@ -81,6 +127,96 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-noninteractive-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("returns the latest stored tokens instead of replaying a stale rotating refresh token", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+        const fetchFn = vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              access_token: "replayed-access",
+              refresh_token: "replayed-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        });
+
+        const response = await provider.wrapFetchForTokenRefresh(fetchFn)(
+          new URL("https://mcp.example.com/token"),
+          {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: "old-refresh",
+            }),
+          },
+        );
+
+        await expect(response.json()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+        expect(fetchFn).not.toHaveBeenCalled();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-stale-refresh-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("marks token invalidation as requiring reauthorization", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "access",
+          refresh_token: "refresh",
+          token_type: "Bearer",
+        });
+
+        await provider.invalidateCredentials?.("tokens");
+
+        await expect(provider.tokens()).resolves.toBeUndefined();
+        await expect(
+          readMcpOAuthCredentialsStatus({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          }),
+        ).resolves.toMatchObject({
+          hasTokens: false,
+          lastErrorCode: "invalid_grant",
+          requiresReauthorization: true,
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-invalid-grant-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,
