@@ -197,6 +197,8 @@ export type CronServiceState = {
   stopped: boolean;
   restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
+  /** Deferred catch-up job IDs that must survive read-path recompute passes until their staggered slot fires. */
+  pendingCatchupDeferralJobIds?: ReadonlySet<string>;
   manualSetupTimeoutRestartNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;

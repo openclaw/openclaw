@@ -678,7 +678,7 @@ export function recomputeNextRunsForMaintenance(
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
+  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds ?? state.pendingCatchupDeferralJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {

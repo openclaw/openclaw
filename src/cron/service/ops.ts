@@ -266,6 +266,7 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
+    state.pendingCatchupDeferralJobIds = deferredCatchupJobIds;
     const changed = recomputeNextRunsForMaintenance(state, {
       recomputeExpired: true,
       skipFutureRepairJobIds: deferredCatchupJobIds,
