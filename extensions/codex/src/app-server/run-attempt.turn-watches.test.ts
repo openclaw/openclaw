@@ -38,10 +38,29 @@ import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
   resolveCodexAppServerBindingPath,
-  writeCodexAppServerBinding,
+  writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
 
 setupRunAttemptTestHooks();
+
+const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+
+function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
+  const [sessionFile, binding, lookup] = args;
+  return writeRawCodexAppServerBinding(
+    sessionFile,
+    {
+      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+      ...binding,
+    },
+    lookup,
+  );
+}
 
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";

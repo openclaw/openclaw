@@ -72,7 +72,7 @@ type ClawHubSkillLockEntry = {
   verification?: ClawHubSkillVerificationLock;
 };
 
-export type ClawHubSkillOrigin = {
+type ClawHubSkillOrigin = {
   version: 1;
   registry: string;
   slug: string;
@@ -83,7 +83,7 @@ export type ClawHubSkillOrigin = {
   skillFile?: ClawHubSkillFileLock;
 };
 
-export type ClawHubSkillsLockfile = {
+type ClawHubSkillsLockfile = {
   version: 1;
   skills: Record<string, ClawHubSkillLockEntry>;
 };
@@ -129,7 +129,7 @@ type LocalSkillCardRead = LocalSkillCardStatus & {
   content?: string;
 };
 
-export type InstallClawHubSkillResult =
+type InstallClawHubSkillResult =
   | {
       ok: true;
       slug: string;
@@ -139,7 +139,7 @@ export type InstallClawHubSkillResult =
     }
   | { ok: false; error: string };
 
-export type UpdateClawHubSkillResult =
+type UpdateClawHubSkillResult =
   | {
       ok: true;
       slug: string;
@@ -192,10 +192,10 @@ type TrackedUpdateTarget =
       error: string;
     };
 
-export type ClawHubSkillVerificationResolutionSource = "installed" | "registry";
-export type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
+type ClawHubSkillVerificationResolutionSource = "installed" | "registry";
+type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
 
-export type ClawHubSkillVerificationTargetResult =
+type ClawHubSkillVerificationTargetResult =
   | {
       ok: true;
       slug: string;
@@ -215,7 +215,7 @@ export type ClawHubSkillVerificationTargetResult =
       error: string;
     };
 
-export async function readClawHubSkillsLockfile(
+async function readClawHubSkillsLockfile(
   workspaceDir: string,
 ): Promise<ClawHubSkillsLockfile> {
   const candidates = [
@@ -282,14 +282,55 @@ function asRecord(raw: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function readVerifiedProvenanceSourceUrl(raw: unknown): string | undefined {
+function normalizeGitHubRepoName(raw: unknown): string | undefined {
+  const repo = normalizeOptionalStringValue(raw);
+  if (!repo) {
+    return undefined;
+  }
+  const parts = repo.split("/");
+  if (parts.length !== 2 || parts.some((part) => !/^[A-Za-z0-9._-]+$/.test(part))) {
+    return undefined;
+  }
+  return repo;
+}
+
+function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
+  const commit = normalizeOptionalStringValue(raw);
+  if (!commit || !/^[0-9a-f]{40}$/i.test(commit)) {
+    return undefined;
+  }
+  return commit;
+}
+
+function buildGitHubTreeUrl(params: { repo: string; commit: string; sourcePath?: string }): string {
+  const [owner, name] = params.repo.split("/") as [string, string];
+  const pathParts = params.sourcePath ? params.sourcePath.split("/") : [];
+  const segments = [owner, name, "tree", params.commit, ...pathParts];
+  return `https://github.com/${segments.map(encodeURIComponent).join("/")}`;
+}
+
+export function readVerifiedClawHubSkillSourceUrl(raw: unknown): string | undefined {
   const provenance = asRecord(raw);
   // Only this ClawHub variant is server-resolved; other provenance metadata
   // must not become a trusted source link.
   if (provenance?.source !== "server-resolved-github-import") {
     return undefined;
   }
-  return normalizeOptionalStringValue(provenance.url);
+  const repo = normalizeGitHubRepoName(provenance.repo);
+  const commit = normalizeGitHubCommitSegment(provenance.commit);
+  if (!repo || !commit) {
+    return undefined;
+  }
+  const pathValue = normalizeOptionalStringValue(provenance.path);
+  let sourcePath: string | undefined;
+  if (pathValue) {
+    try {
+      sourcePath = normalizeGitHubSourcePath(pathValue);
+    } catch {
+      return undefined;
+    }
+  }
+  return buildGitHubTreeUrl({ repo, commit, ...(sourcePath ? { sourcePath } : {}) });
 }
 
 function readInstallResolutionSourceUrl(
@@ -1196,7 +1237,7 @@ async function performClawHubSkillInstall(
       ]);
       const sourceUrl =
         readInstallResolutionSourceUrl(latestResolution) ??
-        readVerifiedProvenanceSourceUrl(verification?.provenance);
+        readVerifiedClawHubSkillSourceUrl(verification?.provenance);
       await writeClawHubSkillOrigin(install.targetDir, {
         version: 1,
         registry: resolveClawHubBaseUrl(params.baseUrl),
