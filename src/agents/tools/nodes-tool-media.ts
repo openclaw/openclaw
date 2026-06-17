@@ -59,7 +59,7 @@ export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
   "file.write",
 ]);
 
-export type NodeMediaAction =
+type NodeMediaAction =
   | "camera_snap"
   | "photos_latest"
   | "camera_clip"

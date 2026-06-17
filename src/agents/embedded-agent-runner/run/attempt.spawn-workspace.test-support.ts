@@ -99,7 +99,7 @@ type AttemptSpawnWorkspaceHoisted = {
   sessionManager: SessionManagerMocks;
 };
 
-export function createSubscriptionMock(): SubscriptionMock {
+function createSubscriptionMock(): SubscriptionMock {
   // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
   // override only the lifecycle method they need.
   return {
@@ -851,7 +851,7 @@ vi.mock("./history-image-prune.js", () => ({
   pruneProcessedHistoryImages: () => null,
 }));
 
-export type MutableSession = {
+type MutableSession = {
   sessionId: string;
   messages: unknown[];
   isCompacting: boolean;
@@ -1136,7 +1136,7 @@ export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessi
   expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
-export const testModel = {
+const testModel = {
   api: "openai-completions",
   provider: "openai",
   compat: {},

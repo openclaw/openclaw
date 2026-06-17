@@ -45,7 +45,7 @@ export function isConfigPathTruthyWithDefaults(
   return isTruthy(value);
 }
 
-export type RuntimeRequires = {
+type RuntimeRequires = {
   bins?: string[];
   anyBins?: string[];
   env?: string[];
