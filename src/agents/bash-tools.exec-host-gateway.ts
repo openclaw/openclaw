@@ -62,7 +62,7 @@ import type {
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
-export type ProcessGatewayAllowlistParams = {
+type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
@@ -104,7 +104,7 @@ export type ProcessGatewayAllowlistParams = {
 };
 
 /** Gateway allowlist outcome before command execution continues. */
-export type ProcessGatewayAllowlistResult = {
+type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
