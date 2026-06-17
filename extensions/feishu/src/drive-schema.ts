@@ -26,6 +26,15 @@ export const FeishuDriveSchema = Type.Union([
     folder_token: Type.Optional(
       Type.String({ description: "Folder token (optional, omit for root directory)" }),
     ),
+    page_size: Type.Optional(
+      Type.Integer({ description: "Page size for pagination (default 10)", minimum: 1, maximum: 100 }),
+    ),
+    page_token: Type.Optional(
+      Type.String({ description: "Page token for pagination (from previous response)" }),
+    ),
+    all: Type.Optional(
+      Type.Boolean({ description: "Fetch all pages automatically (default false)" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("info"),
