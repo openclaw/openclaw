@@ -1725,6 +1725,8 @@ export const uk: TranslationMap = {
       timeoutInvalid: "Якщо задано, тайм-аут має бути більшим за 0 секунд.",
       webhookUrlRequired: "URL webhook є обов’язковим.",
       webhookUrlInvalid: "URL webhook має починатися з http:// або https://.",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "Недійсний час запуску.",
       invalidIntervalAmount: "Недійсне значення інтервалу.",
       cronExprRequiredShort: "Потрібен вираз Cron.",

@@ -1705,6 +1705,8 @@ export const ko: TranslationMap = {
       timeoutInvalid: "설정하는 경우 타임아웃은 0초보다 커야 합니다.",
       webhookUrlRequired: "Webhook URL은 필수입니다.",
       webhookUrlInvalid: "Webhook URL은 http:// 또는 https://로 시작해야 합니다.",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "잘못된 실행 시간입니다.",
       invalidIntervalAmount: "잘못된 간격 값입니다.",
       cronExprRequiredShort: "Cron 표현식이 필요합니다.",

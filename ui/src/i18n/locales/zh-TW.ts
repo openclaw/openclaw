@@ -1679,6 +1679,8 @@ export const zh_TW: TranslationMap = {
       timeoutInvalid: "若有設定，逾時必須大於 0 秒。",
       webhookUrlRequired: "Webhook URL 為必填。",
       webhookUrlInvalid: "Webhook URL 必須以 http:// 或 https:// 開頭。",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "執行時間無效。",
       invalidIntervalAmount: "間隔數值無效。",
       cronExprRequiredShort: "Cron 運算式為必填。",

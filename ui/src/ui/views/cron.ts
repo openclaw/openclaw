@@ -925,7 +925,11 @@ export function renderCron(props: CronProps) {
                       ? html`
                           <label class="field cron-span-2">
                             ${renderFieldLabel(t("cron.form.payloadKind"))}
-                            <input id="cron-payload-kind" .value=${"Command"} readonly />
+                            <input
+                              id="cron-payload-kind"
+                              .value=${t("cron.jobDetail.command")}
+                              readonly
+                            />
                           </label>
                         `
                       : html`
@@ -981,7 +985,7 @@ export function renderCron(props: CronProps) {
                   <label class="field cron-span-2">
                     ${renderFieldLabel(
                       payloadLocked
-                        ? "Command"
+                        ? t("cron.jobDetail.command")
                         : props.form.payloadKind === "systemEvent"
                           ? t("cron.form.mainTimelineMessage")
                           : t("cron.form.assistantTaskPrompt"),
@@ -1092,6 +1096,12 @@ export function renderCron(props: CronProps) {
                                     id="cron-delivery-to"
                                     .value=${props.form.deliveryTo}
                                     list="cron-delivery-to-suggestions"
+                                    aria-invalid=${props.fieldErrors.deliveryTo ? "true" : "false"}
+                                    aria-describedby=${ifDefined(
+                                      props.fieldErrors.deliveryTo
+                                        ? errorIdForField("deliveryTo")
+                                        : undefined,
+                                    )}
                                     @input=${(e: Event) =>
                                       props.onFormChange({
                                         deliveryTo: (e.target as HTMLInputElement).value,
@@ -1099,6 +1109,10 @@ export function renderCron(props: CronProps) {
                                     placeholder=${t("cron.form.toPlaceholder")}
                                   />
                                   <div class="cron-help">${t("cron.form.toHelp")}</div>
+                                  ${renderFieldError(
+                                    props.fieldErrors.deliveryTo,
+                                    errorIdForField("deliveryTo"),
+                                  )}
                                 </label>
                               `
                             : nothing}

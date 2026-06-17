@@ -1682,6 +1682,8 @@ export const th: TranslationMap = {
       timeoutInvalid: "หากกำหนดค่าไว้ timeout ต้องมากกว่า 0 วินาที",
       webhookUrlRequired: "ต้องระบุ Webhook URL",
       webhookUrlInvalid: "Webhook URL ต้องขึ้นต้นด้วย http:// หรือ https://",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "เวลารันไม่ถูกต้อง",
       invalidIntervalAmount: "จำนวนช่วงเวลาไม่ถูกต้อง",
       cronExprRequiredShort: "ต้องระบุ Cron expression",

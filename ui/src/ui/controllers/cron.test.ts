@@ -1181,6 +1181,134 @@ describe("cron controller", () => {
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
+  it("rejects non-numeric Telegram delivery target (regression #90467)", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "not-a-number",
+    });
+    expect(errors.deliveryTo).toBe("cron.errors.telegramChatIdRequired");
+  });
+
+  it("accepts numeric Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "-1001234567890",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("accepts empty Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("accepts @username Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "@mygroup",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("accepts t.me link Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "https://t.me/mygroup",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("accepts telegram: prefixed Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "telegram:-1001234567890",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("accepts topic-qualified Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "-1001234567890:topic:42",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("rejects clearly invalid Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "no",
+    });
+    expect(errors.deliveryTo).toBe("cron.errors.telegramChatIdRequired");
+  });
+
   it("blocks add/update submit when validation errors exist", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState({

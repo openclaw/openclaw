@@ -1727,6 +1727,8 @@ export const tr: TranslationMap = {
       timeoutInvalid: "Ayarlanırsa zaman aşımı 0 saniyeden büyük olmalıdır.",
       webhookUrlRequired: "Webhook URL gerekli.",
       webhookUrlInvalid: "Webhook URL http:// veya https:// ile başlamalıdır.",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "Geçersiz çalıştırma zamanı.",
       invalidIntervalAmount: "Geçersiz aralık miktarı.",
       cronExprRequiredShort: "Cron ifadesi gerekli.",

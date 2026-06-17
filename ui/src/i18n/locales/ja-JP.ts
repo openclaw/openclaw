@@ -1727,6 +1727,8 @@ export const ja_JP: TranslationMap = {
       timeoutInvalid: "設定する場合、タイムアウトは 0 秒より大きくする必要があります。",
       webhookUrlRequired: "Webhook URL は必須です。",
       webhookUrlInvalid: "Webhook URL は http:// または https:// で始まる必要があります。",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "無効な実行時刻です。",
       invalidIntervalAmount: "無効な間隔の値です。",
       cronExprRequiredShort: "Cron 式は必須です。",

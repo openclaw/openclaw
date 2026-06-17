@@ -1731,6 +1731,8 @@ export const pl: TranslationMap = {
       timeoutInvalid: "Jeśli ustawiono, limit czasu musi być większy niż 0 sekund.",
       webhookUrlRequired: "URL webhooka jest wymagany.",
       webhookUrlInvalid: "URL webhooka musi zaczynać się od http:// lub https://.",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "Nieprawidłowy czas uruchomienia.",
       invalidIntervalAmount: "Nieprawidłowa wartość interwału.",
       cronExprRequiredShort: "Wyrażenie Cron jest wymagane.",

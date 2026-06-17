@@ -1718,6 +1718,8 @@ export const id: TranslationMap = {
       timeoutInvalid: "Jika diatur, batas waktu harus lebih besar dari 0 detik.",
       webhookUrlRequired: "URL Webhook wajib diisi.",
       webhookUrlInvalid: "URL Webhook harus diawali dengan http:// atau https://.",
+      telegramChatIdRequired:
+        "Telegram To must be a chat ID, @username, or t.me link (e.g. -1001234567890 or @mygroup).",
       invalidRunTime: "Waktu proses tidak valid.",
       invalidIntervalAmount: "Jumlah interval tidak valid.",
       cronExprRequiredShort: "Ekspresi cron wajib diisi.",

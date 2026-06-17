@@ -116,6 +116,61 @@ export function normalizeCronFormState(form: CronFormState): CronFormState {
   };
 }
 
+/**
+ * Check whether a Telegram delivery target value matches any form accepted by
+ * the Telegram runtime adapter.  Valid forms include:
+ *   - numeric chat IDs (positive or negative, e.g. `123456`, `-1001234567890`)
+ *   - `@username` handles
+ *   - bare usernames (at least 5 alphanumeric/underscore chars)
+ *   - `t.me` links (with or without protocol prefix)
+ *   - `telegram:` / `tg:` prefixed targets
+ *   - topic-qualified targets (`chatId:123` or `chatId:topic:123`)
+ */
+function isValidTelegramTarget(raw: string): boolean {
+  let target = raw.trim();
+  if (!target) {
+    return false;
+  }
+  // Strip telegram: / tg: prefixes (may be stacked).
+  while (/^(telegram|tg):/i.test(target)) {
+    target = target.replace(/^(telegram|tg):/i, "").trim();
+  }
+  // Legacy group: prefix.
+  if (/^group:/i.test(target)) {
+    target = target.replace(/^group:/i, "").trim();
+  }
+  // Strip trailing topic qualifier: `:topic:123` or `:123`.
+  const topicMatch = /^(.+?):topic:(\d+)$/.exec(target);
+  if (topicMatch) {
+    target = topicMatch[1];
+  } else {
+    const colonTopicMatch = /^(.+):(\d+)$/.exec(target);
+    if (colonTopicMatch) {
+      target = colonTopicMatch[1];
+    }
+  }
+  if (!target) {
+    return false;
+  }
+  // Numeric chat ID.
+  if (/^-?\d+$/.test(target)) {
+    return true;
+  }
+  // t.me link.
+  if (/^(?:https?:\/\/)?t\.me\/[A-Za-z0-9_]+\/?$/i.test(target)) {
+    return true;
+  }
+  // @username.
+  if (/^@[A-Za-z0-9_]{5,}$/.test(target)) {
+    return true;
+  }
+  // Bare username (min 5 chars, alphanumeric + underscore).
+  if (/^[A-Za-z0-9_]{5,}$/.test(target)) {
+    return true;
+  }
+  return false;
+}
+
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -166,6 +221,12 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.deliveryTo = "cron.errors.webhookUrlRequired";
     } else if (!/^https?:\/\//i.test(target)) {
       errors.deliveryTo = "cron.errors.webhookUrlInvalid";
+    }
+  }
+  if (form.deliveryMode === "announce" && form.deliveryChannel === "telegram") {
+    const target = form.deliveryTo.trim();
+    if (target && !isValidTelegramTarget(target)) {
+      errors.deliveryTo = "cron.errors.telegramChatIdRequired";
     }
   }
   if (form.failureAlertMode === "custom") {
