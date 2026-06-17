@@ -1067,7 +1067,7 @@ describe("GatewayBrowserClient", () => {
     await vi.waitFor(() => expect(ws.readyState).toBe(3));
     ws.emitClose(4008, "connect failed");
 
-    const err = await pendingRequest.catch((caught) => caught);
+    const err = await pendingRequest.catch((caught: unknown) => caught);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("GatewayRequestError");
     expect(err).toMatchObject({
