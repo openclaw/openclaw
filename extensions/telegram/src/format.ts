@@ -148,7 +148,7 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
 
 export function markdownToTelegramHtml(
   markdown: string,
-  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
+  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean; richMode?: boolean } = {},
 ): string {
   const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
   const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
@@ -159,12 +159,24 @@ export function markdownToTelegramHtml(
     tableMode,
   });
   const html = renderTelegramHtml(ir);
-  const telegramHtml = preserveSupportedTelegramHtmlTags(html);
+  const supportedHtml = preserveSupportedTelegramHtmlTags(html);
+  // Bot API 10.1+ HTML features (e.g. <blockquote>, <h1>-<h6>) are not supported
+  // in regular sendMessage with parse_mode: "HTML". Telegram Web clients show
+  // "This message is not supported" when receiving these tags.
+  // Convert them to legacy-compatible <b> in non-rich mode.
+  const legacyHtml =
+    options.richMode === true
+      ? supportedHtml
+      : supportedHtml
+          .replace(/<blockquote>/g, "<b>")
+          .replace(/<\/blockquote>/g, "</b>")
+          .replace(/<h([1-6])>/g, "<b>")
+          .replace(/<\/h([1-6])>/g, "</b>");
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
-    return wrapFileReferencesInHtml(telegramHtml);
+    return wrapFileReferencesInHtml(legacyHtml);
   }
-  return telegramHtml;
+  return legacyHtml;
 }
 
 /**

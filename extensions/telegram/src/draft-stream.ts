@@ -93,7 +93,7 @@ function normalizeTelegramDraftTransportPreview(
 ): TelegramDraftTransportPreview {
   if (preview.richMessage?.html) {
     return {
-      text: preview.richMessage.html,
+      text: renderTelegramHtmlText(preview.richMessage.html, { textMode: "html" }),
       parseMode: "HTML",
       plainText: preview.text,
     };
