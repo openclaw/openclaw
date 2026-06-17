@@ -54,7 +54,7 @@
         "qrcode": "1.5.4",
         "quickjs-wasi": "3.0.0",
         "rastermill": "0.3.1",
-        "tar": "7.5.15",
+        "tar": "7.5.16",
         "tree-sitter-bash": "0.25.1",
         "tslog": "4.10.2",
         "typebox": "1.1.39",
@@ -2479,10 +2479,9 @@
       }
     },
     "node_modules/protobufjs": {
-      "version": "8.4.1",
-      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-8.4.1.tgz",
-      "integrity": "sha512-oXf2UgIty8jnwfN4yvL1x79VLhL5uiKjZJbSGXGCIUmHmItTP4eS/UIlWDCeNx3seg+ujfn9vDlPMSrsh7wO+Q==",
-      "hasInstallScript": true,
+      "version": "8.6.0",
+      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-8.6.0.tgz",
+      "integrity": "sha512-PIOO89BMGMXGz2333TVv/OqPNVWm7w30ll/4FtLbtLBaonzJMYwTbAZSSlobjIy9MoUgIAxSVUpK7aP7EpTtkg==",
       "license": "BSD-3-Clause",
       "dependencies": {
         "long": "^5.3.2"
@@ -3096,9 +3095,9 @@
       }
     },
     "node_modules/tar": {
-      "version": "7.5.15",
-      "resolved": "https://registry.npmjs.org/tar/-/tar-7.5.15.tgz",
-      "integrity": "sha512-dzGK0boVlC4W5QFuQN1EFSl3bIDYsk7Tj40U6eIBnK2k/8ml7TZ5agbI5j5+qnoVcAA+rNtBml8SEiLxZpNqRQ==",
+      "version": "7.5.16",
+      "resolved": "https://registry.npmjs.org/tar/-/tar-7.5.16.tgz",
+      "integrity": "sha512-56adEpPMouktRlBLXiaYFFzZ/3+JXa8P9n7WbR+ibIjtviN55mEaOkiysCnPnWm+7kkui1Dn8J9l+g6zV8731w==",
       "license": "BlueOak-1.0.0",
       "dependencies": {
         "@isaacs/fs-minipass": "^4.0.0",
