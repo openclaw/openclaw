@@ -71,11 +71,11 @@ function toRecord(row: {
     to: row.to_target ?? undefined,
     accountId: row.account_id ?? undefined,
     threadId: row.thread_id ?? undefined,
-    registeredAt: Number(row.registered_at),
-    retiredAt: row.retired_at == null ? null : Number(row.retired_at),
-    deliveryAttempts: Number(row.delivery_attempts),
+    registeredAt: row.registered_at,
+    retiredAt: row.retired_at,
+    deliveryAttempts: row.delivery_attempts,
     lastDeliveryStatus: row.last_delivery_status,
-    lastDeliveryAt: row.last_delivery_at == null ? null : Number(row.last_delivery_at),
+    lastDeliveryAt: row.last_delivery_at,
   };
 }
 

@@ -217,7 +217,7 @@ async function main(): Promise<void> {
   process.stdout.write("\nPASS: design is sound.\n");
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   process.stderr.write(`\nFAIL: ${err instanceof Error ? err.stack || err.message : String(err)}\n`);
   process.exitCode = 1;
 });

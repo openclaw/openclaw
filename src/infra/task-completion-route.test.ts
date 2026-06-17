@@ -219,7 +219,7 @@ describe("task-completion-route", () => {
       ).toThrow(/taskId/);
       expect(() =>
         registerTaskCompletionRoute(
-          { taskId: "t", source: "cron" as "cron", channel: "webchat" },
+          { taskId: "t", source: "cron", channel: "webchat" },
           stateDirOptions(dir),
         ),
       ).not.toThrow();
@@ -241,7 +241,7 @@ function readRawRetiredAt(dir: string, taskId: string): number | null {
   const row = openDbForDir(dir)
     .db.prepare("SELECT retired_at FROM task_completion_routes WHERE task_id = ?")
     .get(taskId) as { retired_at: number | null } | undefined;
-  return row?.retired_at == null ? null : Number(row.retired_at);
+  return row?.retired_at == null ? null : row.retired_at;
 }
 
 function readRawRowExists(dir: string, taskId: string): boolean {

@@ -1297,7 +1297,7 @@ async function sendSubagentAnnounceDirectly(params: {
           channel: deliveryTarget.channel,
           to: deliveryTarget.to,
           accountId: deliveryTarget.accountId,
-          threadId: deliveryTarget.threadId ? String(deliveryTarget.threadId) : undefined,
+          threadId: deliveryTarget.threadId,
         });
       } catch {
         // Best-effort: registry failure must not block the main delivery path.

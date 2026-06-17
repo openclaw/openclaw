@@ -779,13 +779,17 @@ export async function dispatchCronDelivery(
   // authoritative fallback. Idempotent on the same taskId.
   if (params.resolvedDelivery.ok) {
     try {
+      const threadId =
+        params.resolvedDelivery.threadId == null
+          ? undefined
+          : String(params.resolvedDelivery.threadId);
       registerTaskCompletionRoute({
         taskId: params.runSessionKey,
         source: "cron",
         channel: params.resolvedDelivery.channel,
         to: params.resolvedDelivery.to,
         accountId: params.resolvedDelivery.accountId,
-        threadId: params.resolvedDelivery.threadId,
+        threadId,
       });
     } catch {
       // Best-effort: registry failure must not block the main delivery path.

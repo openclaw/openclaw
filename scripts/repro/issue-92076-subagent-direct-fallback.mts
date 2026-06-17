@@ -171,7 +171,8 @@ async function main(): Promise<void> {
   );
   ok(`sendMessage called via registry fallback (${sendMessageCalls.length} call)`);
 
-  const sent = sendMessageCalls[0]!;
+  const sent = sendMessageCalls[0];
+  assert.ok(sent, "expected at least one sendMessage call");
   assert.equal(sent.channel, "telegram", "channel should be the route's channel (telegram)");
   assert.equal(sent.to, "dm:fallback-target-12345", "to should be the route's target");
   assert.equal(sent.accountId, "fallback-account", "accountId should be the route's accountId");
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
   process.stdout.write("\nPASS: design is sound.\n");
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   process.stderr.write(
     `\nFAIL: ${err instanceof Error ? err.stack || err.message : String(err)}\n`,
   );
