@@ -165,7 +165,17 @@ export async function sendMessageMSTeams(
     tokenProvider,
     sharePointSiteId,
     sdkCloudOptions,
+    replyStyle,
   } = ctx;
+
+  // Derive threadActivityId for threaded attachment sends.
+  // When replyStyle is "thread" and this is a channel conversation,
+  // pass the thread root ID so attachments land in the correct thread.
+  const isChannel = conversationType === "channel" || conversationType === "group";
+  const threadActivityId =
+    replyStyle === "thread" && isChannel
+      ? (ref.threadId ?? ref.activityId)
+      : undefined;
 
   log.debug?.("sending proactive message", {
     conversationId,
@@ -223,6 +233,7 @@ export async function sendMessageMSTeams(
         activity,
         errorPrefix: "msteams consent card send",
         serviceUrlBoundary: sdkCloudOptions,
+        threadActivityId,
       });
 
       // Store the activity ID so the accept handler can replace the consent
@@ -308,6 +319,7 @@ export async function sendMessageMSTeams(
           ref,
           activity,
           serviceUrlBoundary: sdkCloudOptions,
+          threadActivityId,
         });
 
         log.info("sent native file card", {
@@ -352,6 +364,7 @@ export async function sendMessageMSTeams(
         ref,
         activity,
         serviceUrlBoundary: sdkCloudOptions,
+        threadActivityId,
       });
 
       log.info("sent message with OneDrive file link", {
@@ -447,6 +460,7 @@ type ProactiveActivityParams = {
   activity: Record<string, unknown>;
   errorPrefix: string;
   serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
+  threadActivityId?: string;
 };
 
 type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
@@ -456,10 +470,12 @@ async function sendProactiveActivityRaw({
   ref,
   activity,
   serviceUrlBoundary,
+  threadActivityId,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
   const response = await sendMSTeamsActivityWithReference(app, baseRef, activity, {
     serviceUrlBoundary,
+    threadActivityId,
   });
   return extractMessageId(response) ?? "unknown";
 }
@@ -470,9 +486,10 @@ async function sendProactiveActivity({
   activity,
   errorPrefix,
   serviceUrlBoundary,
+  threadActivityId,
 }: ProactiveActivityParams): Promise<string> {
   try {
-    return await sendProactiveActivityRaw({ app, ref, activity, serviceUrlBoundary });
+    return await sendProactiveActivityRaw({ app, ref, activity, serviceUrlBoundary, threadActivityId });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
