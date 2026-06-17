@@ -27,7 +27,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
-export type SearchProvider = NonNullable<
+type SearchProvider = NonNullable<
   NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
 >;
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
@@ -351,7 +351,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   };
 }
 
-export type SetupSearchOptions = {
+type SetupSearchOptions = {
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
 };

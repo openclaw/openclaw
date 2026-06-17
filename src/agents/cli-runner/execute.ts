@@ -312,6 +312,8 @@ const CLI_ENV_AUTH_LOG_KEYS = [
   "OPENROUTER_API_KEY",
 ] as const;
 
+const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
+
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
 function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
@@ -341,6 +343,13 @@ function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
 
 function listPresentCliAuthEnvKeys(env: Record<string, string | undefined>): string[] {
   return CLI_ENV_AUTH_LOG_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
+function listPresentCliRuntimeEnvKeys(env: Record<string, string | undefined>): string[] {
+  return CLI_ENV_RUNTIME_LOG_KEYS.filter((key) => {
     const value = env[key];
     return typeof value === "string" && value.length > 0;
   });
@@ -405,10 +414,17 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
   const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
+  const runtimeHostKeys = listPresentCliRuntimeEnvKeys(process.env);
+  const runtimeChildKeys = listPresentCliRuntimeEnvKeys(childEnv);
+  const runtimeChildKeySet = new Set(runtimeChildKeys);
+  const runtimeClearedKeys = runtimeHostKeys.filter((key) => !runtimeChildKeySet.has(key));
   return [
     `host=${formatCliEnvKeyList(hostKeys)}`,
     `child=${formatCliEnvKeyList(childKeys)}`,
     `cleared=${formatCliEnvKeyList(clearedKeys)}`,
+    `runtimeHost=${formatCliEnvKeyList(runtimeHostKeys)}`,
+    `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
+    `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
 }
 
@@ -676,12 +692,16 @@ export async function executePreparedCliRun(
             }
             delete next[key];
           }
-          if (backend.env && Object.keys(backend.env).length > 0) {
+          const backendEnv = {
+            ...backend.env,
+            ...context.preparedBackend.env,
+          };
+          if (Object.keys(backendEnv).length > 0) {
             Object.assign(
               next,
               sanitizeHostExecEnv({
                 baseEnv: {},
-                overrides: backend.env,
+                overrides: backendEnv,
                 blockPathOverrides: true,
               }),
             );
@@ -1090,9 +1110,13 @@ export async function executePreparedCliRun(
           });
           let stdoutTail: Buffer = Buffer.alloc(0);
           let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+          let stdoutBytes = 0;
+          const stdoutHash = crypto.createHash("sha256");
           let stdoutParseExceeded = false;
           let stderrTail: Buffer = Buffer.alloc(0);
           let stderrParseBuffer: Buffer = Buffer.alloc(0);
+          let stderrBytes = 0;
+          const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
 
           params.onExecutionPhase?.({
@@ -1115,6 +1139,8 @@ export async function executePreparedCliRun(
             input: stdinPayload,
             captureOutput: false,
             onStdout: (chunk: string) => {
+              stdoutBytes += Buffer.byteLength(chunk);
+              stdoutHash.update(chunk);
               stdoutTail = appendCliOutputTail(stdoutTail, chunk);
               if (!stdoutParseExceeded) {
                 const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
@@ -1124,6 +1150,8 @@ export async function executePreparedCliRun(
               streamingParser?.push(chunk);
             },
             onStderr: (chunk: string) => {
+              stderrBytes += Buffer.byteLength(chunk);
+              stderrHash.update(chunk);
               stderrTail = appendCliOutputTail(stderrTail, chunk);
               if (!stderrParseExceeded) {
                 const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
@@ -1171,6 +1199,18 @@ export async function executePreparedCliRun(
           const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
           const stderr = stderrParseBuffer.toString("utf8").trim();
           const stderrDiagnostic = stderrTail.toString("utf8").trim();
+          const processDiagnostics = {
+            backendId: context.backendResolved.id,
+            processReason: result.reason,
+            exitCode: result.exitCode,
+            exitSignal: result.exitSignal,
+            durationMs: result.durationMs,
+            stdoutBytes,
+            stdoutHash: stdoutHash.digest("hex").slice(0, 12),
+            stderrBytes,
+            stderrHash: stderrHash.digest("hex").slice(0, 12),
+            useResume,
+          };
           if (logOutputText) {
             if (stdoutDiagnostic) {
               cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
@@ -1321,12 +1361,28 @@ export async function executePreparedCliRun(
               outputMode,
               fallbackSessionId: resolvedSessionId,
             });
+          if (parsed.errorText) {
+            const reason =
+              classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            throw new FailoverError(parsed.errorText, {
+              reason,
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus(reason),
+            });
+          }
           const rawText = parsed.text;
           cliBackendLog.info(
             `cli turn: provider=${params.provider} model=${context.modelId} durationMs=${Date.now() - cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
           );
           runOutput = {
             ...parsed,
+            diagnostics: {
+              ...parsed.diagnostics,
+              process: processDiagnostics,
+            },
             rawText,
             finalPromptText: prompt,
             text: applyPluginTextReplacements(

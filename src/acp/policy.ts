@@ -7,7 +7,7 @@ const ACP_DISABLED_MESSAGE = "ACP is disabled by policy (`acp.enabled=false`).";
 const ACP_DISPATCH_DISABLED_MESSAGE =
   "ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`).";
 
-export type AcpDispatchPolicyState = "enabled" | "acp_disabled" | "dispatch_disabled";
+type AcpDispatchPolicyState = "enabled" | "acp_disabled" | "dispatch_disabled";
 
 /** Returns whether ACP is globally enabled by config policy. */
 export function isAcpEnabledByPolicy(cfg: OpenClawConfig): boolean {

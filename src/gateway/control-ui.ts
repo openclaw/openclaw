@@ -71,7 +71,7 @@ const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
-export type ControlUiRequestOptions = {
+type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
@@ -154,7 +154,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-export type ControlUiAvatarResolution =
+type ControlUiAvatarResolution =
   | { kind: "none"; reason: string; source?: string | null }
   | { kind: "local"; filePath: string; source?: string | null }
   | { kind: "remote"; url: string; source?: string | null }

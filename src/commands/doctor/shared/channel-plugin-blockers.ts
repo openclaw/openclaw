@@ -20,7 +20,7 @@ import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js
 import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 import { isSafeChannelEnvVarTriggerName } from "../../../secrets/channel-env-var-names.js";
 
-export type ChannelPluginBlockerHit = {
+type ChannelPluginBlockerHit = {
   /** Normalized configured channel id whose backing plugin is unavailable. */
   channelId: string;
   /** Plugin id that would provide the configured channel. */

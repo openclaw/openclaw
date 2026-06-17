@@ -83,7 +83,7 @@ export function isStrictAgenticSupportedProviderModel(params: {
  * Explicit opt-out still works. Assistant prose is never classified to decide
  * whether a turn represents planning, progress, or completion.
  */
-export function resolveEffectiveExecutionContract(params: {
+function resolveEffectiveExecutionContract(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string | null;

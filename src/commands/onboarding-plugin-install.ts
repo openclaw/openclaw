@@ -72,7 +72,7 @@ export type OnboardingPluginInstallEntry = {
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
 
 /** Config and status returned after attempting an onboarding plugin install. */
-export type OnboardingPluginInstallResult = {
+type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
   pluginId: string;

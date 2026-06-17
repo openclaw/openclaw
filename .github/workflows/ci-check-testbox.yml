@@ -6,6 +6,10 @@ on:
         type: string
         description: "Testbox session ID"
         required: true
+      timeout_minutes:
+        type: number
+        description: "Maximum GitHub job runtime for long Testbox commands"
+        default: 120
   pull_request:
     paths:
       - ".github/workflows/**"
@@ -25,7 +29,7 @@ jobs:
       contents: read
     name: "check"
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 30
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
     steps:
       - name: Begin Testbox
         uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043

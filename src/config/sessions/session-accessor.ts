@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -26,6 +28,7 @@ import {
   patchSessionEntry as patchFileSessionEntry,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
+  updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
@@ -40,6 +43,7 @@ import {
   withSessionTranscriptAppendQueue,
 } from "./transcript-append.js";
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
   type OwnedSessionTranscriptPublishedEntry,
@@ -243,6 +247,26 @@ export type SessionEntryPatchContext = {
   existingEntry?: SessionEntry;
 };
 
+export type SessionEntryCreateWithTranscriptContext = {
+  /** Current entry under the requested key before creation, if any. */
+  existingEntry?: SessionEntry;
+  /** Current entries snapshot for validation rules such as label uniqueness. */
+  sessionEntries: Record<string, SessionEntry>;
+};
+
+export type SessionEntryCreateWithTranscriptResult<TError = string> =
+  | { ok: true; entry: SessionEntry; sessionFile: string }
+  | { ok: false; error: TError; phase: "entry" }
+  | { ok: false; error: string; phase: "transcript" };
+
+export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
+  | { ok: true; entry: SessionEntry }
+  | { ok: false; error: TError };
+
+type CreatedSessionTranscriptResult =
+  | { ok: true; sessionFile: string }
+  | { ok: false; error: string; phase: "transcript" };
+
 export type { SessionLifecycleArtifactCleanupParams, SessionLifecycleArtifactCleanupResult };
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
@@ -347,6 +371,100 @@ export async function patchSessionEntry(
     replaceEntry: options.replaceEntry,
     update,
   });
+}
+
+/**
+ * Creates or updates one session entry and initializes its transcript header as
+ * one storage-sized lifecycle operation. File-backed storage still writes JSON
+ * plus JSONL, but callers no longer compose entry write, header creation,
+ * rollback, and normalized sessionFile persistence themselves.
+ */
+export async function createSessionEntryWithTranscript<TError = string>(
+  scope: SessionAccessScope,
+  createEntry: (
+    context: SessionEntryCreateWithTranscriptContext,
+  ) =>
+    | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
+    | SessionEntryCreateWithTranscriptPrepareResult<TError>,
+): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
+  const storePath = resolveAccessStorePath(scope);
+  return await updateSessionStore(storePath, async (store) => {
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+    const created = await createEntry({
+      existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
+      sessionEntries: cloneSessionEntries(store),
+    });
+    if (!created.ok) {
+      return { ok: false, error: created.error, phase: "entry" };
+    }
+
+    const ensured = ensureCreatedSessionTranscript({
+      agentId: scope.agentId,
+      entry: created.entry,
+      storePath,
+    });
+    if (!ensured.ok) {
+      delete store[resolved.normalizedKey];
+      return ensured;
+    }
+
+    const entry =
+      created.entry.sessionFile === ensured.sessionFile
+        ? created.entry
+        : {
+            ...created.entry,
+            sessionFile: ensured.sessionFile,
+          };
+    store[resolved.normalizedKey] = entry;
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
+    }
+    return { ok: true, entry, sessionFile: ensured.sessionFile };
+  });
+}
+
+function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    Object.entries(store).map(([sessionKey, entry]) => [sessionKey, { ...entry }]),
+  );
+}
+
+// File-backed creation resolves the concrete transcript artifact and writes the
+// header before the store mutation is saved; SQLite adapters implement this as
+// the same lifecycle operation without exposing rollback details to callers.
+function ensureCreatedSessionTranscript(params: {
+  agentId?: string;
+  entry: SessionEntry;
+  storePath: string;
+}): CreatedSessionTranscriptResult {
+  try {
+    const sessionFile = resolveSessionFilePath(
+      params.entry.sessionId,
+      params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : undefined,
+      {
+        agentId: params.agentId,
+        sessionsDir: path.dirname(path.resolve(params.storePath)),
+      },
+    );
+    if (!fs.existsSync(sessionFile)) {
+      fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+      fs.writeFileSync(
+        sessionFile,
+        `${JSON.stringify(createSessionTranscriptHeader({ sessionId: params.entry.sessionId }))}\n`,
+        {
+          encoding: "utf-8",
+          mode: 0o600,
+        },
+      );
+    }
+    return { ok: true, sessionFile };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatErrorMessage(err),
+      phase: "transcript",
+    };
+  }
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */

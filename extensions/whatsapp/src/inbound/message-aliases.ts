@@ -1,3 +1,4 @@
+import { buildDeprecatedFlatWhatsAppInboundAdmission } from "./admission.js";
 import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
 import type {
   DeprecatedWebInboundAdmissionTopLevelFields,
@@ -373,6 +374,7 @@ function normalizeLegacyFlatWebInboundMessage(msg: LegacyFlatWebInboundMessage):
       : undefined;
   return withDeprecatedWebInboundMessageFlatAliases({
     ...msg,
+    admission: msg.admission ?? buildDeprecatedFlatWhatsAppInboundAdmission(msg),
     event: {
       id: msg.id,
       timestamp: msg.timestamp,
