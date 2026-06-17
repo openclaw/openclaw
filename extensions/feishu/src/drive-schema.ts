@@ -40,6 +40,9 @@ export const FeishuDriveSchema = Type.Union([
     action: Type.Literal("info"),
     file_token: Type.String({ description: "File or folder token" }),
     type: FileType,
+    folder_token: Type.Optional(
+      Type.String({ description: "Parent folder token (optional, scopes the search)" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("create_folder"),
