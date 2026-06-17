@@ -639,6 +639,22 @@ export async function ensureSandboxContainer(params: {
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
   });
+  // Strip any resolved skill mounts whose container path is already covered
+  // by a user-defined bind to avoid Docker "Duplicate mount point" errors.
+  const userBindContainerPaths = new Set(
+    (params.cfg.docker.binds ?? [])
+      .map((bind) => {
+        const parts = bind.split(":");
+        return parts.length >= 2 ? parts[1] : undefined;
+      })
+      .filter((p): p is string => !!p),
+  );
+  const filteredSkillMounts =
+    userBindContainerPaths.size > 0
+      ? readOnlyWorkspaceSkillMounts.filter(
+          (mount) => !userBindContainerPaths.has(mount.containerPath),
+        )
+      : readOnlyWorkspaceSkillMounts;
   const expectedHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
     dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(params.cfg.docker.env),
@@ -696,7 +712,7 @@ export async function ensureSandboxContainer(params: {
       skillsWorkspaceDir: params.skillsWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
-      readOnlyWorkspaceSkillMounts,
+      readOnlyWorkspaceSkillMounts: filteredSkillMounts,
     });
   } else if (!running) {
     await execDocker(["start", containerName]);
