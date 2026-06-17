@@ -8,7 +8,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
-import { missingTargetError } from "./target-errors.js";
+import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
+import { resolveReservedTargetLiteral } from "./target-normalization.js";
 
 /**
  * Result of resolving a concrete outbound target for a channel send.
@@ -79,6 +80,18 @@ export function resolveOutboundTargetWithPlugin(params: {
   if (targetPrefixError) {
     return { ok: false, error: targetPrefixError };
   }
+  const hint = plugin.messaging?.targetResolver?.hint;
+  const reservedLiteral = resolveReservedTargetLiteral({ raw: effectiveTo, plugin });
+  if (reservedLiteral) {
+    return {
+      ok: false,
+      error: reservedTargetLiteralError(
+        plugin.meta.label ?? params.target.channel,
+        reservedLiteral,
+        hint,
+      ),
+    };
+  }
 
   const resolveTarget = plugin.outbound?.resolveTarget;
   if (resolveTarget) {
@@ -94,7 +107,6 @@ export function resolveOutboundTargetWithPlugin(params: {
   if (effectiveTo) {
     return { ok: true, to: effectiveTo };
   }
-  const hint = plugin.messaging?.targetResolver?.hint;
   return {
     ok: false,
     error: missingTargetError(plugin.meta.label ?? params.target.channel, hint),

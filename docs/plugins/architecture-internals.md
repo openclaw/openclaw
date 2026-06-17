@@ -737,6 +737,9 @@ outbound host generic and use the messaging adapter surface for provider rules:
   should be treated as `direct`, `group`, or `channel` before directory lookup.
 - `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
   input should skip straight to id-like resolution instead of directory search.
+- `messaging.targetResolver.reservedLiterals` lists bare words that are
+  channel/session references for that provider and must fail closed before
+  directory or default-target fallback.
 - `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
   core needs a final provider-owned resolution after normalization or after a
   directory miss.

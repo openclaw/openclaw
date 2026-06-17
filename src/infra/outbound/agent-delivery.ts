@@ -29,6 +29,7 @@ export type AgentDeliveryPlan = {
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
+  targetResolutionError?: Error;
 };
 
 export function resolveAgentDeliveryPlan(params: {
@@ -163,7 +164,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     mode: plan.deliveryTargetMode ?? "explicit",
   });
   if (!normalizedTarget.ok) {
-    return plan;
+    return { ...plan, targetResolutionError: normalizedTarget.error };
   }
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""
@@ -210,6 +211,13 @@ export function resolveAgentOutboundTarget(params: {
     params.targetMode ??
     params.plan.deliveryTargetMode ??
     (params.plan.resolvedTo ? "explicit" : "implicit");
+  if (params.plan.targetResolutionError) {
+    return {
+      resolvedTarget: { ok: false, error: params.plan.targetResolutionError },
+      resolvedTo: undefined,
+      targetMode,
+    };
+  }
   if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
     return {
       resolvedTarget: null,

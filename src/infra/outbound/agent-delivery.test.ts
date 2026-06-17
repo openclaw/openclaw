@@ -313,6 +313,52 @@ describe("agent delivery helpers", () => {
     expect(plan.resolvedTo).toBe("1470130713209602050");
   });
 
+  it("carries explicit target resolution errors from session-route preparation", async () => {
+    const targetResolutionError = new Error('reserved target "current"');
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: targetResolutionError,
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      sessionEntry: undefined,
+      requestedChannel: "workspace",
+      explicitTo: "current",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(plan.resolvedTo).toBe("current");
+    expect(plan.targetResolutionError).toBe(targetResolutionError);
+  });
+
+  it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
+    const targetResolutionError = new Error('reserved target "current"');
+
+    const resolved = resolveAgentOutboundTarget({
+      cfg: {} as OpenClawConfig,
+      plan: {
+        baseDelivery: { mode: "explicit" },
+        resolvedChannel: "workspace",
+        resolvedTo: "current",
+        deliveryTargetMode: "explicit",
+        targetResolutionError,
+      },
+      targetMode: "explicit",
+      validateExplicitTarget: false,
+    });
+
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(resolved.resolvedTarget).toEqual({ ok: false, error: targetResolutionError });
+    expect(resolved.resolvedTo).toBeUndefined();
+  });
+
   it("falls back to the original plan when session-route canonicalization fails", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       messaging: { resolveOutboundSessionRoute: vi.fn() },
