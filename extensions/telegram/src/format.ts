@@ -414,7 +414,7 @@ function preserveTelegramHtmlTag(
   return rawTag;
 }
 
-function escapeUnsupportedTelegramHtml(
+export function escapeUnsupportedTelegramHtml(
   text: string,
   support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
 ): string {
@@ -1075,19 +1075,35 @@ function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
-  const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
+  const safeIndex = splitIndexUtf16Safe(text, normalizedMaxLength);
+  const lastAmpersand = text.lastIndexOf("&", safeIndex - 1);
   if (lastAmpersand === -1) {
-    return normalizedMaxLength;
+    return safeIndex;
   }
-  const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
+  const lastSemicolon = text.lastIndexOf(";", safeIndex - 1);
   if (lastAmpersand < lastSemicolon) {
-    return normalizedMaxLength;
+    return safeIndex;
   }
   const entityEnd = findTelegramHtmlEntityEnd(text, lastAmpersand);
-  if (entityEnd === -1 || entityEnd < normalizedMaxLength) {
-    return normalizedMaxLength;
+  if (entityEnd === -1 || entityEnd < safeIndex) {
+    return safeIndex;
   }
   return lastAmpersand;
+}
+
+/** Step back one code unit when `index` lands between a UTF-16 surrogate pair. */
+function splitIndexUtf16Safe(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) {
+    return index;
+  }
+  const hi = text.charCodeAt(index - 1);
+  if (hi >= 0xd800 && hi <= 0xdbff) {
+    const lo = text.charCodeAt(index);
+    if (lo >= 0xdc00 && lo <= 0xdfff) {
+      return index - 1;
+    }
+  }
+  return index;
 }
 
 function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {

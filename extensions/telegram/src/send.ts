@@ -185,8 +185,18 @@ function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
   const chunks: string[] = [];
-  for (let start = 0; start < text.length; start += normalizedLimit) {
-    chunks.push(text.slice(start, start + normalizedLimit));
+  for (let start = 0; start < text.length; ) {
+    let end = Math.min(start + normalizedLimit, text.length);
+    // Avoid splitting a UTF-16 surrogate pair.
+    if (end > start && end < text.length) {
+      const hi = text.charCodeAt(end - 1);
+      const lo = text.charCodeAt(end);
+      if (hi >= 0xd800 && hi <= 0xdbff && lo >= 0xdc00 && lo <= 0xdfff) {
+        end -= 1;
+      }
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
   }
   return chunks;
 }
