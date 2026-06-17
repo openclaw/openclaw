@@ -858,6 +858,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         extra: {
           botTokenSource: account.botTokenSource,
           baseUrl: account.baseUrl,
+          dmPolicy: account.config.dmPolicy ?? "pairing",
           connected: runtime?.connected ?? false,
           lastConnectedAt: runtime?.lastConnectedAt ?? null,
           lastDisconnect: runtime?.lastDisconnect ?? null,

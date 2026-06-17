@@ -3,10 +3,7 @@
  *
  * Wraps platform-specific spawn behavior and safe close handling for inherited stdio.
  */
-import {
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 
 const EXIT_STDIO_GRACE_MS = 100;
 
