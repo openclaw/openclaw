@@ -71,6 +71,7 @@ type RefreshParams = {
   nowMs?: number;
   forceRefetch?: boolean;
   suppressRefresh?: boolean;
+  targetAppIds?: readonly string[];
 };
 
 /** In-memory app inventory cache with coalesced refreshes per key. */
@@ -190,7 +191,11 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const apps = await listAllApps(params.request, params.forceRefetch ?? false);
+      const apps = await listAllApps(
+        params.request,
+        params.forceRefetch ?? false,
+        params.targetAppIds,
+      );
       this.revision += 1;
       const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
@@ -278,8 +283,11 @@ function normalizeRuntimeIdentityForCacheKey(
 async function listAllApps(
   request: CodexAppInventoryRequest,
   forceRefetch: boolean,
+  targetAppIds: readonly string[] = [],
 ): Promise<v2.AppInfo[]> {
   const apps: v2.AppInfo[] = [];
+  const targetIds = new Set(targetAppIds.filter(Boolean));
+  const foundTargetIds = new Set<string>();
   let cursor: string | null | undefined;
   do {
     const response = await request("app/list", {
@@ -288,7 +296,15 @@ async function listAllApps(
       forceRefetch,
     });
     apps.push(...response.data);
+    for (const app of response.data) {
+      if (targetIds.has(app.id)) {
+        foundTargetIds.add(app.id);
+      }
+    }
     cursor = response.nextCursor;
+    if (targetIds.size > 0 && foundTargetIds.size === targetIds.size) {
+      break;
+    }
   } while (cursor);
   return apps;
 }

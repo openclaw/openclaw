@@ -53,6 +53,7 @@ export type EnsureCodexPluginActivationParams = {
   appCacheKey?: string;
   installEvenIfActive?: boolean;
   mutationPolicy?: CodexAppServerRemoteMutationPolicy;
+  targetAppIds?: readonly string[];
 };
 
 /** Diagnostics from refreshing Codex runtime surfaces after plugin activation. */
@@ -107,6 +108,7 @@ export async function ensureCodexPluginActivation(
           request: params.request,
           appCache: params.appCache,
           appCacheKey: params.appCacheKey,
+          targetAppIds: params.targetAppIds,
         })),
       );
     }
@@ -134,6 +136,7 @@ export async function ensureCodexPluginActivation(
       request: params.request,
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
+      targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
   } catch (error) {
@@ -171,6 +174,7 @@ async function refreshCodexAppInventoryOnly(params: {
   request: CodexPluginRuntimeRequest;
   appCache: CodexAppInventoryCache;
   appCacheKey: string;
+  targetAppIds?: readonly string[];
 }): Promise<CodexPluginActivationDiagnostic[]> {
   params.appCache.invalidate(params.appCacheKey, "Codex remote plugin state needs app inventory refresh");
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
@@ -180,6 +184,7 @@ async function refreshCodexAppInventoryOnly(params: {
       key: params.appCacheKey,
       request,
       forceRefetch: true,
+      targetAppIds: params.targetAppIds,
     });
     return [];
   } catch (error) {
@@ -198,6 +203,7 @@ export async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
   await params.request("plugin/list", {
@@ -227,6 +233,7 @@ export async function refreshCodexPluginRuntimeState(params: {
         key: params.appCacheKey,
         request,
         forceRefetch: true,
+        targetAppIds: params.targetAppIds,
       });
     } catch (error) {
       diagnostics.push({

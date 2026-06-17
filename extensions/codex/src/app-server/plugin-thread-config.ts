@@ -134,6 +134,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "initial_missing",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -161,6 +162,7 @@ export async function buildCodexPluginThreadConfig(
       appCache,
       appCacheKey: params.appCacheKey,
       mutationPolicy: params.mutationPolicy,
+      targetAppIds: record.ownedAppIds,
     });
     activationResults.push(activation);
     if (!activation.ok) {
@@ -175,6 +177,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "post_install",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -194,6 +197,7 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
+      targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
@@ -367,6 +371,9 @@ function shouldWaitForInitialAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
+  if (inventory.records.some((record) => record.activationRequired)) {
+    return false;
+  }
   return Boolean(
     params.appCacheKey &&
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
@@ -377,7 +384,7 @@ function shouldWaitForInitialAppInventory(
 async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean; reason?: string } = {},
+  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
 ): Promise<CodexAppInventorySnapshot | undefined> {
   const appCacheKey = params.appCacheKey;
   if (!appCacheKey) {
@@ -391,6 +398,7 @@ async function refreshAppInventoryNow(
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
+      targetAppIds: options.targetAppIds,
     });
     return snapshot;
   } catch (error) {
@@ -402,6 +410,12 @@ async function refreshAppInventoryNow(
     // Keep building from the diagnostic inventory state; app exposure remains scoped below.
     return undefined;
   }
+}
+
+function collectInventoryOwnedAppIds(inventory: CodexPluginInventory): string[] {
+  return Array.from(
+    new Set(inventory.records.flatMap((record) => record.ownedAppIds).filter(Boolean)),
+  ).toSorted();
 }
 
 function resolveThreadConfigAppsForRecord(params: {
