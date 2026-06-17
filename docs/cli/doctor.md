@@ -24,12 +24,12 @@ wrong.
 
 Doctor has four postures:
 
-| Posture | Command                     | Behavior                                                                        |
-| ------- | --------------------------- | ------------------------------------------------------------------------------- |
-| Inspect | `openclaw doctor`           | Human-oriented checks and guided prompts.                                       |
-| Explain | `openclaw doctor --explain` | Read-only plain-English explanations for structured findings.                   |
-| Repair  | `openclaw doctor --fix`     | Applies supported repairs, using prompts unless non-interactive repair is safe. |
-| Lint    | `openclaw doctor --lint`    | Read-only structured findings for CI, preflight, and review gates.              |
+| Posture | Command                     | Behavior                                                                                  |
+| ------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| Inspect | `openclaw doctor`           | Human-oriented checks and guided prompts.                                                 |
+| Explain | `openclaw doctor --explain` | Plain-English findings; writes only after you explicitly confirm a focused repair prompt. |
+| Repair  | `openclaw doctor --fix`     | Applies supported repairs, using prompts unless non-interactive repair is safe.           |
+| Lint    | `openclaw doctor --lint`    | Read-only structured findings for CI, preflight, and review gates.                        |
 
 Prefer `--explain` when a human needs clear next steps. Prefer `--lint` when
 automation needs a stable result. Prefer `--fix` when a human operator
@@ -76,7 +76,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--allow-exec`: allow doctor to execute configured exec SecretRefs while verifying secrets
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
-- `--explain`: render modernized health-check findings as plain-English diagnostics with next steps
+- `--explain`: render modernized health-check findings as plain-English diagnostics with next steps; in interactive runs, repairable checks may offer an explicit focused repair prompt
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
 - `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint` or `--explain`, drop findings below `info`, `warning`, or `error`
@@ -112,9 +112,15 @@ Gateway config [warning]
 ```
 
 Interactive explain runs may offer to run a focused repair when the selected
-structured check explicitly supports focused automatic repair. Headless or
-`--non-interactive` explain runs never prompt; they only print the focused
-repair command when one is available.
+structured check explicitly supports focused automatic repair. Explain mode
+does not write config or state unless you explicitly confirm that prompt. A
+confirmed focused repair can update `openclaw.json` and write the same backup as
+`doctor --fix --only <checkId>`.
+
+Headless or `--non-interactive` explain runs never prompt or repair; they only
+print the focused repair command when one is available. Use
+`openclaw doctor --fix --only <checkId>` when a script or operator wants the
+focused repair path directly.
 
 ## Lint mode
 

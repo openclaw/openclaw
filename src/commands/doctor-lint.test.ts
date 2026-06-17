@@ -304,6 +304,65 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("does not apply focused repair when an explain user declines the prompt", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "test/declined-explain-repair",
+      kind: "core",
+      description: "declined explain repair",
+      focusedRepair: true,
+      async detect() {
+        return [
+          {
+            checkId: "test/declined-explain-repair",
+            severity: "warning",
+            message: "Needs repair.",
+            path: "gateway.mode",
+          },
+        ];
+      },
+      async repair(ctx) {
+        return {
+          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+          changes: ["Set gateway.mode to local."],
+        };
+      },
+    });
+    const confirmRepairCheck = vi.fn().mockResolvedValue(false);
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        explain: true,
+        onlyIds: ["test/declined-explain-repair"],
+        confirmRepairCheck,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(confirmRepairCheck).toHaveBeenCalledWith({
+        checkId: "test/declined-explain-repair",
+        label: "Declined Explain Repair",
+        findings: [
+          expect.objectContaining({
+            checkId: "test/declined-explain-repair",
+            path: "gateway.mode",
+          }),
+        ],
+      });
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      const output = stdout.mock.calls.map((call) => String(call[0])).join("");
+      expect(output).toContain("Automatic repair: Run openclaw doctor --fix --only");
+      expect(output).not.toContain("doctor --fix --only: 1 change(s)");
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("does not prompt for explain repairs in non-interactive mode", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,

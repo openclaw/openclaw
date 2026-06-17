@@ -95,6 +95,10 @@ Modernized health checks may provide optional repair metadata. `doctor --fix`
 applies focused repairs only for checks that explicitly support focused
 automatic repair, and continues to use the existing doctor repair flow for
 checks that have not migrated yet.
+Explain mode prints the same repair availability in plain English, but it does
+not write config or state unless an interactive operator explicitly confirms a
+focused repair prompt. Headless and `--non-interactive` explain runs only print
+the repair command.
 The structured repair contract also separates repair reporting from detection:
 `detect()` reports current findings, while `repair()` can report changes,
 config/file diffs, and non-file side effects. That keeps the migration path open
