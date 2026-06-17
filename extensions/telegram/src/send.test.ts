@@ -2537,6 +2537,71 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("strips trailing notify=false marker and sends as silent", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "heartbeat result\nnotify=false", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "heartbeat result", {
+      parse_mode: "HTML",
+      disable_notification: true,
+    });
+  });
+
+  it("strips case-insensitive notify=false marker and sends as silent", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 2,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "done\nNotify=FALSE", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "done", {
+      parse_mode: "HTML",
+      disable_notification: true,
+    });
+  });
+
+  it("does not set disable_notification when no notify=false marker", async () => {
+    const chatId = "123";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 3,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "normal message", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "normal message", expect.objectContaining({}));
+    const callParams = sendMessage.mock.calls[0][2] as Record<string, unknown>;
+    expect(callParams.disable_notification).toBeUndefined();
+  });
+
   it("parses message_thread_id from recipient string (telegram:group:...:topic:...)", async () => {
     const chatId = "-1001234567890";
     const sendMessage = vi.fn().mockResolvedValue({

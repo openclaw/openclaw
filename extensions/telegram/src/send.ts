@@ -75,6 +75,8 @@ import { resolveTelegramVoiceSend } from "./voice.js";
 
 export { buildInlineKeyboard } from "./inline-keyboard.js";
 
+const NOTIFY_FALSE_TRAILING_RE = /\n+notify\s*=\s*false\s*$/i;
+
 type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
@@ -612,6 +614,10 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts,
 ): Promise<TelegramSendResult> {
+  const notifyFalseMatch = NOTIFY_FALSE_TRAILING_RE.exec(text);
+  const strippedText = notifyFalseMatch ? text.slice(0, notifyFalseMatch.index) : text;
+  const effectiveSilent = opts.silent === true || notifyFalseMatch !== null;
+
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
@@ -683,7 +689,7 @@ export async function sendMessageTelegram(
     }
     const plainParams: TelegramSendMessageParams = {
       ...baseParams,
-      ...(opts.silent === true ? { disable_notification: true } : {}),
+      ...(effectiveSilent ? { disable_notification: true } : {}),
     };
     const hasPlainParams = Object.keys(plainParams).length > 0;
     const requestPlain = (label: string) =>
@@ -773,7 +779,7 @@ export async function sendMessageTelegram(
         deliveryKind: "text",
         messageThreadId: lastAcceptedParams?.message_thread_id,
         replyToMessageId: opts.replyToMessageId,
-        silent: opts.silent,
+        silent: effectiveSilent || undefined,
         chunkCount: sentChunkCount,
       });
     }
@@ -854,7 +860,7 @@ export async function sendMessageTelegram(
               tableMode,
             }),
             ...acceptedParams,
-            ...(opts.silent === true ? { disable_notification: true } : {}),
+            ...(effectiveSilent ? { disable_notification: true } : {}),
           }),
         "richMessage",
       );
@@ -885,7 +891,7 @@ export async function sendMessageTelegram(
         deliveryKind: "text",
         messageThreadId: lastAcceptedParams?.message_thread_id,
         replyToMessageId: opts.replyToMessageId,
-        silent: opts.silent,
+        silent: effectiveSilent || undefined,
         chunkCount: sentChunkCount,
       });
     }
@@ -956,9 +962,9 @@ export async function sendMessageTelegram(
 
     if (isVideoNote) {
       caption = undefined;
-      followUpText = text.trim() ? text : undefined;
+      followUpText = strippedText.trim() ? strippedText : undefined;
     } else {
-      const split = splitTelegramCaption(text);
+      const split = splitTelegramCaption(strippedText);
       caption = split.caption;
       followUpText = split.followUpText;
     }
@@ -979,7 +985,7 @@ export async function sendMessageTelegram(
     const mediaParams = {
       ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
-      ...(opts.silent === true ? { disable_notification: true } : {}),
+      ...(effectiveSilent ? { disable_notification: true } : {}),
       ...(videoDimensions ? { width: videoDimensions.width, height: videoDimensions.height } : {}),
     };
     const sendMedia = async (
@@ -1101,7 +1107,7 @@ export async function sendMessageTelegram(
       deliveryKind: mediaSender.label,
       messageThreadId: mediaParams.message_thread_id,
       replyToMessageId: opts.replyToMessageId,
-      silent: opts.silent,
+      silent: effectiveSilent || undefined,
     });
     recordChannelActivity({
       channel: "telegram",
@@ -1119,10 +1125,10 @@ export async function sendMessageTelegram(
     return { messageId: String(mediaMessageId), chatId: resolvedChatId };
   }
 
-  if (!text || !text.trim()) {
+  if (!strippedText || !strippedText.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const textResult = await sendChunkedText(text, "text send");
+  const textResult = await sendChunkedText(strippedText, "text send");
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
