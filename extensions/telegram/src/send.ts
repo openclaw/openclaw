@@ -248,6 +248,7 @@ const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the me
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const RICH_MESSAGE_UNSUPPORTED_RE = /not supported on telegram web|not supported on .* telegram/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
@@ -448,6 +449,10 @@ function isTelegramMessageDeleteNoopError(err: unknown): boolean {
 
 function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramRichMessageUnsupportedError(err: unknown): boolean {
+  return RICH_MESSAGE_UNSUPPORTED_RE.test(formatErrorMessage(err));
 }
 
 async function withTelegramHtmlParseFallback<T>(params: {
@@ -845,19 +850,35 @@ export async function sendMessageTelegram(
         continue;
       }
       const acceptedParams = buildRichTextParams(index === chunks.length - 1);
-      const result = await requestWithChatNotFound(
-        () =>
-          richRawApi.sendRichMessage({
-            chat_id: chatId,
-            rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
-              skipEntityDetection: account.config.linkPreview === false,
-              tableMode,
+      let result: TelegramMessageLike;
+      try {
+        result = await requestWithChatNotFound(
+          () =>
+            richRawApi.sendRichMessage({
+              chat_id: chatId,
+              rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
+                skipEntityDetection: account.config.linkPreview === false,
+                tableMode,
+              }),
+              ...acceptedParams,
+              ...(opts.silent === true ? { disable_notification: true } : {}),
             }),
-            ...acceptedParams,
-            ...(opts.silent === true ? { disable_notification: true } : {}),
-          }),
-        "richMessage",
-      );
+          "richMessage",
+        );
+      } catch (err) {
+        if (!isTelegramRichMessageUnsupportedError(err)) {
+          throw err;
+        }
+        sendLogger.warn(
+          `richMessage not supported on this client (chatId=${chatId}), falling back to plain text: ${formatErrorMessage(err)}`,
+        );
+        // Use the first chunk send as the result reference; remaining chunks
+        // will also fall back individually if needed.
+        const fallbackResponse = await sendTelegramTextChunk({
+          plainText: chunk.plainText,
+        });
+        result = fallbackResponse.result as TelegramMessageLike;
+      }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
       await recordOutboundMessageForPromptContext({

@@ -26,6 +26,7 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const RICH_MESSAGE_UNSUPPORTED_RE = /not supported on telegram web|not supported on .* telegram/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -34,6 +35,10 @@ function isTelegramQuoteParamError(err: unknown): boolean {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramRichMessageUnsupportedError(err: unknown): boolean {
+  return RICH_MESSAGE_UNSUPPORTED_RE.test(formatErrorMessage(err));
 }
 
 function createTelegramDeliverySendRetry() {
@@ -122,26 +127,36 @@ export async function sendTelegramText(
   });
   const textMode = opts?.textMode ?? "markdown";
   if (opts?.richMessages === true) {
-    const richMessage = buildTelegramRichMessage(text, textMode, {
-      skipEntityDetection: opts.linkPreview === false,
-      tableMode: opts.tableMode,
-    });
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendRichMessage",
-      runtime,
-      thread: opts.thread,
-      requestParams: toTelegramRichMessageContextParams(baseParams),
-      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-      send: (effectiveParams) =>
-        getTelegramRichRawApi(bot.api).sendRichMessage({
-          chat_id: chatId,
-          rich_message: richMessage,
-          ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
-    });
-    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
+    try {
+      const richMessage = buildTelegramRichMessage(text, textMode, {
+        skipEntityDetection: opts.linkPreview === false,
+        tableMode: opts.tableMode,
+      });
+      const res = await sendTelegramWithThreadFallback({
+        operation: "sendRichMessage",
+        runtime,
+        thread: opts.thread,
+        requestParams: toTelegramRichMessageContextParams(baseParams),
+        removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+        send: (effectiveParams) =>
+          getTelegramRichRawApi(bot.api).sendRichMessage({
+            chat_id: chatId,
+            rich_message: richMessage,
+            ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+      });
+      runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+      return res.message_id;
+    } catch (err) {
+      if (!isTelegramRichMessageUnsupportedError(err)) {
+        throw err;
+      }
+      runtime.log?.(
+        `telegram sendRichMessage not supported on this client (chat=${chatId}), falling back to plain text`,
+      );
+      // fall through to plain text path below
+    }
   }
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
