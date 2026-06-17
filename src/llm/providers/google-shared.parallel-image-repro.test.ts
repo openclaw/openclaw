@@ -27,21 +27,22 @@ function countFunctionResponses(parts: readonly Part[] | undefined): number {
   return (parts ?? []).filter((p) => p.functionResponse != null).length;
 }
 
-function countFunctionCalls(parts: readonly Part[] | undefined): number {
-  return (parts ?? []).filter((p) => p.functionCall != null).length;
+function functionResponseNames(parts: readonly Part[] | undefined): string[] {
+  return (parts ?? []).flatMap((part) =>
+    part.functionResponse?.name ? [part.functionResponse.name] : [],
+  );
 }
 
 describe("google-shared convertMessages — parallel tool results with an image (Gemini < 3)", () => {
-  it("keeps both parallel function responses in the user turn immediately after the model turn", () => {
-    const model = makeVisionModel("gemini-2.5-flash");
-    const context = {
-      messages: [
-        { role: "user", content: "Screenshot the page and check the weather." },
-        makeGoogleAssistantMessage(model.id, [
-          { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
-          { type: "toolCall", id: "call_2", name: "weather", arguments: {} },
-        ]),
-        {
+  it.each([
+    ["image first", ["screenshot", "weather"]],
+    ["image last", ["weather", "screenshot"]],
+  ] as const)(
+    "keeps the response run immediate and retains a deferred %s result",
+    (_label, resultOrder) => {
+      const model = makeVisionModel("gemini-2.5-flash");
+      const toolResults = {
+        screenshot: {
           role: "toolResult",
           toolCallId: "call_1",
           toolName: "screenshot",
@@ -49,7 +50,7 @@ describe("google-shared convertMessages — parallel tool results with an image 
           isError: false,
           timestamp: 0,
         },
-        {
+        weather: {
           role: "toolResult",
           toolCallId: "call_2",
           toolName: "weather",
@@ -57,22 +58,30 @@ describe("google-shared convertMessages — parallel tool results with an image 
           isError: false,
           timestamp: 0,
         },
-      ],
-    } as unknown as Context;
+      } as const;
+      const context = {
+        messages: [
+          { role: "user", content: "Screenshot the page and check the weather." },
+          makeGoogleAssistantMessage(model.id, [
+            { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
+            { type: "toolCall", id: "call_2", name: "weather", arguments: {} },
+          ]),
+          ...resultOrder.map((name) => toolResults[name]),
+        ],
+      } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+      const contents = convertMessagesForTest(model, context);
 
-    const modelTurn = contents[1];
-    expect(modelTurn.role).toBe("model");
-    expect(countFunctionCalls(modelTurn.parts)).toBe(2);
-
-    const immediateUserTurn = contents[2];
-    expect(immediateUserTurn.role).toBe("user");
-    expect(countFunctionResponses(immediateUserTurn.parts)).toBe(2);
-
-    const strandedAfterIndex2 = contents
-      .slice(3)
-      .some((c) => countFunctionResponses(c.parts) > 0);
-    expect(strandedAfterIndex2).toBe(false);
-  });
+      expect(contents.map((content) => content.role)).toEqual(["user", "model", "user", "user"]);
+      expect(functionResponseNames(contents[2].parts)).toEqual(resultOrder);
+      expect(contents[3]).toEqual({
+        role: "user",
+        parts: [
+          { text: "Tool result image:" },
+          { inlineData: { mimeType: "image/png", data: "AAAA" } },
+        ],
+      });
+      expect(contents.slice(3).some((c) => countFunctionResponses(c.parts) > 0)).toBe(false);
+    },
+  );
 });

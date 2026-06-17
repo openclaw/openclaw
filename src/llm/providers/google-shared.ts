@@ -170,12 +170,12 @@ export function convertMessages<T extends GoogleApiType>(
 
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
+  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
+  // live inside functionResponse, so hold them until the consecutive result run ends.
   const pendingToolResultImageTurns: Content[] = [];
   let activeToolResultParts: Part[] | undefined;
   const flushToolResultRun = (): void => {
-    for (const imageTurn of pendingToolResultImageTurns) {
-      contents.push(imageTurn);
-    }
+    contents.push(...pendingToolResultImageTurns);
     pendingToolResultImageTurns.length = 0;
     activeToolResultParts = undefined;
   };
