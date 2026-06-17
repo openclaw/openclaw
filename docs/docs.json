@@ -1586,6 +1586,7 @@
                       "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
                       "gateway/operator-scopes",
+                      "gateway/agent-runtime-boundary",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
