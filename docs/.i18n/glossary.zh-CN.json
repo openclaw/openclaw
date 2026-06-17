@@ -1176,6 +1176,10 @@
     "target": "Control UI"
   },
   {
+    "source": "Models CLI",
+    "target": "模型 CLI"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
   },
