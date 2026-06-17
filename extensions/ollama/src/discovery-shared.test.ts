@@ -1,6 +1,6 @@
 // Ollama tests cover discovery shared plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isLocalOllamaBaseUrl } from "./discovery-shared.js";
+import { isLocalOllamaBaseUrl, resolveOllamaDiscoveryResult } from "./discovery-shared.js";
 
 describe("isLocalOllamaBaseUrl", () => {
   it.each([
@@ -38,5 +38,139 @@ describe("isLocalOllamaBaseUrl", () => {
     "not a url",
   ])("classifies %s as remote", (baseUrl) => {
     expect(isLocalOllamaBaseUrl(baseUrl)).toBe(false);
+  });
+});
+
+describe("resolveOllamaDiscoveryResult — remote base URL guard", () => {
+  const buildMockProvider = async (_configuredBaseUrl?: string, _opts?: { quiet?: boolean }) => ({
+    baseUrl: "https://ollama.com",
+    api: "ollama" as const,
+    models: [
+      {
+        id: "discovered-model",
+        name: "discovered-model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+        params: { num_ctx: 128000 },
+      },
+    ],
+  });
+
+  it("returns null for remote base URL without explicit models", async () => {
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                apiKey: "test-key",
+                api: "ollama",
+              },
+            },
+          },
+        },
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "test-key" }),
+      },
+      pluginConfig: {},
+      buildProvider: buildMockProvider,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns explicit models for remote base URL when models are configured", async () => {
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                apiKey: "test-key",
+                api: "ollama",
+                models: [
+                  {
+                    id: "minimax-m3:cloud",
+                    name: "minimax-m3:cloud",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 8192,
+                    compat: { supportsTools: true, supportsUsageInStreaming: true },
+                    params: { num_ctx: 128000 },
+                  },
+                ],
+              },
+            },
+          },
+        },
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "test-key" }),
+      },
+      pluginConfig: {},
+      buildProvider: buildMockProvider,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.provider.models).toHaveLength(1);
+    expect(result!.provider.models[0].id).toBe("minimax-m3:cloud");
+  });
+
+  it("does not call buildProvider for remote base URL without explicit models", async () => {
+    let providerCalled = false;
+    const trackingBuildProvider = async (..._args: unknown[]) => {
+      providerCalled = true;
+      return buildMockProvider([{ id: "unwanted-model", name: "unwanted-model" }]);
+    };
+
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                apiKey: "test-key",
+                api: "ollama",
+              },
+            },
+          },
+        },
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "test-key" }),
+      },
+      pluginConfig: {},
+      buildProvider: trackingBuildProvider,
+    });
+    expect(result).toBeNull();
+    expect(providerCalled).toBe(false);
+  });
+
+  it("still auto-discovers for local base URL when no explicit models", async () => {
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                api: "ollama",
+              },
+            },
+          },
+        },
+        env: { OLLAMA_API_KEY: "ollama-local" },
+        resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
+      },
+      pluginConfig: {},
+      buildProvider: buildMockProvider,
+    });
+    // Local base URL should still reach the discovery path
+    expect(result).not.toBeNull();
   });
 });

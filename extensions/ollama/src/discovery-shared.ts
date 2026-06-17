@@ -241,6 +241,13 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }
+  // When the base URL is a remote/cloud Ollama instance (not local/loopback),
+  // skip auto-discovery. Cloud instances are shared tenants where available
+  // models are managed by the provider; only use explicitly configured models.
+  const configuredBaseUrl = readProviderBaseUrl(explicit);
+  if (!hasExplicitModels && configuredBaseUrl && !isLocalOllamaBaseUrl(configuredBaseUrl)) {
+    return null;
+  }
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
   const ollamaKey = resolvedOllamaAuth.apiKey;
   const ollamaDiscoveryKey = resolvedOllamaAuth.discoveryApiKey;
@@ -282,7 +289,6 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
 
-  const configuredBaseUrl = readProviderBaseUrl(explicit);
   const quiet = !hasRealOllamaKey && !hasMeaningfulExplicitConfig;
   const provider = await getCachedLiveCatalogValue({
     keyParts: [
