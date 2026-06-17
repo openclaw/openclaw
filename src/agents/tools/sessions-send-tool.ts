@@ -191,10 +191,9 @@ function isRequesterParentOfNativeSubagentSession(params: {
   return requester === spawnedBy || requester === parentSessionKey;
 }
 
-/** Detect isolated cron requesters by the `:cron:` marker in the session key. */
+/** Detect isolated cron requesters using the canonical session-key parser. */
 function isRequesterIsolatedCron(requesterSessionKey: string | null | undefined): boolean {
-  const requester = normalizeOptionalString(requesterSessionKey);
-  return Boolean(requester?.includes(":cron:"));
+  return isCronRunSessionKey(requesterSessionKey);
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
