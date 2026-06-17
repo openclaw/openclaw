@@ -68,6 +68,19 @@ export const OAUTH_REFRESH_LOCK_OPTIONS = {
 /** Maximum duration for one OAuth refresh call inside the refresh lock. */
 export const OAUTH_REFRESH_CALL_TIMEOUT_MS = 120_000;
 
+// Hard upper bound on the ENTIRE held-lock critical section, not just the
+// network refresh call. The section also runs an in-lock keychain store load
+// (which on darwin can hit securityd) and provider buildApiKey hooks; if either
+// hangs while the cross-agent lock is held, every same-key refresher chain
+// stalls on the in-process gate or blocks acquiring the file lock. This bounds
+// the whole body so a wedged keychain/hook cannot pin the lock indefinitely.
+// Sits between the call timeout (so the network call's tighter budget fires
+// first) and the stale window (so a waiter never reclaims the lock while the
+// owner is still within its allowed runtime).
+// Invariant: OAUTH_REFRESH_CALL_TIMEOUT_MS < OAUTH_REFRESH_INLOCK_TIMEOUT_MS < OAUTH_REFRESH_LOCK_OPTIONS.stale.
+/** Maximum duration for the full held-lock OAuth refresh critical section. */
+export const OAUTH_REFRESH_INLOCK_TIMEOUT_MS = 150_000;
+
 /** Freshness window for syncing external CLI auth into auth profiles. */
 export const EXTERNAL_CLI_SYNC_TTL_MS = 15 * 60 * 1000;
 /** Near-expiry threshold that triggers external CLI credential resync. */
