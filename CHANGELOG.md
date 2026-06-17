@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Plugins and updates: repair missing required platform packages during managed plugin installs and updates, including omitted Codex platform binaries.
 - Dependencies: update Hono to 4.12.25 so published OpenClaw and ACPX packages use the patched runtime.
 - Release and test reliability: extend slow Gateway/full-suite watchdogs, split local full-suite shards when throttled, stabilize plugin auth marker fixtures, avoid brittle provider-ref error text, fold Telegram RTT sampling into live QA evidence, simplify QA scorecard mappings around canonical coverage IDs, keep QA Lab bootstrap selection assertions aligned with flow-only scenarios, skip QA coverage artifact consumers when runtime parity producer status is not green, keep Feishu lifecycle release checks pointed at the active fixture config, isolate trajectory-export live seed turns from Codex-native shell approvals, preserve release-check child refs while pinning expected SHAs, widen live OpenAI TTS budgets for slower provider responses, and avoid false downgrade prompts for unresolved latest-tag updates. (#92652, #92550, #92558, #92911) Thanks @RomneyDa and @Andy312432.
+- UI/mobile/TUI: fix backspace key handling on WSL2/Ubuntu by accepting both ^H (0x08) and ^? (0x7f) as valid backspace inputs in the TUI, preventing input field editing failures after agent responses render. (#92777) Thanks @lonestardigitalstudio-tx.
 
 ### Complete contribution ledger
 

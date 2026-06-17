@@ -396,6 +396,31 @@ describe("createBackspaceDeduper", () => {
     expect(dedupe("a")).toBe("a");
     expect(dedupe("\x1b[A")).toBe("\x1b[A");
   });
+
+  it("accepts both ^H (0x08) and ^? (0x7f) as valid backspace inputs", () => {
+    const dedupe1 = createBackspaceDeduper();
+    const dedupe2 = createBackspaceDeduper();
+    expect(dedupe1("\x08")).toBe("\x08");
+    expect(dedupe2("\x7f")).toBe("\x7f");
+  });
+
+  it("dedupes consecutive ^? (0x7f) backspace events within the dedupe window", () => {
+    const { dedupe, advance } = createTimedDedupe();
+    expect(dedupe("\x7f")).toBe("\x7f");
+    advance(1);
+    expect(dedupe("\x7f")).toBe("");
+  });
+
+  it("handles mixed ^H and ^? backspace sequences correctly", () => {
+    const { dedupe, advance } = createTimedDedupe();
+    expect(dedupe("\x08")).toBe("\x08");
+    advance(1);
+    expect(dedupe("\x7f")).toBe("");
+    advance(10);
+    expect(dedupe("\x08")).toBe("\x08");
+    advance(1);
+    expect(dedupe("\x7f")).toBe("");
+  });
 });
 
 describe("resolveCtrlCAction", () => {
