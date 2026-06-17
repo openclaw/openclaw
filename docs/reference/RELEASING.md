@@ -185,10 +185,12 @@ release state.
    immutable postpublish evidence to bind the shipped tag to its Full Release
    Validation and Publish runs, then verifies the stable main state, release,
    mandatory stable soak, and blocking performance evidence. It attaches an
-   immutable closeout manifest to the GitHub release. A missing or
-   more-than-90-day-old drill record blocks closeout; private recovery commands
-   remain in the maintainer-only runbook. Use its manual dispatch only to
-   repair or replay a completed stable closeout.
+   immutable closeout manifest and checksum to the GitHub release. The automatic
+   push trigger skips legacy releases that predate immutable postpublish
+   evidence; it never treats that skip as a completed closeout. A missing or
+   more-than-90-day-old drill record blocks an evidence-backed closeout; private
+   recovery commands remain in the maintainer-only runbook. Use manual dispatch
+   only to repair or replay an evidence-backed stable closeout.
    A legacy fallback correction tag may reuse base-package evidence only when
    the correction tag resolves to the same source commit as the base stable tag.
    A correction with different source must publish and verify its own package

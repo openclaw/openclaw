@@ -129,7 +129,15 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
     expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
     expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
+    expect(workflow).toContain(
+      "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence.",
+    );
     expect(workflow).toContain("Stable closeout is required for $tag");
+    expect(workflow).not.toContain('closeout_asset="openclaw-${release_asset_version}');
+    expect(workflow).not.toContain(
+      'if [[ "$EVENT_NAME" == "push" ]] && gh release view "$tag" --repo "$GITHUB_REPOSITORY"',
+    );
+    expect(workflow).toContain("attach_or_verify \\");
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
     expect(releaseVersionGateIndex).toBeGreaterThan(-1);
