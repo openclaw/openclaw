@@ -31,7 +31,7 @@ export function createSecurityMatrixBeforeToolCallAuditEvent(
     actor: facts.actor ?? "agent",
     influencedBy: facts.influencedBy ?? [],
     ...(facts.capability ? { capability: facts.capability } : {}),
-    approvalState: facts.approvalState ?? "not_required",
+    approvalState: facts.approvalState ?? "none",
     operatorPolicy: facts.operatorPolicy ?? "unknown",
   });
 }
