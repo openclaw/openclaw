@@ -67,6 +67,7 @@ const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.trace_id",
 ]);
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const SECURITY_TARGET_NAME_VALUE_RE = /^[A-Za-z0-9@/_.:-]{1,256}$/u;
 const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
@@ -317,6 +318,18 @@ function lowCardinalityAttr(value: string | undefined, fallback = "unknown"): st
     return fallback;
   }
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
+function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
+  return SECURITY_TARGET_NAME_VALUE_RE.test(redacted) ? redacted : fallback;
 }
 
 function lowCardinalityQueueLaneAttr(value: string | undefined, fallback = "unknown"): string {
@@ -1124,7 +1137,7 @@ function assignOtelSecurityAttributes(
       assignOtelLogAttribute(
         attributes,
         "openclaw.security.target.name",
-        lowCardinalityAttr(evt.target.name),
+        securityTargetNameAttr(evt.target.name),
       );
     }
     if (evt.target.owner) {

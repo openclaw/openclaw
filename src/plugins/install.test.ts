@@ -2496,25 +2496,32 @@ describe("installPluginFromNpmSpec", () => {
     const npmDir = path.join(root, "npm");
     const extensionsDir = path.join(root, "extensions");
     const { scriptPath, logPath } = writeBlockingInstallPolicyScript(root);
-    mockNpmViewMetadata({ name: "@acme/policy-preflight-plugin" });
+    const packageName = "@acme/policy-preflight-plugin";
+    mockNpmViewMetadata({ name: packageName });
+    const captured = captureSecurityEvents();
 
-    const result = await installPluginFromNpmSpec({
-      spec: "@acme/policy-preflight-plugin@1.0.0",
-      extensionsDir,
-      npmDir,
-      config: configWithInstallPolicy(scriptPath, logPath),
-    });
+    let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+    try {
+      result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.0.0`,
+        extensionsDir,
+        npmDir,
+        config: configWithInstallPolicy(scriptPath, logPath),
+      });
+    } finally {
+      captured.stop();
+    }
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("npm installs are disabled by policy");
+    expect(result!.ok).toBe(false);
+    if (!result!.ok) {
+      expect(result!.code, result!.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result!.error).toContain("npm installs are disabled by policy");
     }
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
       "npm",
       "view",
-      "@acme/policy-preflight-plugin@1.0.0",
+      `${packageName}@1.0.0`,
       "name",
       "version",
       "dist.integrity",
@@ -2531,6 +2538,16 @@ describe("installPluginFromNpmSpec", () => {
     expect(requests[0]?.sourcePathKind).toBe("file");
     expect(path.basename(requests[0]?.sourcePath ?? "")).toBe("npm-package-metadata.json");
     expect(requests[0]?.plugin?.contentType).toBe("package");
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "plugin.audit.failed",
+      outcome: "denied",
+      target: { kind: "plugin", name: packageName },
+      attributes: {
+        source_family: "npm",
+        mode: "install",
+      },
+    });
   });
 
   it("reports effective install mode to policy when requested npm update has no installed target", async () => {

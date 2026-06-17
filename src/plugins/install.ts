@@ -1223,6 +1223,9 @@ async function installPluginFromManagedNpmRoot(
   if (!params.skipPolicyPreflight) {
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? params.packageName}"`,
+      pluginId: expectedPluginId ?? params.packageName,
+      mode: effectiveMode,
+      sourceFamily: "npm",
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
@@ -2355,6 +2358,18 @@ async function scanAndLinkInstalledPackage(params: {
 }): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${params.pluginId}"`,
+    pluginId: params.pluginId,
+    mode: params.mode,
+    sourceFamily:
+      params.requestKind === "plugin-npm"
+        ? "npm"
+        : params.requestKind === "plugin-archive"
+          ? "archive"
+          : params.requestKind === "plugin-dir"
+            ? "directory"
+            : params.requestKind === "plugin-file"
+              ? "file"
+              : "installed-package",
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
         ...(params.additionalDependencyPackageDirs
@@ -2926,6 +2941,9 @@ export async function installPluginFromNpmSpec(
     );
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? parsedSpec.name}"`,
+      pluginId: expectedPluginId ?? parsedSpec.name,
+      mode: effectiveMode,
+      sourceFamily: "npm",
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
