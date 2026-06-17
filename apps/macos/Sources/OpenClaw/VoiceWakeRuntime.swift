@@ -48,6 +48,9 @@ actor VoiceWakeRuntime {
     private var preDetectTask: Task<Void, Never>?
     private var isStarting: Bool = false
     private var triggerOnlyTask: Task<Void, Never>?
+    /// Background task that fetches the gateway talk.silenceTimeoutMs config
+    /// so a slow gateway never blocks Voice Wake startup.
+    private var pendingSilenceConfigTask: Task<Void, Never>?
 
     /// Tunables
     /// Silence threshold once we've captured user speech (post-trigger).
@@ -135,6 +138,17 @@ actor VoiceWakeRuntime {
         }
 
         if config == self.currentConfig, self.recognitionTask != nil {
+            // Voice Wake is already running with the same trigger config,
+            // but gateway talk config may have changed. Refresh asynchronously
+            // so the HUD picks up talk.silenceTimeoutMs edits while listening.
+            self.pendingSilenceConfigTask?.cancel()
+            self.pendingSilenceConfigTask = Task { [weak self] in
+                guard let self else { return }
+                let captureSilenceMs = await self.resolveCaptureSilenceMs()
+                if captureSilenceMs > 0, !Task.isCancelled {
+                    self.silenceWindow = TimeInterval(captureSilenceMs) / 1000
+                }
+            }
             return
         }
 
@@ -154,11 +168,16 @@ actor VoiceWakeRuntime {
 
             self.configureSession(localeID: config.localeID)
 
-            // Pull the capture silence window from gateway talk.silenceTimeoutMs
-            // so the HUD respects user-configured pause tolerance.
-            let captureSilenceMs = await self.resolveCaptureSilenceMs()
-            if captureSilenceMs > 0 {
-                self.silenceWindow = TimeInterval(captureSilenceMs) / 1000
+            // Fetch the gateway silence config asynchronously so a slow or
+            // unavailable gateway never delays Voice Wake startup. The HUD
+            // starts with the current (or default 2000 ms) window immediately.
+            self.pendingSilenceConfigTask?.cancel()
+            self.pendingSilenceConfigTask = Task { [weak self] in
+                guard let self else { return }
+                let captureSilenceMs = await self.resolveCaptureSilenceMs()
+                if captureSilenceMs > 0, !Task.isCancelled {
+                    self.silenceWindow = TimeInterval(captureSilenceMs) / 1000
+                }
             }
 
             guard let recognizer, recognizer.isAvailable else {
@@ -260,6 +279,8 @@ actor VoiceWakeRuntime {
         self.preDetectTask = nil
         self.triggerOnlyTask?.cancel()
         self.triggerOnlyTask = nil
+        self.pendingSilenceConfigTask?.cancel()
+        self.pendingSilenceConfigTask = nil
         self.haltRecognitionPipeline()
         self.recognizer = nil
         self.currentConfig = nil
@@ -288,13 +309,14 @@ actor VoiceWakeRuntime {
     }
 
     /// Resolve the HUD capture silence window from gateway talk.silenceTimeoutMs.
+    /// Runs in a background task so it never blocks Voice Wake startup.
     /// Defaults to 2000 ms when the config is unavailable or unset.
     private func resolveCaptureSilenceMs() async -> Int {
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
                 method: .talkConfig,
                 params: [:],
-                timeoutMs: 5000)
+                timeoutMs: 3000)
             let talk = snap.config?["talk"]?.dictionaryValue
             return TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: 2000)
         } catch {
