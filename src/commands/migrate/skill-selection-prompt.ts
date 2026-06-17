@@ -26,7 +26,7 @@ type MigrationSkillSelectionOption = {
 };
 
 /** Options for the migration selection prompt, including testable IO streams. */
-export type MigrationSkillSelectionPromptOptions = {
+type MigrationSkillSelectionPromptOptions = {
   message: string;
   options: MigrationSkillSelectionOption[];
   initialValues?: string[];
