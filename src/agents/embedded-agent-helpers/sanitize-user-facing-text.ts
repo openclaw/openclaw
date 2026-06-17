@@ -99,6 +99,30 @@ const RATE_LIMIT_SPECIFIC_HINT_RE =
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+// Exact internal truncation sentinels emitted by tool-result, transcript,
+// startup-memory, and context-truncation helpers. Each alternative is a precise
+// shape (not a loose "contains truncated" match), and matching is anchored to a
+// standalone line or the very end of the reply, so prose/code/JSON that merely
+// mentions truncation — or a differently-phrased bracket like "[quote truncated
+// by editor]" — is never touched. The ellipsis may be "..." or the U+2026 glyph.
+const TRUNCATION_SENTINEL_CORE = [
+  "(?:\\.{3}|\\u2026)\\(truncated\\)(?:\\.{3}|\\u2026)",
+  "(?:\\.{3}|\\u2026)\\[additional startup memory truncated\\](?:\\.{3}|\\u2026)",
+  "(?:\\.{3}|\\u2026)\\[truncated\\](?:\\.{3}|\\u2026)",
+  "\\u2026\\[truncated\\]",
+  "\\[(?:\\.{3}|\\u2026) \\d+ more characters truncated\\]",
+].join("|");
+// Sentinel occupying a whole line (standalone). The leading `[ \t]*` is anchored
+// at `^` (per line), so it stays linear.
+const TRUNCATION_SENTINEL_LINE_RE = new RegExp(
+  `^[ \\t]*(?:${TRUNCATION_SENTINEL_CORE})[ \\t]*$`,
+  "gim",
+);
+// Sentinel trailing at the very end of the reply. No leading `[ \t]*` here: an
+// unanchored leading whitespace star would let the engine rescan long whitespace
+// runs on non-matching input (O(n^2)); the final trim in stripTruncationSentinels
+// already removes any space left in front of a stripped trailing sentinel.
+const TRUNCATION_SENTINEL_TRAILING_RE = new RegExp(`(?:${TRUNCATION_SENTINEL_CORE})[ \\t]*$`, "i");
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -389,6 +413,19 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
   return result;
 }
 
+function stripTruncationSentinels(text: string): string {
+  const stripped = text
+    .replace(TRUNCATION_SENTINEL_LINE_RE, "")
+    .replace(TRUNCATION_SENTINEL_TRAILING_RE, "");
+  if (stripped === text) {
+    return text;
+  }
+  // Only reached when a sentinel was removed: collapse the blank run a removed
+  // standalone line leaves behind and trim the trailing remnant. Sentinel-free
+  // input is returned byte-for-byte via the early return above.
+  return stripped.replace(/\n{3,}/g, "\n\n").replace(/[ \t\r\n]+$/, "");
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -446,7 +483,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // Replay repair may synthesize this placeholder to keep provider transcripts valid.
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutPlaceholder = stripTruncationSentinels(
+    stripToolCallsOmittedPlaceholderLines(withoutToolCallXml),
+  );
   const withoutInternalTraceLines = errorContext
     ? stripAssistantInternalTraceLines(withoutPlaceholder)
     : withoutPlaceholder;
