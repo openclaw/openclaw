@@ -980,6 +980,83 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes exact source directory roots to their owning shards", () => {
+    const cases = [
+      ["src/acp", "test/vitest/vitest.acp.config.ts"],
+      ["src/agents", "test/vitest/vitest.agents.config.ts"],
+      ["src/auto-reply", "test/vitest/vitest.auto-reply.config.ts"],
+      ["src/channels", "test/vitest/vitest.channels.config.ts"],
+      ["src/cli", "test/vitest/vitest.cli.config.ts"],
+      ["src/config", "test/vitest/vitest.runtime-config.config.ts"],
+      ["src/cron", "test/vitest/vitest.cron.config.ts"],
+      ["src/daemon", "test/vitest/vitest.daemon.config.ts"],
+      ["src/gateway", "test/vitest/vitest.gateway.config.ts"],
+      ["src/hooks", "test/vitest/vitest.hooks.config.ts"],
+      ["src/infra", "test/vitest/vitest.infra.config.ts"],
+      ["src/logging", "test/vitest/vitest.logging.config.ts"],
+      ["src/media", "test/vitest/vitest.media.config.ts"],
+      ["src/media-understanding", "test/vitest/vitest.media-understanding.config.ts"],
+      ["src/plugin-sdk", "test/vitest/vitest.plugin-sdk.config.ts"],
+      ["src/plugins", "test/vitest/vitest.plugins.config.ts"],
+      ["src/process", "test/vitest/vitest.process.config.ts"],
+      ["src/secrets", "test/vitest/vitest.secrets.config.ts"],
+      ["src/shared", "test/vitest/vitest.shared-core.config.ts"],
+      ["src/tasks", "test/vitest/vitest.tasks.config.ts"],
+      ["src/tui", "test/vitest/vitest.tui.config.ts"],
+      ["src/utils", "test/vitest/vitest.utils.config.ts"],
+      ["src/wizard", "test/vitest/vitest.wizard.config.ts"],
+      ["ui/src", "test/vitest/vitest.ui.config.ts"],
+    ] as const;
+
+    for (const [target, config] of cases) {
+      expect(buildVitestRunPlans([target], process.cwd()).at(-1)).toEqual({
+        config,
+        forwardedArgs: [],
+        includePatterns: [`${target}/**/*.test.ts`],
+        watchMode: false,
+      });
+    }
+
+    expect(buildVitestRunPlans(["src/plugin-sdk"], process.cwd())).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        includePatterns: expect.arrayContaining(["src/plugin-sdk/access-groups.test.ts"]),
+      }),
+      expect.objectContaining({
+        config: "test/vitest/vitest.plugin-sdk-light.config.ts",
+        includePatterns: expect.arrayContaining(["src/plugin-sdk/acp-runtime.test.ts"]),
+      }),
+      {
+        config: "test/vitest/vitest.plugin-sdk.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+    expect(buildVitestRunPlans(["src/shared"], process.cwd()).map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.shared-core.config.ts",
+    ]);
+    expect(buildVitestRunPlans(["src/utils"], process.cwd()).map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.utils.config.ts",
+    ]);
+    expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.commands-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("includes the isolated tooling shard for broad shell helper globs", () => {
     expect(buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd())).toEqual([
       {

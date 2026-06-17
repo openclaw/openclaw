@@ -1021,7 +1021,8 @@ async function startGateway(runner, port, env, logPath) {
 }
 
 export async function stopGateway(child, options = {}) {
-  if (!child || hasChildExited(child)) {
+  const killProcess = options.killProcess ?? defaultKillProcess;
+  if (!child || !isGatewayAlive(child, killProcess)) {
     return;
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
@@ -1029,18 +1030,21 @@ export async function stopGateway(child, options = {}) {
   const exited = new Promise((resolve) => {
     child.once("exit", resolve);
   });
-  const waitForExit = async (ms) =>
-    hasChildExited(child)
-      ? true
-      : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
+  const waitForExit = async (ms) => {
+    if (!isGatewayAlive(child, killProcess)) {
+      return true;
+    }
+    await Promise.race([exited, delay(ms)]);
+    return !isGatewayAlive(child, killProcess);
+  };
 
-  if (!signalGateway(child, "SIGTERM")) {
+  if (!signalGateway(child, "SIGTERM", killProcess)) {
     return;
   }
   if (await waitForExit(teardownGraceMs)) {
     return;
   }
-  if (!signalGateway(child, "SIGKILL")) {
+  if (!signalGateway(child, "SIGKILL", killProcess)) {
     return;
   }
   if (await waitForExit(killGraceMs)) {
@@ -1051,6 +1055,25 @@ export async function stopGateway(child, options = {}) {
 
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
+}
+
+function defaultKillProcess(pid, signal) {
+  return process.kill(pid, signal);
+}
+
+function isGatewayAlive(child, killProcess) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      killProcess(-child.pid, 0);
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return false;
+      }
+      throw error;
+    }
+  }
+  return !hasChildExited(child);
 }
 
 function createChildExitPromise(child) {
@@ -1069,10 +1092,10 @@ function releaseUnsettledGatewayChild(child) {
   child.unref?.();
 }
 
-function signalGateway(child, signal) {
+function signalGateway(child, signal, killProcess = defaultKillProcess) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
-      process.kill(-child.pid, signal);
+      killProcess(-child.pid, signal);
       return true;
     } catch (error) {
       if (error?.code === "ESRCH") {

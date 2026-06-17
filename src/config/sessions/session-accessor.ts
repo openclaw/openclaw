@@ -25,11 +25,17 @@ import {
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
   listSessionEntries as listFileSessionEntries,
   loadSessionStore,
+  applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
   patchSessionEntry as patchFileSessionEntry,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
+  type SessionEntryPatchProjectionContext,
+  type SessionEntryPatchProjectionFailure,
+  type SessionEntryPatchProjectionResult,
+  type SessionEntryPatchProjectionSnapshot,
+  type SessionEntryPatchProjectionTarget,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
 } from "./store.js";
@@ -267,6 +273,13 @@ type CreatedSessionTranscriptResult =
   | { ok: true; sessionFile: string }
   | { ok: false; error: string; phase: "transcript" };
 
+export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
+export type SessionPatchProjectionFailure = SessionEntryPatchProjectionFailure;
+export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
+  SessionEntryPatchProjectionResult<TFailure>;
+export type SessionPatchProjectionSnapshot = SessionEntryPatchProjectionSnapshot;
+export type SessionPatchProjectionTarget = SessionEntryPatchProjectionTarget;
+
 export type { SessionLifecycleArtifactCleanupParams, SessionLifecycleArtifactCleanupResult };
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
@@ -482,6 +495,23 @@ export async function updateSessionEntry(
     takeCacheOwnership: options.takeCacheOwnership,
     update,
   });
+}
+
+/**
+ * Applies a session patch projection through the accessor boundary.
+ * The resolver sees a read-only snapshot and names the persisted key set; the
+ * projector returns one replacement entry without receiving the mutable store.
+ */
+export async function applySessionPatchProjection<
+  TFailure extends SessionPatchProjectionFailure,
+>(params: {
+  storePath: string;
+  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
+  project: (
+    context: SessionPatchProjectionContext,
+  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
+}): Promise<SessionPatchProjectionResult<TFailure>> {
+  return await applyFileSessionEntryPatchProjection(params);
 }
 
 /** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */

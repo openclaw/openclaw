@@ -1,7 +1,7 @@
 // Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import {
@@ -49,6 +49,27 @@ function requireRecord(value: unknown): Record<string, unknown> {
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function workboardField(scope: Page | Locator, label: string) {
+  return scope.locator(".workboard-field").filter({
+    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
+  });
+}
+
+async function chooseWorkboardSelectOption(
+  scope: Page | Locator,
+  label: string,
+  optionLabel: string,
+): Promise<void> {
+  const field = workboardField(scope, label);
+  expect(await field.count()).toBe(1);
+  await field.locator(".workboard-select__trigger").click();
+  await field.getByRole("option", { exact: true, name: optionLabel }).click();
 }
 
 async function waitForRequests(
@@ -309,6 +330,27 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
 
+      const prioritySelect = writable.page
+        .locator(".workboard-toolbar__filters .workboard-select")
+        .nth(1);
+      const priorityTrigger = prioritySelect.locator(".workboard-select__trigger");
+      await priorityTrigger.focus();
+      await writable.page.keyboard.press("ArrowDown");
+      expect(await writable.page.locator(":focus").textContent()).toContain("All priorities");
+      await writable.page.keyboard.press("ArrowDown");
+      expect(await writable.page.locator(":focus").textContent()).toContain("Low");
+      await writable.page.keyboard.press("End");
+      expect(await writable.page.locator(":focus").textContent()).toContain("Urgent");
+      await writable.page.keyboard.press("h");
+      expect(await writable.page.locator(":focus").textContent()).toContain("High");
+      await writable.page.keyboard.press("Enter");
+      expect(await prioritySelect.getAttribute("open")).toBeNull();
+      await writable.page.keyboard.press("Home");
+      await writable.page.keyboard.press("Enter");
+      expect(await prioritySelect.locator(".workboard-select__value").textContent()).toBe(
+        "All priorities",
+      );
+
       await writableGateway.deferNext("workboard.cards.create");
       await writable.page
         .locator(".workboard-toolbar__actions")
@@ -317,7 +359,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
       await createDialog.getByLabel("Title").fill(createdCard.title);
       await createDialog.getByLabel("Notes").fill(createdCard.notes ?? "");
-      await createDialog.getByLabel("Session").selectOption(linkedSessionKey);
+      await chooseWorkboardSelectOption(createDialog, "Session", linkedSessionName);
       await createDialog.getByLabel("Labels").fill("ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog");
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
@@ -340,12 +382,12 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
 
       await writableGateway.deferNext("workboard.cards.update");
       await cardInColumn(writable.page, "Todo", createdCard.title)
-        .locator('button[title="Edit card"]')
+        .locator('button[aria-label="Edit card"]')
         .click();
       const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
       await editDialog.getByLabel("Title").fill(editedCard.title);
       await editDialog.getByLabel("Notes").fill(editedCard.notes ?? "");
-      await editDialog.getByLabel("Priority").selectOption("high");
+      await chooseWorkboardSelectOption(editDialog, "Priority", "High");
       await editDialog.getByLabel("Labels").fill("ui, proof, e2e");
       const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
       await editDialog.getByRole("button", { name: /^Save$/u }).click();
