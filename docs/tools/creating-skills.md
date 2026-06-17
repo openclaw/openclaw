@@ -56,7 +56,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
     - Use lowercase letters, digits, and hyphens for `name`.
     - Keep the directory name and frontmatter `name` aligned.
     - `description` is shown to the agent and in slash-command discovery —
-      keep it one line and under 160 characters.
+      keep it one line and under 500 characters.
 
   </Step>
 

@@ -347,7 +347,7 @@ different visible skill set per agent.
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
   Maximum proposal body size in bytes. Proposal descriptions are hard-capped at
-  160 bytes because they appear in discovery and listing output.
+  500 bytes because they appear in discovery and listing output.
 </ParamField>
 
 ## Symlinked skill roots

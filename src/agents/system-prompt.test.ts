@@ -713,7 +713,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain(
       "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations.",
     );
-    expect(withTool).toContain("keep `description` under 160 bytes");
+    expect(withTool).toContain("keep `description` under 500 bytes");
     expect(withTool).toContain("`proposal_content` within the configured body limit");
     expect(withTool).toContain(
       "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",

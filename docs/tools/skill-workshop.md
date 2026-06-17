@@ -211,7 +211,7 @@ agent session or the CLI.
 - `maxPending`: caps pending and quarantined proposals per workspace.
 - `maxSkillBytes`: caps proposal body size. Default: `40000`.
 
-Proposal descriptions are always capped at 160 bytes.
+Proposal descriptions are always capped at 500 bytes.
 
 ## Gateway methods
 
@@ -254,7 +254,7 @@ Default state directory: `~/.openclaw`.
 
 ## Limits
 
-- Description: 160 bytes.
+- Description: 500 bytes.
 - Proposal body: `skills.workshop.maxSkillBytes` (default 40,000).
 - Support files: 64 per proposal.
 - Support file size: 256 KB each, 2 MB total.
@@ -265,7 +265,7 @@ Default state directory: `~/.openclaw`.
 
 | Problem                                        | Resolution                                                                                                                                                                                                  |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                                                                                                                                 |
+| `Skill proposal description is too large`      | Shorten `description` to 500 bytes or less.                                                                                                                                                                 |
 | `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
 | `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
 | `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
