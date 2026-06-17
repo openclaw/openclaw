@@ -122,6 +122,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "grep",
   "head",
   "ls",
+  "ps",
   "pwd",
   "rg",
   "stat",
