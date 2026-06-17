@@ -169,6 +169,31 @@ describe("resolveFastModeState", () => {
     expect(state.fastAutoOnSeconds).toBe(30);
   });
 
+  it.each([
+    ["fastSeconds", { fastSeconds: 15 }],
+    ["fast_seconds", { fast_seconds: 15 }],
+  ])("uses model %s alias for auto cutoff", (_label, params) => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { params: { fastMode: "auto", ...params } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveFastModeState({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(state.mode).toBe("auto");
+    expect(state.source).toBe("config");
+    expect(state.fastAutoOnSeconds).toBe(15);
+  });
+
   it("uses model config when the runtime passes a provider-qualified model ref", () => {
     const cfg = {
       agents: {

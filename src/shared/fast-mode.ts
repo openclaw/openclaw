@@ -78,6 +78,9 @@ export function resolveFastModeModelAutoOnSeconds(params: {
   const modelParams = resolveFastModeModelParams(params);
   return (
     normalizeFastModeAutoOnSeconds(modelParams?.fastAutoOnSeconds) ??
+    normalizeFastModeAutoOnSeconds(modelParams?.fast_auto_on_seconds) ??
+    normalizeFastModeAutoOnSeconds(modelParams?.fastSeconds) ??
+    normalizeFastModeAutoOnSeconds(modelParams?.fast_seconds) ??
     DEFAULT_FAST_MODE_AUTO_ON_SECONDS
   );
 }
