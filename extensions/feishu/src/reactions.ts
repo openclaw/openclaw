@@ -95,25 +95,45 @@ export async function listReactionsFeishu(params: {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
-  const response = (await client.im.messageReaction.list({
-    path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: {
-      items?: Array<{
-        reaction_id?: string;
-        reaction_type?: { emoji_type?: string };
-        operator_type?: string;
-        operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-      }>;
+  const items: Array<{
+    reaction_id?: string;
+    reaction_type?: { emoji_type?: string };
+    operator_type?: string;
+    operator_id?: { open_id?: string; user_id?: string; union_id?: string };
+  }> = [];
+  let pageToken: string | undefined;
+  do {
+    const response = (await client.im.messageReaction.list({
+      path: { message_id: messageId },
+      params: {
+        ...(emojiType ? { reaction_type: emojiType } : {}),
+        ...(pageToken ? { page_token: pageToken } : {}),
+      },
+    })) as {
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<{
+          reaction_id?: string;
+          reaction_type?: { emoji_type?: string };
+          operator_type?: string;
+          operator_id?: { open_id?: string; user_id?: string; union_id?: string };
+        }>;
+        has_more?: boolean;
+        page_token?: string;
+      };
     };
-  };
 
-  assertFeishuReactionApiSuccess(response, "list reactions");
+    assertFeishuReactionApiSuccess(response, "list reactions");
 
-  const items = response.data?.items ?? [];
+    items.push(...(response.data?.items ?? []));
+    const nextPageToken = response.data?.page_token?.trim();
+    if (response.data?.has_more !== true || !nextPageToken) {
+      break;
+    }
+    pageToken = nextPageToken;
+  } while (pageToken);
+
   return items.map((item) => ({
     reactionId: item.reaction_id ?? "",
     emojiType: item.reaction_type?.emoji_type ?? "",
