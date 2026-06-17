@@ -1867,7 +1867,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
-      const outcome = await updateSessionStoreAfterAgentRun({
+      await updateSessionStoreAfterAgentRun({
         cfg,
         sessionId,
         sessionKey,
@@ -1895,7 +1895,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         model: "gpt-5.5",
       });
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
-      expect(outcome).toEqual({ kind: "deleted" });
     });
   });
 
@@ -1907,7 +1906,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionStore: Record<string, SessionEntry> = {};
       await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
-      const outcome = await updateSessionStoreAfterAgentRun({
+      await updateSessionStoreAfterAgentRun({
         cfg,
         sessionId,
         sessionKey,
@@ -1931,7 +1930,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
         sessionId,
       });
-      expect(outcome).toBeUndefined();
     });
   });
 
@@ -2341,6 +2339,35 @@ describe("recordCliCompactionInStore", () => {
       expect(persisted?.cliSessionBindings?.codex).toBeUndefined();
     });
   });
+
+  it("does not recreate a missing row when a post-run compaction has an expected session id", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-deleted";
+      const sessionId = "test-record-cli-compaction-deleted-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          cliSessionIds: {
+            codex: "stale-cli-session",
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
+
+      const result = await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedSessionId: sessionId,
+        tokensAfter: 42,
+      });
+
+      expect(result).toEqual(sessionStore[sessionKey]);
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    });
+  });
 });
 
 describe("clearCliSessionInStore", () => {
@@ -2473,6 +2500,31 @@ describe("clearCliSessionInStore", () => {
         sessionId: "codex-session-1",
       });
       expect(persisted?.claudeCliSessionId).toBeUndefined();
+    });
+  });
+
+  it("does not recreate a missing row when a post-run binding clear has an expected session id", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-clear-cli-deleted-row";
+      const sessionId = "openclaw-session-1";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          claudeCliSessionId: "claude-session-1",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
+
+      await clearCliSessionInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedSessionId: sessionId,
+      });
+
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
     });
   });
 });

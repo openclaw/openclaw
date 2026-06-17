@@ -891,7 +891,7 @@ async function agentCommandInternal(
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
-  let sessionDeletedDuringRun = false;
+  let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
 
@@ -1100,7 +1100,7 @@ async function agentCommandInternal(
               sessionFile: internalSessionFile,
             }
           : sessionEntry;
-        sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
+        const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           transcriptBody,
           finalText: finalTextRaw,
@@ -1114,6 +1114,7 @@ async function agentCommandInternal(
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
           config: cfg,
         });
+        sessionEntry = transcriptResult.sessionEntry;
         if (internalSessionFile) {
           sessionEntry = prepared.sessionEntry;
         }
@@ -2137,7 +2138,7 @@ async function agentCommandInternal(
       // Update token+model fields in the session store.
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
-        const updateOutcome = await updateSessionStoreAfterAgentRun({
+        await updateSessionStoreAfterAgentRun({
           cfg,
           contextTokensOverride: agentCfg?.contextTokens,
           sessionId: effectiveSessionId,
@@ -2159,10 +2160,7 @@ async function agentCommandInternal(
             preserveUserFacingSessionModelState,
           preserveUserFacingSessionModelState,
         });
-        sessionDeletedDuringRun = updateOutcome?.kind === "deleted";
-        if (!sessionDeletedDuringRun) {
-          sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-        }
+        sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       }
 
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
@@ -2171,7 +2169,7 @@ async function agentCommandInternal(
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
       if (
-        !sessionDeletedDuringRun &&
+        !sessionReboundDuringRun &&
         (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
       ) {
         let persistedCliTurnTranscript = false;
@@ -2187,7 +2185,7 @@ async function agentCommandInternal(
                 sessionFile: effectiveSessionFile,
               }
             : sessionEntry;
-          sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+          const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
@@ -2202,10 +2200,12 @@ async function agentCommandInternal(
             config: cfg,
             embeddedAssistantGapFill,
           });
+          sessionEntry = transcriptResult.sessionEntry;
+          sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
           if (suppressVisibleSessionEffects) {
             sessionEntry = prepared.sessionEntry;
           }
-          persistedCliTurnTranscript = true;
+          persistedCliTurnTranscript = transcriptResult.kind === "persisted";
         } catch (error) {
           log.warn(
             `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -2247,7 +2247,7 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !suppressVisibleSessionEffects &&
-        !sessionDeletedDuringRun &&
+        !sessionReboundDuringRun &&
         payloads.length > 0 &&
         !isSubagentSessionKey(sessionKey)
       ) {
@@ -2325,7 +2325,7 @@ async function agentCommandInternal(
         sessionKey &&
         !isSubagentSessionKey(sessionKey) &&
         !suppressVisibleSessionEffects &&
-        !sessionDeletedDuringRun
+        !sessionReboundDuringRun
       ) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         const noPendingTextForThisRun =
@@ -2358,7 +2358,7 @@ async function agentCommandInternal(
     }
   } finally {
     if (
-      !sessionDeletedDuringRun &&
+      !sessionReboundDuringRun &&
       trackedRestartRecoveryDeliveryContext &&
       sessionStore &&
       sessionKey

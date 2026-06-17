@@ -998,10 +998,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: { durationMs: 0, stopReason: "end_turn" },
     }));
     state.persistCliTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        kind: "persisted",
+        sessionEntry: params.sessionEntry,
+      }),
     );
     state.persistAcpTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        kind: "persisted",
+        sessionEntry: params.sessionEntry,
+      }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
@@ -1244,7 +1250,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.persistAcpTurnTranscriptMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => {
         controller.abort(createAgentRunRestartAbortError());
-        return params.sessionEntry;
+        return { kind: "persisted", sessionEntry: params.sessionEntry };
       },
     );
 
@@ -1792,7 +1798,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
       state.sessionStoreMock = { "agent:main:main": rotatedEntry };
     });
-    state.persistCliTurnTranscriptMock.mockResolvedValue(rotatedEntry);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: rotatedEntry,
+    });
     state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
 
     await runBasicAgentCommand();
@@ -1828,14 +1837,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       winnerModel: "gpt-5.4",
     };
     state.runAgentAttemptMock.mockResolvedValue(result);
-    state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
-      delete (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
-      return { kind: "deleted" };
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "session-rebound",
+      sessionEntry: undefined,
     });
 
     await runBasicAgentCommand();
 
-    expect(state.persistCliTurnTranscriptMock).not.toHaveBeenCalled();
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
