@@ -523,6 +523,30 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
   }
 
+  protected markEmbeddingProviderFailed(err: unknown): void {
+    this.markLocalEmbeddingProviderDegraded(err);
+    if (!this.provider) {
+      return;
+    }
+    const message = formatErrorMessage(err);
+    const failedProvider = this.provider;
+    this.provider = null;
+    this.providerRuntime = undefined;
+    this.providerUnavailableReason = `Embedding provider degraded: ${message}`;
+    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+      providerId: failedProvider.id,
+      reason: message,
+    });
+    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+    this.vector.semanticAvailable = false;
+    log.warn("memory embeddings: provider degraded after persistent failures", {
+      provider: failedProvider.id,
+      error: message,
+    });
+  }
+
   protected isRequiredProviderUnavailable(): boolean {
     return this.providerRequirement.mode === "required" && !this.provider;
   }

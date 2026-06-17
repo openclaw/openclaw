@@ -203,6 +203,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  protected abstract markEmbeddingProviderFailed(err: unknown): void;
 
   protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
@@ -440,7 +441,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
       });
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderFailed(err);
       throw createMemoryEmbeddingOperationError({
         operation: "batch",
         providerId: provider.id,
@@ -488,7 +489,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
       });
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderFailed(err);
       throw createMemoryEmbeddingOperationError({
         operation: "structured-batch",
         providerId: provider.id,
@@ -545,7 +546,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
       });
     } catch (err) {
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderFailed(err);
       throw createMemoryEmbeddingOperationError({
         operation: "query",
         providerId: provider.id,
