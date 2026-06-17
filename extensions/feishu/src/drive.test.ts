@@ -142,6 +142,156 @@ describe("registerFeishuDriveTools", () => {
     cleanupAmbientCommentTypingReactionMock.mockResolvedValue(false);
   });
 
+  it("forwards list pagination cursors and returns continuation metadata", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [
+          {
+            token: "file_1",
+            name: "Roadmap",
+            type: "22",
+            url: "https://example.test/file_1",
+            created_time: "1710000000",
+            modified_time: "1710000100",
+            owner_id: "ou_owner",
+          },
+        ],
+        has_more: true,
+        next_page_token: "cursor_2",
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    const result = await tool.execute("call-list-page", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: 25,
+      page_token: "cursor_1",
+    });
+
+    expect(driveFileList).toHaveBeenCalledTimes(1);
+    expect(driveFileList).toHaveBeenCalledWith({
+      params: {
+        folder_token: "folder_1",
+        page_size: 25,
+        page_token: "cursor_1",
+      },
+    });
+    expect(result.details).toEqual({
+      files: [
+        {
+          token: "file_1",
+          name: "Roadmap",
+          type: 22,
+          url: "https://example.test/file_1",
+          created_time: "1710000000",
+          modified_time: "1710000100",
+          owner_id: "ou_owner",
+        },
+      ],
+      has_more: true,
+      next_page_token: "cursor_2",
+    });
+  });
+
+  it("searches subsequent drive pages for info while preserving folder scope", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          files: [{ token: "other_file", name: "Other", type: "22" }],
+          has_more: true,
+          next_page_token: "cursor_2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          files: [
+            {
+              token: "target_file",
+              name: "Target",
+              type: "22",
+              url: "https://example.test/target_file",
+              created_time: "1710000200",
+              modified_time: "1710000300",
+              owner_id: "ou_owner",
+            },
+          ],
+          has_more: false,
+        },
+      });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    const result = await tool.execute("call-info-page", {
+      action: "info",
+      file_token: "target_file",
+      type: "docx",
+      folder_token: "folder_1",
+    });
+
+    expect(driveFileList).toHaveBeenCalledTimes(2);
+    expect(driveFileList).toHaveBeenNthCalledWith(1, {
+      params: { folder_token: "folder_1" },
+    });
+    expect(driveFileList).toHaveBeenNthCalledWith(2, {
+      params: { folder_token: "folder_1", page_token: "cursor_2" },
+    });
+    expect(result.details).toEqual({
+      token: "target_file",
+      name: "Target",
+      type: "22",
+      url: "https://example.test/target_file",
+      created_time: "1710000200",
+      modified_time: "1710000300",
+      owner_id: "ou_owner",
+    });
+  });
+
   it("registers feishu_drive and handles comment actions", async () => {
     const registerTool = vi.fn();
     registerFeishuDriveTools(
