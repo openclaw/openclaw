@@ -413,12 +413,19 @@ export async function searchKeyword(params: {
   }
 
   return rows.map((row) => {
+    // The FTS `text` column is prefixed with the chunk path so filename/date
+    // tokens participate in MATCH ranking (see manager-embedding-ops.ts). Strip
+    // that prefix back off for the snippet and lexical scoring so excerpts and
+    // density scoring use the chunk body, not the path line. Older indexes
+    // written without the prefix are unaffected by the guarded slice.
+    const pathPrefix = `${row.path}\n`;
+    const body = row.text.startsWith(pathPrefix) ? row.text.slice(pathPrefix.length) : row.text;
     const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           query: params.query,
           path: row.path,
-          text: row.text,
+          text: body,
           ftsScore: textScore,
         })
       : textScore;
@@ -429,7 +436,7 @@ export async function searchKeyword(params: {
       endLine: row.end_line,
       score,
       textScore,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+      snippet: truncateUtf16Safe(body, params.snippetMaxChars),
       source: row.source,
     };
   });

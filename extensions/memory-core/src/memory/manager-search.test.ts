@@ -1155,6 +1155,12 @@ describe("searchKeyword filename token ranking (issue #94102)", () => {
 
       expect(results[0]?.path).toBe("memory/2026-06-17-1649.md");
       expect(results[0]?.textScore).toBeGreaterThan(0);
+      // The indexed FTS text is path-prefixed for matching, but the returned
+      // snippet must show the chunk body, not the leading path line.
+      expect(results[0]?.snippet).toBe(
+        "Token has been expired or revoked Google OAuth Testing mode",
+      );
+      expect(results[0]?.snippet.startsWith("memory/")).toBe(false);
     } finally {
       db.close();
     }
