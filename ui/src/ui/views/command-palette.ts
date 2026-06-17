@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";
+import type { RouteId } from "../../routes/route-registry.ts";
 import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
 import { icons, type IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -105,7 +106,7 @@ export type CommandPaletteProps = {
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
-  onNavigate: (tab: string) => void;
+  onNavigate: (routeId: RouteId) => void;
   onSlashCommand: (command: string) => void;
 };
 
@@ -176,7 +177,7 @@ function restoreFocus() {
 
 function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   if (item.action.startsWith("nav:")) {
-    props.onNavigate(item.action.slice(4));
+    props.onNavigate(item.action.slice(4) as RouteId);
   } else {
     props.onSlashCommand(item.action);
   }

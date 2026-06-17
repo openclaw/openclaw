@@ -3,6 +3,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import type { RouteId } from "../../routes/route-registry.ts";
 import { isCronJobActiveFailure } from "../cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
@@ -30,7 +31,7 @@ export type OverviewCardsProps = {
   cronStatus: CronStatus | null;
   modelAuthStatus: ModelAuthStatusResult | null;
   presenceCount: number;
-  onNavigate: (tab: string) => void;
+  onNavigate: (routeId: RouteId) => void;
 };
 
 const DIGIT_RUN = /\d{3,}/g;
@@ -43,15 +44,15 @@ function blurDigits(value: string): TemplateResult {
 
 type StatCard = {
   kind: string;
-  tab: string;
+  routeId: RouteId;
   label: string;
   value: string | TemplateResult;
   hint: string | TemplateResult;
 };
 
-function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
+function renderStatCard(card: StatCard, onNavigate: (routeId: RouteId) => void) {
   return html`
-    <button class="ov-card" data-kind=${card.kind} @click=${() => onNavigate(card.tab)}>
+    <button class="ov-card" data-kind=${card.kind} @click=${() => onNavigate(card.routeId)}>
       <span class="ov-card__label">${card.label}</span>
       <span class="ov-card__value">${card.value}</span>
       <span class="ov-card__hint">${card.hint}</span>
@@ -83,7 +84,7 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
 
   return {
     kind: "quota",
-    tab: "usage",
+    routeId: "usage",
     label: t("tabs.usage"),
     value: html`<span class=${valueClass}
       >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
@@ -157,28 +158,28 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const cards: StatCard[] = [
     {
       kind: "cost",
-      tab: "usage",
+      routeId: "usage",
       label: t("overview.cards.cost"),
       value: totalCost,
       hint: `${totalTokens} tokens · ${totalMessages} msgs`,
     },
     {
       kind: "sessions",
-      tab: "sessions",
+      routeId: "sessions",
       label: t("overview.stats.sessions"),
       value: String(sessionCount ?? t("common.na")),
       hint: t("overview.stats.sessionsHint"),
     },
     {
       kind: "skills",
-      tab: "skills",
+      routeId: "skills",
       label: t("overview.cards.skills"),
       value: `${enabledSkills}/${totalSkills}`,
       hint: blockedSkills > 0 ? `${blockedSkills} blocked` : `${enabledSkills} active`,
     },
     {
       kind: "cron",
-      tab: "cron",
+      routeId: "cron",
       label: t("overview.stats.cron"),
       value: cronValue,
       hint: cronHint,
@@ -199,7 +200,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   if (authLoading) {
     cards.push({
       kind: "auth",
-      tab: "overview",
+      routeId: "overview",
       label: t("overview.cards.modelAuth"),
       value: t("common.na"),
       hint: "",
@@ -267,7 +268,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
 
     cards.push({
       kind: "auth",
-      tab: "overview",
+      routeId: "overview",
       label: t("overview.cards.modelAuth"),
       value: authValue,
       hint: authHint,

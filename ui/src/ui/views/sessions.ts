@@ -1,7 +1,7 @@
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { pathForTab } from "../../routes/route-registry.ts";
+import { pathForRoute } from "../../routes/route-registry.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { formatSessionTokens } from "../presenter.ts";
@@ -860,7 +860,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
   const chatUrl = canLink
-    ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
+    ? `${pathForRoute("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
   const badgeClass =
     row.kind === "cron"

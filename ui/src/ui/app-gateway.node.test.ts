@@ -171,7 +171,7 @@ function createHost(): TestGatewayHost {
     lastErrorCode: null,
     eventLogBuffer: [],
     eventLog: [],
-    tab: "overview",
+    routeId: "overview",
     presenceEntries: [],
     presenceError: null,
     presenceStatus: null,
@@ -1188,7 +1188,7 @@ describe("connectGateway", () => {
 
   it("falls back from restored unconfigured agent sessions before refreshing chat", async () => {
     const host = createHost();
-    host.tab = "chat";
+    host.routeId = "chat";
     host.sessionKey = "agent:local:main";
     host.settings = {
       ...host.settings,

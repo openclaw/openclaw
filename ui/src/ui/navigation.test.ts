@@ -1,23 +1,26 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
-  TAB_GROUPS,
-  SETTINGS_TABS,
-  iconForTab,
+  ROUTE_GROUPS,
+  SETTINGS_ROUTES,
+  iconForRoute,
   inferBasePathFromPathname,
-  isSettingsTab,
+  isSettingsRoute,
   normalizeBasePath,
   normalizePath,
-  pathForTab,
-  subtitleForTab,
-  tabFromPath,
-  titleForTab,
-  type Tab,
+  pathForRoute,
+  subtitleForRoute,
+  routeIdFromPath,
+  titleForRoute,
+  type RouteId,
 } from "../routes/route-registry.ts";
 
-/** All valid tab identifiers derived from visible groups plus routed settings slices. */
-const ALL_TABS: Tab[] = Array.from(
-  new Set<Tab>([...(TAB_GROUPS.flatMap((group) => group.tabs) as Tab[]), ...SETTINGS_TABS]),
+/** All route identifiers derived from visible groups plus routed settings slices. */
+const ALL_ROUTES: RouteId[] = Array.from(
+  new Set<RouteId>([
+    ...(ROUTE_GROUPS.flatMap((group) => group.routes) as RouteId[]),
+    ...SETTINGS_ROUTES,
+  ]),
 );
 
 const leadingSlashNormalizerCases = [
@@ -25,9 +28,11 @@ const leadingSlashNormalizerCases = [
   { name: "normalizePath", normalize: normalizePath, input: "chat", expected: "/chat" },
 ];
 
-describe("iconForTab", () => {
-  it("returns stable icons for every tab", () => {
-    expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, iconForTab(tab)]))).toEqual({
+describe("iconForRoute", () => {
+  it("returns stable icons for every route", () => {
+    expect(
+      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, iconForRoute(routeId)])),
+    ).toEqual({
       chat: "messageSquare",
       overview: "barChart",
       activity: "activity",
@@ -39,7 +44,7 @@ describe("iconForTab", () => {
       cron: "loader",
       agents: "folder",
       skills: "zap",
-      skillWorkshop: "wrench",
+      "skill-workshop": "wrench",
       nodes: "monitor",
       dreams: "moon",
       config: "settings",
@@ -48,22 +53,24 @@ describe("iconForTab", () => {
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
-      aiAgents: "brain",
+      "ai-agents": "brain",
       debug: "bug",
       logs: "scrollText",
     });
   });
 
-  it("returns a fallback icon for unknown tab", () => {
+  it("returns a fallback icon for unknown route", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
-    const unknownTab = "unknown" as Tab;
-    expect(iconForTab(unknownTab)).toBe("folder");
+    const unknownRouteId = "unknown" as RouteId;
+    expect(iconForRoute(unknownRouteId)).toBe("folder");
   });
 });
 
-describe("titleForTab", () => {
-  it("returns expected titles for every tab", () => {
-    expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, titleForTab(tab)]))).toEqual({
+describe("titleForRoute", () => {
+  it("returns expected titles for every route", () => {
+    expect(
+      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
+    ).toEqual({
       chat: "Chat",
       overview: "Overview",
       activity: "Activity",
@@ -75,7 +82,7 @@ describe("titleForTab", () => {
       cron: "Cron Jobs",
       agents: "Agents",
       skills: "Skills",
-      skillWorkshop: "Skill Workshop",
+      "skill-workshop": "Skill Workshop",
       nodes: "Nodes",
       dreams: "Dreaming",
       config: "Settings",
@@ -84,16 +91,18 @@ describe("titleForTab", () => {
       automation: "Automation",
       mcp: "MCP",
       infrastructure: "Infrastructure",
-      aiAgents: "AI & Agents",
+      "ai-agents": "AI & Agents",
       debug: "Debug",
       logs: "Logs",
     });
   });
 });
 
-describe("subtitleForTab", () => {
-  it("returns expected subtitles for every tab", () => {
-    expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, subtitleForTab(tab)]))).toEqual({
+describe("subtitleForRoute", () => {
+  it("returns expected subtitles for every route", () => {
+    expect(
+      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, subtitleForRoute(routeId)])),
+    ).toEqual({
       chat: "Gateway chat for quick interventions.",
       overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
@@ -105,7 +114,7 @@ describe("subtitleForTab", () => {
       cron: "Wakeups and recurring runs.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
-      skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+      "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices and commands.",
       dreams: "Memory dreaming, consolidation, and reflection.",
       config: "Edit openclaw.json.",
@@ -114,7 +123,7 @@ describe("subtitleForTab", () => {
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
-      aiAgents: "Agents, models, skills, tools, memory, session.",
+      "ai-agents": "Agents, models, skills, tools, memory, session.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
     });
@@ -159,44 +168,44 @@ describe("normalizePath", () => {
   });
 });
 
-describe("pathForTab", () => {
+describe("pathForRoute", () => {
   it("returns correct path without base", () => {
-    expect(pathForTab("chat")).toBe("/chat");
-    expect(pathForTab("overview")).toBe("/overview");
+    expect(pathForRoute("chat")).toBe("/chat");
+    expect(pathForRoute("overview")).toBe("/overview");
   });
 
   it("prepends base path", () => {
-    expect(pathForTab("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForTab("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+    expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
+    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
   });
 });
 
-describe("tabFromPath", () => {
+describe("routeIdFromPath", () => {
   it("returns tab for valid path", () => {
-    expect(tabFromPath("/chat")).toBe("chat");
-    expect(tabFromPath("/overview")).toBe("overview");
-    expect(tabFromPath("/activity")).toBe("activity");
-    expect(tabFromPath("/sessions")).toBe("sessions");
-    expect(tabFromPath("/dreaming")).toBe("dreams");
-    expect(tabFromPath("/dreams")).toBe("dreams");
+    expect(routeIdFromPath("/chat")).toBe("chat");
+    expect(routeIdFromPath("/overview")).toBe("overview");
+    expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/sessions")).toBe("sessions");
+    expect(routeIdFromPath("/dreaming")).toBe("dreams");
+    expect(routeIdFromPath("/dreams")).toBe("dreams");
   });
 
   it("returns chat for root path", () => {
-    expect(tabFromPath("/")).toBe("chat");
+    expect(routeIdFromPath("/")).toBe("chat");
   });
 
   it("handles base paths", () => {
-    expect(tabFromPath("/ui/chat", "/ui")).toBe("chat");
-    expect(tabFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
+    expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
+    expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
   });
 
   it("returns null for unknown path", () => {
-    expect(tabFromPath("/unknown")).toBeNull();
+    expect(routeIdFromPath("/unknown")).toBeNull();
   });
 
   it("is case-insensitive", () => {
-    expect(tabFromPath("/CHAT")).toBe("chat");
-    expect(tabFromPath("/Overview")).toBe("overview");
+    expect(routeIdFromPath("/CHAT")).toBe("chat");
+    expect(routeIdFromPath("/Overview")).toBe("overview");
   });
 });
 
@@ -223,21 +232,21 @@ describe("inferBasePathFromPathname", () => {
   });
 });
 
-describe("TAB_GROUPS", () => {
+describe("ROUTE_GROUPS", () => {
   it("contains all expected groups", () => {
-    expect(TAB_GROUPS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
+    expect(ROUTE_GROUPS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
   });
 
-  it("all tabs are unique", () => {
-    const allTabs = TAB_GROUPS.flatMap((g) => g.tabs);
-    const uniqueTabs = new Set(allTabs);
-    expect(uniqueTabs.size).toBe(allTabs.length);
+  it("all routes are unique", () => {
+    const allRoutes = ROUTE_GROUPS.flatMap((g) => g.routes);
+    const uniqueRoutes = new Set(allRoutes);
+    expect(uniqueRoutes.size).toBe(allRoutes.length);
   });
 
   it("keeps detailed settings slices routed but out of the root sidebar", () => {
-    const settings = TAB_GROUPS.find((group) => group.label === "settings");
-    expect(settings?.tabs).toEqual(["config"]);
-    expect(SETTINGS_TABS).toEqual([
+    const settings = ROUTE_GROUPS.find((group) => group.label === "settings");
+    expect(settings?.routes).toEqual(["config"]);
+    expect(SETTINGS_ROUTES).toEqual([
       "config",
       "channels",
       "communications",
@@ -245,10 +254,10 @@ describe("TAB_GROUPS", () => {
       "automation",
       "mcp",
       "infrastructure",
-      "aiAgents",
+      "ai-agents",
       "debug",
       "logs",
     ]);
-    expect(SETTINGS_TABS.every((tab) => isSettingsTab(tab))).toBe(true);
+    expect(SETTINGS_ROUTES.every((routeId) => isSettingsRoute(routeId))).toBe(true);
   });
 });

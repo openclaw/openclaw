@@ -1,4 +1,4 @@
-import type { Tab } from "../routes/route-registry.ts";
+import type { RouteId } from "../routes/route-registry.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
@@ -63,7 +63,7 @@ export type AppViewState = {
   password: string;
   loginShowGatewayToken: boolean;
   loginShowGatewayPassword: boolean;
-  tab: Tab;
+  routeId: RouteId;
   onboarding: boolean;
   basePath: string;
   connected: boolean;
@@ -494,7 +494,7 @@ export type AppViewState = {
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Map<string, import("./ui-types.js").ChatSessionRefreshTarget>;
     connect: () => void;
-    setTab: (tab: Tab) => void;
+    setRoute: (routeId: RouteId) => void;
     setChatMobileControlsOpen: (
       open: boolean,
       options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },

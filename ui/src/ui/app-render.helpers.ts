@@ -2,11 +2,11 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import {
-  iconForTab,
-  isSettingsTab,
-  pathForTab,
-  titleForTab,
-  type Tab,
+  iconForRoute,
+  isSettingsRoute,
+  pathForRoute,
+  titleForRoute,
+  type RouteId,
 } from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -256,9 +256,14 @@ const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
 const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
-export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
-  const href = pathForTab(tab, state.basePath);
-  const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
+export function renderRouteNavItem(
+  state: AppViewState,
+  routeId: RouteId,
+  opts?: { collapsed?: boolean },
+) {
+  const href = pathForRoute(routeId, state.basePath);
+  const isActive =
+    routeId === "config" ? isSettingsRoute(state.routeId) : state.routeId === routeId;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
@@ -276,21 +281,21 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
           return;
         }
         event.preventDefault();
-        if (tab === "chat") {
+        if (routeId === "chat") {
           if (!state.sessionKey) {
             const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
           }
-          if (state.tab !== "chat") {
+          if (state.routeId !== "chat") {
             void state.loadAssistantIdentity();
           }
         }
-        state.setTab(tab);
+        state.setRoute(routeId);
       }}
-      title=${titleForTab(tab)}
+      title=${titleForRoute(routeId)}
     >
-      <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
-      ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
+      <span class="nav-item__icon" aria-hidden="true">${icons[iconForRoute(routeId)]}</span>
+      ${!collapsed ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>` : nothing}
     </a>
   `;
 }
@@ -809,7 +814,7 @@ export function openCurrentSessionCheckpoints(state: AppViewState): void {
   state.sessionsSearchQuery = "";
   state.sessionsSelectedKeys = new Set();
   state.sessionsPage = 0;
-  state.setTab("sessions");
+  state.setRoute("sessions");
   void loadSessions(state, {
     activeMinutes: 0,
     limit: 0,

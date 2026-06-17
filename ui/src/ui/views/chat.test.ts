@@ -429,7 +429,7 @@ function createChatHeaderState(
     applySettings(next: AppViewState["settings"]) {
       state.settings = next;
     },
-    setTab: vi.fn(),
+    setRoute: vi.fn(),
     loadAssistantIdentity: vi.fn(),
     resetChatInputHistoryNavigation: vi.fn(),
     resetToolStream: vi.fn(),
@@ -4056,7 +4056,7 @@ describe("chat session controls", () => {
 
     quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
 
-    expect(state.setTab).toHaveBeenCalledWith("usage");
+    expect(state.setRoute).toHaveBeenCalledWith("usage");
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {

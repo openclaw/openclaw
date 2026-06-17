@@ -1,5 +1,5 @@
 // Shared Control UI host shapes used by app-level route and settings modules.
-import type { Tab } from "../routes/route-registry.ts";
+import type { RouteId } from "../routes/route-registry.ts";
 import type { AgentFilesState } from "../ui/controllers/agent-files.ts";
 import type { AgentIdentityState } from "../ui/controllers/agent-identity.ts";
 import type { AgentSkillsState } from "../ui/controllers/agent-skills.ts";
@@ -33,7 +33,7 @@ export type SettingsHost = {
   themeResolved: ResolvedTheme;
   applySessionKey: string;
   sessionKey: string;
-  tab: Tab;
+  routeId: RouteId;
   connected: boolean;
   chatHasAutoScrolled: boolean;
   logsAtBottom: boolean;
@@ -50,7 +50,7 @@ export type SettingsHost = {
   requestUpdate?: () => void;
   updateComplete?: Promise<unknown>;
   controlUiRefreshSeq?: number;
-  controlUiTabPaintSeq?: number;
+  controlUiRoutePaintSeq?: number;
   controlUiOverviewRefreshSeq?: number;
   controlUiCronRefreshSeq?: number;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;

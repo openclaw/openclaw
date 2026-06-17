@@ -5,7 +5,7 @@ import { t } from "../i18n/index.ts";
 import {
   renderChatControls,
   renderChatMobileToggle,
-  renderTab,
+  renderRouteNavItem,
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -26,7 +26,7 @@ function createState(overrides: Partial<AppViewState> = {}) {
     chatStream: null,
     onboarding: false,
     basePath: "",
-    tab: "chat",
+    routeId: "chat",
     sessionKey: "main",
     sessionsHideCron: true,
     sessionsResult: {
@@ -93,9 +93,9 @@ function requireElement<T extends Element>(element: T | null | undefined, label:
 
 describe("chat header controls (browser)", () => {
   it("keeps the sidebar settings entry active for nested settings tabs", async () => {
-    const state = createState({ tab: "appearance" });
+    const state = createState({ routeId: "appearance" });
     const container = document.createElement("div");
-    render(renderTab(state, "config"), container);
+    render(renderRouteNavItem(state, "config"), container);
     await Promise.resolve();
 
     const link = requireElement(

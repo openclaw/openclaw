@@ -1,23 +1,23 @@
 // Control UI tests cover navigation groups behavior.
 import { describe, expect, it } from "vitest";
 import {
-  SETTINGS_TABS,
-  TAB_GROUPS,
-  isSettingsTab,
-  isTabInGroup,
-  tabFromPath,
+  SETTINGS_ROUTES,
+  ROUTE_GROUPS,
+  isSettingsRoute,
+  isRouteInGroup,
+  routeIdFromPath,
 } from "../routes/route-registry.ts";
 
-describe("TAB_GROUPS", () => {
+describe("ROUTE_GROUPS", () => {
   it("collapses detailed settings slices into one sidebar entry", () => {
-    const settings = TAB_GROUPS.find((group) => group.label === "settings");
-    expect(settings?.tabs).toEqual(["config"]);
-    expect(SETTINGS_TABS.every((tab) => isSettingsTab(tab))).toBe(true);
+    const settings = ROUTE_GROUPS.find((group) => group.label === "settings");
+    expect(settings?.routes).toEqual(["config"]);
+    expect(SETTINGS_ROUTES.every((routeId) => isSettingsRoute(routeId))).toBe(true);
   });
 
   it("keeps channel management out of the primary control sidebar", () => {
-    const control = TAB_GROUPS.find((group) => group.label === "control");
-    expect(control?.tabs).toEqual([
+    const control = ROUTE_GROUPS.find((group) => group.label === "control");
+    expect(control?.routes).toEqual([
       "overview",
       "activity",
       "workboard",
@@ -26,28 +26,28 @@ describe("TAB_GROUPS", () => {
       "usage",
       "cron",
     ]);
-    expect(SETTINGS_TABS).toContain("channels");
+    expect(SETTINGS_ROUTES).toContain("channels");
   });
 
   it("keeps the settings group active for nested settings routes", () => {
-    const settings = TAB_GROUPS.find((group) => group.label === "settings");
+    const settings = ROUTE_GROUPS.find((group) => group.label === "settings");
     if (!settings) {
       throw new Error("Expected settings group");
     }
 
-    expect(isTabInGroup(settings, "appearance")).toBe(true);
-    expect(isTabInGroup(settings, "channels")).toBe(true);
-    expect(isTabInGroup(settings, "debug")).toBe(true);
-    expect(isTabInGroup(settings, "chat")).toBe(false);
+    expect(isRouteInGroup(settings, "appearance")).toBe(true);
+    expect(isRouteInGroup(settings, "channels")).toBe(true);
+    expect(isRouteInGroup(settings, "debug")).toBe(true);
+    expect(isRouteInGroup(settings, "chat")).toBe(false);
   });
 
   it("routes every published settings slice", () => {
-    expect(tabFromPath("/communications")).toBe("communications");
-    expect(tabFromPath("/appearance")).toBe("appearance");
-    expect(tabFromPath("/automation")).toBe("automation");
-    expect(tabFromPath("/infrastructure")).toBe("infrastructure");
-    expect(tabFromPath("/ai-agents")).toBe("aiAgents");
-    expect(tabFromPath("/config")).toBe("config");
-    expect(tabFromPath("/channels")).toBe("channels");
+    expect(routeIdFromPath("/communications")).toBe("communications");
+    expect(routeIdFromPath("/appearance")).toBe("appearance");
+    expect(routeIdFromPath("/automation")).toBe("automation");
+    expect(routeIdFromPath("/infrastructure")).toBe("infrastructure");
+    expect(routeIdFromPath("/ai-agents")).toBe("ai-agents");
+    expect(routeIdFromPath("/config")).toBe("config");
+    expect(routeIdFromPath("/channels")).toBe("channels");
   });
 });

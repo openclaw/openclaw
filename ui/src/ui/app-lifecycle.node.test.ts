@@ -12,7 +12,7 @@ function createHost() {
     client: { stop: vi.fn() },
     connectGeneration: 0,
     connected: true,
-    tab: "chat",
+    routeId: "chat",
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,

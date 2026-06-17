@@ -2,7 +2,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import { pathForTab } from "../../routes/route-registry.ts";
+import { pathForRoute } from "../../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,
@@ -949,7 +949,7 @@ export function renderChatQuotaPill(state: AppViewState) {
   return html`
     <a
       class="chat-controls__quota chat-controls__quota--${severity}"
-      href=${pathForTab("usage", state.basePath)}
+      href=${pathForRoute("usage", state.basePath)}
       title=${title}
       aria-label=${`Provider usage: ${title}`}
       data-chat-provider-usage="true"
@@ -965,7 +965,7 @@ export function renderChatQuotaPill(state: AppViewState) {
           return;
         }
         event.preventDefault();
-        state.setTab("usage");
+        state.setRoute("usage");
       }}
     >
       <span class="chat-controls__quota-label">${t("tabs.usage")}</span>

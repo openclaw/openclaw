@@ -1,22 +1,9 @@
-// Control UI route registry defines tab ids, paths, and navigation metadata.
+// Control UI route registry defines route ids, paths, and navigation metadata.
 import { t } from "../i18n/index.ts";
 import type { IconName } from "../ui/icons.js";
 import { normalizeLowercaseStringOrEmpty } from "../ui/string-coerce.ts";
 
-export const TAB_GROUPS = [
-  { label: "chat", tabs: ["chat"] },
-  {
-    label: "control",
-    tabs: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
-  },
-  { label: "agent", tabs: ["agents", "skills", "skillWorkshop", "nodes", "dreams"] },
-  {
-    label: "settings",
-    tabs: ["config"],
-  },
-] as const;
-
-export type Tab =
+export type RouteId =
   | "agents"
   | "activity"
   | "overview"
@@ -27,7 +14,7 @@ export type Tab =
   | "usage"
   | "cron"
   | "skills"
-  | "skillWorkshop"
+  | "skill-workshop"
   | "nodes"
   | "chat"
   | "config"
@@ -36,12 +23,175 @@ export type Tab =
   | "automation"
   | "mcp"
   | "infrastructure"
-  | "aiAgents"
+  | "ai-agents"
   | "debug"
   | "logs"
   | "dreams";
 
-export const SETTINGS_TABS = [
+export interface RouteRecord {
+  path: string;
+  icon: IconName;
+  titleKey: string;
+  subtitleKey: string;
+  parent?: RouteId;
+}
+
+export const ROUTE_RECORDS = {
+  agents: {
+    path: "/agents",
+    icon: "folder",
+    titleKey: "tabs.agents",
+    subtitleKey: "subtitles.agents",
+  },
+  activity: {
+    path: "/activity",
+    icon: "activity",
+    titleKey: "tabs.activity",
+    subtitleKey: "subtitles.activity",
+  },
+  overview: {
+    path: "/overview",
+    icon: "barChart",
+    titleKey: "tabs.overview",
+    subtitleKey: "subtitles.overview",
+  },
+  workboard: {
+    path: "/workboard",
+    icon: "folder",
+    titleKey: "tabs.workboard",
+    subtitleKey: "subtitles.workboard",
+  },
+  channels: {
+    path: "/channels",
+    icon: "link",
+    titleKey: "tabs.channels",
+    subtitleKey: "subtitles.channels",
+  },
+  instances: {
+    path: "/instances",
+    icon: "radio",
+    titleKey: "tabs.instances",
+    subtitleKey: "subtitles.instances",
+  },
+  sessions: {
+    path: "/sessions",
+    icon: "fileText",
+    titleKey: "tabs.sessions",
+    subtitleKey: "subtitles.sessions",
+  },
+  usage: {
+    path: "/usage",
+    icon: "barChart",
+    titleKey: "tabs.usage",
+    subtitleKey: "subtitles.usage",
+  },
+  cron: {
+    path: "/cron",
+    icon: "loader",
+    titleKey: "tabs.cron",
+    subtitleKey: "subtitles.cron",
+  },
+  skills: {
+    path: "/skills",
+    icon: "zap",
+    titleKey: "tabs.skills",
+    subtitleKey: "subtitles.skills",
+  },
+  "skill-workshop": {
+    path: "/skills/workshop",
+    icon: "wrench",
+    titleKey: "tabs.skillWorkshop",
+    subtitleKey: "subtitles.skillWorkshop",
+    parent: "skills",
+  },
+  nodes: {
+    path: "/nodes",
+    icon: "monitor",
+    titleKey: "tabs.nodes",
+    subtitleKey: "subtitles.nodes",
+  },
+  chat: {
+    path: "/chat",
+    icon: "messageSquare",
+    titleKey: "tabs.chat",
+    subtitleKey: "subtitles.chat",
+  },
+  config: {
+    path: "/config",
+    icon: "settings",
+    titleKey: "nav.settings",
+    subtitleKey: "subtitles.config",
+  },
+  communications: {
+    path: "/communications",
+    icon: "send",
+    titleKey: "tabs.communications",
+    subtitleKey: "subtitles.communications",
+  },
+  appearance: {
+    path: "/appearance",
+    icon: "spark",
+    titleKey: "tabs.appearance",
+    subtitleKey: "subtitles.appearance",
+  },
+  automation: {
+    path: "/automation",
+    icon: "terminal",
+    titleKey: "tabs.automation",
+    subtitleKey: "subtitles.automation",
+  },
+  mcp: {
+    path: "/mcp",
+    icon: "wrench",
+    titleKey: "tabs.mcp",
+    subtitleKey: "subtitles.mcp",
+  },
+  infrastructure: {
+    path: "/infrastructure",
+    icon: "globe",
+    titleKey: "tabs.infrastructure",
+    subtitleKey: "subtitles.infrastructure",
+  },
+  "ai-agents": {
+    path: "/ai-agents",
+    icon: "brain",
+    titleKey: "tabs.aiAgents",
+    subtitleKey: "subtitles.aiAgents",
+  },
+  debug: {
+    path: "/debug",
+    icon: "bug",
+    titleKey: "tabs.debug",
+    subtitleKey: "subtitles.debug",
+  },
+  logs: {
+    path: "/logs",
+    icon: "scrollText",
+    titleKey: "tabs.logs",
+    subtitleKey: "subtitles.logs",
+  },
+  dreams: {
+    path: "/dreaming",
+    icon: "moon",
+    titleKey: "tabs.dreams",
+    subtitleKey: "subtitles.dreams",
+  },
+} as const satisfies Record<RouteId, RouteRecord>;
+
+export const ROUTE_GROUPS = [
+  { label: "chat", routes: ["chat"] },
+  {
+    label: "control",
+    routes: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
+  },
+  { label: "agent", routes: ["agents", "skills", "skill-workshop", "nodes", "dreams"] },
+  {
+    label: "settings",
+    routes: ["config"],
+  },
+] as const;
+
+export const SETTINGS_ROUTES = [
   "config",
   "channels",
   "communications",
@@ -49,43 +199,31 @@ export const SETTINGS_TABS = [
   "automation",
   "mcp",
   "infrastructure",
-  "aiAgents",
+  "ai-agents",
   "debug",
   "logs",
-] as const satisfies readonly Tab[];
+] as const satisfies readonly RouteId[];
 
-const TAB_PATHS: Record<Tab, string> = {
-  agents: "/agents",
-  activity: "/activity",
-  overview: "/overview",
-  workboard: "/workboard",
-  channels: "/channels",
-  instances: "/instances",
-  sessions: "/sessions",
-  usage: "/usage",
-  cron: "/cron",
-  skills: "/skills",
-  skillWorkshop: "/skills/workshop",
-  nodes: "/nodes",
-  chat: "/chat",
-  config: "/config",
-  communications: "/communications",
-  appearance: "/appearance",
-  automation: "/automation",
-  mcp: "/mcp",
-  infrastructure: "/infrastructure",
-  aiAgents: "/ai-agents",
-  debug: "/debug",
-  logs: "/logs",
-  dreams: "/dreaming",
-};
-
-const PATH_ALIASES: Record<string, Tab> = {
+const PATH_ALIASES: Record<string, RouteId> = {
   "/dreams": "dreams",
 };
 
-const PATH_TO_TAB = new Map<string, Tab>([
-  ...Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab] as const),
+const ROUTE_ENTRIES = Object.entries(ROUTE_RECORDS) as Array<[RouteId, RouteRecord]>;
+
+export function getRouteRecord(routeId: RouteId): RouteRecord {
+  return ROUTE_RECORDS[routeId];
+}
+
+export function isChildRoute(routeId: RouteId): boolean {
+  return Boolean(getRouteRecord(routeId).parent);
+}
+
+export function childRoutesOf(parent: RouteId): RouteId[] {
+  return ROUTE_ENTRIES.filter(([, route]) => route.parent === parent).map(([routeId]) => routeId);
+}
+
+const PATH_TO_ROUTE = new Map<string, RouteId>([
+  ...ROUTE_ENTRIES.map(([routeId, route]) => [route.path, routeId] as const),
   ...Object.entries(PATH_ALIASES),
 ]);
 
@@ -120,24 +258,24 @@ export function normalizePath(path: string): string {
   return normalized;
 }
 
-export function pathForTab(tab: Tab, basePath = ""): string {
+export function pathForRoute(routeId: RouteId, basePath = ""): string {
   const base = normalizeBasePath(basePath);
-  const path = TAB_PATHS[tab];
+  const path = ROUTE_RECORDS[routeId].path;
   return base ? `${base}${path}` : path;
 }
 
-export function isSettingsTab(tab: Tab): boolean {
-  return (SETTINGS_TABS as readonly Tab[]).includes(tab);
+export function isSettingsRoute(routeId: RouteId): boolean {
+  return (SETTINGS_ROUTES as readonly RouteId[]).includes(routeId);
 }
 
-export function isTabInGroup(group: (typeof TAB_GROUPS)[number], tab: Tab): boolean {
+export function isRouteInGroup(group: (typeof ROUTE_GROUPS)[number], routeId: RouteId): boolean {
   if (group.label === "settings") {
-    return isSettingsTab(tab);
+    return isSettingsRoute(routeId);
   }
-  return (group.tabs as readonly Tab[]).includes(tab);
+  return (group.routes as readonly RouteId[]).includes(routeId);
 }
 
-export function tabFromPath(pathname: string, basePath = ""): Tab | null {
+export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
   const base = normalizeBasePath(basePath);
   let path = pathname || "/";
   if (base) {
@@ -154,7 +292,7 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   if (normalized === "/") {
     return "chat";
   }
-  return PATH_TO_TAB.get(normalized) ?? null;
+  return PATH_TO_ROUTE.get(normalized) ?? null;
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -171,7 +309,7 @@ export function inferBasePathFromPathname(pathname: string): string {
   }
   for (let i = 0; i < segments.length; i++) {
     const candidate = normalizeLowercaseStringOrEmpty(`/${segments.slice(i).join("/")}`);
-    if (PATH_TO_TAB.has(candidate)) {
+    if (PATH_TO_ROUTE.has(candidate)) {
       const prefix = segments.slice(0, i);
       return prefix.length ? `/${prefix.join("/")}` : "";
     }
@@ -179,66 +317,14 @@ export function inferBasePathFromPathname(pathname: string): string {
   return `/${segments.join("/")}`;
 }
 
-export function iconForTab(tab: Tab): IconName {
-  switch (tab) {
-    case "agents":
-      return "folder";
-    case "chat":
-      return "messageSquare";
-    case "overview":
-      return "barChart";
-    case "activity":
-      return "activity";
-    case "workboard":
-      return "folder";
-    case "channels":
-      return "link";
-    case "instances":
-      return "radio";
-    case "sessions":
-      return "fileText";
-    case "usage":
-      return "barChart";
-    case "cron":
-      return "loader";
-    case "skills":
-      return "zap";
-    case "skillWorkshop":
-      return "wrench";
-    case "nodes":
-      return "monitor";
-    case "config":
-      return "settings";
-    case "communications":
-      return "send";
-    case "appearance":
-      return "spark";
-    case "automation":
-      return "terminal";
-    case "mcp":
-      return "wrench";
-    case "infrastructure":
-      return "globe";
-    case "aiAgents":
-      return "brain";
-    case "debug":
-      return "bug";
-    case "logs":
-      return "scrollText";
-    case "dreams":
-      return "moon";
-    default:
-      return "folder";
-  }
+export function iconForRoute(routeId: RouteId): IconName {
+  return ROUTE_RECORDS[routeId]?.icon ?? "folder";
 }
 
-export function titleForTab(tab: Tab) {
-  if (tab === "config") {
-    return t("nav.settings");
-  }
-  return t(`tabs.${tab}`);
+export function titleForRoute(routeId: RouteId) {
+  return t(ROUTE_RECORDS[routeId].titleKey);
 }
 
-export function subtitleForTab(tab: Tab) {
-  return t(`subtitles.${tab}`);
+export function subtitleForRoute(routeId: RouteId) {
+  return t(ROUTE_RECORDS[routeId].subtitleKey);
 }

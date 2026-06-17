@@ -46,7 +46,7 @@ const debouncedLoadUsage = (state: UsageState) => {
 };
 
 export function renderUsageTab(state: AppViewState, usageView: LazyView<UsageViewModule>) {
-  if (state.tab !== "usage") {
+  if (state.routeId !== "usage") {
     return nothing;
   }
 

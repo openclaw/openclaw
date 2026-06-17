@@ -21,7 +21,7 @@ function createLoadedUsageView(): LazyView<UsageViewModule> {
 
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
-    tab: "usage",
+    routeId: "usage",
     usageLoading: false,
     usageError: null,
     usageResult: null,

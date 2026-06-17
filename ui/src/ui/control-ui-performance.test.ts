@@ -49,7 +49,7 @@ function installPerformanceObserverMock(options: {
 
 function createHost() {
   return {
-    tab: "chat" as const,
+    routeId: "chat" as const,
     eventLog: [] as EventLogEntry[],
     eventLogBuffer: [] as EventLogEntry[],
   };
@@ -205,7 +205,7 @@ describe("startControlUiResponsivenessObserver", () => {
     const entry = requireBufferedEvent(host);
     const payload = payloadOf(entry);
     expect(entry.event).toBe("control-ui.long-animation-frame");
-    expect(payload.tab).toBe("chat");
+    expect(payload.routeId).toBe("chat");
     expect(payload.name).toBe("long-frame");
     expect(payload.startTimeMs).toBe(12);
     expect(payload.durationMs).toBe(84);

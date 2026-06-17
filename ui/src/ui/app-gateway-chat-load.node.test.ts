@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Tab } from "../routes/route-registry.ts";
+import type { RouteId } from "../routes/route-registry.ts";
 import { connectGateway } from "./app-gateway.ts";
 import type { GatewayConnectTiming, GatewayHelloOk } from "./gateway.ts";
 
@@ -182,7 +182,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createHost(tab: Tab) {
+function createHost(routeId: RouteId) {
   return {
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",
@@ -198,7 +198,7 @@ function createHost(tab: Tab) {
     lastErrorCode: null,
     eventLogBuffer: [],
     eventLog: [],
-    tab,
+    routeId,
     presenceEntries: [],
     presenceError: null,
     presenceStatus: null,
@@ -234,8 +234,8 @@ function createHost(tab: Tab) {
   } as unknown as Parameters<typeof connectGateway>[0];
 }
 
-function connectHost(tab: Tab) {
-  const host = createHost(tab);
+function connectHost(routeId: RouteId) {
+  const host = createHost(routeId);
   connectGateway(host);
   const client = gatewayClients[0];
   if (!client) {

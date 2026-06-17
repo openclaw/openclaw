@@ -6,12 +6,12 @@ import {
   applyResolvedTheme,
   applySettings,
   applySettingsFromUrl,
-  setTabFromRoute,
+  setRouteFromLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 
-type Tab =
+type RouteId =
   | "agents"
   | "overview"
   | "channels"
@@ -20,6 +20,7 @@ type Tab =
   | "usage"
   | "cron"
   | "skills"
+  | "skill-workshop"
   | "nodes"
   | "chat"
   | "config"
@@ -27,7 +28,7 @@ type Tab =
   | "appearance"
   | "automation"
   | "infrastructure"
-  | "aiAgents"
+  | "ai-agents"
   | "debug"
   | "logs";
 
@@ -54,7 +55,7 @@ type SettingsHost = {
   themeResolved: import("./theme.ts").ResolvedTheme;
   applySessionKey: string;
   sessionKey: string;
-  tab: Tab;
+  routeId: RouteId;
   connected: boolean;
   chatHasAutoScrolled: boolean;
   logsAtBottom: boolean;
@@ -130,7 +131,7 @@ function setTestWindowUrl(urlString: string) {
   return { history, location: locationLike };
 }
 
-const createHost = (tab: Tab): SettingsHost => ({
+const createHost = (routeId: RouteId): SettingsHost => ({
   settings: {
     gatewayUrl: "",
     token: "",
@@ -152,7 +153,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeResolved: "dark",
   applySessionKey: "main",
   sessionKey: "main",
-  tab,
+  routeId,
   connected: false,
   chatHasAutoScrolled: false,
   logsAtBottom: false,
@@ -185,7 +186,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   wikiMemoryPalace: null,
 });
 
-describe("setTabFromRoute", () => {
+describe("setRouteFromLocation", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -195,25 +196,25 @@ describe("setTabFromRoute", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts and stops log polling based on the tab", () => {
+  it("starts and stops log polling based on the route", () => {
     const host = createHost("chat");
 
-    setTabFromRoute(host, "logs");
+    setRouteFromLocation(host, "logs");
     expect(host.debugPollInterval).toBeNull();
     expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
-    setTabFromRoute(host, "chat");
+    setRouteFromLocation(host, "chat");
     expect(host.logsPollInterval).toBeNull();
   });
 
-  it("starts and stops debug polling based on the tab", () => {
+  it("starts and stops debug polling based on the route", () => {
     const host = createHost("chat");
 
-    setTabFromRoute(host, "debug");
+    setRouteFromLocation(host, "debug");
     expect(host.logsPollInterval).toBeNull();
     expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
-    setTabFromRoute(host, "chat");
+    setRouteFromLocation(host, "chat");
     expect(host.debugPollInterval).toBeNull();
   });
 

@@ -5,9 +5,9 @@ import {
   inferBasePathFromPathname,
   normalizeBasePath,
   normalizePath,
-  pathForTab,
-  tabFromPath,
-  type Tab,
+  pathForRoute,
+  routeIdFromPath,
+  type RouteId,
 } from "../routes/route-registry.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import {
@@ -195,8 +195,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
   updateBrowserHistory(url, true);
 }
 
-export function setTab(host: SettingsHost, next: Tab) {
-  applyTabSelection(host, next, { refreshPolicy: "always", syncUrl: true });
+export function setRoute(host: SettingsHost, next: RouteId) {
+  applyRouteSelection(host, next, { refreshPolicy: "always", syncUrl: true });
 }
 
 function applyThemeTransition(
@@ -343,20 +343,20 @@ function syncSystemThemeListener(host: SettingsHost) {
   }
 }
 
-export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
+export function syncRouteWithLocation(host: SettingsHost, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
-  setTabFromRoute(host, resolved);
-  syncUrlWithTab(host, resolved, replace);
+  const resolved = routeIdFromPath(window.location.pathname, host.basePath) ?? "chat";
+  setRouteFromLocation(host, resolved);
+  syncUrlWithRoute(host, resolved, replace);
 }
 
 export function onPopState(host: SettingsHost) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = tabFromPath(window.location.pathname, host.basePath);
+  const resolved = routeIdFromPath(window.location.pathname, host.basePath);
   if (!resolved) {
     return;
   }
@@ -367,11 +367,11 @@ export function onPopState(host: SettingsHost) {
     applySessionSelection(host, session);
   }
 
-  setTabFromRoute(host, resolved);
+  setRouteFromLocation(host, resolved);
 }
 
-export function setTabFromRoute(host: SettingsHost, next: Tab) {
-  applyTabSelection(host, next, { refreshPolicy: "connected" });
+export function setRouteFromLocation(host: SettingsHost, next: RouteId) {
+  applyRouteSelection(host, next, { refreshPolicy: "connected" });
 }
 
 function updateBrowserHistory(url: URL, replace: boolean) {
@@ -385,13 +385,13 @@ function updateBrowserHistory(url: URL, replace: boolean) {
   return history.pushState({}, "", url.toString());
 }
 
-function applyTabSelection(
+function applyRouteSelection(
   host: SettingsHost,
-  next: Tab,
+  next: RouteId,
   options: { refreshPolicy: "always" | "connected"; syncUrl?: boolean },
 ) {
-  const prev = host.tab;
-  host.tab = next;
+  const prev = host.routeId;
+  host.routeId = next;
   applyActiveRouteTransition(host, prev, next);
 
   if (options.refreshPolicy === "always" || host.connected) {
@@ -399,21 +399,21 @@ function applyTabSelection(
   }
 
   if (options.syncUrl) {
-    syncUrlWithTab(host, next, false);
+    syncUrlWithRoute(host, next, false);
   }
 }
 
-export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
+export function syncUrlWithRoute(host: SettingsHost, routeId: RouteId, replace: boolean) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   const pathname = typeof window === "undefined" ? undefined : window.location?.pathname;
   if (!href || !pathname) {
     return;
   }
-  const targetPath = normalizePath(pathForTab(tab, host.basePath));
+  const targetPath = normalizePath(pathForRoute(routeId, host.basePath));
   const currentPath = normalizePath(pathname);
   const url = new URL(href);
 
-  if (tab === "chat" && host.sessionKey) {
+  if (routeId === "chat" && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
   } else {
     url.searchParams.delete("session");

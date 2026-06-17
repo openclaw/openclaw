@@ -7,15 +7,15 @@ import { createSkillWorkshopFeature } from "../features/skill-workshop/skill-wor
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
-  iconForTab,
-  isSettingsTab,
+  iconForRoute,
+  isSettingsRoute,
   normalizeBasePath,
-  pathForTab,
-  SETTINGS_TABS,
-  TAB_GROUPS,
-  subtitleForTab,
-  titleForTab,
-  type Tab,
+  pathForRoute,
+  SETTINGS_ROUTES,
+  ROUTE_GROUPS,
+  subtitleForRoute,
+  titleForRoute,
+  type RouteId,
 } from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -29,7 +29,7 @@ import "./terminal/terminal-panel.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
-  renderTab,
+  renderRouteNavItem,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
@@ -245,14 +245,14 @@ function runUiTask<Args extends unknown[]>(
 }
 
 function renderSettingsSectionNav(state: AppViewState) {
-  if (!isSettingsTab(state.tab)) {
+  if (!isSettingsRoute(state.routeId)) {
     return nothing;
   }
   return html`
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
-      ${SETTINGS_TABS.map((tab) => {
-        const active = state.tab === tab;
-        const href = pathForTab(tab, state.basePath);
+      ${SETTINGS_ROUTES.map((routeId) => {
+        const active = state.routeId === routeId;
+        const href = pathForRoute(routeId, state.basePath);
         return html`
           <a
             href=${href}
@@ -269,14 +269,14 @@ function renderSettingsSectionNav(state: AppViewState) {
                 return;
               }
               event.preventDefault();
-              state.setTab(tab);
+              state.setRoute(routeId);
             }}
-            title=${titleForTab(tab)}
+            title=${titleForRoute(routeId)}
           >
             <span class="settings-section-nav__icon" aria-hidden="true"
-              >${icons[iconForTab(tab)]}</span
+              >${icons[iconForRoute(routeId)]}</span
             >
-            <span class="settings-section-nav__label">${titleForTab(tab)}</span>
+            <span class="settings-section-nav__label">${titleForRoute(routeId)}</span>
           </a>
         `;
       })}
@@ -368,17 +368,19 @@ function isActiveSidebarSessionRow(state: AppViewState, rowKey: string): boolean
 function renderSidebarChatFallbackRow(state: AppViewState) {
   return html`
     <div
-      class="sidebar-recent-session ${state.tab === "chat" ? "sidebar-recent-session--active" : ""}"
+      class="sidebar-recent-session ${state.routeId === "chat"
+        ? "sidebar-recent-session--active"
+        : ""}"
     >
       <a
-        href=${pathForTab("chat", state.basePath)}
+        href=${pathForRoute("chat", state.basePath)}
         class="sidebar-recent-session__link"
         @click=${(event: MouseEvent) => {
           if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
             return;
           }
           event.preventDefault();
-          state.setTab("chat" as import("./navigation.ts").Tab);
+          state.setRoute("chat");
         }}
       >
         <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
@@ -452,7 +454,7 @@ function renderSidebarSessions(state: AppViewState, collapsed: boolean) {
             return;
           }
           if (await createChatSession(state, { source: "user" })) {
-            state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+            state.setRoute("chat");
           }
         }}
       >
@@ -503,14 +505,14 @@ function renderSidebarSessions(state: AppViewState, collapsed: boolean) {
                     </div>
                   `}
               <a
-                href=${pathForTab("sessions", state.basePath)}
+                href=${pathForRoute("sessions", state.basePath)}
                 class="sidebar-recent-sessions__all"
                 @click=${(event: MouseEvent) => {
                   if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
                     return;
                   }
                   event.preventDefault();
-                  state.setTab("sessions" as import("./navigation.ts").Tab);
+                  state.setRoute("sessions");
                 }}
               >
                 <span>${t("chat.sidebar.allSessions")}</span>
@@ -532,7 +534,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
   const active = isActiveSidebarSessionRow(state, row.key);
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "";
-  const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
+  const href = `${pathForRoute("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
   const pinned = row.pinned === true;
   const running = row.hasActiveRun === true;
   const controlsDisabled = !state.connected || !state.client;
@@ -560,11 +562,11 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
           if (!isActiveSidebarSessionRow(state, row.key)) {
             switchChatSession(state, row.key);
           }
-          state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+          state.setRoute("chat");
         }}
       >
         <span class="sidebar-recent-session__body">
-        <span class="sidebar-recent-session__name">${label}</span>
+          <span class="sidebar-recent-session__name">${label}</span>
         </span>
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
@@ -622,6 +624,9 @@ const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyV
 const lazyUsage = createLazyView(() => import("./views/usage.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 const skillWorkshopFeature = createSkillWorkshopFeature(notifyLazyViewChanged);
+const routeFeatureById = new Map<RouteId, typeof skillWorkshopFeature>([
+  [skillWorkshopFeature.routeId, skillWorkshopFeature],
+]);
 
 type ChatWorkspaceFilesState = {
   activeId: string | null;
@@ -1181,7 +1186,7 @@ function resolveQuickSettingsSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
-function renderCronQuickCreateForTab(
+function renderCronQuickCreateForRoute(
   state: AppViewState,
   requestHostUpdate: (() => void) | undefined,
 ) {
@@ -1337,7 +1342,8 @@ export function renderApp(state: AppViewState) {
     : chatSessionArchived
       ? t("chat.archivedSessionDisabled")
       : null;
-  const isChat = state.tab === "chat";
+  const isChat = state.routeId === "chat";
+  const activeRouteFeature = routeFeatureById.get(state.routeId);
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
@@ -1692,7 +1698,7 @@ export function renderApp(state: AppViewState) {
       state,
       "config",
       {
-        tab: state.tab,
+        routeId: state.routeId,
         formMode: overrides.formMode,
         activeSection,
         activeSubsection: overrides.activeSubsection,
@@ -1743,7 +1749,7 @@ export function renderApp(state: AppViewState) {
     AI_AGENTS_SECTION_KEYS,
   );
   const renderConfigTabForActiveTab = () => {
-    switch (state.tab) {
+    switch (state.routeId) {
       case "config": {
         // Quick Settings mode — opinionated card layout
         if (state.configSettingsMode === "quick") {
@@ -1778,7 +1784,7 @@ export function renderApp(state: AppViewState) {
             onModelChange: () => {
               state.configSettingsMode = "advanced";
               state.aiAgentsActiveSection = "models";
-              state.setTab("aiAgents");
+              state.setRoute("ai-agents");
             },
             onThinkingChange: (level) => {
               void patchSession(state, state.sessionKey, { thinkingLevel: level }).then(() =>
@@ -1792,7 +1798,7 @@ export function renderApp(state: AppViewState) {
             },
             channels: extractQuickSettingsChannels(state),
             onChannelConfigure: () => {
-              state.setTab("channels");
+              state.setRoute("channels");
             },
             automation: {
               cronJobCount: state.cronJobs?.length ?? 0,
@@ -1800,13 +1806,13 @@ export function renderApp(state: AppViewState) {
               mcpServerCount: extractMcpServerCount(state),
             },
             onManageCron: () => {
-              state.setTab("cron");
+              state.setRoute("cron");
             },
             onBrowseSkills: () => {
-              state.setTab("skills");
+              state.setRoute("skills");
             },
             onConfigureMcp: () => {
-              state.setTab("mcp");
+              state.setRoute("mcp");
             },
             security: extractQuickSettingsSecurity(state),
             onSecurityConfigure: () => {
@@ -1830,7 +1836,7 @@ export function renderApp(state: AppViewState) {
             textScale: state.settings.textScale ?? 100,
             setTheme: (theme, context) => state.setTheme(theme, context),
             onOpenCustomThemeImport: () => {
-              state.setTab("appearance");
+              state.setRoute("appearance");
               state.appearanceFormMode = "form";
               state.appearanceSearchQuery = "";
               state.appearanceActiveSection = "__appearance__";
@@ -2079,7 +2085,7 @@ export function renderApp(state: AppViewState) {
           navRootLabel: "Infrastructure",
           includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
         });
-      case "aiAgents":
+      case "ai-agents":
         return renderConfigTab({
           formMode: state.aiAgentsFormMode,
           searchQuery: state.aiAgentsSearchQuery,
@@ -2400,11 +2406,11 @@ export function renderApp(state: AppViewState) {
       onActiveIndexChange: (i) => {
         state.paletteActiveIndex = i;
       },
-      onNavigate: (tab) => {
-        state.setTab(tab as import("../routes/route-registry.ts").Tab);
+      onNavigate: (routeId) => {
+        state.setRoute(routeId);
       },
       onSlashCommand: (cmd) => {
-        state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+        state.setRoute("chat");
         state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
       },
     })}
@@ -2446,11 +2452,11 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="topnav-shell__content">
             <dashboard-header
-              .tab=${state.tab}
+              .routeId=${state.routeId}
               .basePath=${state.basePath}
               .agentLabel=${dashboardHeaderContext.agentLabel}
-              @navigate=${(event: CustomEvent<Tab>) => {
-                state.setTab(event.detail);
+              @navigate=${(event: CustomEvent<RouteId>) => {
+                state.setRoute(event.detail);
               }}
             ></dashboard-header>
           </div>
@@ -2541,7 +2547,7 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               ${renderSidebarSessions(state, navCollapsed)}
               <nav class="sidebar-nav">
-                ${TAB_GROUPS.filter(
+                ${ROUTE_GROUPS.filter(
                   // The expanded sidebar owns chat entry points via the sessions
                   // section; the collapsed rail keeps the chat tab icon reachable.
                   (group) => navCollapsed || group.label !== "chat",
@@ -2573,8 +2579,8 @@ export function renderApp(state: AppViewState) {
                           `
                         : nothing}
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) =>
-                          renderTab(state, tab, { collapsed: navCollapsed }),
+                        ${group.routes.map((routeId) =>
+                          renderRouteNavItem(state, routeId, { collapsed: navCollapsed }),
                         )}
                       </div>
                     </section>
@@ -2621,14 +2627,11 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main
-        class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
+        class="content ${isChat ? "content--chat" : ""} ${state.routeId === "logs"
           ? "content--logs"
-          : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
-        "skillWorkshop"
-          ? `content--skill-workshop ${
-              state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""
-            }`
-          : ""}"
+          : ""} ${state.routeId === "workboard"
+          ? "content--workboard"
+          : ""} ${activeRouteFeature?.contentClass(state) ?? ""}"
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
@@ -2662,7 +2665,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.tab === "config" || isChat
+        ${state.routeId === "config" || isChat
           ? nothing
           : html`<section
               class=${chatHeaderHidden
@@ -2672,14 +2675,12 @@ export function renderApp(state: AppViewState) {
               aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
-                <div class="page-title">${titleForTab(state.tab)}</div>
-                <div class="page-sub">${subtitleForTab(state.tab)}</div>
+                <div class="page-title">${titleForRoute(state.routeId)}</div>
+                <div class="page-sub">${subtitleForRoute(state.routeId)}</div>
               </div>
               <div class="page-meta">
-                ${state.tab === "skillWorkshop"
-                  ? skillWorkshopFeature.renderHeaderControls(state)
-                  : nothing}
-                ${state.tab === "dreams"
+                ${activeRouteFeature?.renderHeaderControls(state) ?? nothing}
+                ${state.routeId === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
                         <button
@@ -2709,7 +2710,7 @@ export function renderApp(state: AppViewState) {
                 ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
               </div>
             </section>`}
-        ${state.tab === "overview"
+        ${state.routeId === "overview"
           ? renderOverview({
               connected: state.connected,
               hello: state.hello,
@@ -2747,11 +2748,11 @@ export function renderApp(state: AppViewState) {
               },
               onConnect: () => state.connect(),
               onRefresh: () => void state.loadOverview({ refresh: true }),
-              onNavigate: (tab) => state.setTab(tab as import("../routes/route-registry.ts").Tab),
+              onNavigate: (routeId) => state.setRoute(routeId),
               onRefreshLogs: () => void state.loadOverview({ refresh: true }),
             })
           : nothing}
-        ${state.tab === "activity"
+        ${state.routeId === "activity"
           ? renderLazyView(lazyActivity, (m) =>
               m.renderActivity({
                 entries: state.activityEntries,
@@ -2800,7 +2801,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "instances"
+        ${state.routeId === "instances"
           ? renderLazyView(lazyInstances, (m) =>
               m.renderInstances({
                 loading: state.presenceLoading,
@@ -2811,7 +2812,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "sessions"
+        ${state.routeId === "sessions"
           ? renderLazyView(lazySessions, (m) => {
               const workboardState = getWorkboardState(state);
               const workboardEnabled = isPluginEnabledInConfigSnapshot(
@@ -2951,7 +2952,7 @@ export function renderApp(state: AppViewState) {
                 }),
                 onNavigateToChat: (sessionKey) => {
                   switchChatSession(state, sessionKey);
-                  state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+                  state.setRoute("chat");
                 },
                 onAddToWorkboard:
                   workboardEnabled && operatorCanWrite
@@ -2962,7 +2963,7 @@ export function renderApp(state: AppViewState) {
                           session,
                           requestUpdate: requestHostUpdate,
                         });
-                        state.setTab("workboard" as import("../routes/route-registry.ts").Tab);
+                        state.setRoute("workboard");
                       })
                     : undefined,
                 onToggleCheckpointDetails: (sessionKey) =>
@@ -2975,7 +2976,7 @@ export function renderApp(state: AppViewState) {
                   );
                   if (nextKey) {
                     switchChatSession(state, nextKey);
-                    state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+                    state.setRoute("chat");
                   }
                 }),
                 onRestoreCheckpoint: (sessionKey, checkpointId) =>
@@ -2983,7 +2984,7 @@ export function renderApp(state: AppViewState) {
               });
             })
           : nothing}
-        ${state.tab === "workboard"
+        ${state.routeId === "workboard"
           ? renderLazyView(lazyWorkboard, (m) => {
               const auth =
                 (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
@@ -3005,7 +3006,7 @@ export function renderApp(state: AppViewState) {
                 sessions: state.sessionsResult?.sessions ?? [],
                 onOpenSession: (sessionKey) => {
                   switchChatSession(state, sessionKey);
-                  state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+                  state.setRoute("chat");
                 },
                 onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
                 onRequestUpdate: requestHostUpdate,
@@ -3013,8 +3014,10 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${renderUsageTab(state, lazyUsage)}
-        ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
-        ${state.tab === "cron"
+        ${state.routeId === "cron"
+          ? renderCronQuickCreateForRoute(state, requestHostUpdate)
+          : nothing}
+        ${state.routeId === "cron"
           ? renderLazyView(lazyCron, (m) =>
               m.renderCron({
                 basePath: state.basePath,
@@ -3140,12 +3143,12 @@ export function renderApp(state: AppViewState) {
                 }),
                 onNavigateToChat: (sessionKey) => {
                   switchChatSession(state, sessionKey);
-                  state.setTab("chat" as import("../routes/route-registry.ts").Tab);
+                  state.setRoute("chat");
                 },
               }),
             )
           : nothing}
-        ${state.tab === "agents"
+        ${state.routeId === "agents"
           ? renderLazyView(lazyAgents, (m) =>
               m.renderAgents({
                 basePath: state.basePath ?? "",
@@ -3458,7 +3461,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "skills"
+        ${state.routeId === "skills"
           ? renderLazyView(lazySkills, (m) =>
               m.renderSkills({
                 connected: state.connected,
@@ -3535,8 +3538,8 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "skillWorkshop" ? skillWorkshopFeature.renderView(state) : nothing}
-        ${state.tab === "nodes"
+        ${activeRouteFeature?.renderView(state) ?? nothing}
+        ${state.routeId === "nodes"
           ? renderLazyView(lazyNodes, (m) =>
               m.renderNodes({
                 loading: state.nodesLoading,
@@ -3629,7 +3632,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "chat"
+        ${state.routeId === "chat"
           ? renderMeasured(
               state,
               "chat",
@@ -3783,7 +3786,7 @@ export function renderApp(state: AppViewState) {
                   },
                   onNavigateToAgent: () => {
                     state.agentsSelectedId = resolvedAgentId;
-                    state.setTab("agents" as import("../routes/route-registry.ts").Tab);
+                    state.setRoute("agents");
                   },
                   onSessionSelect: (key: string) => {
                     switchChatSession(state, key);
@@ -3812,10 +3815,10 @@ export function renderApp(state: AppViewState) {
                 }),
             )
           : nothing}
-        ${isSettingsTab(state.tab) && state.tab !== "debug" && state.tab !== "logs"
+        ${isSettingsRoute(state.routeId) && state.routeId !== "debug" && state.routeId !== "logs"
           ? renderSettingsWorkspace(state, renderConfigTabForActiveTab())
           : renderConfigTabForActiveTab()}
-        ${state.tab === "debug"
+        ${state.routeId === "debug"
           ? renderSettingsWorkspace(
               state,
               renderLazyView(lazyDebug, (m) =>
@@ -3839,7 +3842,7 @@ export function renderApp(state: AppViewState) {
               ),
             )
           : nothing}
-        ${state.tab === "logs"
+        ${state.routeId === "logs"
           ? renderSettingsWorkspace(
               state,
               renderLazyView(lazyLogs, (m) =>
@@ -3864,7 +3867,7 @@ export function renderApp(state: AppViewState) {
               ),
             )
           : nothing}
-        ${state.tab === "dreams"
+        ${state.routeId === "dreams"
           ? renderDreaming({
               active: dreamingOn,
               selectedAgentId: dreamingSelectedAgentId,

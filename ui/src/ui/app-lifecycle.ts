@@ -1,4 +1,4 @@
-import type { Tab } from "../routes/route-registry.ts";
+import type { RouteId } from "../routes/route-registry.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {
@@ -19,7 +19,7 @@ import {
   applySettingsFromUrl,
   detachThemeListener,
   inferBasePath,
-  syncTabWithLocation,
+  syncRouteWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
@@ -42,7 +42,7 @@ type LifecycleHost = {
   client?: { stop: () => void } | null;
   connectGeneration: number;
   connected?: boolean;
-  tab: Tab;
+  routeId: RouteId;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarSource?: string | null;
@@ -89,7 +89,7 @@ type LifecycleHost = {
   logsScrollFrame?: number | null;
   activityScrollFrame?: number | null;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
-  controlUiTabPaintSeq?: number;
+  controlUiRoutePaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   controlUiBootstrapReady?: Promise<void> | null;
   popStateHandler: () => void;
@@ -104,7 +104,7 @@ export function handleConnected(host: LifecycleHost) {
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
     { applyIdentity: false },
   );
-  syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
+  syncRouteWithLocation(host as unknown as Parameters<typeof syncRouteWithLocation>[0], true);
   const hasPendingGatewaySwitch =
     typeof host.pendingGatewayUrl === "string" && host.pendingGatewayUrl.trim();
   if (!hasPendingGatewaySwitch && restoreChatComposerState(host, { preserveCurrent: true })) {
@@ -121,13 +121,13 @@ export function handleConnected(host: LifecycleHost) {
   if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   }
-  if (host.tab === "nodes") {
+  if (host.routeId === "nodes") {
     startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   }
-  if (host.tab === "logs") {
+  if (host.routeId === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   }
-  if (host.tab === "debug") {
+  if (host.routeId === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
@@ -197,7 +197,7 @@ function scheduleChatComposerDraftPersistence(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
-  host.controlUiTabPaintSeq = (host.controlUiTabPaintSeq ?? 0) + 1;
+  host.controlUiRoutePaintSeq = (host.controlUiRoutePaintSeq ?? 0) + 1;
   flushPendingChatComposerPersistence(host);
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
@@ -245,19 +245,19 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   } else if (changed.has("chatMessage")) {
     scheduleChatComposerDraftPersistence(host);
   }
-  if (host.tab === "chat" && host.chatManualRefreshInFlight) {
+  if (host.routeId === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
   if (
-    host.tab === "chat" &&
+    host.routeId === "chat" &&
     (changed.has("chatMessages") ||
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
       changed.has("realtimeTalkConversation") ||
-      changed.has("tab"))
+      changed.has("routeId"))
   ) {
-    const forcedByTab = changed.has("tab");
+    const forcedByRoute = changed.has("routeId");
     const forcedByLoad =
       changed.has("chatLoading") && changed.get("chatLoading") === true && !host.chatLoading;
     // Detect streaming start: chatStream changed from null/undefined to a string value
@@ -268,28 +268,28 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       typeof host.chatStream === "string";
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
-      forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
+      forcedByRoute || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
   }
   if (
-    host.tab === "logs" &&
-    (changed.has("logsEntries") || changed.has("logsAutoFollow") || changed.has("tab"))
+    host.routeId === "logs" &&
+    (changed.has("logsEntries") || changed.has("logsAutoFollow") || changed.has("routeId"))
   ) {
     if (host.logsAutoFollow && host.logsAtBottom) {
       scheduleLogsScroll(
         host as unknown as Parameters<typeof scheduleLogsScroll>[0],
-        changed.has("tab") || changed.has("logsAutoFollow"),
+        changed.has("routeId") || changed.has("logsAutoFollow"),
       );
     }
   }
   if (
-    host.tab === "activity" &&
-    (changed.has("activityEntries") || changed.has("activityAutoFollow") || changed.has("tab"))
+    host.routeId === "activity" &&
+    (changed.has("activityEntries") || changed.has("activityAutoFollow") || changed.has("routeId"))
   ) {
     if (host.activityAutoFollow && host.activityAtBottom) {
       scheduleActivityScroll(
         host as unknown as Parameters<typeof scheduleActivityScroll>[0],
-        changed.has("tab") || changed.has("activityAutoFollow"),
+        changed.has("routeId") || changed.has("activityAutoFollow"),
       );
     }
   }

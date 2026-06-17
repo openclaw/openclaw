@@ -1588,7 +1588,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "measure first send",
       eventLogBuffer: [],
-      tab: "debug",
+      routeId: "debug",
     });
 
     await handleSendChat(host);
@@ -1623,7 +1623,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "measure server milestone",
       eventLogBuffer: [],
-      tab: "debug",
+      routeId: "debug",
     });
 
     await handleSendChat(host);
@@ -1673,7 +1673,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       chatStream: "slow first token",
       eventLogBuffer: [],
-      tab: "debug",
+      routeId: "debug",
     });
     const timingHost = host as ChatHost & {
       chatSendTimingsByRun: Map<
@@ -1756,7 +1756,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "measure painted pending send",
       eventLogBuffer: [],
-      tab: "debug",
+      routeId: "debug",
     });
 
     const send = handleSendChat(host);
@@ -2193,7 +2193,7 @@ describe("handleSendChat", () => {
       chatMessage: "wait for selected model",
       chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
       eventLogBuffer: [],
-      tab: "debug",
+      routeId: "debug",
     });
 
     const send = handleSendChat(host);
@@ -2758,7 +2758,7 @@ describe("handleSendChat", () => {
       connected: false,
       chatMessage: "send after reconnect",
       eventLogBuffer: [],
-      tab: "debug",
+      routeId: "debug",
     });
 
     await handleSendChat(host);

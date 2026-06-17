@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
-import { pathForTab } from "../../routes/route-registry.ts";
+import { pathForRoute } from "../../routes/route-registry.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -1880,7 +1880,7 @@ function renderRun(
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
+      ? `${pathForRoute("chat", basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");

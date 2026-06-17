@@ -2,7 +2,6 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { Tab } from "../../routes/route-registry.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
 import { switchChatSessionAndWait } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -145,8 +144,8 @@ async function sendSkillWorkshopRevisionRequest(
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
-  if (state.tab !== "chat") {
-    state.setTab("chat" as Tab);
+  if (state.routeId !== "chat") {
+    state.setRoute("chat");
   }
   if (state.sessionKey === sessionKey) {
     await loadChatHistory(state);
@@ -234,6 +233,12 @@ export function createSkillWorkshopFeature(notifyLazyViewChanged: () => void) {
   );
 
   return {
+    routeId: "skill-workshop" as const,
+    contentClass(state: AppViewState) {
+      return state.skillWorkshopMode === "today"
+        ? "content--skill-workshop content--skill-workshop-today"
+        : "content--skill-workshop";
+    },
     renderHeaderControls: renderSkillWorkshopHeaderControls,
     renderView(state: AppViewState) {
       return renderLazyView(lazySkillWorkshop, (m) => {

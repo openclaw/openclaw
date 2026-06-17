@@ -11,7 +11,7 @@ import {
   loadSkillWorkshopUseCurrentChatForRevisions,
 } from "../features/skill-workshop/skill-workshop.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
-import type { Tab } from "../routes/route-registry.ts";
+import type { RouteId } from "../routes/route-registry.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -66,7 +66,7 @@ import {
 import {
   applySettings as applySettingsInternal,
   applyLocalUserIdentity as applyLocalUserIdentityInternal,
-  setTab as setTabInternal,
+  setRoute as setRouteInternal,
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
   onPopState as onPopStateInternal,
@@ -227,7 +227,7 @@ export class OpenClawApp extends LitElement {
   @state() password = "";
   @state() loginShowGatewayToken = false;
   @state() loginShowGatewayPassword = false;
-  @state() tab: Tab = "chat";
+  @state() routeId: RouteId = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
@@ -922,12 +922,12 @@ export class OpenClawApp extends LitElement {
   protected override updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
     refreshActiveFloatingTooltip(this);
-    // Some render callbacks assign tab directly while preparing nested panel state.
-    if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
+    // Some render callbacks assign the active route while preparing nested panel state.
+    if (changed.has("routeId") && this.routeId !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);
     }
     if (
-      this.tab === "skillWorkshop" &&
+      this.routeId === "skill-workshop" &&
       (changed.has("sessionKey") || changed.has("assistantAgentId"))
     ) {
       void loadSkillWorkshopProposals(this, { force: true });
@@ -1023,8 +1023,8 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  setTab(next: Tab) {
-    setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
+  setRoute(next: RouteId) {
+    setRouteInternal(this as unknown as Parameters<typeof setRouteInternal>[0], next);
     if (next !== "chat") {
       this.setChatMobileControlsOpen(false);
     }

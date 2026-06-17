@@ -14,7 +14,7 @@ function createHost(request = vi.fn(async () => ({ nodes: [] }))) {
     nodesPollInterval: null,
     logsPollInterval: null,
     debugPollInterval: null,
-    tab: "overview",
+    routeId: "overview",
   };
 }
 
@@ -44,7 +44,7 @@ describe("startNodesPolling", () => {
     vi.advanceTimersByTime(NODES_ACTIVE_POLL_INTERVAL_MS);
     expect(request).not.toHaveBeenCalled();
 
-    host.tab = "nodes";
+    host.routeId = "nodes";
     vi.advanceTimersByTime(NODES_ACTIVE_POLL_INTERVAL_MS);
     expect(request).toHaveBeenCalledWith("node.list", {});
 

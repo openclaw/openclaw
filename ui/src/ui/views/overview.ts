@@ -1,6 +1,7 @@
 // Control UI view renders overview screen content.
 import { html, nothing } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
+import type { RouteId } from "../../routes/route-registry.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
@@ -61,7 +62,7 @@ export type OverviewProps = {
   onToggleGatewayPasswordVisibility: () => void;
   onConnect: () => void;
   onRefresh: () => void;
-  onNavigate: (tab: string) => void;
+  onNavigate: (routeId: RouteId) => void;
   onRefreshLogs: () => void;
 };
 
