@@ -19,12 +19,22 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
-function findUnpinnedExternalWorkflowActions(): string[] {
+function findYamlFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      return findYamlFiles(path);
+    }
+    return entry.isFile() && /\.ya?ml$/u.test(entry.name) ? [path] : [];
+  });
+}
+
+function findUnpinnedExternalActions(): string[] {
   const violations: string[] = [];
-  for (const workflowName of readdirSync(".github/workflows").filter((name) =>
-    /\.ya?ml$/u.test(name),
-  )) {
-    const workflowPath = `.github/workflows/${workflowName}`;
+  for (const workflowPath of [
+    ...findYamlFiles(".github/workflows"),
+    ...findYamlFiles(".github/actions"),
+  ]) {
     for (const [index, line] of readFileSync(workflowPath, "utf8").split("\n").entries()) {
       const uses = line.match(/^\s*(?:-\s*)?uses:\s*([^#\s]+)/u)?.[1];
       if (!uses || uses.startsWith("./") || uses.startsWith("docker://")) {
@@ -40,8 +50,8 @@ function findUnpinnedExternalWorkflowActions(): string[] {
 }
 
 describe("ci workflow guards", () => {
-  it("pins every external GitHub Actions workflow reference to a full commit SHA", () => {
-    expect(findUnpinnedExternalWorkflowActions()).toEqual([]);
+  it("pins every external GitHub Action reference to a full commit SHA", () => {
+    expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
   it("runs the session accessor ratchet as a visible additional check", () => {
