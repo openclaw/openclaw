@@ -104,6 +104,21 @@ async function realpathIfExists(filePath: string): Promise<string | null> {
   return fs.realpath(filePath).catch(() => null);
 }
 
+async function resolveContainedFileIfExists(
+  filePath: string,
+  allowedRoots: readonly string[],
+): Promise<string | null> {
+  const realFile = await realpathIfExists(filePath);
+  if (!realFile) {
+    return null;
+  }
+  if (!allowedRoots.some((root) => isInside(root, realFile))) {
+    return null;
+  }
+  const stats = await fs.stat(realFile).catch(() => null);
+  return stats?.isFile() ? realFile : null;
+}
+
 export async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
@@ -289,24 +304,33 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   }
 }
 
-async function readTextPreviewIfExists(filePath: string): Promise<string | null> {
-  const realFile = await realpathIfExists(filePath);
+async function readTextPreviewIfExists(
+  filePath: string,
+  allowedRoots: readonly string[],
+): Promise<string | null> {
+  const realFile = await resolveContainedFileIfExists(filePath, allowedRoots);
   if (!realFile) {
     return null;
   }
   return readPreview(realFile, "text").catch(() => null);
 }
 
-async function readJsonPreviewIfExists(filePath: string): Promise<string | null> {
-  const realFile = await realpathIfExists(filePath);
+async function readJsonPreviewIfExists(
+  filePath: string,
+  allowedRoots: readonly string[],
+): Promise<string | null> {
+  const realFile = await resolveContainedFileIfExists(filePath, allowedRoots);
   if (!realFile) {
     return null;
   }
   return readPreview(realFile, "json").catch(() => null);
 }
 
-async function readJsonIfExists(filePath: string): Promise<Record<string, unknown> | null> {
-  const realFile = await realpathIfExists(filePath);
+async function readJsonIfExists(
+  filePath: string,
+  allowedRoots: readonly string[],
+): Promise<Record<string, unknown> | null> {
+  const realFile = await resolveContainedFileIfExists(filePath, allowedRoots);
   if (!realFile) {
     return null;
   }
@@ -329,13 +353,15 @@ function artifactHref(evidencePath: string, artifactPath: string) {
 }
 
 async function buildProducerContextFile(params: {
+  allowedRoots: readonly string[];
   artifactPath: string;
   evidencePath: string;
   filePath: string;
   previewKind: "json" | "text";
   repoRoot: string;
 }): Promise<QaEvidenceProducerContextFile | null> {
-  if (!(await realpathIfExists(params.filePath))) {
+  const realFile = await resolveContainedFileIfExists(params.filePath, params.allowedRoots);
+  if (!realFile) {
     return null;
   }
   const repoPath = toRepoRelativePath(params.repoRoot, params.filePath);
@@ -344,8 +370,8 @@ async function buildProducerContextFile(params: {
     path: repoPath,
     preview:
       params.previewKind === "json"
-        ? await readJsonPreviewIfExists(params.filePath)
-        : await readTextPreviewIfExists(params.filePath),
+        ? await readJsonPreviewIfExists(realFile, params.allowedRoots)
+        : await readTextPreviewIfExists(realFile, params.allowedRoots),
   };
 }
 
@@ -566,6 +592,10 @@ async function buildProducerContext(params: {
     return null;
   }
   const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const evidenceDir = path.dirname(
+    await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot }),
+  );
+  const allowedRoots = [repoRoot, evidenceDir];
   const manifestPath = path.join(rootPath, "manifest.json");
   const matrixPath = path.join(rootPath, "matrix.json");
   const releaseLedgerPath = path.join(rootPath, "release-ledger.json");
@@ -573,12 +603,13 @@ async function buildProducerContext(params: {
   const commandsPath = path.join(rootPath, "commands.txt");
   const memoryPath = path.join(rootPath, "preflight", "memory.txt");
   const adbDevicesPath = path.join(rootPath, "preflight", "adb-devices.txt");
-  const manifest = await readJsonIfExists(manifestPath);
-  const matrix = await readJsonIfExists(matrixPath);
-  const releaseLedger = await readJsonIfExists(releaseLedgerPath);
+  const manifest = await readJsonIfExists(manifestPath, allowedRoots);
+  const matrix = await readJsonIfExists(matrixPath, allowedRoots);
+  const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
   const [commandsFile, manifestFile, memoryFile, adbDevicesFile, releaseLedgerFile, scorecardFile] =
     await Promise.all([
       buildProducerContextFile({
+        allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, commandsPath),
         evidencePath: params.evidencePath,
         filePath: commandsPath,
@@ -586,6 +617,7 @@ async function buildProducerContext(params: {
         repoRoot,
       }),
       buildProducerContextFile({
+        allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, manifestPath),
         evidencePath: params.evidencePath,
         filePath: manifestPath,
@@ -593,6 +625,7 @@ async function buildProducerContext(params: {
         repoRoot,
       }),
       buildProducerContextFile({
+        allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, memoryPath),
         evidencePath: params.evidencePath,
         filePath: memoryPath,
@@ -600,6 +633,7 @@ async function buildProducerContext(params: {
         repoRoot,
       }),
       buildProducerContextFile({
+        allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, adbDevicesPath),
         evidencePath: params.evidencePath,
         filePath: adbDevicesPath,
@@ -607,6 +641,7 @@ async function buildProducerContext(params: {
         repoRoot,
       }),
       buildProducerContextFile({
+        allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, releaseLedgerPath),
         evidencePath: params.evidencePath,
         filePath: releaseLedgerPath,
@@ -614,6 +649,7 @@ async function buildProducerContext(params: {
         repoRoot,
       }),
       buildProducerContextFile({
+        allowedRoots,
         artifactPath: toRepoRelativePath(repoRoot, scorecardPath),
         evidencePath: params.evidencePath,
         filePath: scorecardPath,

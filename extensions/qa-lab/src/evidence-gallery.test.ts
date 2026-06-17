@@ -364,6 +364,17 @@ describe("evidence gallery", () => {
       "preflight/adb-devices.txt",
     );
     expect(model.producerContext?.preflight.adbDevices?.preview).toBe("List of devices\n");
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-outside-"));
+    const outsideCommands = path.join(outsideDir, "commands.txt");
+    await fs.writeFile(outsideCommands, "outside secret\n", "utf8");
+    await fs.unlink(path.join(runDir, "commands.txt"));
+    await fs.symlink(outsideCommands, path.join(runDir, "commands.txt"));
+    const symlinkModel = await buildQaEvidenceGalleryModel({
+      evidencePath: suiteDir,
+      repoRoot,
+    });
+    expect(symlinkModel.producerContext?.commands).toBeNull();
+    expect(JSON.stringify(symlinkModel)).not.toContain("outside secret");
     await expect(
       resolveQaEvidenceArtifactFile({
         artifactPath:
