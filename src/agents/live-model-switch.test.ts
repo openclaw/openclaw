@@ -4,7 +4,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   abortEmbeddedAgentRunMock: vi.fn(),
   requestEmbeddedRunModelSwitchMock: vi.fn(),
-  consumeEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
   resolvePersistedSelectedModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
@@ -22,8 +21,6 @@ vi.mock("./embedded-agent-runner/runs.js", () => ({
   abortEmbeddedAgentRun: (...args: unknown[]) => state.abortEmbeddedAgentRunMock(...args),
   requestEmbeddedRunModelSwitch: (...args: unknown[]) =>
     state.requestEmbeddedRunModelSwitchMock(...args),
-  consumeEmbeddedRunModelSwitch: (...args: unknown[]) =>
-    state.consumeEmbeddedRunModelSwitchMock(...args),
 }));
 
 vi.mock("./model-selection.js", async () => {
@@ -86,7 +83,6 @@ describe("live model switch", () => {
   beforeEach(() => {
     state.abortEmbeddedAgentRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
-    state.consumeEmbeddedRunModelSwitchMock.mockReset();
     state.embeddedAgentModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()

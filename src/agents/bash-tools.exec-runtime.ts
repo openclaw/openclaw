@@ -20,7 +20,6 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
-  isDangerousHostInheritedEnvVarName,
   sanitizeHostInheritedEnvEntry,
 } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
@@ -104,27 +103,6 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
     sanitized[sanitizedKey] = sanitizedValue;
   }
   return sanitized;
-}
-/** Validates caller-provided host env, rejecting dangerous vars and PATH overrides. */
-export function validateHostEnv(env: Record<string, string>): void {
-  for (const key of Object.keys(env)) {
-    const upperKey = key.toUpperCase();
-
-    // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostInheritedEnvVarName(upperKey)) {
-      throw new Error(
-        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
-      );
-    }
-
-    // 2. Strictly block PATH modification on host
-    // Allowing custom PATH on the gateway/node can lead to binary hijacking.
-    if (upperKey === "PATH") {
-      throw new Error(
-        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
-      );
-    }
-  }
 }
 /** Default retained aggregate output cap for exec sessions. */
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
