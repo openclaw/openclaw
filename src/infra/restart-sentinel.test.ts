@@ -152,6 +152,18 @@ describe("restart sentinel", () => {
     expect(result).toContain("Gateway restart");
   });
 
+  it("reports config.patch success as restart required", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      stats: { mode: "config.patch" },
+    };
+
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
+    expect(formatRestartSentinelMessage(payload)).toBe("Gateway restart required (config.patch)");
+  });
+
   it("formats summary, distinct reason, and doctor hint together", () => {
     const payload = {
       kind: "config-patch" as const,

@@ -232,9 +232,12 @@ export function summarizeRestartSentinel(payload: RestartSentinelPayload): strin
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
+  const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
+  if (payload.kind === "config-patch" && payload.status === "ok") {
+    return `Gateway restart required${mode}`.trim();
+  }
   const kind = payload.kind;
   const status = payload.status;
-  const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
   const kindSegment = kind === "restart" ? "" : ` ${kind}`;
   return `Gateway restart${kindSegment} ${status}${mode}`.trim();
 }
