@@ -145,6 +145,17 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("uses the container temp root for OpenClaw runtime scratch files", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const dockerEnvStart = script.indexOf("docker_env=(");
+    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
+    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
+
+    expect(dockerEnvStart).toBeGreaterThanOrEqual(0);
+    expect(dockerEnvEnd).toBeGreaterThan(dockerEnvStart);
+    expect(dockerEnv).toContain("-e TMPDIR=/tmp");
+  });
+
   it("forwards repeated RTT controls to the package Telegram live lane", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
