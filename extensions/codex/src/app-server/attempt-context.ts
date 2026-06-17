@@ -892,23 +892,6 @@ function isMissingCodexBootstrapContextFile(file: EmbeddedContextFile): boolean 
   return file.content.trimStart().startsWith("[MISSING] Expected at:");
 }
 
-function toCodexEmbeddedContextFile(file: CodexBootstrapFile): EmbeddedContextFile {
-  return {
-    path: readNonEmptyString(file.path) ?? readNonEmptyString(file.name) ?? "",
-    content: file.content ?? "",
-  };
-}
-
-function isCodexWorkspaceRootMemoryBootstrapFile(params: {
-  file: CodexBootstrapFile;
-  workspaceDir: string;
-}): boolean {
-  return isCodexWorkspaceRootMemoryPath({
-    filePath: readNonEmptyString(params.file.path) ?? readNonEmptyString(params.file.name) ?? "",
-    workspaceDir: params.workspaceDir,
-  });
-}
-
 function isCodexWorkspaceRootMemoryContextFile(params: {
   file: EmbeddedContextFile;
   workspaceDir?: string;
