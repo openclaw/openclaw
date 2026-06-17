@@ -455,16 +455,16 @@ async function insertBlocksWithDescendant(
 }
 
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
-  const existing = await client.docx.documentBlock.list({
+  const existingBlocks: FeishuDocxBlock[] = [];
+  for await (const page of await client.docx.documentBlock.listWithIterator({
     path: { document_id: docToken },
-  });
-  if (existing.code !== 0) {
-    throw new Error(existing.msg);
+  })) {
+    existingBlocks.push(...(page?.items ?? []));
   }
 
   const childIds =
-    existing.data?.items
-      ?.filter((b) => b.parent_id === docToken && b.block_type !== 1)
+    existingBlocks
+      .filter((b) => b.parent_id === docToken && b.block_type !== 1)
       .map((b) => b.block_id) ?? [];
 
   if (childIds.length > 0) {

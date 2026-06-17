@@ -11,6 +11,7 @@ const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
 const documentCreateMock = vi.hoisted(() => vi.fn());
 const blockListMock = vi.hoisted(() => vi.fn());
+const blockListWithIteratorMock = vi.hoisted(() => vi.fn());
 const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
 const blockChildrenGetMock = vi.hoisted(() => vi.fn());
 const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
@@ -110,6 +111,7 @@ describe("feishu_doc image fetch hardening", () => {
         },
         documentBlock: {
           list: blockListMock,
+          listWithIterator: blockListWithIteratorMock,
           patch: blockPatchMock,
         },
         documentBlockChildren: {
@@ -153,6 +155,11 @@ describe("feishu_doc image fetch hardening", () => {
         items: [],
       },
     });
+    blockListWithIteratorMock.mockResolvedValue(
+      (async function* () {
+        yield { items: [] };
+      })(),
+    );
 
     blockChildrenCreateMock.mockResolvedValue({
       code: 0,
@@ -410,6 +417,46 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.images_processed).toBe(0);
     expect(consoleErrorSpy).toHaveBeenCalled();
     consoleErrorSpy.mockRestore();
+  });
+
+  it("clears all top-level blocks from every document block page", async () => {
+    blockListWithIteratorMock.mockResolvedValueOnce(
+      (async function* () {
+        yield {
+          items: [
+            { block_id: "doc_1", parent_id: undefined, block_type: 1 },
+            { block_id: "first_page_1", parent_id: "doc_1", block_type: 2 },
+            { block_id: "first_page_2", parent_id: "doc_1", block_type: 3 },
+            { block_id: "nested_1", parent_id: "first_page_1", block_type: 2 },
+          ],
+        };
+        yield {
+          items: [
+            { block_id: "second_page_1", parent_id: "doc_1", block_type: 2 },
+            { block_id: "second_page_page", parent_id: "doc_1", block_type: 1 },
+            { block_id: "second_page_2", parent_id: "doc_1", block_type: 4 },
+          ],
+        };
+      })(),
+    );
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: "doc_1",
+      content: "replacement content",
+    });
+
+    expect(blockListWithIteratorMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1" },
+    });
+    expect(blockChildrenBatchDeleteMock).toHaveBeenCalledTimes(1);
+    expect(blockChildrenBatchDeleteMock.mock.calls[0]?.[0]).toMatchObject({
+      path: { document_id: "doc_1", block_id: "doc_1" },
+      data: { start_index: 0, end_index: 4 },
+    });
+    expect(result.details.blocks_deleted).toBe(4);
   });
 
   it("create grants permission only to trusted Feishu requester", async () => {
