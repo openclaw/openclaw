@@ -608,7 +608,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
       [
         "scripts/package-openclaw-for-docker.mjs",
-        ["test/scripts/package-openclaw-for-docker.test.ts"],
+        ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
       ],
       ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
       ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
@@ -621,6 +621,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/openclaw-npm-postpublish-verify.ts",
         ["test/openclaw-npm-postpublish-verify.test.ts"],
       ],
+      ["scripts/verify-pr-hosted-gates.mjs", ["test/scripts/verify-pr-hosted-gates.test.ts"]],
       [
         "scripts/postinstall-bundled-plugins.mjs",
         ["test/scripts/postinstall-bundled-plugins.test.ts"],
@@ -638,6 +639,13 @@ describe("scripts/test-projects changed-target routing", () => {
         targets,
       });
     }
+  });
+
+  it("keeps QA Lab gateway smoke script edits on QA e2e tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/dev/gateway-smoke.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"],
+    });
   });
 
   it("keeps shared script library edits on owner tests", () => {

@@ -178,6 +178,7 @@ import {
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForModel,
+  resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -789,7 +790,9 @@ export async function runCodexAppServerAttempt(
     tools,
     registeredTools,
     signal: runAbortController.signal,
-    loading: resolveCodexDynamicToolsLoadingForModel(pluginConfig, params.modelId),
+    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, params.modelId, {
+      connectionClass: appServer.connectionClass,
+    }),
     directToolNames: resolveCodexDynamicToolDirectNames(params),
     hookContext: {
       agentId: sessionAgentId,

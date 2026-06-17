@@ -592,7 +592,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
   ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
   ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
-  ["scripts/package-openclaw-for-docker.mjs", ["test/scripts/package-openclaw-for-docker.test.ts"]],
+  [
+    "scripts/package-openclaw-for-docker.mjs",
+    ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
+  ],
   ["scripts/postinstall-bundled-plugins.mjs", ["test/scripts/postinstall-bundled-plugins.test.ts"]],
   ["scripts/prepare-git-hooks.mjs", ["test/scripts/prepare-git-hooks.test.ts"]],
   [
@@ -604,6 +607,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-live.mjs", ["test/scripts/test-live.test.ts"]],
   ["scripts/tsdown-build.mjs", ["test/scripts/tsdown-build.test.ts"]],
   ["scripts/verify.mjs", ["test/scripts/verify.test.ts"]],
+  ["scripts/verify-pr-hosted-gates.mjs", ["test/scripts/verify-pr-hosted-gates.test.ts"]],
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -648,14 +652,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-lifecycle-measure.test.ts"],
   ],
   [
-    "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
-    ["test/scripts/plugin-lifecycle-probe.test.ts"],
-  ],
-  [
-    "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
-    ["test/scripts/plugin-lifecycle-probe.test.ts"],
-  ],
-  [
     "scripts/e2e/release-media-memory-docker.sh",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/release-media-memory-scenario.test.ts"],
   ],
@@ -668,6 +664,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/tsdown-build.mjs", ["test/scripts/tsdown-build.test.ts"]],
+  ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],

@@ -41,6 +41,10 @@ const sessionCreateLifecycleWriterNames = new Set([
   "updateSessionStoreEntry",
   "ensureSessionTranscriptFile",
 ]);
+const legacyManualCompactTrimNames = new Set([
+  "archiveFileOnDisk",
+  "readRecentSessionTranscriptLines",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
@@ -109,6 +113,10 @@ export const migratedTranscriptWriterFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",
   "src/sessions/user-turn-transcript.ts",
+]);
+
+export const migratedSessionCompactManualTrimFiles = new Set([
+  "src/gateway/server-methods/sessions.ts",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -280,6 +288,15 @@ export function findGatewaySessionCreateLifecycleViolations(content, fileName = 
   return violations;
 }
 
+export function findSessionCompactManualTrimBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedSessionStoreViolations(
+    content,
+    fileName,
+    legacyManualCompactTrimNames,
+    "manual compact trim",
+  );
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const readSourceRoots = resolveSourceRoots(repoRoot, [
@@ -342,11 +359,21 @@ export async function main() {
       "src/gateway/server-methods/sessions.ts",
     findViolations: findGatewaySessionCreateLifecycleViolations,
   });
+  const manualCompactTrimViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
+    skipFile: (filePath) =>
+      !migratedSessionCompactManualTrimFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findSessionCompactManualTrimBoundaryViolations,
+  });
   const violations = [
     ...readViolations,
     ...writeViolations,
     ...transcriptWriterViolations,
     ...sessionCreateLifecycleViolations,
+    ...manualCompactTrimViolations,
   ];
 
   if (violations.length === 0) {

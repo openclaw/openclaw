@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   findGatewaySessionCreateLifecycleViolations,
   findSessionAccessorBoundaryViolations,
+  findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  migratedSessionCompactManualTrimFiles,
   migratedSessionAccessorFiles,
   migratedSessionAccessorWriteFiles,
   migratedTranscriptWriterFiles,
@@ -93,6 +95,12 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/chat-transcript-inject.ts",
         "src/sessions/user-turn-transcript.ts",
       ]),
+    );
+  });
+
+  it("ratchets only compact manual trim gateway files", () => {
+    expect(migratedSessionCompactManualTrimFiles).toEqual(
+      new Set(["src/gateway/server-methods/sessions.ts"]),
     );
   });
 
@@ -274,6 +282,29 @@ describe("session accessor boundary guard", () => {
         };
       `),
     ).toEqual([]);
+  });
+
+  it("flags gateway manual compact trim file mutations", () => {
+    expect(
+      findSessionCompactManualTrimBoundaryViolations(`
+        import { archiveFileOnDisk } from "../session-utils.js";
+        import { readRecentSessionTranscriptLines } from "../session-transcript-readers.js";
+        const tail = readRecentSessionTranscriptLines(scope);
+        const archived = archiveFileOnDisk(filePath, "bak");
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports legacy session store manual compact trim "archiveFileOnDisk"' },
+      {
+        line: 3,
+        reason:
+          'imports legacy session store manual compact trim "readRecentSessionTranscriptLines"',
+      },
+      {
+        line: 4,
+        reason: 'calls legacy session store manual compact trim "readRecentSessionTranscriptLines"',
+      },
+      { line: 5, reason: 'calls legacy session store manual compact trim "archiveFileOnDisk"' },
+    ]);
   });
 
   it("ignores comments and strings that describe legacy readers", () => {

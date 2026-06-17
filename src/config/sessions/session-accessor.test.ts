@@ -20,6 +20,7 @@ import {
   replaceSessionEntry,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
+  trimSessionTranscriptForManualCompact,
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
@@ -541,6 +542,102 @@ describe("session accessor file-backed seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
     // Explicit-artifact writes never touch entry metadata: no entry appears.
     expect(listSessionEntries({ storePath })).toEqual([]);
+  });
+
+  it("trims a manual compact transcript and clears stale token metadata", async () => {
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const manualTranscriptPath = path.join(tempDir, `${sessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const contextBudgetStatus: NonNullable<SessionEntry["contextBudgetStatus"]> = {
+      schemaVersion: 1,
+      source: "pre-prompt-estimate",
+      updatedAt: 90,
+      provider: "openai",
+      model: "gpt-5.5",
+      route: "fits",
+      shouldCompact: false,
+      estimatedPromptTokens: 10,
+      contextTokenBudget: 100,
+      promptBudgetBeforeReserve: 80,
+      reserveTokens: 20,
+      effectiveReserveTokens: 20,
+      remainingPromptBudgetTokens: 70,
+      overflowTokens: 0,
+      toolResultReducibleChars: 0,
+      messageCount: 1,
+      unwindowedMessageCount: 1,
+    };
+    await upsertSessionEntry(scope, {
+      contextBudgetStatus,
+      inputTokens: 10,
+      outputTokens: 20,
+      sessionFile: manualTranscriptPath,
+      sessionId,
+      totalTokens: 30,
+      totalTokensFresh: true,
+      updatedAt: 100,
+    });
+    fs.writeFileSync(manualTranscriptPath, "line 1\n\nline 2\nline 3\nline 4\n", "utf-8");
+    const updates: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+
+    const result = await trimSessionTranscriptForManualCompact(scope, {
+      maxLines: 2,
+      nowMs: 500,
+    });
+
+    unsubscribe();
+    expect(result).toMatchObject({ compacted: true, kept: 2 });
+    const archived = result.compacted ? result.archived : "";
+    expect(path.basename(archived)).toMatch(new RegExp(`^${sessionId}\\.jsonl\\.bak\\.`));
+    expect(fs.readFileSync(archived, "utf-8")).toBe("line 1\n\nline 2\nline 3\nline 4\n");
+    expect(fs.readFileSync(manualTranscriptPath, "utf-8")).toBe("line 3\nline 4\n");
+    const updatedEntry = loadSessionEntry(scope);
+    expect(updatedEntry).toMatchObject({
+      sessionFile: manualTranscriptPath,
+      sessionId,
+      updatedAt: 500,
+    });
+    expect(updatedEntry?.contextBudgetStatus).toBeUndefined();
+    expect(updatedEntry?.inputTokens).toBeUndefined();
+    expect(updatedEntry?.outputTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokensFresh).toBeUndefined();
+    expect(updates).toEqual([{ sessionFile: archived }]);
+  });
+
+  it("prefers the current generated transcript over a stale generated sessionFile", async () => {
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionId = "22222222-2222-4222-8222-222222222222";
+    const currentTranscriptPath = path.join(tempDir, `${currentSessionId}.jsonl`);
+    const staleTranscriptPath = path.join(tempDir, `${staleSessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId: currentSessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionFile: staleTranscriptPath,
+      sessionId: currentSessionId,
+      updatedAt: 100,
+    });
+    fs.writeFileSync(currentTranscriptPath, "current one\ncurrent two\n", "utf-8");
+    fs.writeFileSync(staleTranscriptPath, "stale one\nstale two\n", "utf-8");
+
+    const result = await trimSessionTranscriptForManualCompact(scope, {
+      maxLines: 1,
+      sessionFile: staleTranscriptPath,
+    });
+
+    expect(result).toMatchObject({ compacted: true, kept: 1 });
+    expect(fs.readFileSync(currentTranscriptPath, "utf-8")).toBe("current two\n");
+    expect(fs.readFileSync(staleTranscriptPath, "utf-8")).toBe("stale one\nstale two\n");
   });
 
   it("rejects transcript writes without a session key or explicit file", async () => {

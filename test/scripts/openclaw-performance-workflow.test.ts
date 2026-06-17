@@ -33,6 +33,16 @@ function findStep(name: string): WorkflowStep {
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("uses an optional dispatch identifier to name parent-owned runs", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+
+    expect(workflow).toContain(
+      "run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}",
+    );
+    expect(workflow).toContain("dispatch_id:");
+    expect(workflow).toContain("Optional parent workflow dispatch identifier");
+  });
+
   it("uses the clawgrit reports token for every report repo push path", () => {
     const prepare = findStep("Prepare clawgrit reports checkout");
     const publish = findStep("Publish to clawgrit reports");

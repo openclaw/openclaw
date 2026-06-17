@@ -161,6 +161,9 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "remoteWorkspaceRoot": {
+            "type": "string"
+          },
           "codeModeOnly": {
             "type": "boolean",
             "default": false
@@ -384,6 +387,11 @@
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.remoteWorkspaceRoot": {
+      "label": "Remote Workspace Root",
+      "help": "Remote Codex app-server workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
       "advanced": true
     },
     "appServer.codeModeOnly": {

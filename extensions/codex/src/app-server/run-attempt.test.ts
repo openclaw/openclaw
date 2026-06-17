@@ -156,6 +156,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -1683,9 +1685,6 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests((options) =>
-      options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
-    );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -1694,21 +1693,15 @@ describe("runCodexAppServerAttempt", () => {
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.runtimePlan = createCodexRuntimePlanFixture();
 
-    const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
-    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      ignoreDisableMessageTool: true,
-      ignoreRuntimePlan: true,
-    });
+    const availableTools: RuntimeDynamicToolForTest[] = [];
+    const registeredTools = [createRuntimeDynamicTool("message")];
     const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
     const normalParams = createParams(sessionFile, workspaceDir);
     normalParams.disableTools = false;
     normalParams.sourceReplyDeliveryMode = "message_tool_only";
     normalParams.runtimePlan = createCodexRuntimePlanFixture();
-    const normalTools = await buildDynamicToolsForTest(normalParams, workspaceDir);
-    const normalRegisteredTools = await buildDynamicToolsForTest(normalParams, workspaceDir, {
-      ignoreDisableMessageTool: true,
-      ignoreRuntimePlan: true,
-    });
+    const normalTools = [createRuntimeDynamicTool("message")];
+    const normalRegisteredTools = [createRuntimeDynamicTool("message")];
     const normalBridge = createCodexToolBridgeForTest(
       normalParams,
       normalTools,

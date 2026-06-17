@@ -9,6 +9,16 @@ export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
+export {
+  deleteSessionEntryLifecycle,
+  resetSessionEntryLifecycle,
+  type DeleteSessionEntryLifecycleParams,
+  type DeleteSessionEntryLifecycleResult,
+  type ResetSessionEntryLifecycleParams,
+  type ResetSessionEntryLifecycleResult,
+  type SessionLifecycleArchivedTranscript,
+  type SessionLifecycleStoreTarget,
+} from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";
 export * from "./sessions/types.js";

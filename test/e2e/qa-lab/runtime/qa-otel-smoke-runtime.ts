@@ -1,5 +1,4 @@
-#!/usr/bin/env -S node --import tsx
-// Qa Otel Smoke script supports OpenClaw repository automation.
+// QA OTEL Smoke runtime supports OpenClaw repository automation.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -11,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
 
 type CollectorMode = "local" | "docker";
 

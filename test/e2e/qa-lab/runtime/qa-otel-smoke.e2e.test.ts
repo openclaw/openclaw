@@ -1,4 +1,4 @@
-// Qa Otel Smoke tests cover qa otel smoke script behavior.
+// QA OTEL Smoke tests cover QA Lab telemetry evidence.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
@@ -8,7 +8,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { testing } from "../../scripts/qa-otel-smoke.ts";
+import { testing } from "./qa-otel-smoke-runtime.js";
 
 describe("qa-otel-smoke receiver bounds", () => {
   let configuredBodyLimitLoad: ReturnType<typeof spawnSync>;
@@ -21,7 +21,7 @@ describe("qa-otel-smoke receiver bounds", () => {
         "tsx",
         "--input-type=module",
         "--eval",
-        'await import("./scripts/qa-otel-smoke.ts");',
+        'await import("./test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts");',
       ],
       {
         encoding: "utf8",

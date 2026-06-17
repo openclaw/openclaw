@@ -90,7 +90,7 @@ const qaMaturityTaxonomySchema = z
     }
   });
 
-export type QaNativeCoverageEvidenceKind = "vitest" | "playwright";
+export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
