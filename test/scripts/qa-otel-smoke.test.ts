@@ -35,6 +35,72 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
+  function makePassingSmokeAssertionInput(): Parameters<typeof testing.assertSmoke>[0] {
+    return {
+      bodyText: {
+        logs: ["diagnostics-otel: logs exporter enabled"],
+      },
+      childExitCode: 0,
+      disallowedBodyNeedles: ["OTEL-QA-SECRET"],
+      logRecords: [
+        {
+          body: "diagnostics-otel: logs exporter enabled",
+          traceId: "trace",
+          spanId: "span",
+        },
+      ],
+      metrics: [{ name: "openclaw.harness.duration_ms" }],
+      requests: [
+        {
+          path: "/v1/traces",
+          signal: "traces",
+          bytes: 16,
+          contentEncoding: undefined,
+          status: 200,
+          spanCount: 5,
+          metricCount: 0,
+          logCount: 0,
+        },
+        {
+          path: "/v1/metrics",
+          signal: "metrics",
+          bytes: 16,
+          contentEncoding: undefined,
+          status: 200,
+          spanCount: 0,
+          metricCount: 1,
+          logCount: 0,
+        },
+        {
+          path: "/v1/logs",
+          signal: "logs",
+          bytes: 16,
+          contentEncoding: undefined,
+          status: 200,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 1,
+        },
+      ],
+      spans: [
+        { name: "openclaw.run", parent: false, attributes: {} },
+        { name: "openclaw.harness.run", parent: true, attributes: {} },
+        { name: "openclaw.context.assembled", parent: true, attributes: {} },
+        { name: "openclaw.message.delivery", parent: true, attributes: {} },
+        {
+          name: "chat gpt-5.5",
+          parent: true,
+          attributes: {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": "gpt-5.5",
+            "openclaw.model": "gpt-5.5",
+            "openclaw.provider": "openai",
+          },
+        },
+      ],
+    };
+  }
+
   it("accepts package-manager forwarded arguments", () => {
     expect(
       testing.parseArgs([
@@ -229,6 +295,42 @@ describe("qa-otel-smoke receiver bounds", () => {
 
     expect(assertion.passed).toBe(false);
     expect(assertion.failures).toContain("OTLP traces request /v1/traces returned status 400");
+  });
+
+  it("allows safe operational OTLP log bodies while leak checks inspect raw payloads", () => {
+    const assertion = testing.assertSmoke(makePassingSmokeAssertionInput());
+
+    expect(assertion.passed).toBe(true);
+    expect(assertion.failures).toEqual([]);
+  });
+
+  it("still fails when OTLP log payload text leaks scenario content", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.bodyText = {
+      logs: ["diagnostics-otel: log payload contains OTEL-QA-SECRET"],
+    };
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("OTLP logs payload leaked content: OTEL-QA-SECRET");
+    expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
+  });
+
+  it("still requires OTLP log records to carry trace correlation", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.logRecords = [
+      {
+        body: "diagnostics-otel: logs exporter enabled",
+        traceId: "",
+        spanId: "",
+      },
+    ];
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("no OTLP log records included trace/span correlation ids");
   });
 
   it("preserves leak markers even when later body text is truncated", () => {
