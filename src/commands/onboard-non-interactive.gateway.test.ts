@@ -783,7 +783,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           runtime,
         ),
       ).rejects.toThrow(
-        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+        /only waits for an already-running gateway unless you also install the daemon[\s\S]*onboard --non-interactive --accept-risk --install-daemon[\s\S]*onboard --non-interactive --accept-risk --skip-health/,
       );
     });
   }, 60_000);
