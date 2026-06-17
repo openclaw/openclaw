@@ -17,6 +17,32 @@ function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Erro
   return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }
 
+/**
+ * Determine whether a sync error is likely recoverable.
+ * Decryption failures on individual messages should not tear down the sync loop.
+ */
+function isRecoverableSyncError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  // Megolm session-key failures: a remote sender hasn't shared keys yet.
+  if (message.includes("decryption") || message.includes("decrypt")) {
+    return true;
+  }
+  if (message.includes("megolm") || (message.includes("session") && message.includes("key"))) {
+    return true;
+  }
+  if (message.includes("unknown inbound session")) {
+    return true;
+  }
+  // Transient HTTP/network errors that the SDK already retries internally.
+  if (message.includes("etimedout") || message.includes("econnrefused") || message.includes("enotfound")) {
+    return true;
+  }
+  return false;
+}
+
 export function createMatrixMonitorSyncLifecycle(params: {
   client: MatrixClient;
   statusController: MatrixMonitorStatusController;
@@ -62,7 +88,11 @@ export function createMatrixMonitorSyncLifecycle(params: {
       return;
     }
     params.statusController.noteUnexpectedError(error);
-    settleFatal(error);
+    // Decryption and transient network errors should not tear down the sync loop.
+    // The SDK will attempt to recover; only escalate truly fatal errors.
+    if (!isRecoverableSyncError(error)) {
+      settleFatal(error);
+    }
   };
 
   params.client.on("sync.state", onSyncState);

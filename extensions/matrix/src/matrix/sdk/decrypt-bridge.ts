@@ -33,6 +33,8 @@ type MatrixCryptoRetrySignalSource = {
 const MATRIX_DECRYPT_RETRY_BASE_DELAY_MS = 1_500;
 const MATRIX_DECRYPT_RETRY_MAX_DELAY_MS = 30_000;
 const MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS = 8;
+/** Fewer retries for missing-key failures: keys were never shared, so retrying won't help. */
+const MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS_MISSING_KEY = 2;
 
 function resolveDecryptRetryKey(roomId: string, eventId: string): string | null {
   if (!roomId || !eventId) {
@@ -53,6 +55,18 @@ function getDecryptionFailureReason(event: MatrixEvent): DecryptionFailureCode |
   return typeof reason === "string" && reason in DecryptionFailureCode
     ? (reason as DecryptionFailureCode)
     : null;
+}
+
+/**
+ * Returns the max retry attempts for a given decryption failure reason.
+ * Missing-key failures (sender never shared the session) get fewer retries
+ * because the keys are unlikely to arrive without explicit intervention.
+ */
+function resolveDecryptRetryMaxAttempts(reason: DecryptionFailureCode | null): number {
+  if (reason === DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID) {
+    return MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS_MISSING_KEY;
+  }
+  return MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS;
 }
 
 function shouldRetryDecryptionFailure(event: MatrixEvent): boolean {
@@ -271,7 +285,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       return;
     }
     const attempts = (existing?.attempts ?? 0) + 1;
-    if (attempts > MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS) {
+    const failureReason = getDecryptionFailureReason(params.event);
+    const maxAttempts = resolveDecryptRetryMaxAttempts(failureReason);
+    if (attempts > maxAttempts) {
       const retry = this.decryptRetries.get(retryKey);
       if (retry?.timer) {
         clearTimeout(retry.timer);
@@ -280,7 +296,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       this.exhaustedDecryptRetries.add(retryKey);
       LogService.debug(
         "MatrixClientLite",
-        `Giving up decryption retry for ${params.eventId} in ${params.roomId} after ${attempts - 1} attempts`,
+        `Giving up decryption retry for ${params.eventId} in ${params.roomId} after ${attempts - 1} attempts (reason=${String(failureReason)})`,
       );
       return;
     }
