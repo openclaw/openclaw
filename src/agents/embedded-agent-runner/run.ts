@@ -1853,6 +1853,7 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          const laneHeartbeat = setInterval(noteLaneTaskProgress, 30_000);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2011,6 +2012,7 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              clearInterval(laneHeartbeat);
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
