@@ -553,8 +553,27 @@ describe("session accessor file-backed seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
+    const contextBudgetStatus: NonNullable<SessionEntry["contextBudgetStatus"]> = {
+      schemaVersion: 1,
+      source: "pre-prompt-estimate",
+      updatedAt: 90,
+      provider: "openai",
+      model: "gpt-5.5",
+      route: "fits",
+      shouldCompact: false,
+      estimatedPromptTokens: 10,
+      contextTokenBudget: 100,
+      promptBudgetBeforeReserve: 80,
+      reserveTokens: 20,
+      effectiveReserveTokens: 20,
+      remainingPromptBudgetTokens: 70,
+      overflowTokens: 0,
+      toolResultReducibleChars: 0,
+      messageCount: 1,
+      unwindowedMessageCount: 1,
+    };
     await upsertSessionEntry(scope, {
-      contextBudgetStatus: { route: "stale" } as NonNullable<SessionEntry["contextBudgetStatus"]>,
+      contextBudgetStatus,
       inputTokens: 10,
       outputTokens: 20,
       sessionFile: manualTranscriptPath,

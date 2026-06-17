@@ -2629,7 +2629,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     if (!trimResult.compacted) {
-      if ("reason" in trimResult && trimResult.reason === "no transcript") {
+      if ("kept" in trimResult) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimResult.kept,
+          },
+          undefined,
+        );
+      } else {
         respond(
           true,
           {
@@ -2640,18 +2651,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        return;
       }
-      respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          kept: trimResult.kept,
-        },
-        undefined,
-      );
       return;
     }
 
