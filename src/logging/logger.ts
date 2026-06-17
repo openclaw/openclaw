@@ -539,7 +539,8 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? resolveDefaultActiveLogFile();
+  const rawFile = typeof cfg?.file === "string" ? cfg.file.trim() : undefined;
+  const file = rawFile && rawFile.length > 0 ? rawFile : resolveDefaultActiveLogFile();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
@@ -589,6 +590,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
   let currentFileBytes = getCurrentLogFileBytes(activeFile);
   let warnedAboutRotationFailure = false;
+  let warnedAboutWriteFailure = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -619,6 +621,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         if (rotateLogFile(activeFile)) {
           currentFileBytes = getCurrentLogFileBytes(activeFile);
           warnedAboutRotationFailure = false;
+          warnedAboutWriteFailure = false;
         } else if (!warnedAboutRotationFailure) {
           warnedAboutRotationFailure = true;
           process.stderr.write(
@@ -628,6 +631,12 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       }
       if (appendLogLine(activeFile, payload)) {
         currentFileBytes += payloadBytes;
+        warnedAboutWriteFailure = false;
+      } else if (!warnedAboutWriteFailure) {
+        warnedAboutWriteFailure = true;
+        process.stderr.write(
+          `[openclaw] log file write failed; continuing without file log file=${activeFile} (will retry silently; check path/permissions)\n`,
+        );
       }
     } catch {
       // never block on logging failures
