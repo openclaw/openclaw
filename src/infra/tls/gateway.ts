@@ -62,10 +62,10 @@ async function generateSelfSignedCert(params: {
     "-subj",
     "/CN=openclaw-gateway",
   ]);
-  await fs.chmod(params.keyPath, 0o600).catch((err) => {
+  await fs.chmod(params.keyPath, 0o600).catch((err: unknown) => {
     throw new Error(`failed to chmod key file ${params.keyPath}: ${String(err)}`);
   });
-  await fs.chmod(params.certPath, 0o600).catch((err) => {
+  await fs.chmod(params.certPath, 0o600).catch((err: unknown) => {
     throw new Error(`failed to chmod cert file ${params.certPath}: ${String(err)}`);
   });
   params.log?.info?.(
