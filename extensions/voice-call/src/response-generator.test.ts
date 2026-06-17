@@ -72,10 +72,19 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
-  const runEmbeddedAgent = vi.fn(async (_args: EmbeddedAgentArgs) => ({
-    payloads,
-    meta: { durationMs: 12, aborted: false },
-  }));
+  const runEmbeddedAgent = vi.fn(
+    async (
+      args: EmbeddedAgentArgs & { onBlockReply?: (payload: Record<string, unknown>) => void },
+    ) => {
+      for (const payload of options?.blockReplyPayloads ?? []) {
+        args.onBlockReply?.(payload);
+      }
+      return {
+        payloads,
+        meta: { durationMs: 12, aborted: false },
+      };
+    },
+  );
   const resolveAgentDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
     return `/tmp/openclaw/agents/${agentId}`;
   });
