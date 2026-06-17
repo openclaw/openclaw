@@ -1585,6 +1585,7 @@
                       "gateway/security/secure-file-operations",
                       "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
+                      "gateway/agent-runtime-boundary",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
