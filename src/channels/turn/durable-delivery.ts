@@ -1,3 +1,5 @@
+// Durable final-reply delivery for inbound channel turns.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,12 +12,12 @@ import {
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import { sendDurableMessageBatch } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
+/** Options controlling durable final delivery for inbound channel replies. */
 export type DurableInboundReplyDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
   "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
@@ -25,6 +27,7 @@ export type DurableInboundReplyDeliveryOptions = Pick<
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
+/** Full context required to deliver one inbound final reply through durable message sending. */
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
   cfg: OpenClawConfig;
   channel: string;
@@ -35,6 +38,7 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   info: ChannelDeliveryInfo;
 };
 
+/** Outcome of attempting durable final delivery for an inbound reply payload. */
 export type DurableInboundReplyDeliveryResult =
   | { status: "not_applicable"; reason: "non_final" }
   | {
@@ -61,6 +65,7 @@ function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): strin
 export function resolveDurableInboundReplyToId(
   params: Pick<DurableInboundReplyDeliveryParams, "ctxPayload" | "payload" | "replyToId">,
 ): string | null | undefined {
+  // Explicit null means "do not reply to a source message"; do not fall back to context ids.
   if (params.replyToId === null || params.payload.replyToId === null) {
     return null;
   }
@@ -93,6 +98,7 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
   };
 }
 
+/** Narrows durable delivery results that handled the payload without caller fallback. */
 export function isDurableInboundReplyDeliveryHandled(
   result: DurableInboundReplyDeliveryResult,
 ): result is Extract<
@@ -102,6 +108,7 @@ export function isDurableInboundReplyDeliveryHandled(
   return result.status === "handled_visible" || result.status === "handled_no_send";
 }
 
+/** Throws failed durable delivery results, preserving visible-send metadata when applicable. */
 export function throwIfDurableInboundReplyDeliveryFailed(
   result: DurableInboundReplyDeliveryResult,
 ): void {
@@ -113,6 +120,7 @@ export function throwIfDurableInboundReplyDeliveryFailed(
 }
 
 function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
+  // Partial durable sends must suppress duplicate fallback delivery while still surfacing failure.
   if (typeof error === "object" && error !== null && Object.isExtensible(error)) {
     Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
     return error;
@@ -123,6 +131,7 @@ function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
   return visibleError;
 }
 
+/** Delivers final inbound replies through the durable message-send context when supported. */
 export async function deliverInboundReplyWithMessageSendContext(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
@@ -199,7 +208,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     silent: params.silent,
     durability,
     session,
-    gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
+    gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
     return { status: "failed" as const, error: send.error };

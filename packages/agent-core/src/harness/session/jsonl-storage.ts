@@ -1,7 +1,13 @@
+// Agent Core module implements jsonl storage behavior.
 import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../types.js";
 import { SessionError, toError } from "../types.js";
 import { getFileSystemResultOrThrow } from "./repo-utils.js";
-import { BaseSessionStorage, leafIdAfterEntry } from "./storage-base.js";
+import {
+  appendParentIdAfterEntry,
+  BaseSessionStorage,
+  leafIdUpdateAfterEntry,
+} from "./storage-base.js";
+import { parseSessionTimestampMs } from "./timestamps.js";
 
 type JsonlSessionStorageFileSystem = Pick<
   FileSystem,
@@ -64,6 +70,9 @@ function parseHeaderLine(line: string, filePath: string): SessionHeader {
   if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
     throw invalidSession(filePath, "session header is missing timestamp");
   }
+  if (parseSessionTimestampMs(parsed.timestamp) === undefined) {
+    throw invalidSession(filePath, "session header has invalid timestamp");
+  }
   if (typeof parsed.cwd !== "string" || !parsed.cwd) {
     throw invalidSession(filePath, "session header is missing cwd");
   }
@@ -102,8 +111,22 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
   if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
     throw invalidEntry(filePath, lineNumber, "is missing timestamp");
   }
+  if (parseSessionTimestampMs(parsed.timestamp) === undefined) {
+    throw invalidEntry(filePath, lineNumber, "has invalid timestamp");
+  }
   if (parsed.type === "leaf" && parsed.targetId !== null && typeof parsed.targetId !== "string") {
     throw invalidEntry(filePath, lineNumber, "has invalid targetId");
+  }
+  if (
+    parsed.type === "leaf" &&
+    parsed.appendParentId !== undefined &&
+    parsed.appendParentId !== null &&
+    typeof parsed.appendParentId !== "string"
+  ) {
+    throw invalidEntry(filePath, lineNumber, "has invalid appendParentId");
+  }
+  if (parsed.appendMode !== undefined && parsed.appendMode !== "side") {
+    throw invalidEntry(filePath, lineNumber, "has invalid appendMode");
   }
   return parsed as unknown as SessionTreeEntry;
 }
@@ -118,6 +141,7 @@ function headerToSessionMetadata(header: SessionHeader, path: string): JsonlSess
   };
 }
 
+/** Read only the JSONL session header and convert it to session metadata. */
 export async function loadJsonlSessionMetadata(
   fs: JsonlSessionStorageFileSystem,
   filePath: string,
@@ -140,6 +164,7 @@ async function loadJsonlStorage(
   header: SessionHeader;
   entries: SessionTreeEntry[];
   leafId: string | null;
+  appendParentId: string | null;
 }> {
   const content = getFileSystemResultOrThrow(
     await fs.readTextFile(filePath),
@@ -153,14 +178,20 @@ async function loadJsonlStorage(
   const header = parseHeaderLine(lines[0], filePath);
   const entries: SessionTreeEntry[] = [];
   let leafId: string | null = null;
+  let appendParentId: string | null = null;
   for (let i = 1; i < lines.length; i++) {
     const entry = parseEntryLine(lines[i], filePath, i + 1);
     entries.push(entry);
-    leafId = leafIdAfterEntry(entry);
+    const leafUpdate = leafIdUpdateAfterEntry(entry);
+    if (leafUpdate !== undefined) {
+      leafId = leafUpdate;
+    }
+    appendParentId = appendParentIdAfterEntry(entry);
   }
-  return { header, entries, leafId };
+  return { header, entries, leafId, appendParentId };
 }
 
+/** Append-only JSONL-backed storage for one session tree. */
 export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata> {
   private readonly fs: JsonlSessionStorageFileSystem;
   private readonly filePath: string;
@@ -171,8 +202,9 @@ export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata
     header: SessionHeader,
     entries: SessionTreeEntry[],
     leafId: string | null,
+    appendParentId: string | null,
   ) {
-    super(headerToSessionMetadata(header, filePath), entries, leafId);
+    super(headerToSessionMetadata(header, filePath), entries, leafId, appendParentId);
     this.fs = fs;
     this.filePath = filePath;
   }
@@ -182,9 +214,17 @@ export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata
     filePath: string,
   ): Promise<JsonlSessionStorage> {
     const loaded = await loadJsonlStorage(fs, filePath);
-    return new JsonlSessionStorage(fs, filePath, loaded.header, loaded.entries, loaded.leafId);
+    return new JsonlSessionStorage(
+      fs,
+      filePath,
+      loaded.header,
+      loaded.entries,
+      loaded.leafId,
+      loaded.appendParentId,
+    );
   }
 
+  /** Create a new JSONL file with a session header and no entries. */
   static async create(
     fs: JsonlSessionStorageFileSystem,
     filePath: string,
@@ -206,7 +246,7 @@ export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata
       await fs.writeFile(filePath, `${JSON.stringify(header)}\n`),
       `Failed to create session ${filePath}`,
     );
-    return new JsonlSessionStorage(fs, filePath, header, [], null);
+    return new JsonlSessionStorage(fs, filePath, header, [], null, null);
   }
 
   override async setLeafId(leafId: string | null): Promise<void> {
@@ -219,6 +259,7 @@ export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata
   }
 
   override async appendEntry(entry: SessionTreeEntry): Promise<void> {
+    this.validateEntryForAppend(entry);
     getFileSystemResultOrThrow(
       await this.fs.appendFile(this.filePath, `${JSON.stringify(entry)}\n`),
       `Failed to append session entry ${entry.id}`,

@@ -1,3 +1,4 @@
+// Interactive outbound tests cover channel outbound interactive payload construction.
 import { describe, expect, it } from "vitest";
 import {
   adaptMessagePresentationForChannel,
@@ -77,6 +78,94 @@ describe("presentation capability limits", () => {
       { label: "First", value: "first", priority: 1 },
       { label: "Second", value: "second", priority: 100 },
       { label: "Third", value: "third" },
+    ]);
+  });
+
+  it("applies callback byte limits to typed command actions", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Keep",
+          action: { type: "command", command: "/codex plugins menu" },
+        },
+        {
+          label: "Drop",
+          action: { type: "command", command: `/codex plugins enable ${"x".repeat(20)}` },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 24,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Keep",
+        action: { type: "command", command: "/codex plugins menu" },
+      },
+    ]);
+  });
+
+  it("keeps typed button actions when only the legacy fallback exceeds value limits", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Keep",
+          value: "legacy-value-that-is-too-long",
+          action: { type: "command", command: "/short" },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 8,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Keep",
+        action: { type: "command", command: "/short" },
+      },
+    ]);
+  });
+
+  it("keeps typed select actions when only the legacy fallback exceeds value limits", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            options: [
+              {
+                label: "Keep",
+                value: "legacy-value-that-is-too-long",
+                action: { type: "callback", value: "short" },
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        limits: {
+          selects: {
+            maxValueBytes: 8,
+          },
+        },
+      },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "select",
+        options: [{ label: "Keep", action: { type: "callback", value: "short" } }],
+      },
     ]);
   });
 

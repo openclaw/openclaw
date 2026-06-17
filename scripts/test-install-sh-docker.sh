@@ -14,23 +14,30 @@ run_install_smoke_container() {
 }
 
 resolve_default_smoke_platform() {
-  local host_os
   local host_arch
   if [[ -n "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}" ]]; then
     printf "%s" "$OPENCLAW_INSTALL_SMOKE_PLATFORM"
     return
   fi
+  host_arch="$(uname -m)"
   if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    case "$host_arch" in
+      arm64 | aarch64)
+        printf "linux/arm64"
+        return
+        ;;
+    esac
     printf "linux/amd64"
     return
   fi
-  host_os="$(uname -s)"
-  host_arch="$(uname -m)"
-  if [[ "$host_os" == "Darwin" && "$host_arch" == "arm64" ]]; then
-    printf "linux/arm64"
-    return
-  fi
-  printf "linux/amd64"
+  case "$host_arch" in
+    arm64 | aarch64)
+      printf "linux/arm64"
+      ;;
+    *)
+      printf "linux/amd64"
+      ;;
+  esac
 }
 
 print_pack_audit() {
@@ -142,6 +149,28 @@ console.log(
   `==> Pack audit delta (${baseline.version ?? "baseline"} -> ${update.version ?? "update"}): tgz=${formatSignedBytes((update.size ?? NaN) - (baseline.size ?? NaN))} unpacked=${formatSignedBytes((update.unpackedSize ?? NaN) - (baseline.unpackedSize ?? NaN))} files=${fileDelta}`,
 );
 ' "$baseline_pack_json_file" "$update_pack_json_file"
+}
+
+read_pack_tarball_filename() {
+  local pack_json_file="$1"
+  node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const raw = fs.readFileSync(process.argv[1], "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const last = Array.isArray(parsed) ? parsed.at(-1) : null;
+const filename = typeof last?.filename === "string" ? last.filename.trim() : "";
+if (
+  !filename.endsWith(".tgz") ||
+  filename.includes("\0") ||
+  filename !== path.basename(filename) ||
+  filename !== path.win32.basename(filename)
+) {
+  console.error(`ERROR: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}`);
+  process.exit(1);
+}
+process.stdout.write(filename);
+' "$pack_json_file"
 }
 
 SMOKE_IMAGE="${OPENCLAW_INSTALL_SMOKE_IMAGE:-openclaw-install-smoke:local}"
@@ -291,17 +320,7 @@ prepare_update_tarball() {
     node scripts/check-package-dist-imports.mjs "$ROOT_DIR"
     quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   fi
-  UPDATE_TGZ_FILE="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(last.filename);
-' "$pack_json_file"
-  )"
+  UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"
   if [[ -z "$UPDATE_PACKAGE_SPEC" ]]; then
     node scripts/check-openclaw-package-tarball.mjs "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
   fi
@@ -327,17 +346,7 @@ process.stdout.write(last.version);
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
-  BASELINE_TGZ_FILE="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(last.filename);
-' "$baseline_pack_json_file"
-  )"
+  BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
   UPDATE_BASELINE_VERSION="$(
     node -e '
 const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
@@ -443,6 +452,10 @@ else
   LATEST_VERSION=""
   if [[ -f "$LATEST_FILE" ]]; then
     LATEST_VERSION="$(cat "$LATEST_FILE")"
+  fi
+  public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+  if [[ -n "$public_latest_version" ]]; then
+    LATEST_VERSION="$public_latest_version"
   fi
 
   echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"

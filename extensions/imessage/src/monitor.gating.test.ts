@@ -1,3 +1,4 @@
+// Imessage tests cover monitor.gating plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetIMessageShortIdState } from "./monitor-reply-cache.js";
@@ -7,8 +8,10 @@ import {
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 beforeEach(() => {
+  installIMessageStateRuntimeForTest();
   resetIMessageShortIdState();
 });
 

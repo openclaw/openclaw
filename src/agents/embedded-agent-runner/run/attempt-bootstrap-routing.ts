@@ -1,8 +1,12 @@
+/**
+ * Resolves bootstrap context targets for one embedded-agent attempt.
+ */
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 
-export type AttemptBootstrapRoutingInput = {
+/** Inputs that decide whether this attempt should inject workspace bootstrap context. */
+type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   trigger?: string;
@@ -14,13 +18,14 @@ export type AttemptBootstrapRoutingInput = {
   hasBootstrapFileAccess: boolean;
 };
 
-export type AttemptBootstrapRouting = {
+/** Bootstrap placement decision consumed by system/runtime context assembly. */
+type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
 
-export type AttemptWorkspaceBootstrapRoutingInput = Omit<
+type AttemptWorkspaceBootstrapRoutingInput = Omit<
   AttemptBootstrapRoutingInput,
   "workspaceBootstrapPending"
 > & {
@@ -28,6 +33,11 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
+/**
+ * Maps a resolved bootstrap mode to concrete prompt destinations. Today only
+ * full bootstrap enters system context; limited/none intentionally avoid
+ * runtime-context injection until that path has a separate contract.
+ */
 export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
 }): Pick<
@@ -72,6 +82,12 @@ export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[
   );
 }
 
+/**
+ * Resolves workspace bootstrap routing after checking pending state and
+ * hook-provided bootstrap files. Hook content counts as both pending bootstrap
+ * and file access so generated bootstrap text follows the same route as disk
+ * bootstrap content.
+ */
 export async function resolveAttemptWorkspaceBootstrapRouting(
   params: AttemptWorkspaceBootstrapRoutingInput,
 ): Promise<AttemptBootstrapRouting> {

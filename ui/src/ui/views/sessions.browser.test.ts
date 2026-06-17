@@ -1,7 +1,11 @@
-import { existsSync } from "node:fs";
+// Control UI tests cover sessions behavior.
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import {
+  canRunPlaywrightChromium,
+  resolvePlaywrightChromiumExecutablePath,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
   [375, 812],
@@ -10,7 +14,10 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 
-const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
+  ? describe
+  : describe.skip;
 
 let browser: Browser;
 
@@ -39,6 +46,7 @@ function sessionsTableHtml() {
     "Fast",
     "Verbose",
     "Reasoning",
+    "Actions",
   ];
   return `
     <section class="card">
@@ -95,9 +103,10 @@ function sessionsTableHtml() {
                 <td><select><option>on</option></select></td>
                 <td><select><option>full</option></select></td>
                 <td><select><option>stream</option></select></td>
+                <td><button class="icon-btn" title="Add to Workboard"></button></td>
               </tr>
               <tr class="session-checkpoint-details-row">
-                <td colspan="13">
+                <td colspan="14">
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
@@ -157,7 +166,7 @@ async function openFixture(width: number, height: number): Promise<Page> {
 
 describeBrowserLayout("sessions responsive browser layout", () => {
   beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   });
 
   afterAll(async () => {

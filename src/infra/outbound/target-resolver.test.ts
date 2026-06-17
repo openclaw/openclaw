@@ -1,6 +1,10 @@
+// Covers outbound target resolver id heuristics, directory cache/live fallback,
+// ambiguity modes, display formatting, and plugin normalized fallbacks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
@@ -126,6 +130,47 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reuse directory cache entries across prepared plugin runtimes", async () => {
+    const firstListGroups = vi
+      .fn()
+      .mockResolvedValue([
+        { kind: "group", id: "first-id", name: "support" } satisfies ChannelDirectoryEntry,
+      ]);
+    const replacementListGroups = vi
+      .fn()
+      .mockResolvedValue([
+        { kind: "group", id: "replacement-id", name: "support" } satisfies ChannelDirectoryEntry,
+      ]);
+    const firstPlugin = {
+      ...createChannelTestPluginBase({ id: "richchat" }),
+      directory: { listGroups: firstListGroups },
+      messaging: { targetResolver: {} },
+    } satisfies ChannelPlugin;
+    const replacementPlugin = {
+      ...createChannelTestPluginBase({ id: "richchat" }),
+      directory: { listGroups: replacementListGroups },
+      messaging: { targetResolver: {} },
+    } satisfies ChannelPlugin;
+
+    const first = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: firstPlugin,
+    });
+    const replacement = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: replacementPlugin,
+    });
+
+    expect(first.target.to).toBe("first-id");
+    expect(replacement.target.to).toBe("replacement-id");
+    expect(firstListGroups).toHaveBeenCalledOnce();
+    expect(replacementListGroups).toHaveBeenCalledOnce();
+  });
+
   it("skips directory lookup for direct ids", async () => {
     const result = await expectOkResolution({
       cfg,
@@ -162,6 +207,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       to: "user:dm-user-id",
       kind: "user",
       source: "directory",
+      resolutionSource: "plugin",
       display: undefined,
     });
     expect(mocks.resolveTarget).toHaveBeenCalledOnce();
@@ -200,6 +246,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       kind: "group",
       display: "telegram:-1001234567890:topic:42",
       source: "normalized",
+      resolutionSource: "normalized",
     });
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
@@ -236,6 +283,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       to: "+15551234567",
       kind: "user",
       source: "normalized",
+      resolutionSource: "plugin",
       display: undefined,
     });
     expect(mocks.listPeers).toHaveBeenCalledTimes(1);

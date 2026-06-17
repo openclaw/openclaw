@@ -1,3 +1,4 @@
+// Inworld tests cover speech provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
@@ -157,6 +158,29 @@ describe("buildInworldSpeechProvider", () => {
     ).toEqual({
       handled: true,
       warnings: ['invalid Inworld temperature "3"'],
+    });
+  });
+
+  it("warns on non-decimal directive temperature", () => {
+    const provider = buildInworldSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "temperature",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Inworld temperature "0x1"'],
     });
   });
 

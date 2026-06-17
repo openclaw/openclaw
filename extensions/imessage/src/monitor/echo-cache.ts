@@ -1,8 +1,14 @@
+// Imessage plugin module implements echo cache behavior.
 import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 type SentMessageLookup = {
   text?: string;
   messageId?: string;
+};
+
+type SentMessageLookupOptions = {
+  skipIdShortCircuit?: boolean;
+  includePendingText?: boolean;
 };
 
 export type SentMessageCache = {
@@ -16,7 +22,11 @@ export type SentMessageCache = {
    *   that will never match the GUID outbound IDs, but text matching is still
    *   the right way to identify agent reply echoes.
    */
-  has: (scope: string, lookup: SentMessageLookup, skipIdShortCircuit?: boolean) => boolean;
+  has: (
+    scope: string,
+    lookup: SentMessageLookup,
+    options?: boolean | SentMessageLookupOptions,
+  ) => boolean;
 };
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -24,17 +34,28 @@ export type SentMessageCache = {
 // duplicate delivery (noisy but not lossy) — never message loss.
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
-const LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS = /^[\uFEFF\uFFFD\uFFFE\uFFFF]+/u;
+
+function isLeadingEchoTextCorruptionMarker(code: number): boolean {
+  return (
+    code === 0x0000 || code === 0xfeff || code === 0xfffd || code === 0xfffe || code === 0xffff
+  );
+}
+
+function stripLeadingEchoTextCorruptionMarkers(text: string): string {
+  let offset = 0;
+  while (offset < text.length && isLeadingEchoTextCorruptionMarker(text.charCodeAt(offset))) {
+    offset += 1;
+  }
+  return offset === 0 ? text : text.slice(offset);
+}
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text
-    .replace(/\r\n?/g, "\n")
-    .trim()
-    .replace(LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS, "")
-    .trim();
+  const normalized = stripLeadingEchoTextCorruptionMarkers(
+    text.replace(/\r\n?/g, "\n").trim(),
+  ).trim();
   return normalized ? normalized : null;
 }
 
@@ -69,9 +90,21 @@ class DefaultSentMessageCache implements SentMessageCache {
     this.cleanup();
   }
 
-  has(scope: string, lookup: SentMessageLookup, skipIdShortCircuit = false): boolean {
+  has(
+    scope: string,
+    lookup: SentMessageLookup,
+    options: boolean | SentMessageLookupOptions = false,
+  ): boolean {
     this.cleanup();
-    if (hasPersistedIMessageEcho({ scope, ...lookup })) {
+    const resolvedOptions =
+      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
+    if (
+      hasPersistedIMessageEcho({
+        scope,
+        ...lookup,
+        includePendingText: resolvedOptions.includePendingText,
+      })
+    ) {
       return true;
     }
     const textKey = normalizeEchoTextKey(lookup.text);
@@ -88,7 +121,7 @@ class DefaultSentMessageCache implements SentMessageCache {
       const hasTextOnlyMatch =
         typeof textTimestamp === "number" &&
         (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
-      if (!skipIdShortCircuit && !hasTextOnlyMatch) {
+      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch) {
         return false;
       }
     }

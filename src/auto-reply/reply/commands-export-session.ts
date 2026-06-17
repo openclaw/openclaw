@@ -1,14 +1,16 @@
+// Builds export bundles for a session transcript and runtime context.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
+import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import { pathExists } from "../../infra/fs-safe.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -25,6 +27,7 @@ interface SessionData {
   header: SessionHeader | null;
   entries: AgentSessionEntry[];
   leafId: string | null;
+  hasLeafControl: boolean;
   systemPrompt?: string;
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
@@ -239,6 +242,7 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   header: SessionHeader | null;
   entries: AgentSessionEntry[];
   leafId: string | null;
+  hasLeafControl: boolean;
   warnings: SessionExportWarningSummary[];
 }> {
   const raw = await fsp.readFile(sessionFile, "utf-8");
@@ -246,10 +250,26 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is AgentSessionEntry => entry.type !== "session");
-  const lastEntry = entries.at(-1);
-  const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
-  return { header, entries, leafId, warnings: summarizeSessionExportWarnings(warnings) };
+  const rawEntries = fileEntries.filter(
+    (entry): entry is AgentSessionEntry => entry.type !== "session",
+  );
+  const tree = scanSessionTranscriptTree(rawEntries);
+  const hasLeafControl = tree.hasLeafControl;
+  const entries = hasLeafControl
+    ? rawEntries.map((entry) => {
+        const node = tree.byId.get(entry.id);
+        return node && entry.parentId !== node.parentId
+          ? ({ ...entry, parentId: node.parentId } as AgentSessionEntry)
+          : entry;
+      })
+    : rawEntries;
+  return {
+    header,
+    entries,
+    leafId: tree.leafId,
+    hasLeafControl,
+    warnings: summarizeSessionExportWarnings(warnings),
+  };
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
@@ -271,7 +291,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
 
   // 2. Load session entries
-  const { entries, header, leafId, warnings } = await readSessionDataFromTranscript(sessionFile);
+  const { entries, header, leafId, hasLeafControl, warnings } =
+    await readSessionDataFromTranscript(sessionFile);
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
@@ -284,6 +305,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     header,
     entries,
     leafId,
+    hasLeafControl,
     systemPrompt,
     tools: tools.map((t) => ({
       name: t.name,

@@ -1,3 +1,4 @@
+// Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,16 +9,20 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
+import { resolveTimerTimeoutMs } from "./shared/number-coercion.js";
 export { escapeRegExp } from "./shared/regexp.js";
 
+/** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
 }
 
+/** Clamps a number to an inclusive min/max range. */
 export function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** Floors a number before clamping it to an inclusive min/max range. */
 export function clampInt(value: number, min: number, max: number): number {
   return clampNumber(Math.floor(value), min, max);
 }
@@ -47,6 +52,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
@@ -56,8 +62,11 @@ export function normalizeE164(number: string): string {
   return `+${digits}`;
 }
 
+/** Promise-based sleep that clamps timer inputs through the shared timeout resolver. */
 export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
+  });
 }
 
 function isHighSurrogate(codeUnit: number): boolean {
@@ -68,6 +77,7 @@ function isLowSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
 }
 
+/** Slices a UTF-16 string without returning dangling surrogate halves at either edge. */
 export function sliceUtf16Safe(input: string, start: number, end?: number): string {
   const len = input.length;
 
@@ -97,6 +107,7 @@ export function sliceUtf16Safe(input: string, start: number, end?: number): stri
   return input.slice(from, to);
 }
 
+/** Truncates a UTF-16 string without cutting a surrogate pair in half. */
 export function truncateUtf16Safe(input: string, maxLen: number): string {
   const limit = Math.max(0, Math.floor(maxLen));
   if (input.length <= limit) {
@@ -105,6 +116,7 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
   return sliceUtf16Safe(input, 0, limit);
 }
 
+/** Resolves `~` and OpenClaw home-relative paths with injectable env/home sources. */
 export function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -116,6 +128,7 @@ export function resolveUserPath(
   return resolveHomeRelativePath(input, { env, homedir });
 }
 
+/** Resolves the OpenClaw config directory from state/config env overrides or home. */
 export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -140,6 +153,7 @@ export function resolveConfigDir(
   return newDir;
 }
 
+/** Resolves the effective OpenClaw home directory, if one can be determined. */
 export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }
@@ -156,6 +170,7 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return { home, prefix: "~" };
 }
 
+/** Replaces the leading home directory in a path with `~` or `$OPENCLAW_HOME`. */
 export function shortenHomePath(input: string): string {
   if (!input) {
     return input;
@@ -174,6 +189,7 @@ export function shortenHomePath(input: string): string {
   return input;
 }
 
+/** Replaces all effective-home occurrences inside a diagnostic string. */
 export function shortenHomeInString(input: string): string {
   if (!input) {
     return input;
@@ -185,16 +201,24 @@ export function shortenHomeInString(input: string): string {
   return input.split(display.home).join(display.prefix);
 }
 
+/** Shortens a path for display without changing non-home paths. */
 export function displayPath(input: string): string {
   return shortenHomePath(input);
 }
 
+/** Shortens home paths embedded in arbitrary display text. */
 export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
-// Configuration root; can be overridden via OPENCLAW_STATE_DIR.
-export const CONFIG_DIR = resolveConfigDir();
+// Gateway startup re-pins this live binding after config/state selection converges so modules
+// imported during early CLI bootstrap cannot keep using the superseded configuration root.
+export let CONFIG_DIR = resolveConfigDir();
+
+export function pinConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  CONFIG_DIR = resolveConfigDir(env);
+  return CONFIG_DIR;
+}
 /**
  * Check if a file or directory exists at the given path.
  */

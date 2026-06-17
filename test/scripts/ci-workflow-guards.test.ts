@@ -1,3 +1,4 @@
+// Ci Workflow Guards tests cover ci workflow guards script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -6,26 +7,70 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readWorkflowSanityWorkflow() {
+  return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
+}
+
+function readCriticalQualityWorkflow() {
+  return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+}
+
 describe("ci workflow guards", () => {
+  it("runs the session accessor ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-session-accessor-boundary",
+      group: "session-accessor-boundary",
+    });
+
+    const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
+    expect(runStep.run).toContain("session-accessor-boundary)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary',
+    );
+  });
+
+  it("runs the transcript reader ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-session-transcript-reader-boundary",
+      group: "session-transcript-reader-boundary",
+    });
+
+    const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
+    expect(runStep.run).toContain("session-transcript-reader-boundary)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary',
+    );
+  });
+
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
-      ".github/workflows/ci.yml",
-      ".github/workflows/workflow-sanity.yml",
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-      ".github/workflows/crabbox-hydrate.yml",
+      [".github/workflows/ci.yml", "120s"],
+      [".github/workflows/workflow-sanity.yml", "30s"],
+      [".github/workflows/ci-check-testbox.yml", "120s"],
+      [".github/workflows/ci-check-arm-testbox.yml", "120s"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "120s"],
+      [".github/workflows/crabbox-hydrate.yml", "30s"],
     ];
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, timeoutSeconds] of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
       const fetchTimeouts = workflow.match(
-        /timeout --signal=TERM[^\n]* 30s git(?: -C "(?:\$workdir|\$GITHUB_WORKSPACE|clawhub-source)")?/g,
+        new RegExp(
+          `timeout --signal=TERM[^\\n]* ${timeoutSeconds} git(?: -C "(?:\\$workdir|\\$GITHUB_WORKSPACE|clawhub-source)")?`,
+          "g",
+        ),
       );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
       expect(
         fetchTimeouts?.every((line) =>
-          line.startsWith("timeout --signal=TERM --kill-after=10s 30s git"),
+          line.startsWith(`timeout --signal=TERM --kill-after=10s ${timeoutSeconds} git`),
         ),
         workflowPath,
       ).toBe(true);
@@ -48,14 +93,15 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+        'timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE"',
       );
       expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
+      const expectedDepth = jobName === "preflight" ? 2 : 1;
       expect(checkoutStep.run, jobName).toContain(
-        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+        `fetch --no-tags --prune --no-recurse-submodules --depth=${expectedDepth} origin`,
       );
       if (jobName !== "skills-python") {
         expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
@@ -67,6 +113,42 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("retries workflow sanity checkout fetch timeouts", () => {
+    const workflow = readWorkflowSanityWorkflow();
+
+    for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
+      const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
+
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
+      expect(checkoutStep.run, jobName).toContain(
+        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
+      );
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
+      expect(checkoutStep.run, jobName).toContain(
+        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+    }
+  });
+
+  it("runs plugin SDK API and surface drift checks in workflow sanity", () => {
+    const workflow = readWorkflowSanityWorkflow();
+    const steps = workflow.jobs["generated-doc-baselines"].steps;
+    const stepNames = steps.map((step) => step.name);
+
+    expect(stepNames).toContain("Check plugin SDK API baseline drift");
+    expect(stepNames).toContain("Check plugin SDK surface budget");
+    expect(stepNames.indexOf("Check plugin SDK API baseline drift")).toBeLessThan(
+      stepNames.indexOf("Check plugin SDK surface budget"),
+    );
+    expect(steps.find((step) => step.name === "Check plugin SDK surface budget").run).toBe(
+      "pnpm plugin-sdk:surface:check",
+    );
+  });
+
   it("bounds platform checkout fetches without GNU timeout", () => {
     const workflow = readCiWorkflow();
 
@@ -74,9 +156,13 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then',
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
@@ -89,13 +175,54 @@ describe("ci workflow guards", () => {
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 
-    expect(workflow).toContain("$fetch = Start-Process git");
-    expect(workflow).toContain('"protocol.version=2"');
-    expect(workflow).toContain('"--no-recurse-submodules"');
+    expect(workflow).toContain("$fetchInfo = New-Object System.Diagnostics.ProcessStartInfo");
+    expect(workflow).toContain('$fetchInfo.FileName = "git"');
+    expect(workflow).toContain("$fetchInfo.WorkingDirectory = $repo");
+    expect(workflow).toContain("$fetchInfo.UseShellExecute = $false");
+    expect(workflow).not.toContain("$fetchInfo.RedirectStandardOutput = $true");
+    expect(workflow).not.toContain("$fetchInfo.RedirectStandardError = $true");
+    expect(workflow).toContain(
+      "--no-tags --no-progress --prune --no-recurse-submodules --depth=50",
+    );
+    expect(workflow).toContain("$fetch = New-Object System.Diagnostics.Process");
+    expect(workflow).toContain("$fetch.StartInfo = $fetchInfo");
     expect(workflow).toContain("$fetch.WaitForExit(30000)");
+    expect(workflow).toContain("$fetch.Kill()");
+    expect(workflow).not.toContain("StandardOutput.ReadToEnd()");
+    expect(workflow).not.toContain("StandardError.ReadToEnd()");
+    expect(workflow).toContain('throw "git fetch failed with exit code $($fetch.ExitCode)"');
     expect(workflow).toContain('throw "git fetch timed out after 30 seconds"');
     expect(workflow).not.toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
+  });
+
+  it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
+    const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
+
+    expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
+    expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
+    const hydratingFailureBlock = workflow.slice(
+      workflow.indexOf('if [[ ! "$hydrating_http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('response="$(cat "$hydrating_response")"'),
+    );
+    const missingSshKeyFailureBlock = workflow.slice(
+      workflow.indexOf('if [ -z "$ssh_public_key" ]; then'),
+      workflow.indexOf("mkdir -p ~/.ssh"),
+    );
+    const readyFailureBlock = workflow.slice(
+      workflow.indexOf('if [[ ! "$http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('echo "============================================"'),
+    );
+
+    expect(hydratingFailureBlock).toContain("exit 1");
+    expect(missingSshKeyFailureBlock).toContain("exit 1");
+    expect(readyFailureBlock).toContain("exit 1");
+    expect(workflow).toContain(
+      "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections.",
+    );
+    expect(workflow).not.toContain(
+      'phone_home_ready_http=${http_code}"\n\n          echo "============================================"',
     );
   });
 
@@ -103,11 +230,16 @@ describe("ci workflow guards", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
+      workflow.indexOf("shrinkwrap)"),
+    );
+    const shrinkwrapGuards = workflow.slice(
+      workflow.indexOf("shrinkwrap)"),
       workflow.indexOf("prod-types)"),
     );
 
     expect(workflow).toContain("check-guards");
-    expect(preflightGuards).toContain("pnpm deps:shrinkwrap:check");
+    expect(workflow).toContain("check-shrinkwrap");
+    expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
@@ -119,6 +251,46 @@ describe("ci workflow guards", () => {
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Build Control UI");
     expect(buildArtifactSteps.some((step) => step.run === "pnpm ui:build")).toBe(false);
+  });
+
+  it("restores the dist build cache before building and saves only cache misses", () => {
+    const workflow = readCiWorkflow();
+    const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const stepNames = buildArtifactSteps.map((step) => step.name);
+    const restoreStep = buildArtifactSteps.find((step) => step.name === "Restore dist build cache");
+    const buildDistStep = buildArtifactSteps.find((step) => step.name === "Build dist");
+    const saveStep = buildArtifactSteps.find((step) => step.name === "Save dist build cache");
+
+    expect(stepNames.indexOf("Restore dist build cache")).toBeLessThan(
+      stepNames.indexOf("Build dist"),
+    );
+    expect(stepNames.indexOf("Build dist")).toBeLessThan(
+      stepNames.indexOf("Pack built runtime artifacts"),
+    );
+    expect(stepNames.indexOf("Run built artifact checks")).toBeLessThan(
+      stepNames.indexOf("Save dist build cache"),
+    );
+    expect(restoreStep.uses).toBe("actions/cache/restore@v5");
+    expect(buildDistStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(saveStep.uses).toBe("actions/cache/save@v5");
+    expect(saveStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(saveStep.with.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
+    expect(restoreStep.with.path).toContain("dist/");
+    expect(restoreStep.with.path).toContain("dist-runtime/");
+    expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
+    expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
+    expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
+  });
+
+  it("fails and retries quiet Node test shard stalls quickly", () => {
+    const workflow = readCiWorkflow();
+    const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
+
+    expect(nodeTestJob["timeout-minutes"]).toBe(60);
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
+    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {
@@ -173,6 +345,18 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it("keeps workflow guards in fast CI-routing checks", () => {
+    const workflow = readCiWorkflow();
+    const fastCoreJob = workflow.jobs["checks-fast-core"];
+    const runStep = fastCoreJob.steps.find(
+      (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+
+    expect(runStep.run).toContain("contracts-plugins-ci-routing)");
+    expect(runStep.run).toContain("ci-routing)");
+    expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
+  });
+
   it("keeps push docs validation ClawHub-backed", () => {
     const workflow = readFileSync(".github/workflows/docs.yml", "utf8");
 
@@ -181,5 +365,38 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain(
       "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source",
     );
+  });
+
+  it("keeps network CodeQL off unrelated source-only refactors", () => {
+    const workflow = readCriticalQualityWorkflow();
+    const networkConfig = readFileSync(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+      "utf8",
+    );
+    const networkSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
+      workflow.indexOf("network-runtime-boundary:"),
+    );
+    const broadCodeqlSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/*|.github/workflows/codeql-critical-quality.yml"),
+      workflow.indexOf("src/**/*.test.ts|src/**/*.test.tsx"),
+    );
+
+    expect(broadCodeqlSelector).not.toContain("network_runtime=true");
+    expect(networkSelector).toContain(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+    );
+    expect(networkSelector).not.toContain("src/*.ts|src/**/*.ts");
+    expect(networkSelector).not.toContain("extensions/*.ts|extensions/**/*.ts");
+    expect(networkSelector).toContain("src/infra/net/*");
+    expect(networkSelector).toContain("src/infra/ssh-tunnel.ts");
+    expect(networkSelector).toContain("packages/net-policy/src/*");
+    expect(networkConfig).not.toContain("\n  - src\n");
+    expect(networkConfig).not.toContain("\n  - extensions\n");
+    expect(networkConfig).toContain("\n  - src/infra/net\n");
+    expect(networkConfig).toContain("\n  - packages/net-policy/src\n");
+    expect(workflow).toContain("Fast PR network boundary diff scan");
+    expect(workflow).toContain("Network runtime boundary-sensitive added lines");
+    expect(workflow).toContain("if: ${{ github.event_name != 'pull_request' }}");
   });
 });

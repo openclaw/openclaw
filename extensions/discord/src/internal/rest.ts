@@ -1,6 +1,11 @@
+// Discord plugin module implements rest behavior.
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  clampTimerTimeoutMs,
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -34,6 +39,7 @@ export type RequestClientOptions = {
   baseUrl?: string;
   apiVersion?: number;
   userAgent?: string;
+  signal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
@@ -232,13 +238,16 @@ export class RequestClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeout ?? 15_000);
     timeout.unref?.();
+    const signal = this.options.signal
+      ? AbortSignal.any([this.options.signal, controller.signal])
+      : controller.signal;
     this.requestControllers.add(controller);
     try {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
         body: await normalizeFetchBody(body, headers),
-        signal: controller.signal,
+        signal,
       });
       const text = await response.text();
       const parsed = coerceResponseBody(text);
@@ -310,7 +319,8 @@ function normalizeRequestClientOptions(
   return {
     ...merged,
     apiVersion: normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, { min: 1 }),
-    timeout: normalizeIntegerOption(merged.timeout, defaultOptions.timeout, { min: 1 }),
+    timeout:
+      clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
     maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {
       min: 1,
     }),

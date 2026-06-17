@@ -1,3 +1,5 @@
+// Gateway hooks tests cover token extraction, target agent resolution, payload
+// normalization, allowed-agent checks, and channel alias handling.
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -58,6 +60,32 @@ describe("gateway hooks helpers", () => {
       },
       agents: {
         list: [{ id: "main", default: true }, { id: "hooks" }],
+      },
+    }) as OpenClawConfig;
+
+  const buildStaticShadowingMappingConfig = (params: {
+    firstMatch?: Partial<{ path: string; source: string }>;
+    firstMessageTemplate?: string;
+    secondMatch?: Partial<{ path: string; source: string }>;
+  }) =>
+    ({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            ...(params.firstMatch ? { match: params.firstMatch } : {}),
+            action: "agent",
+            messageTemplate: params.firstMessageTemplate ?? "catch-all",
+            sessionKey: "hook:static",
+          },
+          {
+            match: params.secondMatch ?? { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].id}}",
+          },
+        ],
       },
     }) as OpenClawConfig;
 
@@ -428,25 +456,7 @@ describe("gateway hooks helpers", () => {
   });
 
   test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
-    const resolved = resolveHooksConfigOrThrow({
-      hooks: {
-        enabled: true,
-        token: "secret",
-        mappings: [
-          {
-            action: "agent",
-            messageTemplate: "catch-all",
-            sessionKey: "hook:static",
-          },
-          {
-            match: { path: "gmail" },
-            action: "agent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-            sessionKey: "hook:gmail:{{messages[0].id}}",
-          },
-        ],
-      },
-    } as OpenClawConfig);
+    const resolved = resolveHooksConfigOrThrow(buildStaticShadowingMappingConfig({}));
 
     expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
       "hook:static",
@@ -479,52 +489,22 @@ describe("gateway hooks helpers", () => {
   });
 
   test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {
-    const resolved = resolveHooksConfigOrThrow({
-      hooks: {
-        enabled: true,
-        token: "secret",
-        mappings: [
-          {
-            match: { path: "/" },
-            action: "agent",
-            messageTemplate: "catch-all",
-            sessionKey: "hook:static",
-          },
-          {
-            match: { path: "gmail" },
-            action: "agent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-            sessionKey: "hook:gmail:{{messages[0].id}}",
-          },
-        ],
-      },
-    } as OpenClawConfig);
+    const resolved = resolveHooksConfigOrThrow(
+      buildStaticShadowingMappingConfig({ firstMatch: { path: "/" } }),
+    );
 
     expect(resolved.mappings.map((mapping) => mapping.matchPath)).toEqual(["", "gmail"]);
     expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 
   test("resolveHooksConfig treats empty match.source as a wildcard for shadowing", () => {
-    const resolved = resolveHooksConfigOrThrow({
-      hooks: {
-        enabled: true,
-        token: "secret",
-        mappings: [
-          {
-            match: { path: "gmail", source: "" },
-            action: "agent",
-            messageTemplate: "catch-all source",
-            sessionKey: "hook:static",
-          },
-          {
-            match: { path: "gmail", source: "gmail" },
-            action: "agent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-            sessionKey: "hook:gmail:{{messages[0].id}}",
-          },
-        ],
-      },
-    } as OpenClawConfig);
+    const resolved = resolveHooksConfigOrThrow(
+      buildStaticShadowingMappingConfig({
+        firstMatch: { path: "gmail", source: "" },
+        firstMessageTemplate: "catch-all source",
+        secondMatch: { path: "gmail", source: "gmail" },
+      }),
+    );
 
     expect(resolved.mappings.map((mapping) => mapping.matchSource)).toEqual(["", "gmail"]);
     expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();

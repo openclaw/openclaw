@@ -1,9 +1,14 @@
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+/**
+ * Live-test provider API-key discovery.
+ * Reads provider-specific and manifest-declared env names without logging or
+ * exposing secret values, with explicit single-key pins for flaky live lanes.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -105,6 +110,7 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
   };
 }
 
+/** Collect configured API keys for live provider tests without exposing values. */
 export function collectProviderApiKeys(
   provider: string,
   options: CollectProviderApiKeysOptions = {},
@@ -117,6 +123,7 @@ export function collectProviderApiKeys(
     ? normalizeOptionalString(env[config.liveSingle])
     : undefined;
   if (forcedSingle) {
+    // OPENCLAW_LIVE_*_KEY pins a single key so retries do not rotate fixtures.
     return [forcedSingle];
   }
 
@@ -161,14 +168,17 @@ export function collectProviderApiKeys(
   return Array.from(seen);
 }
 
-export function collectAnthropicApiKeys(): string[] {
-  return collectProviderApiKeys("anthropic");
+/** Collect Anthropic API keys for live cache/model tests when OAuth is unavailable. */
+export function collectAnthropicApiKeys(options: CollectProviderApiKeysOptions = {}): string[] {
+  const env = options.env ?? process.env;
+  if (normalizeOptionalString(env.ANTHROPIC_OAUTH_TOKEN)) {
+    // OAuth is a separate auth mode; API-key rotation would overwrite it.
+    return [];
+  }
+  return collectProviderApiKeys("anthropic", { ...options, env });
 }
 
-export function collectGeminiApiKeys(): string[] {
-  return collectProviderApiKeys("google");
-}
-
+/** Return whether a provider error message indicates API-key rate limiting. */
 export function isApiKeyRateLimitError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   if (lower.includes("rate_limit")) {
@@ -192,10 +202,7 @@ export function isApiKeyRateLimitError(message: string): boolean {
   return false;
 }
 
-export function isAnthropicRateLimitError(message: string): boolean {
-  return isApiKeyRateLimitError(message);
-}
-
+/** Return whether an Anthropic error message indicates billing exhaustion. */
 export function isAnthropicBillingError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   if (lower.includes("credit balance")) {

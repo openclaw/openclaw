@@ -1,3 +1,7 @@
+// Google tests cover index plugin behavior.
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
@@ -13,6 +17,7 @@ import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-v
 import { describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
+import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
@@ -65,7 +70,13 @@ describe("google provider plugin hooks", () => {
         modelApi: "google-generative-ai",
         modelId: "gemini-3.1-pro-preview",
       } as never),
-    ).toBe("tagged");
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
 
     const sanitized = await Promise.resolve(
       provider.sanitizeReplayHistory?.({
@@ -100,6 +111,113 @@ describe("google provider plugin hooks", () => {
     });
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
+  });
+
+  it("keeps google-gemini-cli on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    expect(
+      cliProvider.resolveReasoningOutputMode?.({
+        provider: "google-gemini-cli",
+        modelApi: "google-gemini-cli",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-antigravity");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-antigravity",
+        modelApi: "openai-completions",
+        modelId: "gemini-3-pro-low",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-vertex hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelApi: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "",
+          GCLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      googleProviderDiscovery.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
   });
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {

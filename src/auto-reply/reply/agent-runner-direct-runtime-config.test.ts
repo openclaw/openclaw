@@ -1,3 +1,4 @@
+// Tests direct runtime config overrides passed into agent runner execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -174,7 +175,7 @@ describe("runReplyAgent runtime config", () => {
     enqueueFollowupRunMock.mockReset();
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
-    resolveReplyToModeMock.mockReturnValue("default");
+    resolveReplyToModeMock.mockReturnValue("all");
     createReplyToModeFilterForChannelMock.mockReturnValue((payload: unknown) => payload);
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
     runPreflightCompactionIfNeededMock.mockRejectedValue(sentinelError);
@@ -283,6 +284,14 @@ describe("runReplyAgent runtime config", () => {
     });
     expect(getReplyPayloadMetadata(result)).toEqual({
       deliverDespiteSourceReplySuppression: true,
+      replyDelivery: {
+        chatType: "direct",
+        replyToMode: "all",
+      },
+      replyDeliverySource: {
+        channel: "telegram",
+        accountId: "default",
+      },
     });
   });
 
@@ -302,6 +311,29 @@ describe("runReplyAgent runtime config", () => {
       throw new Error("expected a single usage-limit reply payload");
     }
     expect(result.text).toBe(`⚠️ ${codexMessage}`);
+    const metadata = getReplyPayloadMetadata(result);
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("surfaces preflight compaction failures before the agent starts", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    runMemoryFlushIfNeededMock.mockResolvedValue(undefined);
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single preflight compaction failure reply payload");
+    }
+    expect(result.text).toContain("Context is too large");
+    expect(result.text).toContain("auto-compaction could not recover");
+    expect(result.text).toContain("/compact");
+    expect(result.text).toContain("/new");
     const metadata = getReplyPayloadMetadata(result);
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });

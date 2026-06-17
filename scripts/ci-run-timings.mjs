@@ -1,6 +1,58 @@
 #!/usr/bin/env node
 
+// Summarizes GitHub Actions run/job timings for CI analysis.
 import { execFileSync } from "node:child_process";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
+
+const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
+const RUN_JOBS_PAGE_SIZE = 20;
+const RUN_JOBS_MAX_PAGES = 25;
+const GH_JSON_RETRY_DELAYS_MS = [1_000, 3_000, 6_000];
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function parseJsonCommand(command, args, options = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= GH_JSON_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return JSON.parse(
+        execFileSync(command, args, {
+          encoding: "utf8",
+          ...options,
+        }),
+      );
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /HTTP 5\d\d|Server Error|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u.test(message);
+      if (!retryable || attempt === GH_JSON_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      sleepSync(GH_JSON_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+}
+
+function normalizeRunJob(job) {
+  return {
+    completedAt: job.completedAt ?? job.completed_at ?? null,
+    conclusion: job.conclusion ?? "",
+    databaseId: job.databaseId ?? job.id,
+    name: job.name,
+    startedAt: job.startedAt ?? job.started_at ?? null,
+    status: job.status ?? "",
+  };
+}
+
+/**
+ * Flattens paginated GitHub run job responses.
+ */
+export function collectRunJobsFromPages(pages) {
+  return pages.flatMap((page) => (Array.isArray(page.jobs) ? page.jobs.map(normalizeRunJob) : []));
+}
 
 function parseTime(value) {
   if (!value || value === "0001-01-01T00:00:00Z") {
@@ -37,6 +89,7 @@ function isPnpmStoreWarmupGatedJobName(name) {
     name === "build-artifacts" ||
     name === "check-docs" ||
     name === "check-guards" ||
+    name === "check-shrinkwrap" ||
     name === "check-prod-types" ||
     name === "check-lint" ||
     name === "check-dependencies" ||
@@ -69,8 +122,14 @@ function collectRunTimingContext(run) {
   return { created, jobs, updated };
 }
 
+/**
+ * Summarizes longest jobs and total timing for a workflow run.
+ */
 export function summarizeRunTimings(run, limit = 15) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const byDuration = [...jobs]
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
@@ -93,6 +152,9 @@ export function summarizeRunTimings(run, limit = 15) {
   };
 }
 
+/**
+ * Summarizes pnpm store warmup overlap near run start.
+ */
 export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
   const { jobs } = collectRunTimingContext(run);
   const preflight = jobs.find((job) => job.name === "preflight");
@@ -133,6 +195,9 @@ export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
   };
 }
 
+/**
+ * Selects the latest main push CI run, optionally matching a head SHA.
+ */
 export function selectLatestMainPushCiRun(runs, headSha = null) {
   const pushRuns = runs.filter((run) => run.event === "push");
   if (headSha) {
@@ -215,19 +280,44 @@ function listRecentSuccessfulCiRuns(limit) {
 }
 
 function loadRun(runId) {
-  return JSON.parse(
-    execFileSync(
-      "gh",
-      ["run", "view", runId, "--json", "status,conclusion,createdAt,updatedAt,jobs"],
-      {
-        encoding: "utf8",
-      },
-    ),
-  );
+  const run = parseJsonCommand("gh", [
+    "run",
+    "view",
+    runId,
+    "--json",
+    "status,conclusion,createdAt,updatedAt",
+  ]);
+  const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
+  const pages = [];
+  let totalCount = null;
+  for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
+    const payload = parseJsonCommand("gh", [
+      "api",
+      "-X",
+      "GET",
+      `repos/${repository}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PAGE_SIZE}&page=${page}`,
+    ]);
+    pages.push(payload);
+    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
+    if (
+      jobs.length === 0 ||
+      (totalCount !== null && collectRunJobsFromPages(pages).length >= totalCount)
+    ) {
+      break;
+    }
+  }
+  return {
+    ...run,
+    jobs: collectRunJobsFromPages(pages),
+  };
 }
 
 function summarizeJobs(run) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const completedJobs = jobs.filter((job) => job.started !== null && job.completed !== null);
   const successfulDurations = jobs
     .filter((job) => job.status === "completed" && job.conclusion === "success")
@@ -266,32 +356,72 @@ function printSection(title, jobs, metric) {
   }
 }
 
+/**
+ * Parses CI run timing CLI arguments.
+ */
 export function parseRunTimingArgs(args) {
-  const recentIndex = args.indexOf("--recent");
-  const limitIndex = args.indexOf("--limit");
-  const ignoredArgIndexes = new Set();
-  for (const [index, arg] of args.entries()) {
-    if (arg === "--" || arg === "--latest-main") {
-      ignoredArgIndexes.add(index);
+  let explicitRunId;
+  let limit = 15;
+  let recentLimit = null;
+  let useLatestMain = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") {
+      continue;
     }
+    if (arg === "--latest-main") {
+      useLatestMain = true;
+      continue;
+    }
+    const limitOption = consumePositiveIntFlag(args, index, "--limit");
+    if (limitOption) {
+      limit = limitOption.value;
+      index = limitOption.nextIndex;
+      continue;
+    }
+    const recentOption = consumePositiveIntFlag(args, index, "--recent");
+    if (recentOption) {
+      recentLimit = recentOption.value;
+      index = recentOption.nextIndex;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown CI run timing option: ${arg}`);
+    }
+    if (explicitRunId) {
+      throw new Error(`Unexpected CI run id argument: ${arg}`);
+    }
+    explicitRunId = arg;
   }
-  if (limitIndex !== -1) {
-    ignoredArgIndexes.add(limitIndex);
-    ignoredArgIndexes.add(limitIndex + 1);
-  }
-  if (recentIndex !== -1) {
-    ignoredArgIndexes.add(recentIndex);
-    ignoredArgIndexes.add(recentIndex + 1);
-  }
-  const limit =
-    limitIndex === -1 ? 15 : Math.max(1, Number.parseInt(args[limitIndex + 1] ?? "", 10) || 15);
-  const recentLimit =
-    recentIndex === -1 ? null : Math.max(1, Number.parseInt(args[recentIndex + 1] ?? "", 10) || 10);
+
   return {
-    explicitRunId: args.find((_arg, index) => !ignoredArgIndexes.has(index)),
+    explicitRunId,
     limit,
     recentLimit,
-    useLatestMain: args.includes("--latest-main"),
+    useLatestMain,
+  };
+}
+
+function consumePositiveIntFlag(args, index, flag) {
+  const arg = args[index];
+  const inlinePrefix = `${flag}=`;
+  if (arg.startsWith(inlinePrefix)) {
+    return {
+      nextIndex: index,
+      value: parsePositiveInt(arg.slice(inlinePrefix.length), flag),
+    };
+  }
+  if (arg !== flag) {
+    return null;
+  }
+  const rawValue = args[index + 1];
+  if (!rawValue || rawValue.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return {
+    nextIndex: index + 1,
+    value: parsePositiveInt(rawValue, flag),
   };
 }
 

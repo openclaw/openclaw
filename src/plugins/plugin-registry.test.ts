@@ -1,9 +1,13 @@
+// Covers plugin registry assembly, contribution lookup, and reset behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -41,6 +45,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -379,8 +384,9 @@ describe("plugin registry facade", () => {
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
         id: "openai",
+        legacyPluginIds: ["openai-codex"],
         configSchema: { type: "object" },
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         channels: ["openai-chat"],
       }),
       "utf8",
@@ -819,12 +825,26 @@ describe("plugin registry facade", () => {
     const env = hermeticEnv();
     await writePersistedInstalledPluginIndex(createPersistableIndex("first"), { stateDir });
     const first = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
-    const filePath = resolveInstalledPluginIndexStorePath({ stateDir, env });
-
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify(createPersistableIndex("second-external"), null, 2),
-      "utf8",
+    const external = createPersistableIndex("second-external");
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        db.prepare(
+          `
+            UPDATE installed_plugin_index
+               SET plugins_json = ?,
+                   install_records_json = ?,
+                   diagnostics_json = ?,
+                   updated_at_ms = ?
+             WHERE index_key = 'installed-plugin-index'
+          `,
+        ).run(
+          JSON.stringify(external.plugins),
+          JSON.stringify(external.installRecords),
+          JSON.stringify(external.diagnostics),
+          Date.now(),
+        );
+      },
+      { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
     );
     const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
 
@@ -854,7 +874,7 @@ describe("plugin registry facade", () => {
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
-  it("derives a fresh registry without dropping persisted install records", async () => {
+  it("derives a fresh registry without persisted install records when caller disables persisted reads", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
@@ -880,10 +900,7 @@ describe("plugin registry facade", () => {
 
     expect(result.source).toBe("derived");
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
-    expectInstallRecord(result.snapshot.installRecords, "persisted", {
-      source: "npm",
-      spec: "persisted-plugin@1.0.0",
-    });
+    expect(result.snapshot.installRecords).not.toHaveProperty("persisted");
   });
 
   it("exposes explicit persisted registry inspect and refresh operations", async () => {

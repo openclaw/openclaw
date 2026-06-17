@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements self check behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -13,6 +14,13 @@ export type QaSelfCheckResult = {
   checks: Array<{ name: string; status: "pass" | "fail"; details?: string }>;
   scenarioResult: QaScenarioResult;
 };
+
+export function isQaSelfCheckSuccessful(result: QaSelfCheckResult): boolean {
+  return (
+    result.scenarioResult.status === "pass" &&
+    result.checks.every((check) => check.status === "pass")
+  );
+}
 
 export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
   if (params?.outputPath) {

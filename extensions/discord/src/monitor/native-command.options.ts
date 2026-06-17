@@ -1,3 +1,4 @@
+// Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -57,12 +58,13 @@ function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {
 export function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: OpenClawConfig;
+  resolveConfig?: () => OpenClawConfig;
   authorizeChoiceContext?: (interaction: AutocompleteInteraction) => Promise<boolean>;
   resolveChoiceContext?: (
     interaction: AutocompleteInteraction,
   ) => Promise<{ provider?: string; model?: string } | null>;
 }): CommandOptions | undefined {
-  const { command, cfg, authorizeChoiceContext, resolveChoiceContext } = params;
+  const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
   const commandLabel = resolveDiscordCommandLogLabel(command);
   const args = command.args;
   if (!args || args.length === 0) {
@@ -114,10 +116,11 @@ export function buildDiscordCommandOptions(params: {
             typeof arg.choices === "function" && resolveChoiceContext
               ? await resolveChoiceContext(interaction)
               : null;
+          const currentCfg = resolveConfig?.() ?? cfg;
           const choices = resolveCommandArgChoices({
             command,
             arg,
-            cfg,
+            cfg: currentCfg,
             provider: context?.provider,
             model: context?.model,
           });

@@ -1,3 +1,4 @@
+// Agent Core type module defines shared TypeScript contracts.
 import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,
@@ -10,7 +11,7 @@ import type {
   TextContent,
   Tool,
   ToolResultMessage,
-} from "./llm.js";
+} from "../../llm-core/src/index.js";
 
 /**
  * Stream function used by the agent loop.
@@ -53,6 +54,15 @@ export type AgentToolCall = Extract<AssistantMessage["content"][number], { type:
 export interface BeforeToolCallResult {
   block?: boolean;
   reason?: string;
+}
+
+export interface DeferredToolCallContext {
+  /** The assistant message that requested the deferred tool call. */
+  assistantMessage: AssistantMessage;
+  /** The raw tool call block whose authorized tool definition is deferred. */
+  toolCall: AgentToolCall;
+  /** Current agent context before the deferred tool is hydrated. */
+  context: AgentContext;
 }
 
 /**
@@ -132,6 +142,8 @@ export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
+  /** Logical thinking level retained across model changes before provider mapping. */
+  thinkingLevel?: ThinkingLevel;
 
   /**
    * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -263,6 +275,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   ) => Promise<BeforeToolCallResult | undefined>;
 
   /**
+   * Hydrates an already-authorized tool that was deferred out of the current
+   * provider-visible tool set. Return undefined for every other unknown name so
+   * the loop keeps the normal "Tool <name> not found" result. Thrown or rejected
+   * failures become error tool results for the requested call.
+   */
+  resolveDeferredTool?: (
+    context: DeferredToolCallContext,
+    signal?: AbortSignal,
+  ) => Promise<AgentTool | undefined> | AgentTool | undefined;
+
+  /**
    * Called after a tool finishes executing, before `tool_execution_end` and tool-result message events are emitted.
    *
    * Return an `AfterToolCallResult` to override parts of the executed tool result:
@@ -287,22 +310,79 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface BashExecutionMessage {
+  /** Harness role for shell command transcripts. */
+  role: "bashExecution";
+  /** Command line that was executed. */
+  command: string;
+  /** Captured command output, usually already truncated for context. */
+  output: string;
+  /** Process exit code when the command reached process exit. */
+  exitCode: number | undefined;
+  /** True when the command was interrupted before normal completion. */
+  cancelled: boolean;
+  /** True when output was shortened for transcript/context storage. */
+  truncated: boolean;
+  /** Optional path containing the complete output when truncation occurred. */
+  fullOutputPath?: string;
+  /** Millisecond timestamp for transcript ordering. */
+  timestamp: number;
+  /** Exclude this command transcript from model context while keeping it in session history. */
+  excludeFromContext?: boolean;
+}
+
+export interface CustomMessage<T = unknown> {
+  /** Harness role for application-defined transcript content. */
+  role: "custom";
+  /** Application-defined discriminator for rendering or handling this message. */
+  customType: string;
+  /** Content replayed into model context when this message is included. */
+  content: string | (TextContent | ImageContent)[];
+  /** Whether UI surfaces should display this message. */
+  display: boolean;
+  /** Optional application-specific metadata. */
+  details?: T;
+  /** Millisecond timestamp for transcript ordering. */
+  timestamp: number;
+}
+
+export interface BranchSummaryMessage {
+  /** Harness role for summaries produced when returning from another branch. */
+  role: "branchSummary";
+  /** Summary text inserted back into model context. */
+  summary: string;
+  /** Entry id of the branch root or source leaf being summarized. */
+  fromId: string;
+  /** Millisecond timestamp for transcript ordering. */
+  timestamp: number;
+}
+
+export interface CompactionSummaryMessage {
+  /** Harness role for summaries that replace compacted transcript history. */
+  role: "compactionSummary";
+  /** Summary text inserted back into model context. */
+  summary: string;
+  /** Estimated context tokens before compaction. */
+  tokensBefore: number;
+  /** Timestamp may be numeric in memory or string when loaded from older persisted rows. */
+  timestamp: number | string;
+  /** Optional estimated context tokens after compaction. */
+  tokensAfter?: number;
+  /** Optional first retained entry id from the compaction range. */
+  firstKeptEntryId?: string;
+  /** Optional implementation-specific compaction metadata. */
+  details?: unknown;
+}
+
 /**
- * Extensible interface for custom app messages.
- * Apps can extend via declaration merging:
- *
- * @example
- * ```typescript
- * declare module "@mariozechner/agent" {
- *   interface CustomAgentMessages {
- *     artifact: ArtifactMessage;
- *     notification: NotificationMessage;
- *   }
- * }
- * ```
+ * Extensible interface for custom app and harness messages.
+ * Apps can extend via declaration merging.
  */
-export interface CustomAgentMessages extends Record<never, never> {
-  // Empty by default - apps extend via declaration merging
+export interface CustomAgentMessages {
+  bashExecution: BashExecutionMessage;
+  custom: CustomMessage;
+  branchSummary: BranchSummaryMessage;
+  compactionSummary: CompactionSummaryMessage;
 }
 
 /**
@@ -345,12 +425,26 @@ export interface AgentState {
   readonly errorMessage?: string;
 }
 
+/** Channel-safe progress text emitted by a running tool. */
+export interface AgentToolProgress {
+  /** Public text suitable for user-facing progress surfaces. */
+  text: string;
+  /** Tool progress is rendered by channel progress UIs. */
+  visibility: "channel";
+  /** Progress text must not contain secrets, private args, or fetched content. */
+  privacy: "public";
+  /** Optional stable id for progress line replacement. */
+  id?: string;
+}
+
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
   /** Text or image content returned to the model. */
   content: (TextContent | ImageContent)[];
   /** Arbitrary structured details for logs or UI rendering. */
   details: T;
+  /** Optional public progress hint for partial tool updates; never model content. */
+  progress?: AgentToolProgress;
   /**
    * Hint that the agent should stop after the current tool batch.
    * Early termination only happens when every finalized tool result in the batch sets this to true.
@@ -434,4 +528,6 @@ export type AgentEvent =
       toolName: string;
       result: unknown;
       isError: boolean;
+      /** False when resolution, argument preparation, validation, or policy blocked execution. */
+      executionStarted?: boolean;
     };

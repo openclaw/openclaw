@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Production dependency audit helper using pnpm lock data and npm bulk advisories.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -8,6 +9,7 @@ import { pathToFileURL } from "node:url";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
+/** Maximum advisory error body characters retained in messages. */
 export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 export const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 export const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
@@ -729,6 +731,7 @@ async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
 async function readBoundedResponseText(response, maxBytes, label) {
   const contentLength = Number.parseInt(response.headers?.get?.("content-length") ?? "", 10);
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
     throw Object.assign(new Error(`${label} exceeded ${maxBytes} bytes`), { code: "ETOOBIG" });
   }
 
@@ -910,22 +913,29 @@ export async function runPnpmAuditProd({
   return 1;
 }
 
-function parseArgs(argv) {
+function readSeverityValue(value, optionName) {
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   let minSeverity = MIN_SEVERITY;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--audit-level" || argument === "--min-severity") {
-      minSeverity = argv[index + 1] ?? "";
+      minSeverity = readSeverityValue(argv[index + 1], argument);
       index += 1;
       continue;
     }
     if (argument.startsWith("--audit-level=")) {
-      minSeverity = argument.slice("--audit-level=".length);
+      minSeverity = readSeverityValue(argument.slice("--audit-level=".length), "--audit-level");
       continue;
     }
     if (argument.startsWith("--min-severity=")) {
-      minSeverity = argument.slice("--min-severity=".length);
+      minSeverity = readSeverityValue(argument.slice("--min-severity=".length), "--min-severity");
       continue;
     }
     throw new Error(`Unknown argument "${argument}".`);

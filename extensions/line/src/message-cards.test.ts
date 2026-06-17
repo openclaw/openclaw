@@ -1,3 +1,4 @@
+// Line tests cover message cards plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createActionCard,
@@ -50,13 +51,13 @@ describe("createButtonTemplate", () => {
     expect((template.template as { text: string }).text.length).toBe(60);
   });
 
-  it("keeps longer text when thumbnail is provided", () => {
+  it("truncates text to 60 chars when title and thumbnail are provided", () => {
     const longText = "x".repeat(100);
     const template = createButtonTemplate("Title", longText, [messageAction("OK")], {
       thumbnailImageUrl: "https://example.com/thumb.jpg",
     });
 
-    expect((template.template as { text: string }).text.length).toBe(100);
+    expect((template.template as { text: string }).text.length).toBe(60);
   });
 });
 
@@ -76,11 +77,66 @@ describe("createCarouselColumn", () => {
     expect(column.actions.length).toBe(3);
   });
 
-  it("truncates text to 120 characters", () => {
+  it("truncates text to 120 characters when no title or image is set", () => {
     const longText = "x".repeat(150);
     const column = createCarouselColumn({ text: longText, actions: [messageAction("OK")] });
 
     expect(column.text.length).toBe(120);
+  });
+
+  it("truncates text to 60 characters when a title is set", () => {
+    const longText = "x".repeat(150);
+    const column = createCarouselColumn({
+      title: "Title",
+      text: longText,
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.text.length).toBe(60);
+  });
+
+  it("does not split an emoji grapheme at the 60-code-unit boundary", () => {
+    const text = `${"x".repeat(59)}👨‍👩‍👧‍👦after`;
+    const column = createCarouselColumn({
+      title: "Title",
+      text,
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.text).toBe("x".repeat(59));
+  });
+
+  it("keeps required text when the first grapheme exceeds the limit", () => {
+    const text = `😀${"\u0301".repeat(59)}`;
+    const column = createCarouselColumn({
+      title: "Title",
+      text,
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.text.length).toBe(60);
+    expect(column.text.startsWith("😀")).toBe(true);
+  });
+
+  it("uses the compact limit when a whitespace-only title is present", () => {
+    const column = createCarouselColumn({
+      title: " ",
+      text: "x".repeat(150),
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.text).toBe("x".repeat(60));
+  });
+
+  it("truncates text to 60 characters when a thumbnail image is set", () => {
+    const longText = "x".repeat(150);
+    const column = createCarouselColumn({
+      text: longText,
+      thumbnailImageUrl: "https://example.com/thumb.jpg",
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.text.length).toBe(60);
   });
 });
 
@@ -129,6 +185,20 @@ describe("createProductCarousel", () => {
     const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
       .columns;
     expect(columns[0].actions[0].type).toBe(expectedType);
+  });
+
+  it("preserves the complete price when truncating a long description", () => {
+    const template = createProductCarousel([
+      {
+        title: "Product",
+        description: "x".repeat(59),
+        price: "$12.99",
+      },
+    ]);
+    const columns = (template.template as { columns: Array<{ text: string }> }).columns;
+
+    expect(columns[0].text).toBe(`${"x".repeat(53)}\n$12.99`);
+    expect(columns[0].text.length).toBe(60);
   });
 });
 

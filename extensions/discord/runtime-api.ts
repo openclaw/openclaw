@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 export {
   discordMessageActions,
   handleDiscordAction,
@@ -45,10 +46,13 @@ export {
   createDiscordNativeCommand,
   getGateway,
   getPresence,
+  isAbortError,
   isDiscordGroupAllowedByPolicy,
   mergeAbortSignals,
   monitorDiscordProvider,
   normalizeDiscordAllowList,
+  normalizeDiscordInboundWorkerTimeoutMs,
+  normalizeDiscordListenerTimeoutMs,
   normalizeDiscordSlug,
   presenceCacheSize,
   registerDiscordListener,
@@ -61,6 +65,7 @@ export {
   resolveDiscordReplyTarget,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
+  runDiscordTaskWithTimeout,
   sanitizeDiscordThreadName,
   setPresence,
   shouldEmitDiscordReactionNotification,

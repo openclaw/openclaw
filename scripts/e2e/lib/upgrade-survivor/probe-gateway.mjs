@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Probes gateway state for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -17,9 +18,35 @@ function option(name, fallback) {
   return value;
 }
 
+function optionValue(name, envName, fallback) {
+  const index = args.indexOf(name);
+  if (index !== -1) {
+    return {
+      label: name,
+      value: option(name),
+    };
+  }
+  return {
+    label: envName,
+    value: process.env[envName] ?? fallback,
+  };
+}
+
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readStrictInteger({ allowZero = false, label, value }) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${label}: ${text}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`invalid ${label}: ${text}`);
+  }
+  return parsed;
 }
 
 const baseUrl = option("--base-url");
@@ -32,35 +59,28 @@ const allowFailing = new Set(
     .map((entry) => entry.trim())
     .filter(Boolean),
 );
-const timeoutMs = Number.parseInt(
-  option("--timeout-ms", process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS || "60000"),
-  10,
+const allowDegradedReady =
+  args.includes("--allow-degraded-ready") ||
+  process.env.OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED === "1";
+const timeoutOption = optionValue(
+  "--timeout-ms",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS",
+  "60000",
 );
-const attemptTimeoutMs = Number.parseInt(
-  option(
-    "--attempt-timeout-ms",
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS || "5000",
-  ),
-  10,
+const attemptTimeoutOption = optionValue(
+  "--attempt-timeout-ms",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS",
+  "5000",
 );
-const maxBodyBytes = Number.parseInt(
-  option(
-    "--max-body-bytes",
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES || "1048576",
-  ),
-  10,
+const maxBodyOption = optionValue(
+  "--max-body-bytes",
+  "OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES",
+  "1048576",
 );
+const timeoutMs = readStrictInteger({ ...timeoutOption, allowZero: true });
+const attemptTimeoutMs = readStrictInteger(attemptTimeoutOption);
+const maxBodyBytes = readStrictInteger(maxBodyOption);
 const url = new URL(probePath, baseUrl).toString();
-
-if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
-  throw new Error(`invalid --timeout-ms: ${String(timeoutMs)}`);
-}
-if (!Number.isFinite(attemptTimeoutMs) || attemptTimeoutMs <= 0) {
-  throw new Error(`invalid --attempt-timeout-ms: ${String(attemptTimeoutMs)}`);
-}
-if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
-  throw new Error(`invalid --max-body-bytes: ${String(maxBodyBytes)}`);
-}
 if (expectKind !== "live" && expectKind !== "ready") {
   throw new Error(`unknown probe expectation: ${expectKind}`);
 }
@@ -69,8 +89,12 @@ function matchesExpectation(body) {
   if (expectKind === "live") {
     return body?.ok === true && body?.status === "live";
   }
-  if (body?.ready === true) {
-    return true;
+  return body?.ready === true;
+}
+
+function matchesDegradedReadyExpectation(body) {
+  if (expectKind !== "ready" || body?.ready !== false) {
+    return false;
   }
   const failing = Array.isArray(body?.failing) ? body.failing : [];
   return (
@@ -136,8 +160,10 @@ while (Date.now() - startedAt <= timeoutMs) {
       status: response.status,
       text,
     };
-    const expectationMet = matchesExpectation(body);
-    if ((response.ok || expectKind === "ready") && expectationMet) {
+    const healthyExpectationMet = response.ok && matchesExpectation(body);
+    const degradedExpectationMet =
+      allowDegradedReady && response.status === 503 && matchesDegradedReadyExpectation(body);
+    if (healthyExpectationMet || degradedExpectationMet) {
       writeJson(out, {
         body,
         elapsedMs: Date.now() - startedAt,
@@ -153,7 +179,9 @@ while (Date.now() - startedAt <= timeoutMs) {
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
   }
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 500);
+  });
 }
 
 const suffix = lastResult ? ` (last HTTP ${lastResult.status}: ${lastResult.text})` : "";

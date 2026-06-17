@@ -1,3 +1,4 @@
+// Feishu tests cover client plugin behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -384,6 +385,31 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
       timeout: 45_000,
     });
+  });
+
+  it("evicts client cache when SDK is replaced via setFeishuClientRuntimeForTest (#83911)", () => {
+    const ctorCountA = clientCtorMock.mock.calls.length;
+
+    // First client gets cached
+    createFeishuClient({ appId: "app_7", appSecret: "secret_7", accountId: "cache-clear-test" }); // pragma: allowlist secret
+    expect(clientCtorMock.mock.calls.length).toBe(ctorCountA + 1);
+
+    // SDK swap via setFeishuClientRuntimeForTest should clear the cache
+    setFeishuClientRuntimeForTest({
+      sdk: {
+        AppType: { SelfBuild: "self" } as never,
+        Client: clientCtorMock as never,
+        Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" } as never,
+        LoggerLevel: { info: "info" } as never,
+        WSClient: vi.fn() as never,
+        EventDispatcher: vi.fn() as never,
+        defaultHttpInstance: mockBaseHttpInstance as never,
+      },
+    });
+
+    // Same credentials — would hit cache before the fix; now evicted
+    createFeishuClient({ appId: "app_7", appSecret: "secret_7", accountId: "cache-clear-test" }); // pragma: allowlist secret
+    expect(clientCtorMock.mock.calls.length).toBe(ctorCountA + 2);
   });
 });
 

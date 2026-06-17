@@ -1,3 +1,4 @@
+// Control UI tests cover custom theme behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createImportedCustomThemeFixture as createImportedTheme,
@@ -111,6 +112,16 @@ describe("custom theme import helpers", () => {
       fetchUrl: "https://tweakcn.com/r/themes/amethyst-haze",
       themeId: "amethyst-haze",
     });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("twitter")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/twitter",
+      fetchUrl: "https://tweakcn.com/r/themes/twitter",
+      themeId: "twitter",
+    });
   });
 
   it("maps a tweakcn payload into a normalized imported theme record", () => {
@@ -164,7 +175,7 @@ describe("custom theme import helpers", () => {
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
     ).rejects.toThrow("unreadable theme payload");
-    expect(response.text).not.toHaveBeenCalled();
+    expect(response["text"]).not.toHaveBeenCalled();
   });
 
   it("rejects redirected tweakcn import responses", async () => {
@@ -266,6 +277,7 @@ describe("custom theme import helpers", () => {
       throw new Error("Expected imported custom theme to parse");
     }
     expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    expect(parseImportedCustomTheme({ ...imported, themeId: "claude" })?.themeId).toBe("claude");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
 
@@ -289,7 +301,7 @@ describe("custom theme import helpers", () => {
 
     vi.stubGlobal("document", {
       head: documentStub.head,
-      createElement: documentStub.createElement,
+      createElement: documentStub["createElement"],
       getElementById: vi.fn(() => style),
     } as unknown as Document);
 

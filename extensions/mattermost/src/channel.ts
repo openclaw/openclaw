@@ -1,7 +1,11 @@
+// Mattermost plugin module implements channel behavior.
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
+  ChannelThreadingContext,
+  ChannelThreadingToolContext,
+  ChannelToolSend,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
@@ -12,12 +16,14 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   type MessagePresentation,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -65,18 +71,27 @@ function buildMattermostPresentationButtons(presentation: MessagePresentation) {
   return presentation.blocks
     .filter((block) => block.type === "buttons")
     .map((block) =>
-      block.buttons.flatMap((button) =>
-        button.value
+      block.buttons.flatMap((button) => {
+        if (button.action) {
+          return [];
+        }
+        const value = resolveMessagePresentationControlValue(button);
+        return value
           ? [
               {
+                id: value,
                 text: button.label,
-                callback_data: button.value,
+                callback_data: value,
+                context: {
+                  callback_data: value,
+                },
                 style: button.style,
               },
             ]
-          : [],
-      ),
-    );
+          : [];
+      }),
+    )
+    .filter((row) => row.length > 0);
 }
 
 const MATTERMOST_PRESENTATION_CAPABILITIES = {
@@ -173,6 +188,155 @@ function hasConfiguredMattermostDirectoryAccount({
   );
 }
 
+function extractMattermostToolSend(args: Record<string, unknown>): ChannelToolSend | null {
+  if (normalizeOptionalString(args.action) !== "send") {
+    return null;
+  }
+  const to = normalizeOptionalString(args.to) ?? normalizeOptionalString(args.target);
+  if (!to) {
+    return null;
+  }
+  const threadId =
+    normalizeOptionalString(args.threadId) ??
+    normalizeOptionalString(args.replyToId) ??
+    normalizeOptionalString(args.replyTo);
+  const threadSuppressed = args.topLevel === true || args.threadId === null;
+  return {
+    to,
+    accountId: normalizeOptionalString(args.accountId),
+    ...(threadId ? { threadId } : {}),
+    ...(!threadId && !threadSuppressed ? { threadImplicit: true } : {}),
+    ...(threadSuppressed ? { threadSuppressed: true } : {}),
+  };
+}
+
+function extractMattermostToolSendResult(
+  result: unknown,
+  send: ChannelToolSend,
+): ChannelToolSend | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const toolSend = (details as { toolSend?: unknown }).toolSend;
+  if (!toolSend || typeof toolSend !== "object") {
+    return null;
+  }
+  const record = toolSend as Record<string, unknown>;
+  const to = normalizeOptionalString(record.to);
+  if (!to) {
+    return null;
+  }
+  const threadId = normalizeOptionalString(record.threadId);
+  const originalTarget = normalizeOptionalString(send.to);
+  const preserveOriginalTarget =
+    originalTarget?.startsWith("user:") === true || originalTarget?.startsWith("@") === true;
+  return {
+    to: preserveOriginalTarget ? originalTarget : to,
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
+function resolveMattermostAutoThreadId(params: {
+  to: string;
+  replyToId?: string | null;
+  toolContext?: {
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    currentMessageId?: string | number;
+    replyToMode?: "off" | "first" | "all" | "batched";
+    hasRepliedRef?: { value: boolean };
+  };
+}): string | undefined {
+  const replyToId = normalizeOptionalString(params.replyToId);
+  const context = params.toolContext;
+  const currentThreadId = normalizeOptionalString(context?.currentThreadTs);
+  const currentMessageId =
+    typeof context?.currentMessageId === "number"
+      ? String(context.currentMessageId)
+      : normalizeOptionalString(context?.currentMessageId);
+  const currentTarget = normalizeMattermostThreadTarget(context?.currentChannelId);
+  if (currentThreadId && currentTarget === normalizeMattermostThreadTarget(params.to)) {
+    if (replyToId === currentMessageId) {
+      return currentThreadId;
+    }
+    if (!replyToId) {
+      const replyToMode = context?.replyToMode;
+      const canInheritThread =
+        replyToMode === "all" ||
+        (replyToMode === "first" && context?.hasRepliedRef?.value !== true);
+      return canInheritThread ? currentThreadId : undefined;
+    }
+  }
+  return replyToId;
+}
+
+function normalizeMattermostThreadTarget(raw: string | undefined): string | undefined {
+  const normalized = raw ? normalizeMattermostMessagingTarget(raw) : undefined;
+  if (normalized) {
+    return normalized;
+  }
+  const trimmed = normalizeOptionalString(raw);
+  return trimmed && /^[a-z0-9]{26}$/i.test(trimmed) ? `channel:${trimmed}` : undefined;
+}
+
+function matchesMattermostToolContextTarget(params: {
+  target: string;
+  toolContext: ChannelThreadingToolContext;
+}): boolean {
+  const target = normalizeMattermostThreadTarget(params.target);
+  if (!target) {
+    return false;
+  }
+  return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
+    (currentTarget) => normalizeMattermostThreadTarget(currentTarget) === target,
+  );
+}
+
+function normalizeMattermostThreadId(value: string | number | undefined): string | undefined {
+  return typeof value === "number" ? String(value) : normalizeOptionalString(value);
+}
+
+function buildMattermostThreadingToolContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  context: ChannelThreadingContext;
+  hasRepliedRef?: { value: boolean };
+}): ChannelThreadingToolContext {
+  const account = resolveMattermostAccount({
+    cfg: params.cfg,
+    accountId: params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
+  });
+  const chatType =
+    params.context.ChatType === "direct" ||
+    params.context.ChatType === "group" ||
+    params.context.ChatType === "channel"
+      ? params.context.ChatType
+      : "channel";
+  const configuredReplyToMode = resolveMattermostReplyToMode(account, chatType);
+  const currentThreadTs =
+    normalizeMattermostThreadId(params.context.MessageThreadId) ??
+    normalizeMattermostThreadId(params.context.TransportThreadId) ??
+    normalizeOptionalString(params.context.ReplyToId);
+  const currentMessageId = normalizeMattermostThreadId(params.context.CurrentMessageId);
+  const hasExistingThread =
+    Boolean(currentThreadTs) && (!currentMessageId || currentThreadTs !== currentMessageId);
+  const currentChannelId = params.context.To
+    ? normalizeMattermostMessagingTarget(params.context.To)
+    : undefined;
+  return {
+    currentChannelId,
+    currentThreadTs,
+    currentMessageId: params.context.CurrentMessageId,
+    replyToMode: hasExistingThread ? "all" : configuredReplyToMode,
+    hasRepliedRef: params.hasRepliedRef,
+    sameChannelThreadRequired: Boolean(currentThreadTs),
+  };
+}
+
 async function listMattermostDirectoryGroups(params: MattermostDirectoryListParams) {
   if (!hasConfiguredMattermostDirectoryAccount(params)) {
     return [];
@@ -189,10 +353,20 @@ async function listMattermostDirectoryPeers(params: MattermostDirectoryListParam
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeMattermostMessageTool,
+  extractToolSend: ({ args }) => extractMattermostToolSend(args),
+  extractToolSendResult: ({ result, send }) => extractMattermostToolSendResult(result, send),
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
@@ -266,14 +440,27 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       : typeof params.message === "string"
         ? params.message
         : "";
-    // Match the shared runner semantics: trim empty reply IDs away before
-    // falling back from replyToId to replyTo on direct plugin calls.
+    // Mattermost post root_id is the thread root. A generic replyTo can name
+    // the current child post, so prefer threadId unless the caller supplied the
+    // Mattermost-specific replyToId root directly.
     const replyToId =
-      normalizeOptionalString(params.replyToId) ?? normalizeOptionalString(params.replyTo);
+      normalizeOptionalString(params.replyToId) ??
+      normalizeOptionalString(params.threadId) ??
+      normalizeOptionalString(params.replyTo);
     const resolvedAccountId = accountId || undefined;
 
-    const mediaUrl =
-      typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+    const attachmentMedia = collectMattermostAttachmentMedia(params);
+    if (attachmentMedia.hasUnsupportedAttachmentPayload) {
+      throw new Error(
+        "Mattermost send attachments require media, mediaUrl, path, filePath, fileUrl, mediaUrls, or attachments[] with one of those fields; buffer/base64 payloads are not supported.",
+      );
+    }
+    if (attachmentMedia.mediaUrls.length > 1) {
+      throw new Error(
+        "Mattermost send supports one attachment per message; split multiple mediaUrls or attachments[] entries into separate sends.",
+      );
+    }
+    const buttons = presentation ? buildMattermostPresentationButtons(presentation) : [];
 
     const result = await (
       await loadMattermostChannelRuntime()
@@ -281,9 +468,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: presentation ? buildMattermostPresentationButtons(presentation) : undefined,
+      buttons: buttons.length > 0 ? buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
-      mediaUrl,
+      mediaUrl: attachmentMedia.mediaUrls[0],
+      mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
+      mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
+      ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
+      requireMediaUpload: requiresMattermostMediaUpload(attachmentMedia.mediaUrls[0])
+        ? true
+        : undefined,
     });
 
     return {
@@ -298,7 +491,12 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
           }),
         },
       ],
-      details: {},
+      details: {
+        toolSend: {
+          to: `channel:${result.channelId}`,
+          ...(replyToId ? { threadId: replyToId } : {}),
+        },
+      },
     };
   },
 };
@@ -323,6 +521,104 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     postId,
     emojiName,
     remove: params.remove === true,
+  };
+}
+
+function collectNonBlankStrings(values: Array<string | undefined>): string[] {
+  const collected: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      collected.push(trimmed);
+    }
+  }
+  return collected;
+}
+
+function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+function readMattermostParam(params: Record<string, unknown>, key: string): unknown {
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = toSnakeCaseKey(key);
+  return snakeKey === key || !Object.hasOwn(params, snakeKey) ? undefined : params[snakeKey];
+}
+
+function readMattermostStringParam(
+  params: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const raw = readMattermostParam(params, key);
+  return typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
+}
+
+function readMattermostStringArrayParam(params: Record<string, unknown>, key: string): string[] {
+  const raw = readMattermostParam(params, key);
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((entry): entry is string => typeof entry === "string")
+      .flatMap((entry) => {
+        const normalized = normalizeOptionalString(entry);
+        return normalized ? [normalized] : [];
+      });
+  }
+  if (typeof raw === "string") {
+    const normalized = normalizeOptionalString(raw);
+    return normalized ? [normalized] : [];
+  }
+  return [];
+}
+
+function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
+  const normalized = normalizeOptionalString(mediaUrl);
+  return Boolean(normalized && !/^https?:\/\//i.test(normalized));
+}
+
+function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
+  mediaUrls: string[];
+  hasUnsupportedAttachmentPayload: boolean;
+} {
+  const mediaUrlCandidates: Array<string | undefined> = [
+    readMattermostStringParam(params, "media"),
+    readMattermostStringParam(params, "mediaUrl"),
+    readMattermostStringParam(params, "path"),
+    readMattermostStringParam(params, "filePath"),
+    readMattermostStringParam(params, "fileUrl"),
+  ];
+  mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
+
+  let hasUnsupportedAttachmentPayload =
+    typeof params.buffer === "string" || typeof params.base64 === "string";
+  if (Array.isArray(params.attachments)) {
+    for (const attachment of params.attachments) {
+      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+        continue;
+      }
+      const record = attachment as Record<string, unknown>;
+      mediaUrlCandidates.push(
+        readMattermostStringParam(record, "media"),
+        readMattermostStringParam(record, "mediaUrl"),
+        readMattermostStringParam(record, "path"),
+        readMattermostStringParam(record, "filePath"),
+        readMattermostStringParam(record, "fileUrl"),
+        readMattermostStringParam(record, "url"),
+      );
+      hasUnsupportedAttachmentPayload ||= typeof record.buffer === "string";
+      hasUnsupportedAttachmentPayload ||= typeof record.base64 === "string";
+    }
+  }
+
+  return {
+    mediaUrls: collectNonBlankStrings(mediaUrlCandidates),
+    hasUnsupportedAttachmentPayload,
   };
 }
 
@@ -377,8 +673,10 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
         mediaUrl,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
+        mediaLocalRoots: ctx.mediaLocalRoots ?? ctx.mediaAccess?.localRoots,
+        mediaReadFile: ctx.mediaReadFile ?? ctx.mediaAccess?.readFile,
+        ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),
+        requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
         replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
         buttons,
       });
@@ -413,7 +711,9 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       replyToId,
       threadId,
@@ -424,7 +724,10 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         cfg,
         accountId: accountId ?? undefined,
         mediaUrl,
-        mediaLocalRoots,
+        mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
+        mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
+        ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
+        requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
         replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       }),
   }),
@@ -555,6 +858,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         extra: {
           botTokenSource: account.botTokenSource,
           baseUrl: account.baseUrl,
+          dmPolicy: account.config.dmPolicy ?? "pairing",
           connected: runtime?.connected ?? false,
           lastConnectedAt: runtime?.lastConnectedAt ?? null,
           lastDisconnect: runtime?.lastDisconnect ?? null,
@@ -597,6 +901,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
   },
   threading: {
+    buildToolContext: (params) => buildMattermostThreadingToolContext(params),
     scopedAccountReplyToMode: {
       resolveAccount: (cfg, accountId) =>
         resolveMattermostAccount({
@@ -611,10 +916,25 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             : "channel",
         ),
     },
-    resolveReplyTransport: ({ threadId, replyToId }) => ({
-      replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-      threadId,
-    }),
+    resolveAutoThreadId: ({ to, replyToId, toolContext }) =>
+      resolveMattermostAutoThreadId({ to, replyToId, toolContext }),
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      matchesMattermostToolContextTarget({ target, toolContext }),
+    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+      const ambientThreadId = threadId != null ? String(threadId) : undefined;
+      const resolvedThreadId =
+        replyDelivery?.chatType === "direct"
+          ? undefined
+          : replyDelivery
+            ? replyToIsExplicit
+              ? (replyToId ?? ambientThreadId)
+              : (ambientThreadId ?? replyToId ?? undefined)
+            : (ambientThreadId ?? replyToId);
+      return {
+        replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+        threadId: resolvedThreadId ?? null,
+      };
+    },
   },
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,

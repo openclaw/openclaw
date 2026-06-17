@@ -25,7 +25,6 @@ import {
   getQQBotMediaDir,
   isLocalPath as isLocalFilePath,
   normalizePath,
-  resolveQQBotPayloadLocalFilePath,
 } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
@@ -42,6 +41,7 @@ import {
   type DeliveryTarget,
 } from "./sender.js";
 import { parseTarget as coreParseTarget } from "./target-parser.js";
+import { resolveTrustedOutboundMediaPath } from "./trusted-media-path.js";
 
 /** Parse a qqbot target into a structured delivery target. */
 export function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: string } {
@@ -139,7 +139,9 @@ export function resolveOutboundMediaPath(
     return { ok: true, mediaPath: normalizedPath };
   }
 
-  const allowedPath = resolveQQBotPayloadLocalFilePath(normalizedPath);
+  const allowedPath = resolveTrustedOutboundMediaPath(normalizedPath, {
+    allowMissing: options.allowMissingLocalPath,
+  });
   if (allowedPath) {
     return { ok: true, mediaPath: allowedPath };
   }
@@ -303,7 +305,7 @@ export async function sendVoice(
   ctx: MediaTargetContext,
   voicePath: string,
   directUploadFormats?: string[],
-  transcodeEnabled: boolean = true,
+  transcodeEnabled = true,
 ): Promise<OutboundResult> {
   const resolvedMediaPath = resolveOutboundMediaPath(voicePath, "voice", {
     allowMissingLocalPath: true,
@@ -368,7 +370,7 @@ async function sendVoiceFromLocal(
   }
 
   // Re-check containment after the file appears to prevent symlink-race escapes.
-  const safeMediaPath = resolveQQBotPayloadLocalFilePath(mediaPath);
+  const safeMediaPath = resolveTrustedOutboundMediaPath(mediaPath);
   if (!safeMediaPath) {
     debugWarn(`sendVoice: blocked local voice path outside QQ Bot media storage`);
     return { channel: "qqbot", error: "Voice path must be inside QQ Bot media storage" };

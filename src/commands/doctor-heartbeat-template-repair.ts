@@ -1,12 +1,13 @@
+/** Doctor repair for HEARTBEAT.md files that accidentally contain docs template wrappers. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveWorkspaceTemplateDir } from "../agents/workspace-templates.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 const LEGACY_HEARTBEAT_PROSE_TEMPLATE = [
@@ -86,7 +87,7 @@ const KNOWN_REPAIRABLE_DIRTY_HEARTBEAT_TEMPLATES = [
   DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE,
 ] as const;
 
-export type HeartbeatTemplateRepairAnalysis =
+type HeartbeatTemplateRepairAnalysis =
   | { status: "clean" }
   | { status: "dirty-template" }
   | { status: "dirty-template-with-custom-content"; customLines: string[] };
@@ -95,6 +96,7 @@ function linesEqual(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((line, index) => line === right[index]);
 }
 
+/** Classifies heartbeat template content as clean, repairable, or risky because it has user text. */
 export function analyzeHeartbeatTemplateForRepair(
   content: string,
 ): HeartbeatTemplateRepairAnalysis {
@@ -124,6 +126,7 @@ async function readCleanHeartbeatTemplate(): Promise<string> {
   return await fs.readFile(templatePath, "utf-8");
 }
 
+/** Replaces known dirty heartbeat templates with the clean runtime template when repair is enabled. */
 export async function maybeRepairHeartbeatTemplate(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;

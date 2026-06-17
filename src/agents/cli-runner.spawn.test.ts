@@ -1,3 +1,4 @@
+/** Tests CLI runner process spawning, logging, diagnostics, and live-session paths. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,11 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  markMcpLoopbackToolCallFinished,
+  markMcpLoopbackToolCallStarted,
+  recordMcpLoopbackToolCallResult,
+} from "../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
@@ -17,6 +23,7 @@ import {
   resetDiagnosticRunActivityForTest,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunExit } from "../process/supervisor/types.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -34,11 +41,16 @@ import {
   runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
 import {
+  attachCliMessagingDeliveryEvidence,
+  getCliMessagingDeliveryEvidence,
+} from "./cli-runner/delivery-evidence.js";
+import {
   buildCliEnvAuthLog,
   buildCliExecLogLine,
   executePreparedCliRun,
+  setCliRunnerExecuteTestDeps,
 } from "./cli-runner/execute.js";
-import { buildSystemPrompt } from "./cli-runner/helpers.js";
+import { buildSystemPrompt, writeCliSystemPromptFile } from "./cli-runner/helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -58,6 +70,7 @@ beforeEach(() => {
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();
+  setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
   supervisorSpawnMock.mockClear();
 });
 
@@ -70,7 +83,7 @@ afterEach(() => {
 });
 
 function buildPreparedCliRunContext(params: {
-  provider: "claude-cli" | "codex-cli";
+  provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
   runId: string;
   prompt?: string;
@@ -79,42 +92,69 @@ function buildPreparedCliRunContext(params: {
   sessionEntry?: PreparedCliRunContext["params"]["sessionEntry"];
   agentId?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
+  mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
+  executionMode?: PreparedCliRunContext["params"]["executionMode"];
   workspaceDir?: string;
   timeoutMs?: number;
 }): PreparedCliRunContext {
+  // Produces a prepared context without invoking prepare.runtime, keeping spawn
+  // assertions focused on execute/runtime behavior.
   const workspaceDir = params.workspaceDir ?? "/tmp";
-  const baseBackend =
-    params.provider === "claude-cli"
-      ? {
-          command: "claude",
-          args: ["-p", "--output-format", "stream-json"],
-          output: "jsonl" as const,
-          input: "stdin" as const,
-          modelArg: "--model",
-          sessionArg: "--session-id",
-          sessionMode: "always" as const,
-          systemPromptFileArg: "--append-system-prompt-file",
-          systemPromptWhen: "first" as const,
-          serialize: true,
-        }
-      : {
-          command: "codex",
-          args: ["exec", "--json"],
-          resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
-          output: "text" as const,
-          input: "arg" as const,
-          modelArg: "--model",
-          sessionMode: "existing" as const,
-          systemPromptFileConfigArg: "-c",
-          systemPromptFileConfigKey: "model_instructions_file",
-          systemPromptWhen: "first" as const,
-          serialize: true,
-        };
+  const baseBackend = (() => {
+    if (params.provider === "claude-cli") {
+      return {
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+        output: "jsonl" as const,
+        input: "stdin" as const,
+        modelArg: "--model",
+        sessionArg: "--session-id",
+        sessionMode: "always" as const,
+        systemPromptFileArg: "--append-system-prompt-file",
+        systemPromptWhen: "first" as const,
+        serialize: true,
+      };
+    }
+    if (params.provider === "google-gemini-cli") {
+      return {
+        command: "gemini",
+        args: [
+          "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
+          "--output-format",
+          "stream-json",
+          "--prompt",
+          "{prompt}",
+        ],
+        output: "jsonl" as const,
+        jsonlDialect: "gemini-stream-json" as const,
+        input: "arg" as const,
+        modelArg: "--model",
+        sessionMode: "existing" as const,
+        serialize: true,
+      };
+    }
+    return {
+      command: "codex",
+      args: ["exec", "--json"],
+      resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
+      output: "text" as const,
+      input: "arg" as const,
+      modelArg: "--model",
+      sessionMode: "existing" as const,
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first" as const,
+      serialize: true,
+    };
+  })();
   const backend = { ...baseBackend, ...params.backend };
   return {
     params: {
@@ -129,6 +169,7 @@ function buildPreparedCliRunContext(params: {
       provider: params.provider,
       model: params.model,
       thinkLevel: params.thinkLevel,
+      executionMode: params.executionMode,
       timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -139,12 +180,17 @@ function buildPreparedCliRunContext(params: {
       id: params.provider,
       config: backend,
       bundleMcp: params.provider === "claude-cli",
-      pluginId: params.provider === "claude-cli" ? "anthropic" : "openai",
+      pluginId:
+        params.provider === "claude-cli"
+          ? "anthropic"
+          : params.provider === "google-gemini-cli"
+            ? "google"
+            : "openai",
       resolveExecutionArgs: params.resolveExecutionArgs,
     },
     preparedBackend: {
       backend,
-      env: {},
+      env: params.preparedEnv ?? {},
       ...(params.mcpConfigHash ? { mcpConfigHash: params.mcpConfigHash } : {}),
     },
     reusableCliSession: {},
@@ -156,6 +202,7 @@ function buildPreparedCliRunContext(params: {
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
+    ...(params.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
   };
 }
 
@@ -198,6 +245,8 @@ async function expectRejectsWithFields(
   promise: Promise<unknown>,
   expected: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Failover errors carry structured fields; this helper verifies them while
+  // preserving the original object for deeper assertions.
   try {
     await promise;
   } catch (error) {
@@ -463,6 +512,30 @@ describe("runCliAgent spawn path", () => {
     expect(input.argv).not.toContain("hi");
   });
 
+  it("does not pass a Claude session id for side-question runs", async () => {
+    mockSuccessfulCliRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--max-turns", "1"]);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-side-question",
+        executionMode: "side-question",
+        backend: { sessionMode: "none" },
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.executionMode).toBe("side-question");
+    expect(resolveArgsInput.useResume).toBe(false);
+    const input = mockCallArg(supervisorSpawnMock) as { argv?: string[]; input?: string };
+    expect(input.argv).not.toContain("--session-id");
+    expect(input.argv).toContain("--max-turns");
+    expect(input.input).toContain("hi");
+  });
+
   it("applies backend-owned per-run args before spawning", async () => {
     mockSuccessfulCliRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--effort", "high"]);
@@ -485,6 +558,35 @@ describe("runCliAgent spawn path", () => {
     expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
     const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
+  });
+
+  it("passes prepared backend env to the spawned CLI process", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        runId: "run-prepared-env",
+        backend: {
+          env: {
+            GEMINI_CLI_HOME: "/ignored/static-home",
+            STATIC_BACKEND_FLAG: "set",
+          },
+        },
+        preparedEnv: {
+          GEMINI_CLI_HOME: "/tmp/openclaw-gemini-profile-home",
+          GEMINI_CLI_SYSTEM_SETTINGS_PATH: "/tmp/openclaw-gemini-system-settings.json",
+        },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+    expect(input.env?.STATIC_BACKEND_FLAG).toBe("set");
+    expect(input.env?.GEMINI_CLI_HOME).toBe("/tmp/openclaw-gemini-profile-home");
+    expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
+      "/tmp/openclaw-gemini-system-settings.json",
+    );
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
@@ -646,11 +748,41 @@ describe("runCliAgent spawn path", () => {
       runId: "run-claude-channel-wrapper",
       messageChannel: "telegram",
       messageProvider: "acp",
+      currentChannelId: "telegram:-100123:topic:42",
+      currentThreadTs: "42",
+      currentMessageId: "reply-message-1",
+      senderId: "sender-1",
+      senderIsOwner: true,
+      persistAssistantTranscript: true,
+      storePath: "/tmp/sessions.json",
+      currentInboundEventKind: "room_event",
     });
 
     expect(params.messageChannel).toBe("telegram");
     expect(params.messageProvider).toBe("acp");
+    expect(params.currentChannelId).toBe("telegram:-100123:topic:42");
+    expect(params.currentThreadTs).toBe("42");
+    expect(params.currentMessageId).toBe("reply-message-1");
+    expect(params.senderId).toBe("sender-1");
+    expect(params.senderIsOwner).toBe(true);
     expect(params.cwd).toBe("/tmp/task-repo");
+    expect(params.persistAssistantTranscript).toBe(true);
+    expect(params.storePath).toBe("/tmp/sessions.json");
+    expect(params.currentInboundEventKind).toBe("room_event");
+  });
+
+  it("forwards explicit message target policy through the compat wrapper", () => {
+    const params = buildRunClaudeCliAgentParams({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      timeoutMs: 1_000,
+      runId: "run-claude-target-policy-wrapper",
+      requireExplicitMessageTarget: true,
+    });
+
+    expect(params.requireExplicitMessageTarget).toBe(true);
   });
 
   it("forwards static extra system prompt through the compat wrapper", () => {
@@ -745,6 +877,87 @@ describe("runCliAgent spawn path", () => {
     } finally {
       logInfoSpy.mockRestore();
     }
+  });
+
+  it("returns process diagnostics with byte counts and bounded output hashes", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 75,
+        stdout: "ok",
+        stderr: "warn\n",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-process-diagnostics",
+      }),
+    );
+
+    expect(result.diagnostics?.process).toEqual({
+      backendId: "codex-cli",
+      processReason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 75,
+      stdoutBytes: 2,
+      stdoutHash: "2689367b205c",
+      stderrBytes: 5,
+      stderrHash: "7597e6b3a377",
+      useResume: false,
+    });
+  });
+
+  it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout:
+          [
+            JSON.stringify({
+              type: "message",
+              role: "assistant",
+              content: "partial text",
+              delta: true,
+            }),
+            JSON.stringify({
+              type: "result",
+              status: "error",
+              error: {
+                message: "Gemini stream failed",
+              },
+            }),
+          ].join("\n") + "\n",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          runId: "run-gemini-stream-json-error",
+        }),
+      ),
+      {
+        name: "FailoverError",
+        message: "Gemini stream failed",
+        reason: "unknown",
+      },
+    );
   });
 
   it("passes Codex system prompts through model_instructions_file", async () => {
@@ -903,6 +1116,61 @@ describe("runCliAgent spawn path", () => {
         { stream: "assistant", text: "Hello", delta: "Hello" },
         { stream: "assistant", text: "Hello world", delta: " world" },
       ]);
+    } finally {
+      stop();
+    }
+  });
+
+  it("suppresses Claude text delta events for side-question runs", async () => {
+    const agentEvents: Array<{ stream: string; text?: string; delta?: string }> = [];
+    const stop = onAgentEvent((evt) => {
+      agentEvents.push({
+        stream: evt.stream,
+        text: typeof evt.data.text === "string" ? evt.data.text : undefined,
+        delta: typeof evt.data.delta === "string" ? evt.data.delta : undefined,
+      });
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      input.onStdout?.(
+        [
+          JSON.stringify({ type: "init", session_id: "session-123" }),
+          JSON.stringify({
+            type: "stream_event",
+            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hello" } },
+          }),
+          JSON.stringify({
+            type: "result",
+            session_id: "session-123",
+            result: "Hello",
+          }),
+        ].join("\n") + "\n",
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      const result = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-side-question-stream-json",
+          executionMode: "side-question",
+          backend: { sessionMode: "none" },
+        }),
+      );
+
+      expect(result.text).toBe("Hello");
+      expect(agentEvents).toEqual([]);
     } finally {
       stop();
     }
@@ -1074,6 +1342,148 @@ describe("runCliAgent spawn path", () => {
 
     resetClaudeLiveSessionsForTest();
     await vi.waitFor(() => expect(preparedBackendCleanup).toHaveBeenCalledOnce());
+  });
+
+  it("keeps captured live prepared backend cleanup with the whole-run owner", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "captured-live-cleanup-run",
+        pid: 2347,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            stdoutListener?.(
+              [
+                JSON.stringify({
+                  type: "system",
+                  subtype: "init",
+                  session_id: "captured-live-cleanup",
+                }),
+                JSON.stringify({
+                  type: "result",
+                  session_id: "captured-live-cleanup",
+                  result: "ok",
+                }),
+              ].join("\n") + "\n",
+            );
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => exited),
+        cancel: vi.fn(() =>
+          resolveExit?.({
+            reason: "manual-cancel",
+            exitCode: null,
+            exitSignal: null,
+            durationMs: 1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+        ),
+      };
+    });
+    const preparedBackendCleanup = vi.fn(async () => {});
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-captured-live-cleanup",
+      prompt: "first",
+      backend: {
+        args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-captured.json"],
+        liveSession: "claude-stdio",
+      },
+      mcpConfigHash: "captured-cleanup-mcp-config",
+      mcpDeliveryCapture: true,
+    });
+    context.preparedBackend.cleanup = preparedBackendCleanup;
+
+    const result = await executePreparedCliRun(context);
+
+    expect(result.text).toBe("ok");
+    expect(context.preparedBackend.cleanup).toBe(preparedBackendCleanup);
+    expect(preparedBackendCleanup).not.toHaveBeenCalled();
+
+    await context.preparedBackend.cleanup?.();
+    expect(preparedBackendCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("preserves completed output when system prompt cleanup fails after delivery", async () => {
+    const cleanupError = new Error("system prompt cleanup failed");
+    const logWarnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    setCliRunnerExecuteTestDeps({
+      writeCliSystemPromptFile: async () => ({
+        filePath: "/tmp/system-prompt.md",
+        cleanup: async () => {
+          throw cleanupError;
+        },
+      }),
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: { action: "send", target: "chat123", message: "done" },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: { action: "send", target: "chat123", message: "done" },
+        result: { status: "sent" },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      input.onStdout?.("done");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      runId: "run-cleanup-delivery-evidence",
+      mcpDeliveryCapture: true,
+    });
+
+    const result = await executePreparedCliRun(context);
+    setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
+
+    expect(result.text).toBe("done");
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(logWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("outer resource cleanup failed after confirmed message delivery"),
+    );
+  });
+
+  it("wraps primitive and frozen failures to preserve delivery evidence", () => {
+    const evidence = { didSendViaMessagingTool: true };
+    const primitive = attachCliMessagingDeliveryEvidence("failed", evidence);
+    const frozen = attachCliMessagingDeliveryEvidence(Object.freeze(new Error("frozen")), evidence);
+
+    expect(primitive).toBeInstanceOf(Error);
+    expect(frozen).toBeInstanceOf(Error);
+    expect(getCliMessagingDeliveryEvidence(primitive)?.didSendViaMessagingTool).toBe(true);
+    expect(getCliMessagingDeliveryEvidence(frozen)?.didSendViaMessagingTool).toBe(true);
   });
 
   it("accepts Claude live stream-json lines larger than 256 KiB", async () => {
@@ -2450,8 +2860,10 @@ ${JSON.stringify({
     expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");
   });
 
-  it("restarts Claude live sessions for env changes and fresh retries", async () => {
+  it("uses a fresh Claude live process and capture key for every captured turn", async () => {
+    const logWarnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
     const cancels: Array<ReturnType<typeof vi.fn>> = [];
+    const captureKeys: string[] = [];
     const turnResults = ["first-ok", "resume-ok", "env-ok", "fresh-ok"];
     let turnIndex = 0;
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
@@ -2459,6 +2871,30 @@ ${JSON.stringify({
       const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
       const cancel = vi.fn();
       cancels.push(cancel);
+      let resolveExit: (() => void) | undefined;
+      const exited = new Promise<{
+        reason: "manual-cancel";
+        exitCode: null;
+        exitSignal: null;
+        durationMs: number;
+        stdout: string;
+        stderr: string;
+        timedOut: false;
+        noOutputTimedOut: false;
+      }>((resolve) => {
+        resolveExit = () =>
+          resolve({
+            reason: "manual-cancel",
+            exitCode: null,
+            exitSignal: null,
+            durationMs: 1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          });
+      });
+      cancel.mockImplementation(() => resolveExit?.());
       return {
         runId: `live-run-${spawnIndex}`,
         pid: 2345 + spawnIndex,
@@ -2481,7 +2917,7 @@ ${JSON.stringify({
           }),
           end: vi.fn(),
         },
-        wait: vi.fn(() => new Promise(() => {})),
+        wait: vi.fn(() => exited),
         cancel,
       };
     });
@@ -2494,6 +2930,7 @@ ${JSON.stringify({
           liveSession: "claude-stdio",
           resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
         },
+        mcpDeliveryCapture: true,
       });
       const result = await runClaudeLiveSessionTurn({
         context,
@@ -2511,7 +2948,12 @@ ${JSON.stringify({
           getRecord: vi.fn(),
         }),
         onAssistantDelta: () => {},
-        cleanup: async () => {},
+        onMcpCaptureReady: (captureKey) => captureKeys.push(captureKey),
+        cleanup: async () => {
+          if (runId === "run-live-resume") {
+            throw new Error("captured cleanup failed");
+          }
+        },
       });
       return result.output.text;
     };
@@ -2524,14 +2966,17 @@ ${JSON.stringify({
     await expect(
       runTurn("run-live-resume", resumeArgs, { ANTHROPIC_BASE_URL: "https://one.example" }),
     ).resolves.toBe("resume-ok");
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expect(cancels[0]).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
+    expect(cancels[1]).toHaveBeenCalledWith("manual-cancel");
+    expect(captureKeys[1]).not.toBe(captureKeys[0]);
 
     await expect(
       runTurn("run-live-env-change", resumeArgs, { ANTHROPIC_BASE_URL: "https://two.example" }),
     ).resolves.toBe("env-ok");
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
-    expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
+    expect(cancels[2]).toHaveBeenCalledWith("manual-cancel");
+    expect(captureKeys[2]).not.toBe(captureKeys[1]);
 
     await expect(
       runTurn("run-live-fresh-retry", freshArgs, {
@@ -2539,9 +2984,12 @@ ${JSON.stringify({
       }),
     ).resolves.toBe("fresh-ok");
 
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
-    expect(cancels[1]).toHaveBeenCalledWith("manual-cancel");
-    expect(cancels[2]).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(4);
+    expect(cancels[3]).toHaveBeenCalledWith("manual-cancel");
+    expect(captureKeys[3]).not.toBe(captureKeys[2]);
+    expect(logWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Claude live session cleanup failed: captured cleanup failed"),
+    );
   });
 
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
@@ -3283,11 +3731,13 @@ ${JSON.stringify({
   it("formats CLI auth env diagnostics as key names without secret values", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
+    vi.stubEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "/tmp/host-gemini-settings.json");
     vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
 
     const log = buildCliEnvAuthLog({
       ANTHROPIC_API_TOKEN: "token-child",
       CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      GEMINI_CLI_HOME: "/tmp/child-gemini-home",
       OPENAI_API_KEY: "sk-openai-child",
     });
 
@@ -3298,8 +3748,12 @@ ${JSON.stringify({
     expect(log).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
     expect(log).toMatch(/child=.*OPENAI_API_KEY/);
     expect(log).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
+    expect(log).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
+    expect(log).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
+    expect(log).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
     expect(log).not.toContain("sk-ant-host");
     expect(log).not.toContain("token-child");
+    expect(log).not.toContain("/tmp/child-gemini-home");
     expect(log).not.toContain("sk-openai-child");
   });
 

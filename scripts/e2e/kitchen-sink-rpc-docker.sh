@@ -33,7 +33,13 @@ for env_name in \
   OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS \
   OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS \
   OPENCLAW_KITCHEN_SINK_RPC_CALL_MS \
-  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB; do
+  OPENCLAW_KITCHEN_SINK_RPC_PORT \
+  OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS \
+  OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES \
+  OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS \
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP \
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB \
+  OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB; do
   env_value="${!env_name:-}"
   if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
     DOCKER_ENV_ARGS+=(-e "$env_name")
@@ -47,24 +53,27 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --nam
   node scripts/e2e/kitchen-sink-rpc-walk.mjs >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 
-while kill -0 "$docker_pid" 2>/dev/null; do
-  if docker_e2e_docker_cmd inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-    docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$CONTAINER_NAME" >>"$STATS_LOG" 2>/dev/null || true
-  fi
-  sleep 2
-done
+docker_e2e_sample_stats_until_exit \
+  "$CONTAINER_NAME" \
+  "$docker_pid" \
+  "$STATS_LOG" \
+  "$RUN_LOG" \
+  "Kitchen-sink RPC Docker E2E" \
+  "${OPENCLAW_DOCKER_E2E_STATS_HEARTBEAT_SECONDS:-30}"
 
 set +e
 wait "$docker_pid"
 run_status="$?"
 set -e
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 
 if [ "$run_status" -eq 0 ]; then
   node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc
 elif [ -s "$STATS_LOG" ]; then
-  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc || true
+  if ! node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc; then
+    echo "RESOURCE_CEILING_FAILED lane=kitchen-sink-rpc primary_status=$run_status" >&2
+  fi
 fi
 
 exit "$run_status"

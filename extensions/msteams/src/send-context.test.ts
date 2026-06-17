@@ -1,3 +1,4 @@
+// Msteams tests cover send context plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -20,8 +21,8 @@ const sendContextMockState = vi.hoisted(() => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => sendContextMockState.store,
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => sendContextMockState.store,
 }));
 
 vi.mock("./runtime.js", () => ({

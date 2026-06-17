@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -15,7 +16,7 @@ import {
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
@@ -91,6 +92,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
@@ -140,7 +142,7 @@ const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
-const laneFloorAdoptionDateKey = 20260227;
+const laneFloorAdoptionReleaseKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
@@ -176,11 +178,17 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
 
 function positiveEnvInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function runReleaseCheckCommand(
@@ -373,7 +381,7 @@ function runPack(packDestination: string): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
-function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
+export function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
   const filenames = results
     .map((entry) => entry.filename)
     .filter((filename): filename is string => typeof filename === "string" && filename.length > 0);
@@ -382,7 +390,18 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
       `release-check: npm pack produced ${filenames.length} tarballs; expected exactly one.`,
     );
   }
-  return resolve(packDestination, filenames[0]);
+  const filename = filenames[0];
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== basename(filename) ||
+    filename !== win32.basename(filename)
+  ) {
+    throw new Error(
+      `release-check: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}.`,
+    );
+  }
+  return resolve(packDestination, filename);
 }
 
 function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
@@ -973,24 +992,28 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     }
     const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
     if (floors === null) {
+      errors.push(
+        `appcast item '${title}' has invalid sparkle:shortVersionString '${shortVersion}'.`,
+      );
       continue;
     }
 
     calverItems.push({ title, sparkleBuild: Number(sparkleVersion), floors });
   }
 
-  const observedLaneAdoptionDateKey = calverItems
+  const observedLaneAdoptionReleaseKey = calverItems
     .filter((item) => item.sparkleBuild >= laneBuildMin)
-    .map((item) => item.floors.dateKey)
+    .map((item) => item.floors.releaseKey)
     .toSorted((a, b) => a - b)[0];
-  const effectiveLaneAdoptionDateKey =
-    typeof observedLaneAdoptionDateKey === "number"
-      ? Math.min(observedLaneAdoptionDateKey, laneFloorAdoptionDateKey)
-      : laneFloorAdoptionDateKey;
+  const effectiveLaneAdoptionReleaseKey =
+    typeof observedLaneAdoptionReleaseKey === "number"
+      ? Math.min(observedLaneAdoptionReleaseKey, laneFloorAdoptionReleaseKey)
+      : laneFloorAdoptionReleaseKey;
 
   for (const item of calverItems) {
     const expectLaneFloor =
-      item.sparkleBuild >= laneBuildMin || item.floors.dateKey >= effectiveLaneAdoptionDateKey;
+      item.sparkleBuild >= laneBuildMin ||
+      item.floors.releaseKey >= effectiveLaneAdoptionReleaseKey;
     const floor = expectLaneFloor ? item.floors.laneFloor : item.floors.legacyFloor;
     if (item.sparkleBuild < floor) {
       const floorLabel = expectLaneFloor ? "lane floor" : "legacy floor";

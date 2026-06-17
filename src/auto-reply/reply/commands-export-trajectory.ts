@@ -1,3 +1,4 @@
+// Implements trajectory export command packaging for the active session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
@@ -19,11 +20,13 @@ import {
 import {
   buildCurrentOpenClawCliArgv,
   buildCurrentOpenClawCliCommand,
+  buildCurrentOpenClawCliExecEnv,
 } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -53,7 +56,7 @@ type ExportTrajectoryCommandDeps = {
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply: deliverPrivateTrajectoryReply,
+  deliverPrivateTrajectoryReply,
 };
 
 export async function buildExportTrajectoryCommandReply(
@@ -216,7 +219,7 @@ function buildTrajectoryExportApprovalRequest(
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -242,10 +245,13 @@ async function requestTrajectoryExportApproval(
       trigger: "export-trajectory",
       scopeKey: EXPORT_TRAJECTORY_EXEC_SCOPE_KEY,
       allowBackground: true,
+      approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+      sessionStore: params.cfg.session?.store,
       mainKey: params.cfg.session?.mainKey,
       sessionScope: params.cfg.session?.scope,
       messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
@@ -263,6 +269,7 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
+      env: buildCurrentOpenClawCliExecEnv(),
       security: "allowlist",
       ask: "always",
       background: true,

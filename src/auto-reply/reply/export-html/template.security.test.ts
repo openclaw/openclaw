@@ -1,3 +1,4 @@
+// Tests exported HTML transcript escaping and template safety.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,8 @@ type SessionEntry = {
   message?: unknown;
   summary?: string;
   content?: unknown;
+  targetId?: string | null;
+  appendParentId?: string | null;
   display?: boolean;
   customType?: string;
   provider?: string;
@@ -22,7 +25,8 @@ type SessionEntry = {
 type SessionData = {
   header: { id: string; timestamp: string };
   entries: SessionEntry[];
-  leafId: string;
+  leafId: string | null;
+  hasLeafControl?: boolean;
   systemPrompt: string;
   tools: unknown[];
 };
@@ -51,7 +55,7 @@ let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
 
 async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
   parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
-    ({ parseHTML }) => parseHTML,
+    (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
 }
@@ -208,6 +212,36 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it("renders an explicitly selected empty branch without inactive messages", async () => {
+    const session: SessionData = {
+      header: { id: "session-empty", timestamp: now() },
+      entries: [
+        {
+          id: "inactive-tail",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "assistant", content: "inactive history" },
+        },
+        {
+          id: "empty-leaf",
+          parentId: "inactive-tail",
+          timestamp: now(),
+          type: "leaf",
+          targetId: null,
+        },
+      ],
+      leafId: null,
+      hasLeafControl: true,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.textContent).not.toContain("inactive history");
+  });
+
   it("escapes raw HTML from markdown blocks", async () => {
     const attack = "<img src=x onerror=alert(1)>";
     const session: SessionData = {
@@ -623,5 +657,106 @@ describe("export html security hardening", () => {
     expect(img.getAttribute("onerror")).toBeNull();
     expect(img.getAttribute("alt")).toBe('x" onerror="alert(1)');
     expect(img.getAttribute("src")).toBe(dataImage);
+  });
+
+  it("does not crash when assistant message has non-array content", async () => {
+    for (const content of [null, undefined, "plain string", 42]) {
+      const session: SessionData = {
+        header: { id: "session-malformed-assistant", timestamp: now() },
+        entries: [
+          {
+            id: "1",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: { role: "user", content: "hello" },
+          },
+          {
+            id: "2",
+            parentId: "1",
+            timestamp: now(),
+            type: "message",
+            message: { role: "assistant", content },
+          },
+        ],
+        leafId: "2",
+        systemPrompt: "",
+        tools: [],
+      };
+      const { document } = await renderTemplate(session);
+      if (typeof content === "string") {
+        expect(document.querySelector(".assistant-message")?.textContent).toContain(content);
+      }
+    }
+  });
+
+  it("renders string tool-result content", async () => {
+    const session: SessionData = {
+      header: { id: "session-string-tool-result", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run a command" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "bash",
+                arguments: { command: "echo legacy" },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            content: "legacy output",
+          },
+        },
+      ],
+      leafId: "3",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    expect(document.querySelector(".tool-output")?.textContent).toContain("legacy output");
+  });
+
+  it("does not crash when user message has non-array non-string content", async () => {
+    for (const content of [null, undefined, 42]) {
+      const session: SessionData = {
+        header: { id: "session-malformed-user", timestamp: now() },
+        entries: [
+          {
+            id: "1",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: { role: "user", content },
+          },
+        ],
+        leafId: "1",
+        systemPrompt: "",
+        tools: [],
+      };
+      await expect(renderTemplate(session)).resolves.toBeDefined();
+    }
   });
 });

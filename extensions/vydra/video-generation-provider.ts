@@ -1,3 +1,4 @@
+// Vydra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
@@ -12,6 +13,7 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   resolveCompletedVydraPayload,
+  resolveVydraGeneratedMediaMaxBytes,
   resolveVydraResponseJobId,
   resolveVydraResponseStatus,
   resolveVydraRequestContext,
@@ -131,6 +133,7 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "video" }),
         });
         return {
           videos: [

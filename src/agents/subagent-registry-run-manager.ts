@@ -1,14 +1,18 @@
+/**
+ * Subagent run manager.
+ *
+ * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
+ */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
-import { isAbortedAgentStopReason } from "./run-termination.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
@@ -36,6 +40,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -44,30 +49,6 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-}
-
-function resolveSubagentRunDeadlineMs(
-  entry: SubagentRunRecord,
-  observedStartedAt?: number,
-): number | undefined {
-  const timeoutSeconds = entry.runTimeoutSeconds;
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    return undefined;
-  }
-  const startedAt =
-    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
-      ? observedStartedAt
-      : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
-        ? entry.startedAt
-        : entry.createdAt;
-  if (!Number.isFinite(startedAt)) {
-    return undefined;
-  }
-  return startedAt + Math.floor(timeoutSeconds * 1000);
 }
 
 function resolveHardRunTimeoutEndedAt(
@@ -166,6 +147,8 @@ export type RegisterSubagentRunParams = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
+  agentId?: string;
+  requesterAgentId?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -199,6 +182,7 @@ export function createSubagentRunManager(params: {
   stopSweeper(): void;
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
+  clearPendingLifecycleTimeout(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   resolveSubagentSessionCompletion(args: {
@@ -277,9 +261,14 @@ export function createSubagentRunManager(params: {
       if (wait.status === "pending") {
         return;
       }
-      const waitBlocked = isBlockedLivenessState(wait.livenessState);
-      const waitAborted = isAbortedAgentStopReason(wait.stopReason);
-      if (wait.yielded === true && !waitBlocked) {
+      const waitTerminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(wait);
+      const waitBlocked = waitTerminalOutcome?.reason === "blocked";
+      const waitAborted =
+        waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
+      const waitStatus = waitTerminalOutcome?.status ?? wait.status;
+      if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
+        params.clearPendingLifecycleError(runId);
+        params.clearPendingLifecycleTimeout(runId);
         if (
           markSubagentRunPausedAfterYield({
             entry,
@@ -291,7 +280,6 @@ export function createSubagentRunManager(params: {
         }
         return;
       }
-      const waitStatus = waitBlocked || waitAborted ? "error" : wait.status;
       if (waitStatus === "error" && !waitAborted && isRecoverableAgentWaitError(wait.error)) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
@@ -425,9 +413,7 @@ export function createSubagentRunManager(params: {
       const rawWaitError = typeof wait.error === "string" ? wait.error : undefined;
       const waitError = waitAborted
         ? "subagent run terminated"
-        : waitBlocked
-          ? formatBlockedLivenessError(rawWaitError)
-          : rawWaitError;
+        : (waitTerminalOutcome?.error ?? rawWaitError);
       const baseOutcome: SubagentRunOutcome =
         waitStatus === "error" ? { status: "error", error: waitError } : { status: "ok" };
       const outcome = withSubagentOutcomeTiming(baseOutcome, {
@@ -595,6 +581,7 @@ export function createSubagentRunManager(params: {
       endedReason: undefined,
       pauseReason: undefined,
       endedHookEmittedAt: undefined,
+      browserCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,
       execution: {
@@ -695,7 +682,7 @@ export function createSubagentRunManager(params: {
       throw error;
     }
     try {
-      createRunningTaskRun({
+      const task = createRunningTaskRun({
         runtime: "subagent",
         sourceId: runId,
         ownerKey: requesterSessionKey,
@@ -705,11 +692,18 @@ export function createSubagentRunManager(params: {
         runId,
         label: registerParams.label,
         task: registerParams.task,
+        agentId: registerParams.agentId,
+        requesterAgentId: registerParams.requesterAgentId,
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
         startedAt: now,
         lastEventAt: now,
       });
+      if (!task) {
+        log.warn("Failed to persist background task for subagent run", {
+          runId: registerParams.runId,
+        });
+      }
     } catch (error) {
       log.warn("Failed to create background task for subagent run", {
         runId: registerParams.runId,
@@ -812,7 +806,7 @@ export function createSubagentRunManager(params: {
             inFlightRunIds: params.endedHookInFlightRunIds,
             persist: () => params.persist(),
           });
-        void persistSubagentSessionTiming(entry).catch((err) => {
+        void persistSubagentSessionTiming(entry).catch((err: unknown) => {
           log.warn("failed to persist killed subagent session timing", {
             err,
             runId: entry.runId,

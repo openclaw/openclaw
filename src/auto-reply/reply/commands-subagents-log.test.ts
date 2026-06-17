@@ -1,3 +1,4 @@
+/** Tests subagent command log output formatting and routing. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -69,6 +70,24 @@ describe("subagents log", () => {
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "chat.history",
       params: { sessionKey: "agent:main:subagent:log", limit: 5 },
+    });
+  });
+
+  it("clamps a zero history limit to one", async () => {
+    await handleSubagentsLogAction(buildLogContext(["1", "0"], [makeRun()]));
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:subagent:log", limit: 1 },
+    });
+  });
+
+  it("ignores unsafe history limit tokens", async () => {
+    await handleSubagentsLogAction(buildLogContext(["1", "9007199254740992"], [makeRun()]));
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:subagent:log", limit: 20 },
     });
   });
 });

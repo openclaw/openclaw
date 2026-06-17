@@ -1,9 +1,11 @@
+// Discord tests cover subagent hooks plugin behavior.
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleDiscordSubagentSpawning } from "./subagent-hooks.js";
 
 type ThreadBindingRecord = {
   accountId: string;
@@ -85,7 +87,10 @@ function registerHandlersForTest(
 ) {
   return registerHookHandlersForTest<OpenClawPluginApi>({
     config,
-    register: registerDiscordSubagentHooks,
+    register: (api) => {
+      registerDiscordSubagentHooks(api);
+      api.on("subagent_spawning", (event) => handleDiscordSubagentSpawning(api, event));
+    },
   });
 }
 

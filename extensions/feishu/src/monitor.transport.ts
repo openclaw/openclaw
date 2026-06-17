@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.transport behavior.
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
@@ -12,8 +13,8 @@ import {
   type RuntimeEnv,
 } from "./monitor-transport-runtime-api.js";
 import {
-  botNames,
-  botOpenIds,
+  clearFeishuBotIdentityState,
+  closeTrackedFeishuHttpServer,
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
@@ -39,7 +40,7 @@ const FEISHU_WS_AUTORECONNECT_DISABLED_ERROR =
   "WebSocket connect failed and autoReconnect is disabled";
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function buildFeishuWebhookEnvelope(
@@ -172,8 +173,7 @@ function cleanupFeishuWsClient(params: {
   }
   wsClients.delete(accountId);
   if (clearIdentity) {
-    botOpenIds.delete(accountId);
-    botNames.delete(accountId);
+    clearFeishuBotIdentityState(accountId);
   }
 }
 
@@ -187,7 +187,6 @@ function waitForFeishuWsCycleEnd(params: {
 
   return new Promise((resolve) => {
     let settled = false;
-    let handleAbort: (() => void) | undefined;
 
     const finish = (result: "abort" | Error) => {
       if (settled) {
@@ -200,7 +199,7 @@ function waitForFeishuWsCycleEnd(params: {
       resolve(result);
     };
 
-    handleAbort = () => finish("abort");
+    const handleAbort: (() => void) | undefined = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");
@@ -416,23 +415,23 @@ export async function monitorWebhook({
 
   httpServers.set(accountId, server);
 
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      server.close();
-      httpServers.delete(accountId);
-      botOpenIds.delete(accountId);
-      botNames.delete(accountId);
+  return await new Promise<void>((resolve, reject) => {
+    let cleanupStarted = false;
+    const cleanup = async () => {
+      if (cleanupStarted) {
+        return;
+      }
+      cleanupStarted = true;
+      await closeTrackedFeishuHttpServer(accountId, server);
     };
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
-      cleanup();
-      resolve();
+      cleanup().then(resolve, reject);
     };
 
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      cleanup().then(resolve, reject);
       return;
     }
 

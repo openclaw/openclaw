@@ -1,5 +1,7 @@
-import { parseStrictFiniteNumber } from "../shared/number-coercion.js";
+/** Coerces cron schedule number fields with strict finite-number parsing. */
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
+/** Coerces schedule numeric fields without accepting partial or non-finite numbers. */
 export function coerceFiniteScheduleNumber(value: unknown): number | undefined {
   return parseStrictFiniteNumber(value);
 }

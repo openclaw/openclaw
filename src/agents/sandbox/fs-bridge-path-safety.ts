@@ -1,3 +1,8 @@
+/**
+ * Host/container path safety guard for the sandbox filesystem bridge.
+ *
+ * Proves requested container paths stay inside allowed mounts before host paths are opened or mutated.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
@@ -11,29 +16,34 @@ import {
 
 type BoundaryAllowedType = "file" | "directory";
 
-export type PathSafetyOptions = {
+/** Caller-provided path safety requirements for one fs bridge operation. */
+type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
   allowedType?: BoundaryAllowedType;
 };
 
+/** Path plus operation constraints to validate before execution. */
 export type PathSafetyCheck = {
   target: SandboxResolvedFsPath;
   options: PathSafetyOptions;
 };
 
+/** Container entry pinned by mount root plus lexical parent and basename. */
 export type PinnedSandboxEntry = {
   mountRootPath: string;
   relativeParentPath: string;
   basename: string;
 };
 
+/** Entry anchored by canonical parent path after symlink resolution. */
 export type AnchoredSandboxEntry = {
   canonicalParentPath: string;
   basename: string;
 };
 
+/** Directory entry pinned relative to a container mount root. */
 export type PinnedSandboxDirectoryEntry = {
   mountRootPath: string;
   relativePath: string;
@@ -49,6 +59,7 @@ type RunCommand = (
   },
 ) => Promise<{ stdout: Buffer }>;
 
+/** Validates sandbox fs bridge paths against mount, symlink, and writability boundaries. */
 export class SandboxFsPathGuard {
   private readonly mountsByContainer: SandboxFsMount[];
   private readonly runCommand: RunCommand;
@@ -137,6 +148,7 @@ export class SandboxFsPathGuard {
       containerPath: target.containerPath,
       allowFinalSymlinkForUnlink: options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
     });
+    // Re-check the canonical path against mounts so symlinks cannot escape the sandbox root.
     const canonicalMount = this.resolveRequiredMount(canonicalContainerPath, options.action);
     if (options.requireWritable && !canonicalMount.writable) {
       throw new Error(
@@ -193,6 +205,7 @@ export class SandboxFsPathGuard {
       containerPath: parentPath,
       allowFinalSymlinkForUnlink: false,
     });
+    // Anchor mutations to the canonical parent; the basename is applied after boundary checks.
     this.resolveRequiredMount(canonicalParentPath, action);
     return {
       canonicalParentPath,
@@ -254,6 +267,7 @@ export class SandboxFsPathGuard {
     containerPath: string;
     allowFinalSymlinkForUnlink: boolean;
   }): Promise<string> {
+    // Resolve the deepest existing path and append missing suffixes to handle create operations.
     const script = [
       "set -eu",
       'target="$1"',

@@ -1,10 +1,12 @@
+// Doctor checks for context engine host requirements against configured agent runtimes.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
 import { resolveDefaultAgentDir } from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import { getRegisteredAgentHarness } from "../../../agents/harness/registry.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   buildGenericCliContextEngineHostSupport,
@@ -18,12 +20,14 @@ import { getContextEngineFactory, resolveContextEngine } from "../../../context-
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
-import { uniqueStrings } from "../../../shared/string-normalization.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
-export type HostCandidate = {
+type HostCandidate = {
+  /** Runtime or harness id that will host an agent run. */
   runtimeId: string;
+  /** Context-engine host capability descriptor for the runtime. */
   host: ContextEngineHostSupport;
+  /** Config paths that caused doctor to consider this host. */
   paths: string[];
 };
 

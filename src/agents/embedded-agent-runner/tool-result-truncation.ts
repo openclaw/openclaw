@@ -1,8 +1,11 @@
+/**
+ * Truncates oversized tool-result content in messages and transcripts.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -22,6 +25,10 @@ import {
   rewriteTranscriptEntriesInSessionManager,
   rewriteTranscriptEntriesInState,
 } from "./transcript-rewrite.js";
+import {
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -38,8 +45,8 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
-export const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
-export const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
+const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
+const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
@@ -60,7 +67,6 @@ const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
-export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 function resolveSuffixFactory(
   suffix: ToolResultTruncationOptions["suffix"],
@@ -383,7 +389,7 @@ function calculateRecoveryAggregateToolResultChars(
   );
 }
 
-export type ToolResultReductionPotential = {
+type ToolResultReductionPotential = {
   maxChars: number;
   aggregateBudgetChars: number;
   toolResultCount: number;
@@ -668,6 +674,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   const { sessionManager, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -706,6 +713,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
 
@@ -731,6 +739,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   aggregateMaxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
@@ -775,6 +784,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
 
@@ -800,6 +810,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
@@ -810,6 +821,49 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
+/**
+ * Truncates oversized tool results for a runtime transcript scope.
+ */
+export async function truncateOversizedToolResultsInRuntimeTranscript(params: {
+  scope: RuntimeTranscriptScope;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+
+  try {
+    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: target.sessionFile,
+      ...resolveSessionWriteLockOptions(params.config),
+    });
+    const state = await readTranscriptFileState(target.sessionFile);
+    return await truncateOversizedToolResultsInTranscriptState({
+      state,
+      contextWindowTokens: params.contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      sessionFile: target.sessionFile,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      config: params.config,
+    });
+  } catch (err) {
+    const errMsg = formatErrorMessage(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  } finally {
+    await sessionLock?.release();
+  }
+}
+
+/**
+ * Truncates a named transcript file artifact. Runtime callers should prefer
+ * truncateOversizedToolResultsInRuntimeTranscript with agent/session scope.
+ */
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
@@ -817,6 +871,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   aggregateMaxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;

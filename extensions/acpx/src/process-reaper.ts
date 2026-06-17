@@ -1,3 +1,7 @@
+/**
+ * ACPX process ownership checks and cleanup. The reaper only terminates
+ * OpenClaw-owned wrapper trees after validating paths, packages, and lease ids.
+ */
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -29,24 +33,28 @@ const ACP_PACKAGE_MARKERS = [
   "/acpx/dist/",
 ];
 
+/** Minimal process-table row used by ACPX cleanup. */
 export type AcpxProcessInfo = {
   pid: number;
   ppid: number;
   command: string;
 };
 
+/** Injectable process-listing and termination hooks for tests. */
 export type AcpxProcessCleanupDeps = {
   listProcesses?: () => Promise<AcpxProcessInfo[]>;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
   sleep?: (ms: number) => Promise<void>;
 };
 
+/** Result from cleaning up a single ACPX process tree. */
 export type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
 };
 
+/** Result from startup orphan reaping. */
 export type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
@@ -109,6 +117,7 @@ function commandWrapperBelongsToRoot(command: string, wrapperRoot: string | unde
   );
 }
 
+/** Check whether a command references an OpenClaw-generated ACPX wrapper path. */
 export function isOpenClawLeaseAwareAcpxProcessCommand(params: {
   command: string | undefined;
   wrapperRoot?: string;
@@ -158,6 +167,7 @@ function liveCommandMatchesLeaseIdentity(params: {
   );
 }
 
+/** Check whether a command is owned by OpenClaw ACPX runtime packages or wrappers. */
 export function isOpenClawOwnedAcpxProcessCommand(params: {
   command: string | undefined;
   wrapperRoot?: string;
@@ -200,6 +210,7 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   return processes;
 }
 
+/** List host processes in the compact shape needed by ACPX cleanup. */
 export async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
@@ -262,7 +273,12 @@ async function terminatePids(
   deps: AcpxProcessCleanupDeps | undefined,
 ): Promise<number[]> {
   const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
-  const sleep = deps?.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    deps?.sleep ??
+    ((ms) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const terminated: number[] = [];
 
   for (const pid of pids) {
@@ -289,6 +305,7 @@ async function terminatePids(
   return terminated;
 }
 
+/** Terminate one validated OpenClaw-owned ACPX wrapper process tree. */
 export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   rootPid?: number;
   rootCommand?: string;
@@ -302,7 +319,7 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
   }
 
-  let processes: AcpxProcessInfo[] = [];
+  let processes: AcpxProcessInfo[];
   try {
     processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
   } catch {
@@ -373,6 +390,7 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   };
 }
 
+/** Reap orphaned OpenClaw-owned ACPX wrapper trees during runtime startup. */
 export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   wrapperRoot: string;
   deps?: AcpxProcessCleanupDeps;

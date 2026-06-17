@@ -1,3 +1,9 @@
+// Agent config mutation and summary builders used by `openclaw agents` commands.
+import {
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listAgentEntries,
   resolveAgentDir,
@@ -10,8 +16,6 @@ import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 export type AgentSummary = {
   id: string;
@@ -34,6 +38,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 export type AgentIdentity = AgentIdentityFile;
 export { listAgentEntries };
 
+/** Find a configured agent entry by normalized id. */
 export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number {
   const id = normalizeAgentId(agentId);
   return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
@@ -50,6 +55,7 @@ function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
   return resolvePrimaryStringValue(cfg.agents?.defaults?.model);
 }
 
+/** Load non-empty identity metadata from a workspace identity file. */
 export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   const parsed = loadAgentIdentityFromWorkspace(workspace);
   if (!parsed) {
@@ -58,6 +64,7 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   return identityHasValues(parsed) ? parsed : null;
 }
 
+/** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const configuredAgents = listAgentEntries(cfg);
@@ -103,6 +110,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   });
 }
 
+/** Add or update one agent entry while preserving the default-agent placeholder when needed. */
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -146,6 +154,7 @@ export function applyAgentConfig(
   };
 }
 
+/** Remove an agent and any config references that route or allow traffic to it. */
 export function pruneAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,

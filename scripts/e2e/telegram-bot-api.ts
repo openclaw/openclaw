@@ -1,3 +1,7 @@
+// Telegram Bot Api script supports OpenClaw repository automation.
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+
 type JsonObject = Record<string, unknown>;
 
 type TelegramBotApiOptions = {
@@ -9,19 +13,25 @@ type TelegramBotApiOptions = {
 
 const DEFAULT_BASE_URL =
   process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BASE_URL ?? "https://api.telegram.org";
-const DEFAULT_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS,
-  30000,
-);
-const DEFAULT_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES,
-  1024 * 1024,
-);
+export type TelegramBotApiLimits = {
+  bodyMaxBytes: number;
+  timeoutMs: number;
+};
 
-function readPositiveInt(raw: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+export function readTelegramBotApiLimits(
+  env: NodeJS.ProcessEnv = process.env,
+): TelegramBotApiLimits {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES",
+      1024 * 1024,
+      env,
+    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS", 30000, env),
+  };
 }
+
+const DEFAULT_LIMITS = readTelegramBotApiLimits();
 
 function optionalString(source: JsonObject, key: string) {
   const value = source[key];
@@ -30,46 +40,6 @@ function optionalString(source: JsonObject, key: string) {
 
 function taggedError(message: string, code: string) {
   return Object.assign(new Error(message), { code });
-}
-
-async function readBoundedResponseText(
-  response: Response,
-  label: string,
-  byteLimit: number,
-  timeoutPromise: Promise<never>,
-) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function parseJsonPayload(rawPayload: string, label: string) {
@@ -87,8 +57,8 @@ export async function telegramBotApi(
   options: TelegramBotApiOptions = {},
 ) {
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_BODY_MAX_BYTES);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_LIMITS.timeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_LIMITS.bodyMaxBytes);
   const label = `Telegram Bot API ${method}`;
   const timeoutError = taggedError(`${label} timed out after ${timeoutMs}ms`, "ETIMEDOUT");
   const controller = new AbortController();
@@ -111,7 +81,12 @@ export async function telegramBotApi(
       }),
       timeoutPromise,
     ]);
-    const rawPayload = await readBoundedResponseText(response, label, maxBodyBytes, timeoutPromise);
+    const rawPayload = await readBoundedResponseText(response, label, maxBodyBytes, {
+      createTooLargeError(message) {
+        return taggedError(message, "ETOOBIG");
+      },
+      timeoutPromise,
+    });
     const payload = parseJsonPayload(rawPayload, label);
     if (!response.ok || payload.ok !== true) {
       throw new Error(

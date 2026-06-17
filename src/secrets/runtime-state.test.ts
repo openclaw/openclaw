@@ -1,71 +1,51 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveAuthStatePath, resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { writeCachedAuthProfileStore } from "../agents/auth-profiles/store-cache.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
-
-function authStore(key: string): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        key,
-      },
-    },
-  };
-}
+/** Tests secrets runtime state clone isolation and refresh context. */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeConfigSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  type PreparedSecretsRuntimeSnapshot,
+} from "./runtime-state.js";
 
 describe("secrets runtime state", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    envSnapshot.restore();
   });
 
-  it("clears loaded auth-profile cache without importing the full secrets runtime", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-state-cache-"));
-    process.env.OPENCLAW_STATE_DIR = root;
-    const agentDir = path.join(root, "agents", "default", "agent");
+  it("exposes the active config pair for hot paths without requiring the full snapshot", () => {
+    const snapshot: PreparedSecretsRuntimeSnapshot = {
+      sourceConfig: { agents: { list: [{ id: "source" }] } },
+      config: { agents: { list: [{ id: "runtime" }] } },
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: { providerSource: "none", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    };
 
-    try {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const authPath = resolveAuthStorePath(agentDir);
-      const statePath = resolveAuthStatePath(agentDir);
-      fs.writeFileSync(authPath, `${JSON.stringify(authStore("sk-new"))}\n`);
-      const stat = fs.statSync(authPath);
-      writeCachedAuthProfileStore({
-        authPath,
-        authMtimeMs: stat.mtimeMs,
-        stateMtimeMs: fs.existsSync(statePath) ? fs.statSync(statePath).mtimeMs : null,
-        store: authStore("sk-old"),
-      });
+    activateSecretsRuntimeSnapshotState({
+      snapshot,
+      refreshContext: null,
+      refreshHandler: null,
+    });
 
-      expect(
-        loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false }).profiles[
-          "openai:default"
-        ],
-      ).toMatchObject({ key: "sk-old" });
+    const configSnapshot = getActiveSecretsRuntimeConfigSnapshot();
+    const fullSnapshot = getActiveSecretsRuntimeSnapshot();
 
-      clearSecretsRuntimeSnapshot();
-
-      expect(
-        loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false }).profiles[
-          "openai:default"
-        ],
-      ).toMatchObject({ key: "sk-new" });
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    expect(configSnapshot?.config).not.toBe(fullSnapshot?.config);
+    expect(configSnapshot?.sourceConfig).not.toBe(fullSnapshot?.sourceConfig);
+    expect(configSnapshot?.config).toEqual(snapshot.config);
+    expect(configSnapshot?.sourceConfig).toEqual(snapshot.sourceConfig);
   });
 });

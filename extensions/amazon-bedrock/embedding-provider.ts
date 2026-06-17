@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock embedding provider runtime. It normalizes model-specific
+ * request/response shapes across Titan, Cohere, Nova, and TwelveLabs models.
+ */
 import {
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
@@ -20,6 +24,7 @@ type BedrockEmbeddingClient = {
   dimensions?: number;
 };
 
+/** Default Bedrock embedding model used when no explicit model is configured. */
 export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 
 /** Request/response format family — each has a different API shape. */
@@ -64,12 +69,18 @@ const MODELS: Record<string, ModelSpec> = {
   "twelvelabs.marengo-embed-3-0-v1:0": { maxTokens: 512, dims: 512, family: "twelvelabs" },
 };
 
+/** Strip AWS inference profile prefix (us., eu., ap., apac., au., jp., global.) from model ID. */
+function stripInferenceProfilePrefix(modelId: string): string {
+  return modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+}
+
 /** Resolve spec, stripping throughput suffixes like `:2:8k` or `:0:512`. */
 function resolveSpec(modelId: string): ModelSpec | undefined {
-  if (MODELS[modelId]) {
-    return MODELS[modelId];
+  const bare = stripInferenceProfilePrefix(modelId);
+  if (MODELS[bare]) {
+    return MODELS[bare];
   }
-  const parts = modelId.split(":");
+  const parts = bare.split(":");
   for (let i = parts.length - 1; i >= 1; i--) {
     const spec = MODELS[parts.slice(0, i).join(":")];
     if (spec) {
@@ -81,7 +92,7 @@ function resolveSpec(modelId: string): ModelSpec | undefined {
 
 /** Infer family from model ID prefix when not in catalog. */
 function inferFamily(modelId: string): Family {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
+  const id = normalizeLowercaseStringOrEmpty(stripInferenceProfilePrefix(modelId));
   if (id.startsWith("amazon.titan-embed-text-v2")) {
     return "titan-v2";
   }
@@ -307,6 +318,7 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
 export const testing = {
   parseCohereBatch,
   parseSingle,
+  stripInferenceProfilePrefix,
 };
 
 // ---------------------------------------------------------------------------
@@ -365,29 +377,29 @@ export async function createBedrockEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    options?: { signal?: AbortSignal },
+    optionsValue?: { signal?: AbortSignal },
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query", options?.signal))[0] ?? [];
+      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
     }
-    return embedSingle(text, options?.signal);
+    return embedSingle(text, optionsValue?.signal);
   };
 
   const embedBatch = async (
     texts: string[],
-    options?: { signal?: AbortSignal },
+    optionsLocal?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
     if (isCohere) {
-      return embedCohere(texts, "search_document", options?.signal);
+      return embedCohere(texts, "search_document", optionsLocal?.signal);
     }
     return Promise.all(
-      texts.map((t) => (t.trim() ? embedSingle(t, options?.signal) : Promise.resolve([]))),
+      texts.map((t) => (t.trim() ? embedSingle(t, optionsLocal?.signal) : Promise.resolve([]))),
     );
   };
 

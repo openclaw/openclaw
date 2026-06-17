@@ -1,6 +1,8 @@
+// Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type ResolveConfigPathMock = Mock<() => string>;
@@ -208,9 +210,17 @@ export async function loadStatusScanModuleForTest(
 
   vi.doMock("../config/io.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
+    readBestEffortConfigSnapshot: async () => {
+      const config = await mocks.readBestEffortConfig();
+      return { config, sourceConfig: config };
+    },
   }));
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
+    readBestEffortConfigSnapshot: async () => {
+      const config = await mocks.readBestEffortConfig();
+      return { config, sourceConfig: config };
+    },
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
     getStatusCommandSecretTargetIds,
@@ -319,9 +329,7 @@ export function createStatusSummary(
       paths: [],
       defaults: {},
       recent: [],
-      ...(Object.prototype.hasOwnProperty.call(options, "byAgent")
-        ? { byAgent: options.byAgent ?? [] }
-        : {}),
+      ...(Object.hasOwn(options, "byAgent") ? { byAgent: options.byAgent ?? [] } : {}),
     },
   };
 }
@@ -450,27 +458,5 @@ export async function withTemporaryEnv(
   overrides: Record<string, string | undefined>,
   run: () => Promise<void>,
 ) {
-  const previousEntries = Object.fromEntries(
-    Object.keys(overrides).map((key) => [key, process.env[key]]),
-  );
-
-  for (const [key, value] of Object.entries(overrides)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
-  try {
-    await run();
-  } finally {
-    for (const [key, value] of Object.entries(previousEntries)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  await withEnvAsync(overrides, run);
 }

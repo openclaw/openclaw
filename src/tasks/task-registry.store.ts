@@ -1,5 +1,6 @@
+// Stores task registry records in memory and bridges persistence runtime hooks.
 import {
-  closeTaskRegistrySqliteStore,
+  closeTaskRegistryDatabase,
   deleteTaskAndDeliveryStateFromSqlite,
   deleteTaskDeliveryStateFromSqlite,
   deleteTaskRegistryRecordFromSqlite,
@@ -47,7 +48,7 @@ export type TaskRegistryObserverEvent =
       previous: TaskRecord;
     };
 
-export type TaskRegistryObservers = {
+type TaskRegistryObservers = {
   // Observers are incremental/best-effort only. Snapshot persistence belongs to TaskRegistryStore.
   onEvent?: (event: TaskRegistryObserverEvent) => void;
 };
@@ -62,7 +63,7 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
   deleteTask: deleteTaskRegistryRecordFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
   deleteDeliveryState: deleteTaskDeliveryStateFromSqlite,
-  close: closeTaskRegistrySqliteStore,
+  close: closeTaskRegistryDatabase,
 };
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;

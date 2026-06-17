@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check)"
+summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
@@ -16,6 +16,7 @@ directories, verify ClawHub skills, and update ClawHub-tracked installs.
 Related:
 
 - Skills system: [Skills](/tools/skills)
+- Skill Workshop: [Skill Workshop](/tools/skill-workshop)
 - Skills config: [Skills config](/tools/skills-config)
 - ClawHub installs: [ClawHub](/clawhub/cli)
 
@@ -53,6 +54,14 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
+openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Not reusable"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
@@ -98,6 +107,10 @@ Notes:
   in the shared managed skills directory when combined with `--global`.
 - `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
   default. There is no `--json` flag because JSON is already the default.
+- When ClawHub returns server-resolved source provenance, verify JSON also
+  includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or
+  self-declared source URLs stay only in the raw provenance envelope and are not
+  promoted.
 - `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it
   verifies the installed version against the registry it came from. `--version`
   and `--tag` override the version selector but keep that installed registry
@@ -115,6 +128,31 @@ Notes:
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
   and scripts.
+
+## Skill Workshop
+
+`openclaw skills workshop` manages pending skill proposals in the selected
+workspace. Proposals are not active skills until applied. For proposal storage,
+support-file safeguards, Gateway methods, and approval policy, see
+[Skill Workshop](/tools/skill-workshop).
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal ./PROPOSAL.md
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal-dir ./qa-check-proposal
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Duplicate"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+```
 
 ## Related
 

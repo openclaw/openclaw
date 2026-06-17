@@ -1,3 +1,6 @@
+// Config-only channel status formatter used when the gateway is unreachable.
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -15,8 +18,6 @@ import {
   type OfficialExternalPluginRepairHint,
   resolveMissingOfficialExternalChannelPluginRepairHint,
 } from "../../plugins/official-external-plugin-repair-hints.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -31,13 +32,16 @@ type ChannelStatusPluginLabel = {
   meta: { label?: string };
 };
 
+/** Render channel status lines from config snapshots without calling the gateway. */
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig; channel?: string },
+  opts?: { sourceConfig?: OpenClawConfig; channel?: string; fallbackReason?: string },
 ): Promise<string[]> {
   const lines: string[] = [];
-  lines.push(theme.warn("Gateway not reachable; showing config-only status."));
+  lines.push(
+    theme.warn(opts?.fallbackReason ?? "Gateway not reachable; showing config-only status."),
+  );
   if (meta.path) {
     lines.push(`Config: ${meta.path}`);
   }

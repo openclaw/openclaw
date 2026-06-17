@@ -1,6 +1,10 @@
+/**
+ * Resolves retry, fallback, and terminal failover decisions for a run.
+ */
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
-export type RunFailoverDecision =
+/** Failover action selected for one embedded run failure decision point. */
+type RunFailoverDecision =
   | {
       action: "continue_normal";
     }
@@ -21,7 +25,7 @@ export type RetryLimitFailoverDecision = Extract<
   { action: "fallback_model" | "return_error_payload" }
 >;
 
-export type PromptFailoverDecision = Extract<
+type PromptFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "rotate_profile" | "fallback_model" | "surface_error" }
 >;
@@ -65,7 +69,7 @@ type AssistantDecisionParams = {
   profileRotated: boolean;
 };
 
-export type RunFailoverDecisionParams =
+type RunFailoverDecisionParams =
   | RetryLimitDecisionParams
   | PromptDecisionParams
   | AssistantDecisionParams;
@@ -132,6 +136,7 @@ function assistantFallbackReason(params: AssistantDecisionParams): FailoverReaso
   return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
+/** Preserves an existing retry reason unless the current attempt produced a stronger signal. */
 export function mergeRetryFailoverReason(params: {
   previous: FailoverReason | null;
   failoverReason: FailoverReason | null;
@@ -147,6 +152,11 @@ export function resolveRunFailoverDecision(params: PromptDecisionParams): Prompt
 export function resolveRunFailoverDecision(
   params: AssistantDecisionParams,
 ): AssistantFailoverDecision;
+/**
+ * Chooses whether a run should rotate auth profile, switch model fallback,
+ * surface the error, continue normally, or return an error payload. Prompt,
+ * assistant, and retry-limit stages intentionally use different action sets.
+ */
 export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
     if (params.fallbackConfigured && shouldEscalateRetryLimit(params.failoverReason)) {

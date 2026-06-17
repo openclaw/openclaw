@@ -1,4 +1,12 @@
+// Node gateway methods manage paired node discovery, pairing lifecycle, command
+// invocation, wake delivery, events, pending work, and node metadata updates.
 import { randomUUID } from "node:crypto";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type ConnectParams,
   ErrorCodes,
@@ -38,16 +46,12 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
   removeRemoteNodeInfo,
-} from "../../infra/skills-remote.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
+} from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -58,6 +62,7 @@ import {
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
+import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
@@ -115,6 +120,49 @@ type PendingNodeAction = {
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
+function canReadPendingNodePairing(client: GatewayClient | null): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
+}
+
+function safeNodeReadProjection(node: NodeListNode): NodeListNode | null {
+  if (!node.paired && !node.connected) {
+    return null;
+  }
+  const {
+    pendingRequestId: _pendingRequestId,
+    pendingDeclaredCaps: _pendingDeclaredCaps,
+    pendingDeclaredCommands: _pendingDeclaredCommands,
+    pendingDeclaredPermissions: _pendingDeclaredPermissions,
+    ...safeNode
+  } = node;
+  return safeNode;
+}
+
+function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
+  return node !== null;
+}
+
+function listNodesForClient(params: {
+  client: GatewayClient | null;
+  pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
+  pairedNodes: Awaited<ReturnType<typeof listNodePairing>>["paired"];
+  pendingNodes: Awaited<ReturnType<typeof listNodePairing>>["pending"];
+  connectedNodes: readonly NodeSession[];
+}): NodeListNode[] {
+  const catalog = createKnownNodeCatalog({
+    pairedDevices: params.pairedDevices,
+    pairedNodes: params.pairedNodes,
+    pendingNodes: params.pendingNodes,
+    connectedNodes: params.connectedNodes,
+  });
+  const nodes = listKnownNodes(catalog);
+  if (canReadPendingNodePairing(params.client)) {
+    return nodes;
+  }
+  return nodes.map(safeNodeReadProjection).filter(isVisibleNode);
+}
 
 function normalizeBrowserProxyPath(value: string): string {
   const trimmed = value.trim();
@@ -199,8 +247,16 @@ async function resolveDirectNodePushConfig() {
     : { ok: false as const, error: auth.error };
 }
 
-function resolveRelayNodePushConfig(cfg: OpenClawConfig) {
-  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway);
+function resolveRelayNodePushConfig(
+  cfg: OpenClawConfig,
+  registration: Extract<
+    NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
+    { transport: "relay" }
+  >,
+) {
+  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway, {
+    registrationRelayOrigin: registration.relayOrigin,
+  });
   return relay.ok
     ? { ok: true as const, relayConfig: relay.value }
     : { ok: false as const, error: relay.error };
@@ -226,7 +282,9 @@ async function clearStaleApnsRegistrationIfNeeded(
 }
 
 async function delayMs(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function isForegroundRestrictedIosCommand(command: string): boolean {
@@ -243,6 +301,8 @@ function shouldQueueAsPendingForegroundAction(params: {
   command: string;
   error: unknown;
 }): boolean {
+  // iOS cannot run camera/screen/Talk commands in the background. Queue only
+  // those foreground-only commands when the node explicitly reports that state.
   const platform = normalizeLowercaseStringOrEmpty(params.platform);
   if (!platform.startsWith("ios") && !platform.startsWith("ipados")) {
     return false;
@@ -281,6 +341,8 @@ function enqueuePendingNodeAction(params: {
   const queue = prunePendingNodeActions(params.nodeId, nowMs);
   const existing = queue.find((entry) => entry.idempotencyKey === params.idempotencyKey);
   if (existing) {
+    // Keep retries idempotent so callers do not create duplicate foreground
+    // actions while the node is still backgrounded.
     return existing;
   }
   const entry: PendingNodeAction = {
@@ -324,7 +386,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
     deviceFamily: nodeSession.deviceFamily,
     commands: nodeSession.commands,
     cfg,
-  }).catch((err) =>
+  }).catch((err: unknown) =>
     params.context.logGateway.warn(
       `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
     ),
@@ -340,6 +402,8 @@ function resolveAllowedPendingNodeActions(params: {
   if (pending.length === 0) {
     return pending;
   }
+  // Re-filter queued actions against the node's current declared commands and
+  // allowlist; app upgrades or permission changes can make old actions unsafe.
   const connect = params.client?.connect;
   const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
@@ -493,7 +557,7 @@ export async function maybeWakeNodeWithApns(
 
       let wakeResult;
       if (registration.transport === "relay") {
-        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
+        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
         if (!relay.ok) {
           return withDuration({
             available: false,
@@ -595,7 +659,7 @@ export async function maybeSendNodeWakeNudge(
   try {
     let result;
     if (registration.transport === "relay") {
-      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
+      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
       if (!relay.ok) {
         return withDuration({
           sent: false,
@@ -664,8 +728,8 @@ export async function waitForNodeReconnect(params: {
   timeoutMs?: number;
   pollMs?: number;
 }): Promise<boolean> {
-  const timeoutMs = Math.max(250, params.timeoutMs ?? NODE_WAKE_RECONNECT_WAIT_MS);
-  const pollMs = Math.max(50, params.pollMs ?? NODE_WAKE_RECONNECT_POLL_MS);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 250);
+  const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -913,7 +977,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, { nodeId: updated.nodeId, displayName: updated.displayName }, undefined);
     });
   },
-  "node.list": async ({ params, respond, context }) => {
+  "node.list": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {
       respondInvalidParams({
         respond,
@@ -927,16 +991,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
         listDevicePairing(),
         listNodePairing(),
       ]);
-      const catalog = createKnownNodeCatalog({
+      const nodes = listNodesForClient({
+        client,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
+        pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      const nodes = listKnownNodes(catalog);
       respond(true, { ts: Date.now(), nodes }, undefined);
     });
   },
-  "node.describe": async ({ params, respond, context }) => {
+  "node.describe": async ({ params, respond, client, context }) => {
     if (!validateNodeDescribeParams(params)) {
       respondInvalidParams({
         respond,
@@ -959,9 +1024,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
+        pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      const node = getKnownNode(catalog, id);
+      const catalogNode = getKnownNode(catalog, id);
+      const node =
+        catalogNode && canReadPendingNodePairing(client)
+          ? catalogNode
+          : catalogNode
+            ? safeNodeReadProjection(catalogNode)
+            : null;
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
@@ -1225,6 +1297,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
         idempotencyKey: p.idempotencyKey,
       });
       if (policyResult) {
+        // Plugin policies can satisfy an invocation without crossing the raw
+        // node command channel; still emit mirrored Talk events for UI state.
         if (!policyResult.ok) {
           const errorCode = policyResult.unavailable
             ? ErrorCodes.UNAVAILABLE
@@ -1278,6 +1352,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
             error: res.error,
           })
         ) {
+          // Foreground-only iOS commands become pullable pending actions instead
+          // of failing permanently while the device is locked/backgrounded.
           const paramsJSON = toPendingParamsJSON(forwardedParams.params);
           const queued = enqueuePendingNodeAction({
             nodeId,

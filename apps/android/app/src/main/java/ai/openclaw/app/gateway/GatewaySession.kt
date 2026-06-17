@@ -33,6 +33,9 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Identity advertised during gateway connect; these fields become the device row users approve.
+ */
 data class GatewayClientInfo(
   val id: String,
   val displayName: String?,
@@ -44,6 +47,9 @@ data class GatewayClientInfo(
   val modelIdentifier: String?,
 )
 
+/**
+ * Role, scopes, commands, and permission snapshot sent with the connect frame.
+ */
 data class GatewayConnectOptions(
   val role: String,
   val scopes: List<String>,
@@ -62,14 +68,22 @@ private enum class GatewayConnectAuthSource {
   NONE,
 }
 
+/**
+ * Structured auth failure guidance from the gateway, preserved for reconnect and UI decisions.
+ */
 data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean? = null,
   val reason: String? = null,
+  val requestId: String? = null,
+  val retryable: Boolean = false,
 )
 
+/**
+ * Server hello fields cached by the Android runtime after a successful connect.
+ */
 data class GatewayHelloSummary(
   val serverName: String?,
   val remoteAddress: String?,
@@ -99,12 +113,16 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
+/**
+ * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
+ */
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
   private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (GatewayHelloSummary) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
+  private val onConnectFailure: (error: ErrorShape, pauseReconnect: Boolean) -> Unit = { _, _ -> },
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
@@ -112,8 +130,12 @@ class GatewaySession(
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
+    private val PAIRING_REQUEST_ID_PATTERN = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
   }
 
+  /**
+   * Gateway node.invoke request routed to Android command handlers.
+   */
   data class InvokeRequest(
     val id: String,
     val nodeId: String,
@@ -143,6 +165,9 @@ class GatewaySession(
     val details: GatewayConnectErrorDetails? = null,
   )
 
+  /**
+   * Structured RPC result used by callers that need error codes without exceptions.
+   */
   data class RpcResult(
     val ok: Boolean,
     val payloadJson: String?,
@@ -174,12 +199,15 @@ class GatewaySession(
 
   @Volatile private var currentConnection: Connection? = null
 
+  // One reconnect can retry a shared-token mismatch by pairing the shared token with the stored device token.
   @Volatile private var pendingDeviceTokenRetry = false
 
+  // Keep the mismatch retry single-shot so an invalid stored token cannot create an auth loop.
   @Volatile private var deviceTokenRetryBudgetUsed = false
 
   @Volatile private var reconnectPausedForAuthFailure = false
 
+  /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
   fun connect(
     endpoint: GatewayEndpoint,
     token: String?,
@@ -202,6 +230,7 @@ class GatewaySession(
     connectionToClose?.closeQuietly()
   }
 
+  /** Clears desired connection state, closes the socket, and stops reconnect attempts. */
   fun disconnect() {
     val jobToCancel: Job?
     val connectionToClose: Connection?
@@ -225,6 +254,7 @@ class GatewaySession(
     }
   }
 
+  /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
     reconnectPausedForAuthFailure = false
     currentConnection?.closeQuietly()
@@ -232,6 +262,7 @@ class GatewaySession(
 
   fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
 
+  /** Refreshes the canvas plugin surface URL and caches the normalized Android-reachable URL. */
   suspend fun refreshCanvasHostUrl(timeoutMs: Long = 8_000): String? {
     val refreshed =
       refreshPluginSurfaceUrl(
@@ -247,6 +278,7 @@ class GatewaySession(
 
   fun currentMainSessionKey(): String? = mainSessionKey
 
+  /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
     payloadJson: String?,
@@ -287,6 +319,7 @@ class GatewaySession(
     }
   }
 
+  /** Sends node.event and preserves the gateway RPC error shape for callers that need diagnostics. */
   suspend fun sendNodeEventDetailed(
     event: String,
     payloadJson: String?,
@@ -319,9 +352,11 @@ class GatewaySession(
   ): JsonObject =
     buildJsonObject {
       put("event", JsonPrimitive(event))
+      // Gateway node events carry payloadJSON as a string for compatibility with non-JSON payload producers.
       put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
     }
 
+  /** Sends an RPC request and throws a code-prefixed exception when the gateway returns an error. */
   suspend fun request(
     method: String,
     paramsJson: String?,
@@ -333,6 +368,7 @@ class GatewaySession(
     throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
   }
 
+  /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
@@ -349,6 +385,7 @@ class GatewaySession(
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
+  /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
   suspend fun sendRequestFrame(
     method: String,
     paramsJson: String?,
@@ -705,6 +742,7 @@ class GatewaySession(
         persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
       }
       if (shouldPersistBootstrapHandoffTokens(authSource)) {
+        // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
         authObj
           ?.get("deviceTokens")
           .asArrayOrNull()
@@ -725,6 +763,7 @@ class GatewaySession(
       val rawPluginSurfaceUrls = obj["pluginSurfaceUrls"].asObjectOrNull()
       val normalizedPluginSurfaceUrls =
         rawPluginSurfaceUrls?.mapNotNull { (surface, value) ->
+          // Canvas URLs may be loopback gateway metadata; normalize them to the reachable Android endpoint.
           normalizeCanvasHostUrl(value.asStringOrNull(), endpoint, isTlsConnection = tls != null)
             ?.let { normalized -> surface to normalized }
         } ?: emptyList()
@@ -797,6 +836,7 @@ class GatewaySession(
 
       val connectScopes = resolveConnectScopes(selectedAuth)
       val signedAtMs = System.currentTimeMillis()
+      // V3 signatures bind the auth token, nonce, role, and scopes so replayed connect frames fail.
       val payload =
         DeviceAuthPayload.buildV3(
           deviceId = identity.deviceId,
@@ -887,6 +927,8 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
+                requestId = normalizePairingRequestId(it["requestId"].asStringOrNull()),
+                retryable = it["retryable"].asBooleanOrNull() == true,
               )
             }
           ErrorShape(code, msg, details)
@@ -910,6 +952,11 @@ class GatewaySession(
         return
       }
       onEvent(event, payloadJson)
+    }
+
+    private fun normalizePairingRequestId(requestId: String?): String? {
+      val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+      return trimmed.takeIf { PAIRING_REQUEST_ID_PATTERN.matches(it) }
     }
 
     private suspend fun awaitConnectNonce(): String =
@@ -966,6 +1013,7 @@ class GatewaySession(
           if (parsedPayload != null) {
             put("payload", parsedPayload)
           } else if (result.payloadJson != null) {
+            // Preserve malformed/non-object payloads as payloadJSON so the gateway can report handler output.
             put("payloadJSON", JsonPrimitive(result.payloadJson))
           }
           result.error?.let { err ->
@@ -1024,10 +1072,14 @@ class GatewaySession(
       } catch (err: Throwable) {
         attempt += 1
         onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
-        if (
-          err is GatewayConnectFailure &&
-          shouldPauseReconnectAfterAuthFailure(err.gatewayError)
-        ) {
+        val gatewayConnectFailure = err as? GatewayConnectFailure
+        val pauseForAuthFailure =
+          gatewayConnectFailure
+            ?.let { shouldPauseReconnectAfterAuthFailure(it.gatewayError) } == true
+        if (gatewayConnectFailure != null) {
+          onConnectFailure(gatewayConnectFailure.gatewayError, pauseForAuthFailure)
+        }
+        if (pauseForAuthFailure) {
           reconnectPausedForAuthFailure = true
           continue
         }
@@ -1189,6 +1241,7 @@ class GatewaySession(
     if (!isTrustedDeviceRetryEndpoint(endpoint, tls)) return false
     val detailCode = error.details?.code
     val recommendedNextStep = error.details?.recommendedNextStep
+    // New gateways set canRetryWithDeviceToken; older builds expose equivalent string codes.
     return error.details?.canRetryWithDeviceToken == true ||
       recommendedNextStep == "retry_with_device_token" ||
       detailCode == "AUTH_TOKEN_MISMATCH"
@@ -1213,10 +1266,13 @@ class GatewaySession(
     tls: GatewayTlsParams?,
   ): Boolean {
     if (isLocalCleartextGatewayHost(endpoint.host)) return true
+    // Retrying a stored device token alongside a shared token is only safe for
+    // remote gateways when an existing TLS pin already identifies the endpoint.
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
 
+/** Decides whether auth failures should stop reconnect churn until the user changes credentials. */
 internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   error: GatewaySession.ErrorShape,
   hasBootstrapToken: Boolean,
@@ -1249,6 +1305,7 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
     else -> false
   }
 
+/** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
 internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
@@ -1258,6 +1315,7 @@ internal fun buildGatewayWebSocketUrl(
   return "$scheme://${formatGatewayAuthority(host, port)}"
 }
 
+/** Formats host/port for gateway URLs, including IPv6 bracket wrapping. */
 internal fun formatGatewayAuthority(
   host: String,
   port: Int,
@@ -1308,6 +1366,7 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   }
 }
 
+/** Keeps invoke-result ack waits inside the gateway-supported timeout window. */
 internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {
   val normalized = invokeTimeoutMs?.takeIf { it > 0L } ?: 15_000L
   return normalized.coerceIn(15_000L, 120_000L)

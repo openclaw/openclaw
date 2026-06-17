@@ -1,3 +1,4 @@
+// Google Meet plugin module implements voice call gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   GatewayClient,
@@ -68,7 +69,7 @@ async function createConnectedGatewayClient(
           reject(new Error("gateway event loop readiness timeout"));
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         clearTimeout(timer);
         reject(err instanceof Error ? err : new Error(String(err)));
       });

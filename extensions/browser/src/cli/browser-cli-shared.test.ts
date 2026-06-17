@@ -1,3 +1,4 @@
+// Browser tests cover browser cli shared plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { callGatewayFromCli } from "./core-api.js";
 
@@ -64,5 +65,18 @@ describe("callBrowserRequest", () => {
       | undefined;
     expect(call?.[1]).toMatchObject({ timeout: "2147483647" });
     expect(call?.[2]).toMatchObject({ timeoutMs: 2_147_483_647 });
+  });
+
+  it("accepts strict signed and zero-padded parent timeout values", async () => {
+    await callBrowserRequest(
+      { json: true, timeout: " +060000 " },
+      { method: "GET", path: "/status" },
+    );
+
+    const call = gatewayMocks.callGatewayFromCli.mock.calls[0] as unknown as
+      | CallGatewayFromCliArgs
+      | undefined;
+    expect(call?.[1]).toMatchObject({ timeout: "60000" });
+    expect(call?.[2]).toMatchObject({ timeoutMs: 60_000 });
   });
 });

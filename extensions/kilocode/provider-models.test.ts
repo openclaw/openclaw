@@ -1,3 +1,4 @@
+// Kilocode tests cover provider models plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -196,8 +197,8 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(models.length).toBe(2);
 
       const sonnet = requireModelById(models, "anthropic/claude-sonnet-4");
-      expect(sonnet.cost.input).toBeCloseTo(3.0);
-      expect(sonnet.cost.output).toBeCloseTo(15.0);
+      expect(sonnet.cost.input).toBeCloseTo(3);
+      expect(sonnet.cost.output).toBeCloseTo(15);
       expect(sonnet.cost.cacheRead).toBeCloseTo(0.3);
       expect(sonnet.cost.cacheWrite).toBeCloseTo(3.75);
       expect(sonnet.input).toEqual(["text", "image"]);
@@ -329,7 +330,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const models = await discoverKilocodeModels();
       const auto = requireModelById(models, "kilo/auto");
       expect(auto.name).toBe("Kilo: Auto");
-      expect(auto.cost.input).toBeCloseTo(5.0);
+      expect(auto.cost.input).toBeCloseTo(5);
       expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
         "anthropic/claude-sonnet-4",
       );

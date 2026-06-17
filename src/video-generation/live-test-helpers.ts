@@ -1,3 +1,5 @@
+// Video live test helpers resolve live provider test settings from environment.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   parseLiveCsvFilter,
@@ -6,10 +8,11 @@ import {
   resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export { parseProviderModelMap, redactLiveApiKey };
 
+// Default provider/model matrix for video live tests. Env/config filters can
+// override this without editing the live test source.
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
@@ -31,6 +34,8 @@ const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "opena
 const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
 const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/Wan2.2-I2V-A14B";
 
+// Keep live-test resolution conservative and provider-specific so broad smoke
+// lanes do not spend extra time or hit unsupported defaults.
 export function resolveLiveVideoResolution(params: {
   providerId: string;
   modelRef: string;
@@ -61,6 +66,8 @@ export function canRunBufferBackedVideoToVideoLiveLane(params: {
   modelRef: string;
 }): boolean {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
+  // Some providers only accept remote URL references in live video-to-video
+  // lanes; skip buffer-backed coverage for those providers.
   if (REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS.has(providerId)) {
     return false;
   }

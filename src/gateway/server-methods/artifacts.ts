@@ -1,4 +1,8 @@
+// Artifact gateway methods collect generated artifacts from session transcripts
+// and expose list/get/download RPCs scoped by session, run, task, or agent.
 import { createHash } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,8 +20,6 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -25,7 +27,8 @@ import {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
+import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -84,6 +87,7 @@ function resolveRequesterSessionAgentId(
   return resolveAgentIdFromSessionKey(key);
 }
 
+/** Applies an optional agent scope to a transcript session key without crossing stores. */
 function resolveScopedArtifactSessionKey(
   sessionKey: string | undefined,
   agentId: string | undefined,
@@ -164,8 +168,7 @@ function estimateBase64Size(value: string | undefined): number | undefined {
   }
   let encodedLength = 0;
   let padding = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
+  for (const char of value) {
     if (!char || isBase64Whitespace(char)) {
       continue;
     }
@@ -212,6 +215,7 @@ function isSafeDownloadUrl(value: string): boolean {
   }
 }
 
+/** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
   sessionKey: string;
   messageSeq: number;
@@ -419,8 +423,14 @@ function resolveQuerySession(
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
-    const taskAgentId =
-      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey, cfg);
+    const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
+    const requesterAgentId =
+      asNonEmptyString(task?.requesterAgentId) ??
+      ownerAgentId ??
+      (requesterSessionKey === "global"
+        ? undefined
+        : resolveRequesterSessionAgentId(requesterSessionKey, cfg));
+    const taskAgentId = asNonEmptyString(task?.agentId) ?? requesterAgentId;
     if (
       query.agentId &&
       taskAgentId &&
@@ -428,11 +438,20 @@ function resolveQuerySession(
     ) {
       return undefined;
     }
-    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     if (requesterSessionKey) {
-      const scopedSessionKey = resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
-      return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
+      // task.agentId identifies the executor. requesterAgentId keeps global
+      // requester transcripts in the correct agent store across restarts.
+      const sessionAgentId = requesterAgentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
+      const scopedSessionKey = resolveScopedArtifactSessionKey(
+        requesterSessionKey,
+        sessionAgentId,
+        cfg,
+      );
+      return scopedSessionKey
+        ? { sessionKey: scopedSessionKey, agentId: sessionAgentId }
+        : undefined;
     }
+    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     const runId = asNonEmptyString(task?.runId);
     const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
     const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
@@ -441,6 +460,7 @@ function resolveQuerySession(
   return undefined;
 }
 
+/** Loads artifacts from the transcript selected by sessionKey, runId, or taskId. */
 async function loadArtifacts(
   query: ArtifactQuery,
   cfg?: OpenClawConfig,
@@ -462,9 +482,12 @@ async function loadArtifacts(
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
-    sessionId,
-    storePath,
-    entry?.sessionFile,
+    {
+      agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+      sessionFile: entry?.sessionFile,
+      sessionId,
+      storePath,
+    },
     (message, seq) => {
       collectArtifactsFromMessage({
         message,
@@ -520,10 +543,11 @@ async function findArtifact(
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: dataValue, url: _url, ...summary } = artifact;
+  const { data: _dataValue, url: _url, ...summary } = artifact;
   return summary;
 }
 
+/** Gateway handlers for listing, summarizing, and downloading transcript artifacts. */
 export const artifactsHandlers: GatewayRequestHandlers = {
   "artifacts.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {

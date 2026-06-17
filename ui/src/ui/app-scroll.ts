@@ -1,7 +1,9 @@
+// Control UI module implements app scroll behavior.
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+const FOLLOW_REACQUIRE_THRESHOLD = 8;
 const HEADER_HIDE_SCROLL_DELTA = 12;
 const HEADER_SHOW_TOP_THRESHOLD = 24;
 
@@ -14,13 +16,13 @@ type ScrollHost = {
   chatLastScrollTop: number;
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
+  chatFollowLocked: boolean;
   chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
   settings?: {
     chatAutoScroll?: ChatAutoScrollMode;
-    chatFocusMode?: boolean;
   };
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
@@ -85,8 +87,8 @@ export function scheduleChatScroll(
         autoScrollMode === "always" ||
         (autoScrollMode === "near-bottom" &&
           (effectiveForce ||
-            host.chatUserNearBottom ||
-            distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+            (!host.chatFollowLocked &&
+              (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
@@ -96,6 +98,7 @@ export function scheduleChatScroll(
       if (effectiveForce) {
         host.chatHasAutoScrolled = true;
       }
+      host.chatFollowLocked = false;
       const smoothEnabled =
         smooth &&
         (typeof window === "undefined" ||
@@ -129,8 +132,8 @@ export function scheduleChatScroll(
           autoScrollMode === "always" ||
           (autoScrollMode === "near-bottom" &&
             (effectiveForce ||
-              host.chatUserNearBottom ||
-              latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+              (!host.chatFollowLocked &&
+                (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
         if (!shouldStickRetry) {
           return;
         }
@@ -207,24 +210,30 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   // Only suppress if scrollTop is still at or above the position we scrolled to;
   // if it dropped below, the user scrolled up during the guard window and we must
   // process the event so streaming stops pinning them back to the bottom.
+  const isUserScrollUp = delta < 0;
+  const isDeliberateScrollUp = delta < -HEADER_HIDE_SCROLL_DELTA;
   if (
     host.chatIsProgrammaticScroll &&
+    !isUserScrollUp &&
     container.scrollTop >= host.chatProgrammaticScrollTarget - container.clientHeight
   ) {
     return;
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  if (isUserScrollUp && distanceFromBottom > FOLLOW_REACQUIRE_THRESHOLD) {
+    host.chatFollowLocked = true;
+  } else if (distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD) {
+    host.chatFollowLocked = false;
+  }
+  host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
   const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
 
-  if (!host.settings?.chatFocusMode) {
-    if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
-      host.chatHeaderControlsHidden = false;
-    } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
-      host.chatHeaderControlsHidden = true;
-    } else if (delta < -HEADER_HIDE_SCROLL_DELTA) {
-      host.chatHeaderControlsHidden = false;
-    }
+  if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
+    host.chatHeaderControlsHidden = false;
+  } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = true;
+  } else if (isDeliberateScrollUp) {
+    host.chatHeaderControlsHidden = false;
   }
 
   // Clear the "new messages below" indicator when user scrolls back to bottom.
@@ -254,6 +263,7 @@ export function handleActivityScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
+  host.chatFollowLocked = false;
   host.chatLastScrollTop = 0;
   host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;

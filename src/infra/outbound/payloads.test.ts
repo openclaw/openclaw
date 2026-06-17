@@ -1,3 +1,5 @@
+// Covers outbound payload normalization across text, media, presentation,
+// interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -437,6 +439,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
             mediaUrl: null,
             mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
             audioAsVoice: undefined,
+            presentation: undefined,
+            delivery: undefined,
+            interactive: undefined,
             channelData: undefined,
           },
         ],
@@ -591,12 +596,12 @@ describe("formatOutboundPayloadLog", () => {
       expected: string;
     }>([
       {
-        name: "text with media lines",
+        name: "text with attachment lines",
         input: {
           text: "hello  ",
           mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
         },
-        expected: "hello\nMEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
+        expected: "hello\nAttachment: https://x.test/a.png\nAttachment: https://x.test/b.png",
       },
       {
         name: "media only",
@@ -604,7 +609,7 @@ describe("formatOutboundPayloadLog", () => {
           text: "",
           mediaUrls: ["https://x.test/a.png"],
         },
-        expected: "MEDIA:https://x.test/a.png",
+        expected: "Attachment: https://x.test/a.png",
       },
     ]),
   )("$name", ({ input, expected }) => {

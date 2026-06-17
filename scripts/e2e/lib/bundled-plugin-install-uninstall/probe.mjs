@@ -1,7 +1,9 @@
+// Probe script for bundled plugin install/uninstall E2E scenarios.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
@@ -52,6 +54,10 @@ function pathReferencesBundledRuntime(value, pluginDir) {
 function pathReferencesPackagedBundledRoot(value) {
   const normalized = normalizePathForProbe(value);
   return bundledRuntimeRootFragments.some((fragment) => normalized.includes(fragment));
+}
+
+function pathsEqualForProbe(actual, expected) {
+  return normalizePathForProbe(actual) === normalizePathForProbe(expected);
 }
 
 function resolveOpenClawEntry() {
@@ -171,13 +177,11 @@ async function selectedManifestEntries() {
   return selected;
 }
 
-function assertInstalled(pluginId, pluginDir, requiresConfig) {
+function assertInstalled(pluginId, pluginDir, requiresConfig, selectedPluginRoot = "") {
   const stateDir = resolveStateDir();
   const configPath = path.join(stateDir, "openclaw.json");
-  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = readJson(configPath);
-  const index = readJson(indexPath);
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readPluginInstallRecords({ stateDir, configPath });
   const record = records[pluginId];
   if (!record) {
     throw new Error(`missing install record for ${pluginId}`);
@@ -187,13 +191,22 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
       `expected bundled install record source=path for ${pluginId}, got ${record.source}`,
     );
   }
-  if (
-    typeof record.sourcePath !== "string" ||
-    !pathReferencesBundledRuntime(record.sourcePath, pluginDir)
-  ) {
+  const sourcePath = typeof record.sourcePath === "string" ? record.sourcePath : "";
+  if (!sourcePath) {
     throw new Error(`unexpected bundled source path for ${pluginId}: ${record.sourcePath}`);
   }
-  if (normalizePathForProbe(record.installPath) !== normalizePathForProbe(record.sourcePath)) {
+  if (selectedPluginRoot && !pathsEqualForProbe(sourcePath, selectedPluginRoot)) {
+    throw new Error(
+      `bundled source path for ${pluginId} did not match selected root: expected ${selectedPluginRoot}, got ${record.sourcePath}`,
+    );
+  }
+  if (!selectedPluginRoot && !pathReferencesBundledRuntime(sourcePath, pluginDir)) {
+    throw new Error(`unexpected bundled source path for ${pluginId}: ${record.sourcePath}`);
+  }
+  if (selectedPluginRoot && !fs.existsSync(sourcePath)) {
+    throw new Error(`bundled source path for ${pluginId} does not exist: ${record.sourcePath}`);
+  }
+  if (!pathsEqualForProbe(record.installPath, record.sourcePath)) {
     throw new Error(`bundled install path should equal source path for ${pluginId}`);
   }
   const paths = config.plugins?.load?.paths || [];
@@ -220,10 +233,8 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
 function assertUninstalled(pluginId, pluginDir) {
   const stateDir = resolveStateDir();
   const configPath = path.join(stateDir, "openclaw.json");
-  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readPluginInstallRecords({ stateDir, configPath });
   if (records[pluginId]) {
     throw new Error(`install record still present after uninstall for ${pluginId}`);
   }
@@ -248,13 +259,13 @@ function assertUninstalled(pluginId, pluginDir) {
   }
 }
 
-const [command, pluginId, pluginDir, requiresConfig] = process.argv.slice(2);
+const [command, pluginId, pluginDir, requiresConfig, selectedPluginRoot] = process.argv.slice(2);
 if (command === "select") {
   for (const entry of await selectedManifestEntries()) {
     console.log(`${entry.id}\t${entry.dir}\t${entry.requiresConfig ? "1" : "0"}\t${entry.rootDir}`);
   }
 } else if (command === "assert-installed") {
-  assertInstalled(pluginId, pluginDir, requiresConfig === "1");
+  assertInstalled(pluginId, pluginDir, requiresConfig === "1", selectedPluginRoot);
 } else if (command === "assert-uninstalled") {
   assertUninstalled(pluginId, pluginDir);
 } else {

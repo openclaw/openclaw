@@ -1,6 +1,11 @@
+// Memory Core plugin module implements manager atomic reindex behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  acquireMemoryReindexSwapLock,
+  type MemoryReindexLockHandle,
+} from "./manager-reindex-lock.js";
 
 type MemoryIndexFileOps = {
   rename: typeof fs.rename;
@@ -25,6 +30,13 @@ const defaultFileOps: MemoryIndexFileOps = {
 };
 
 const transientFileErrorCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
+// SQLite keeps WAL/SHM sidecars under journal_mode=WAL, but NFS-backed stores
+// fall back to journal_mode=DELETE and leave a rollback-journal (-journal)
+// sidecar instead. Index file operations must cover all three so a swap never
+// strands a stale -journal next to the freshly published database, which would
+// trigger an erroneous rollback the next time SQLite opens the index.
+const memoryIndexFileSuffixes = ["", "-wal", "-shm", "-journal"] as const;
+const memoryIndexSidecarSuffixes = ["-wal", "-shm", "-journal"] as const;
 const defaultMaxRenameAttempts = 6;
 const defaultRenameRetryDelayMs = 25;
 const defaultMaxRemoveAttempts = 10;
@@ -50,13 +62,14 @@ async function renameWithRetry(
   source: string,
   target: string,
   options: ResolvedMemoryIndexFileOptions,
+  optional = false,
 ): Promise<void> {
   for (let attempt = 1; attempt <= options.maxRenameAttempts; attempt++) {
     try {
       await options.fileOps.rename(source, target);
       return;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (optional && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return;
       }
       if (!isTransientFileError(err) || attempt === options.maxRenameAttempts) {
@@ -74,11 +87,10 @@ export async function moveMemoryIndexFiles(
   options: MemoryIndexFileOptions = {},
 ): Promise<void> {
   const resolvedOptions = resolveMemoryIndexFileOptions(options);
-  const suffixes = ["", "-wal", "-shm"];
-  for (const suffix of suffixes) {
+  for (const suffix of memoryIndexFileSuffixes) {
     const source = `${sourceBase}${suffix}`;
     const target = `${targetBase}${suffix}`;
-    await renameWithRetry(source, target, resolvedOptions);
+    await renameWithRetry(source, target, resolvedOptions, suffix !== "");
   }
 }
 
@@ -105,22 +117,107 @@ export async function removeMemoryIndexFiles(
   options: MemoryIndexFileOptions = {},
 ): Promise<void> {
   const resolvedOptions = resolveMemoryIndexFileOptions(options);
-  const suffixes = ["", "-wal", "-shm"];
-  for (const suffix of suffixes) {
+  for (const suffix of memoryIndexFileSuffixes) {
     await rmWithRetry(`${basePath}${suffix}`, resolvedOptions);
   }
 }
 
-async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
-  const backupPath = `${targetPath}.backup-${randomUUID()}`;
-  await moveMemoryIndexFiles(targetPath, backupPath);
+async function removeMemoryIndexSidecars(
+  basePath: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
+  for (const suffix of memoryIndexSidecarSuffixes) {
+    await rmWithRetry(`${basePath}${suffix}`, options);
+  }
+}
+
+async function moveMemoryIndexSidecars(
+  sourceBase: string,
+  targetBase: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
+  for (const suffix of memoryIndexSidecarSuffixes) {
+    await renameWithRetry(`${sourceBase}${suffix}`, `${targetBase}${suffix}`, options, true);
+  }
+}
+
+async function moveMemoryIndexSidecarsWithRollback(
+  sourceBase: string,
+  targetBase: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
   try {
-    await moveMemoryIndexFiles(tempPath, targetPath);
+    await moveMemoryIndexSidecars(sourceBase, targetBase, options);
   } catch (err) {
-    await moveMemoryIndexFiles(backupPath, targetPath);
+    try {
+      await moveMemoryIndexSidecars(targetBase, sourceBase, options);
+    } catch (rollbackErr) {
+      const aggregateErr = new AggregateError(
+        [err, rollbackErr],
+        "memory index sidecar backup failed and rollback failed",
+        { cause: rollbackErr },
+      );
+      throw aggregateErr;
+    }
     throw err;
   }
-  await removeMemoryIndexFiles(backupPath);
+}
+
+async function swapMemoryIndexFiles(
+  targetPath: string,
+  tempPath: string,
+  options: MemoryIndexFileOptions = {},
+  afterPublish?: () => Promise<void> | void,
+): Promise<void> {
+  // On POSIX (Linux/macOS), rename(2) atomically overwrites the target,
+  // so there is no absent-window between removing the old index and
+  // publishing the new one. On Windows, rename fails when the target
+  // exists, so the three-step backup protocol is retained.
+  const resolvedOptions = resolveMemoryIndexFileOptions(options);
+  const backupPath = `${targetPath}.backup-${randomUUID()}`;
+  let published = false;
+  const markPublished = async () => {
+    if (published) {
+      return;
+    }
+    published = true;
+    await afterPublish?.();
+  };
+  // The old and temp DBs are checkpointed and closed before swap. Hide target
+  // sidecars before publishing the new main DB, but keep them rollbackable
+  // until the main-file publish succeeds.
+  await moveMemoryIndexSidecarsWithRollback(targetPath, backupPath, resolvedOptions);
+  try {
+    await renameWithRetry(tempPath, targetPath, resolvedOptions);
+    await markPublished();
+  } catch (err) {
+    if (
+      (err as NodeJS.ErrnoException).code === "EPERM" ||
+      (err as NodeJS.ErrnoException).code === "EEXIST"
+    ) {
+      // Windows: target exists, use three-step backup protocol with rollback.
+      try {
+        await renameWithRetry(targetPath, backupPath, resolvedOptions);
+      } catch (backupErr) {
+        await moveMemoryIndexSidecars(backupPath, targetPath, resolvedOptions);
+        throw backupErr;
+      }
+      try {
+        await renameWithRetry(tempPath, targetPath, resolvedOptions);
+        await markPublished();
+      } catch (moveErr) {
+        await moveMemoryIndexFiles(backupPath, targetPath, options);
+        throw moveErr;
+      }
+    } else {
+      await moveMemoryIndexSidecars(backupPath, targetPath, resolvedOptions);
+      throw err;
+    }
+  }
+  await removeMemoryIndexFiles(backupPath, options);
+  // Closed temp databases should not need sidecars after checkpoint; remove
+  // leftovers at the temp path without touching the published target pair.
+  await removeMemoryIndexSidecars(tempPath, resolvedOptions);
 }
 
 export async function runMemoryAtomicReindex<T>(params: {
@@ -128,11 +225,19 @@ export async function runMemoryAtomicReindex<T>(params: {
   tempPath: string;
   build: () => Promise<T>;
   beforeTempCleanup?: () => Promise<void> | void;
+  afterPublish?: () => Promise<void> | void;
   fileOptions?: MemoryIndexFileOptions;
 }): Promise<T> {
+  let swapLock: MemoryReindexLockHandle | undefined;
   try {
+    swapLock = acquireMemoryReindexSwapLock(params.targetPath);
     const result = await params.build();
-    await swapMemoryIndexFiles(params.targetPath, params.tempPath);
+    await swapMemoryIndexFiles(
+      params.targetPath,
+      params.tempPath,
+      params.fileOptions,
+      params.afterPublish,
+    );
     return result;
   } catch (err) {
     try {
@@ -147,5 +252,7 @@ export async function runMemoryAtomicReindex<T>(params: {
       throw aggregateErr;
     }
     throw err;
+  } finally {
+    swapLock?.release();
   }
 }

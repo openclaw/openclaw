@@ -11,10 +11,14 @@
  */
 
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
   sendPlainReply,
+  sendTextOnlyReply,
+  TEXT_CHUNK_LIMIT,
   type DeliverDeps,
 } from "../messaging/outbound-deliver.js";
 import {
@@ -68,7 +72,50 @@ type ReplyDeliverPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   audioAsVoice?: boolean;
+  isError?: boolean;
 };
+
+function shouldDeliverToolProgressImmediately(
+  account: GatewayAccount,
+  useOfficialC2cStream: boolean,
+): boolean {
+  if (useOfficialC2cStream) {
+    return true;
+  }
+  const streaming = account.config?.streaming;
+  if (streaming === true) {
+    return true;
+  }
+  return typeof streaming === "object" && streaming !== null && streaming.mode !== "off";
+}
+
+function immediateToolProgressText(payload: ReplyDeliverPayload): string | undefined {
+  const text = (payload.text ?? "").trim();
+  if (!text || payload.isError || payload.audioAsVoice) {
+    return undefined;
+  }
+  if (payload.mediaUrl || payload.mediaUrls?.length) {
+    return undefined;
+  }
+  return text;
+}
+
+function hasReplyMedia(payload: ReplyDeliverPayload): boolean {
+  return Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+}
+
+function isSilentBlockReplyText(text: string): boolean {
+  return !text || text === "[SKIP]" || isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
+}
+
+function blockReplyTextForDelivery(payload: ReplyDeliverPayload): string {
+  const text = payload.text ?? "";
+  return isSilentBlockReplyText(text.trim()) ? "" : text;
+}
+
+function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
+  return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
+}
 
 // ============ dispatchOutbound ============
 
@@ -106,53 +153,116 @@ export async function dispatchOutbound(
   // ---- Deliver state ----
   let hasResponse = false;
   let hasBlockResponse = false;
+  let hasVisibleBlockResponse = false;
   let toolDeliverCount = 0;
   const toolTexts: string[] = [];
   const toolMediaUrls: string[] = [];
   let toolFallbackSent = false;
   let toolRenewalCount = 0;
+  let skippedSilentBlockResponse = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let toolOnlyTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+  const markBlockResponse = (): void => {
+    hasBlockResponse = true;
+    inbound.typing.keepAlive?.stop();
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    if (toolOnlyTimeoutId) {
+      clearTimeout(toolOnlyTimeoutId);
+      toolOnlyTimeoutId = null;
+    }
+  };
+
   // ---- Tool fallback ----
+  const sendToolMediaWithTimeout = async (
+    mediaUrl: string,
+    labels: { resultError: string; thrownError: string },
+  ): Promise<void> => {
+    const ac = new AbortController();
+    let mediaTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const result = await Promise.race([
+        sendMedia({
+          to: qualifiedTarget,
+          text: "",
+          mediaUrl,
+          accountId: account.accountId,
+          replyToId: event.messageId,
+          account,
+        }).then((r) => {
+          if (ac.signal.aborted) {
+            return { channel: "qqbot", error: "suppressed" } as OutboundResult;
+          }
+          return r;
+        }),
+        new Promise<OutboundResult>((resolve) => {
+          mediaTimeoutId = setTimeout(() => {
+            ac.abort();
+            resolve({ channel: "qqbot", error: "timeout" });
+          }, TOOL_MEDIA_SEND_TIMEOUT);
+        }),
+      ]);
+      if (result.error) {
+        log?.error(`${labels.resultError}: ${result.error}`);
+      }
+    } catch (err) {
+      log?.error(`${labels.thrownError}: ${String(err)}`);
+    } finally {
+      if (mediaTimeoutId) {
+        clearTimeout(mediaTimeoutId);
+      }
+    }
+  };
+
   const sendToolFallback = async (): Promise<void> => {
     if (toolMediaUrls.length > 0) {
       for (const mediaUrl of toolMediaUrls) {
-        const ac = new AbortController();
-        try {
-          const result = await Promise.race([
-            sendMedia({
-              to: qualifiedTarget,
-              text: "",
-              mediaUrl,
-              accountId: account.accountId,
-              replyToId: event.messageId,
-              account,
-            }).then((r) => {
-              if (ac.signal.aborted) {
-                return { channel: "qqbot", error: "suppressed" } as OutboundResult;
-              }
-              return r;
-            }),
-            new Promise<OutboundResult>((resolve) =>
-              setTimeout(() => {
-                ac.abort();
-                resolve({ channel: "qqbot", error: "timeout" });
-              }, TOOL_MEDIA_SEND_TIMEOUT),
-            ),
-          ]);
-          if (result.error) {
-            log?.error(`Tool fallback error: ${result.error}`);
-          }
-        } catch (err) {
-          log?.error(`Tool fallback failed: ${String(err)}`);
-        }
+        await sendToolMediaWithTimeout(mediaUrl, {
+          resultError: "Tool fallback error",
+          thrownError: "Tool fallback failed",
+        });
       }
       return;
     }
     if (toolTexts.length > 0) {
       await sendErrorMessage(toolTexts.slice(-3).join("\n---\n").slice(0, 2000));
     }
+  };
+
+  const hasPendingToolFallbackPayload = (): boolean =>
+    toolTexts.length > 0 || toolMediaUrls.length > 0;
+
+  const flushPendingToolDeliveriesOnce = async (): Promise<boolean> => {
+    if (toolFallbackSent || !hasPendingToolFallbackPayload()) {
+      return false;
+    }
+    await flushPendingToolDeliveries();
+    toolFallbackSent = true;
+    recordOutbound();
+    return true;
+  };
+
+  const renewToolOnlyFallback = (): boolean => {
+    if (toolFallbackSent) {
+      return false;
+    }
+    if (toolOnlyTimeoutId) {
+      if (toolRenewalCount >= MAX_TOOL_RENEWALS) {
+        return false;
+      }
+      clearTimeout(toolOnlyTimeoutId);
+      toolRenewalCount++;
+    }
+    toolOnlyTimeoutId = setTimeout(() => {
+      if (!hasBlockResponse && !toolFallbackSent && !skippedSilentBlockResponse) {
+        toolFallbackSent = true;
+        void sendToolFallback().catch(() => {});
+      }
+    }, TOOL_ONLY_TIMEOUT);
+    return true;
   };
 
   // ---- Timeout promise ----
@@ -169,6 +279,9 @@ export async function dispatchOutbound(
   });
 
   // ---- Deliver deps ----
+  const markdownChunker = createQQBotMarkdownChunker((text, limit) =>
+    runtime.channel.text.chunkMarkdownText(text, limit),
+  );
   const deliverDeps: DeliverDeps = {
     mediaSender: {
       sendPhoto: (target, imageUrl) => sendPhoto(target, imageUrl),
@@ -178,7 +291,35 @@ export async function dispatchOutbound(
       sendDocument: (target, filePath) => sendDocument(target, filePath),
       sendMedia: (opts) => sendMedia(opts),
     },
-    chunkText: (text, limit) => runtime.channel.text.chunkMarkdownText(text, limit),
+    chunkText: (text, limit) => markdownChunker.chunkText(text, limit),
+  };
+  const flushPendingMarkdownText = async (): Promise<void> => {
+    const pendingChunks = markdownChunker.flushPendingText(TEXT_CHUNK_LIMIT);
+    if (pendingChunks.length === 0) {
+      return;
+    }
+    const passthroughDeps: DeliverDeps = {
+      ...deliverDeps,
+      chunkText: (text) => [text],
+    };
+    for (const chunk of pendingChunks) {
+      await sendTextOnlyReply(
+        chunk,
+        {
+          type: event.type,
+          senderId: event.senderId,
+          messageId: event.messageId,
+          channelId: event.channelId,
+          groupOpenid: event.groupOpenid,
+          msgIdx: event.msgIdx,
+        },
+        { account, qualifiedTarget, log },
+        sendWithRetry,
+        () => undefined,
+        passthroughDeps,
+      );
+      recordOutbound();
+    }
   };
 
   const replyDeps: ReplyDispatcherDeps = {
@@ -186,6 +327,41 @@ export async function dispatchOutbound(
       textToSpeech: (params) => runtime.tts.textToSpeech(params),
       audioFileToSilkBase64: async (p) => (await audioFileToSilkBase64(p)) ?? undefined,
     },
+  };
+
+  const flushPendingToolDeliveries = async (): Promise<void> => {
+    if (toolMediaUrls.length > 0) {
+      const urlsToSend = [...toolMediaUrls];
+      toolMediaUrls.length = 0;
+      for (const mediaUrl of urlsToSend) {
+        await sendToolMediaWithTimeout(mediaUrl, {
+          resultError: "Tool media forward error",
+          thrownError: "Tool media forward failed",
+        });
+      }
+    }
+
+    if (toolTexts.length > 0) {
+      const textsToSend = [...toolTexts];
+      toolTexts.length = 0;
+      for (const text of textsToSend) {
+        await sendTextOnlyReply(
+          text,
+          {
+            type: event.type,
+            senderId: event.senderId,
+            messageId: event.messageId,
+            channelId: event.channelId,
+            groupOpenid: event.groupOpenid,
+            msgIdx: event.msgIdx,
+          },
+          { account, qualifiedTarget, log },
+          sendWithRetry,
+          () => undefined,
+          deliverDeps,
+        );
+      }
+    }
   };
 
   const recordOutbound = () =>
@@ -208,6 +384,10 @@ export async function dispatchOutbound(
         ? ("group" as const)
         : ("channel" as const);
   const useOfficialC2cStream = shouldUseOfficialC2cStream(account, targetType);
+  const deliverToolProgressImmediately = shouldDeliverToolProgressImmediately(
+    account,
+    useOfficialC2cStream,
+  );
   let streamingController: StreamingController | null = null;
   if (useOfficialC2cStream) {
     streamingController = new StreamingController({
@@ -275,6 +455,29 @@ export async function dispatchOutbound(
                 if (info.kind === "tool") {
                   toolDeliverCount++;
                   const toolText = (payload.text ?? "").trim();
+                  const textOnlyProgress = immediateToolProgressText(payload);
+                  if (!hasBlockResponse && deliverToolProgressImmediately && textOnlyProgress) {
+                    if (toolOnlyTimeoutId || hasPendingToolFallbackPayload()) {
+                      renewToolOnlyFallback();
+                    }
+                    await sendTextOnlyReply(
+                      textOnlyProgress,
+                      {
+                        type: event.type,
+                        senderId: event.senderId,
+                        messageId: event.messageId,
+                        channelId: event.channelId,
+                        groupOpenid: event.groupOpenid,
+                        msgIdx: event.msgIdx,
+                      },
+                      { account, qualifiedTarget, log },
+                      sendWithRetry,
+                      () => undefined,
+                      deliverDeps,
+                    );
+                    recordOutbound();
+                    return;
+                  }
                   if (toolText) {
                     toolTexts.push(toolText);
                   }
@@ -305,36 +508,22 @@ export async function dispatchOutbound(
                   if (toolFallbackSent) {
                     return;
                   }
-                  if (toolOnlyTimeoutId) {
-                    if (toolRenewalCount < MAX_TOOL_RENEWALS) {
-                      clearTimeout(toolOnlyTimeoutId);
-                      toolRenewalCount++;
-                    } else {
-                      return;
-                    }
-                  }
-                  toolOnlyTimeoutId = setTimeout(async () => {
-                    if (!hasBlockResponse && !toolFallbackSent) {
-                      toolFallbackSent = true;
-                      try {
-                        await sendToolFallback();
-                      } catch {}
-                    }
-                  }, TOOL_ONLY_TIMEOUT);
+                  renewToolOnlyFallback();
                   return;
                 }
 
                 // ---- Block deliver ----
-                hasBlockResponse = true;
-                inbound.typing.keepAlive?.stop();
-                if (timeoutId) {
-                  clearTimeout(timeoutId);
-                  timeoutId = null;
+                markBlockResponse();
+
+                if (!streamingController && isSilentBlockReply(payload)) {
+                  if (!(await flushPendingToolDeliveriesOnce()) && event.type === "group") {
+                    log?.info(
+                      `Model decided to skip group message (${(payload.text ?? "").trim() || "empty reply"}) from ${event.senderId}`,
+                    );
+                  }
+                  return;
                 }
-                if (toolOnlyTimeoutId) {
-                  clearTimeout(toolOnlyTimeoutId);
-                  toolOnlyTimeoutId = null;
-                }
+                hasVisibleBlockResponse = true;
 
                 if (streamingController && !streamingController.isTerminalPhase) {
                   try {
@@ -374,7 +563,7 @@ export async function dispatchOutbound(
                   return undefined;
                 };
 
-                let replyText = payload.text ?? "";
+                let replyText = blockReplyTextForDelivery(payload);
                 const deliverEvent = {
                   type: event.type,
                   senderId: event.senderId,
@@ -458,6 +647,27 @@ export async function dispatchOutbound(
                   timeoutId = null;
                 }
               },
+              onSkip: (
+                _payload: ReplyDeliverPayload,
+                info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+              ) => {
+                if (
+                  !streamingController &&
+                  (info.kind === "block" || info.kind === "final") &&
+                  (info.reason === "silent" || info.reason === "empty")
+                ) {
+                  skippedSilentBlockResponse = true;
+                }
+              },
+              onFreshSettledDelivery: async () => {
+                if (skippedSilentBlockResponse && !hasVisibleBlockResponse) {
+                  markBlockResponse();
+                  if (await flushPendingToolDeliveriesOnce()) {
+                    return { visibleReplySent: true };
+                  }
+                }
+                return undefined;
+              },
             },
             replyOptions: {
               disableBlockStreaming: useOfficialC2cStream
@@ -493,16 +703,27 @@ export async function dispatchOutbound(
   } catch {
     if (timeoutId) {
       clearTimeout(timeoutId);
+      timeoutId = null;
     }
   } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     if (toolOnlyTimeoutId) {
       clearTimeout(toolOnlyTimeoutId);
       toolOnlyTimeoutId = null;
     }
-    if (toolDeliverCount > 0 && !hasBlockResponse && !toolFallbackSent) {
+    if (
+      toolDeliverCount > 0 &&
+      !hasBlockResponse &&
+      !toolFallbackSent &&
+      !skippedSilentBlockResponse
+    ) {
       toolFallbackSent = true;
       await sendToolFallback();
     }
+    await flushPendingMarkdownText();
     if (streamingController && !streamingController.isTerminalPhase) {
       try {
         streamingController.markFullyComplete();

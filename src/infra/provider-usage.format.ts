@@ -1,6 +1,8 @@
+// Formats provider usage summaries for CLI and status output.
 import { clampPercent } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
 
+// Compact reset times for chat/status lines; long windows fall back to a date.
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
   if (!targetMs) {
     return null;
@@ -40,6 +42,7 @@ function formatWindowShort(window: UsageWindow, now?: number): string {
   return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
 }
 
+/** Formats one provider snapshot into a short usage-window summary. */
 export function formatUsageWindowSummary(
   snapshot: ProviderUsageSnapshot,
   opts?: { now?: number; maxWindows?: number; includeResets?: boolean },
@@ -48,7 +51,7 @@ export function formatUsageWindowSummary(
     return null;
   }
   if (snapshot.windows.length === 0) {
-    return null;
+    return snapshot.summary?.trim() || null;
   }
   const now = opts?.now ?? Date.now();
   const maxWindows =
@@ -71,13 +74,16 @@ export function formatUsageSummaryLine(
   opts?: { now?: number; maxProviders?: number },
 ): string | null {
   const providers = summary.providers
-    .filter((entry) => entry.windows.length > 0 && !entry.error)
+    .filter((entry) => (entry.windows.length > 0 || Boolean(entry.summary?.trim())) && !entry.error)
     .slice(0, opts?.maxProviders ?? summary.providers.length);
   if (providers.length === 0) {
     return null;
   }
 
   const parts = providers.map((entry) => {
+    if (entry.windows.length === 0 && entry.summary?.trim()) {
+      return `${entry.displayName} ${entry.summary.trim()}`;
+    }
     const window = entry.windows.reduce((best, next) =>
       next.usedPercent > best.usedPercent ? next : best,
     );
@@ -99,10 +105,13 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
       continue;
     }
     if (entry.windows.length === 0) {
-      lines.push(`  ${entry.displayName}${planSuffix}: no data`);
+      lines.push(`  ${entry.displayName}${planSuffix}: ${entry.summary?.trim() || "no data"}`);
       continue;
     }
     lines.push(`  ${entry.displayName}${planSuffix}`);
+    if (entry.summary?.trim()) {
+      lines.push(`    ${entry.summary.trim()}`);
+    }
     for (const window of entry.windows) {
       const remaining = clampPercent(100 - window.usedPercent);
       const reset = formatResetRemaining(window.resetAt, opts?.now);

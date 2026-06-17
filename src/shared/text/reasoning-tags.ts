@@ -1,11 +1,15 @@
+// Reasoning tag helpers find and remove model reasoning tag blocks from text.
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
-const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
+// Reasoning tags may carry a model-specific namespace prefix (e.g. Anthropic's
+// `antml:`, MiniMax's `mm:`). Accept the known prefixes so namespaced variants
+// like `<mm:think>` are stripped instead of leaking into visible output.
+const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
 const THINKING_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -17,6 +21,7 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
   return value.trim();
 }
 
+/** Detects whether a stray reasoning close tag separates two visible text regions. */
 export function hasOrphanReasoningCloseBoundary(params: {
   before: string;
   after: string;
@@ -24,6 +29,7 @@ export function hasOrphanReasoningCloseBoundary(params: {
   return params.before.trim().length > 0 && params.after.trim().length > 0;
 }
 
+/** Strips model reasoning/final tags from visible text while preserving literal code examples. */
 export function stripReasoningTagsFromText(
   text: string,
   options?: {
@@ -91,6 +97,8 @@ export function stripReasoningTagsFromText(
         const before = cleaned.slice(lastIndex, idx);
         const after = cleaned.slice(afterIndex);
         if (hasOrphanReasoningCloseBoundary({ before, after })) {
+          // A lone close tag after visible preamble means the hidden opening tag was
+          // probably truncated; drop the preamble so partial reasoning is not leaked.
           result = "";
         } else {
           result += before;

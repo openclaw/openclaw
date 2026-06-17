@@ -1,8 +1,9 @@
+/** Test registry fixture for command authorization across Discord and phone-based channels. */
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { afterEach, beforeEach } from "vitest";
 import { normalizeE164 } from "../../plugin-sdk/account-resolution.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { lowercasePreservingWhitespace } from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function formatDiscordAllowFromEntries(allowFrom: Array<string | number>): string[] {
@@ -25,6 +26,7 @@ function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): stri
         const match = stripped.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i);
         return match ? normalizeE164(match[1]) : null;
       }
+      // WhatsApp LID values are numeric identifiers; test fixtures map them like phone ids.
       if (/^(\d+)@lid$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)@lid$/i);
         return match ? normalizeE164(match[1]) : null;
@@ -85,6 +87,7 @@ const createCommandAuthRegistry = () =>
     },
   ]);
 
+/** Installs and resets the command-auth registry around each test case. */
 export function installDiscordRegistryHooks() {
   beforeEach(() => {
     setActivePluginRegistry(createCommandAuthRegistry());

@@ -1,3 +1,4 @@
+// Browser tests cover chrome plugin behavior.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
@@ -34,6 +35,8 @@ import {
 } from "./constants.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+
+const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
 type ChromeCdpDiagnostic = Awaited<ReturnType<typeof diagnoseChromeCdp>>;
@@ -89,7 +92,7 @@ async function withMockChromeCdpServer(params: {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES });
   server.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith(params.wsPath)) {
       socket.destroy();
@@ -108,8 +111,12 @@ async function withMockChromeCdpServer(params: {
     const addr = server.address() as AddressInfo;
     await params.run(`http://127.0.0.1:${addr.port}`);
   } finally {
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
@@ -549,7 +556,9 @@ describe("browser chrome helpers", () => {
         }),
       ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -559,7 +568,7 @@ describe("browser chrome helpers", () => {
       onConnection: (wss) => {
         wss.on("connection", (ws) => {
           ws.on("message", (raw) => {
-            let message: { id?: unknown; method?: unknown } | null = null;
+            let message: { id?: unknown; method?: unknown } | null;
             try {
               const text =
                 typeof raw === "string"
@@ -723,7 +732,10 @@ describe("browser chrome helpers", () => {
       res.writeHead(404);
       res.end();
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     server.on("upgrade", (req, socket, head) => {
       if (req.url?.startsWith("/e/bad")) {
         socket.destroy();
@@ -755,8 +767,12 @@ describe("browser chrome helpers", () => {
       expect(diagnostic.wsUrl).toBe(wsOnlyBase);
       expect(diagnostic.browser).toBe("Browserless/Mock");
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -784,13 +800,21 @@ describe("browser chrome helpers", () => {
       } as unknown as Response),
     );
     // A real WS server accepts the handshake.
-    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const wss = new WebSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
+    await new Promise<void>((resolve) => {
+      wss.once("listening", () => resolve());
+    });
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeReachable(`ws://127.0.0.1:${port}`, 500)).resolves.toBe(true);
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
     }
   });
 
@@ -802,7 +826,11 @@ describe("browser chrome helpers", () => {
         json: async () => ({}),
       } as unknown as Response),
     );
-    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    const wss = new WebSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     wss.on("connection", (ws) => {
       ws.on("message", (raw) => {
         const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
@@ -811,7 +839,9 @@ describe("browser chrome helpers", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.once("listening", () => resolve());
+    });
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeCdpReady(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toBe(true);
@@ -820,7 +850,9 @@ describe("browser chrome helpers", () => {
       );
       expect(diagnostic.wsUrl).toBe(`ws://127.0.0.1:${port}`);
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
     }
   });
 

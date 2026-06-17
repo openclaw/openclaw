@@ -1,3 +1,8 @@
+/**
+ * Docker sandbox backend implementation.
+ *
+ * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
+ */
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
@@ -22,8 +27,6 @@ function resolveConfiguredDockerRuntimeImage(params: {
   switch (params.configLabelKind) {
     case "BrowserImage":
       return sandboxCfg.browser.image;
-    case "Image":
-    case undefined:
     default:
       return sandboxCfg.docker.image;
   }
@@ -36,6 +39,7 @@ export async function createDockerSandboxBackend(
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: params.cfg,
   });
   return createDockerSandboxBackendHandle({

@@ -1,3 +1,4 @@
+// Slack tests cover interactions plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -2073,6 +2074,54 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.selectedDate).toBe("2026-02-16");
     expect(payload.selectedTime).toBe("14:30");
     expect(payload.selectedDateTime).toBe(1_771_700_200);
+  });
+
+  it("falls back when Slack datetime selection is outside Date range", async () => {
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U333" },
+        channel: { id: "C3" },
+        message: {
+          ts: "555.669",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "datetime_block",
+              elements: [{ type: "datetimepicker", action_id: "openclaw:datetime" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "datetimepicker",
+        action_id: "openclaw:datetime",
+        block_id: "datetime_block",
+        selected_date_time: 9_000_000_000_000,
+      },
+    });
+
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C3",
+      ts: "555.669",
+      blocks: [
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: ":white_check_mark: *openclaw:datetime* selected by <@U333>",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("captures workflow button trigger metadata", async () => {

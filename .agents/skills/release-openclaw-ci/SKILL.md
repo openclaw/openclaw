@@ -16,6 +16,14 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
 - Fetch logs only for failed or currently-blocking jobs. If quota is low, stop polling and wait for reset.
 - Treat live-provider flakes separately from code failures: prove key validity, provider HTTP status, retry evidence, and exact failing lane before editing code.
+- A model-list response proves authentication, not billing or inference
+  entitlement. Mandatory live providers must pass a real completion probe
+  before release dispatch. Fix the credential first; do not add an alternate
+  auth path merely to bypass a failed release credential.
+- Full Release Validation parent monitors fail fast: once a required child job
+  fails, the parent cancels the remaining child matrix and prints the failed
+  job summary. Inspect that first red job instead of waiting for unrelated
+  matrix tails.
 
 ## Preflight
 
@@ -32,6 +40,8 @@ git rev-parse HEAD
 preflight. Inject those exact targeted keys first, then run the verifier; use
 ambient env only when it was already intentionally injected for this release.
 The script prints only provider status and HTTP class, never tokens.
+The Anthropic check performs a tiny message completion so exhausted or
+non-billable credentials fail before the expensive release matrix.
 
 ## Dispatch
 
@@ -61,6 +71,13 @@ gh workflow run openclaw-performance.yml \
 
 Prefer the trusted workflow on `main`, target the exact release SHA:
 
+- Keep trusted-workflow checks compatible with frozen release targets. If
+  `main` adds a target-owned guard script or package command after the release
+  branch cut, make the trusted workflow skip only when that target surface is
+  absent. Heal the trusted workflow before rerunning validation; do not port an
+  unrelated runtime refactor or mutate the release candidate just to satisfy a
+  newer `main`-only check.
+
 ```bash
 gh workflow run full-release-validation.yml \
   --repo openclaw/openclaw \
@@ -73,6 +90,9 @@ gh workflow run full-release-validation.yml \
 ```
 
 Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Use narrow `rerun_group` after focused fixes.
+Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
+unless a maintainer intentionally wants to cross-check a specific profile; the
+publish workflow reads the effective profile from the full-validation manifest.
 
 ## Watch
 
@@ -99,7 +119,10 @@ Stop watchers before ending the turn or switching strategy.
      --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled") | [.databaseId,.name,.conclusion,.url] | @tsv'
    ```
 3. Fetch one failed job log. If rate-limited, note reset time and avoid more REST calls.
-4. For secret-looking failures, validate the provider endpoint from the same secret source before editing code.
+4. For secret-looking failures, validate a real completion from the same secret source before editing code. A successful model-list request is insufficient.
+   Claude CLI subscription credentials are a separate native auth path; prove
+   them in a clean-home CLI probe, never as a substitute for a required
+   Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
 6. Fix narrowly, run local/changed proof, commit, push, rerun the smallest matching group.
 

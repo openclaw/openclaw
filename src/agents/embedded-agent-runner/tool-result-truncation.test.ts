@@ -1,3 +1,5 @@
+// Tool-result truncation tests cover live and persisted shrinking of oversized
+// tool outputs while preserving transcript shape and update notifications.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +17,7 @@ let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.
 let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
+let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
@@ -24,6 +27,8 @@ let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
+  // Load after each setup so module-level constants and mocks stay isolated
+  // across persisted-session and live-truncation tests.
   ({
     truncateToolResultText,
     truncateToolResultMessage,
@@ -32,6 +37,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     resolveAutoLiveToolResultMaxChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
+    truncateOversizedToolResultsInRuntimeTranscript,
     truncateOversizedToolResultsInSession,
     isOversizedToolResult,
     sessionLikelyHasOversizedToolResults,
@@ -57,6 +63,8 @@ afterEach(async () => {
 });
 
 function makeToolResult(text: string, toolCallId = "call_1"): ToolResultMessage {
+  // Tool-result fixtures use increasing timestamps so persisted branch rewrites
+  // can preserve ordering while changing content.
   return {
     role: "toolResult",
     toolCallId,
@@ -424,6 +432,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
+    // Live replay truncates cloned tool-result messages; the source array keeps
+    // full content for UI and transcript persistence.
     const medium = "alpha beta gamma delta epsilon ".repeat(800);
     const messages: AgentMessage[] = [
       makeUserMessage("hello"),
@@ -456,7 +466,28 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
+  it("does not create session metadata for missing runtime transcripts", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}\n", "utf8");
+
+    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+      scope: {
+        agentId: "main",
+        sessionId: "missing-session",
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+      contextWindowTokens: 100,
+    });
+
+    expect(result.truncated).toBe(false);
+    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+  });
+
   it("readably truncates aggregate medium tool results in a session file", async () => {
+    // Persisted truncation rewrites JSONL directly and emits the transcript
+    // update event instead of reopening through SessionManager internals.
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir, dir);
     sm.appendMessage(makeUserMessage("hello"));
@@ -522,6 +553,8 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("prefers truncating older aggregate tool-result entries before newer results", async () => {
+    // Newer tool results are more likely to matter to the current turn, so
+    // aggregate recovery spends the cut on older results first.
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir, dir);
     sm.appendMessage(makeUserMessage("hello"));

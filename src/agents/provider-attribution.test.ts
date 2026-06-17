@@ -1,6 +1,8 @@
+// Verifies provider attribution headers and endpoint classification policies.
 import { describe, expect, it, vi } from "vitest";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  // Policy helpers return broad records; assertions pin only the relevant fields.
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -13,9 +15,14 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 
 const providerEndpointPlugins = vi.hoisted(() => [
   {
+    // Mirrors manifest-declared endpoint metadata without loading real plugins.
     providerEndpoints: [
-      { endpointClass: "openai-public", hosts: ["api.openai.com"] },
-      { endpointClass: "openai-codex", hosts: ["chatgpt.com"] },
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        hostSuffixes: [".api.openai.com"],
+      },
+      { endpointClass: "openai", hosts: ["chatgpt.com"] },
       { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
       { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
@@ -32,6 +39,16 @@ const providerEndpointPlugins = vi.hoisted(() => [
         endpointClass: "google-vertex",
         hosts: ["aiplatform.googleapis.com"],
         googleVertexRegion: "global",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.eu.rep.googleapis.com"],
+        googleVertexRegion: "eu",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.us.rep.googleapis.com"],
+        googleVertexRegion: "us",
       },
       {
         endpointClass: "google-vertex",
@@ -60,6 +77,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
       },
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
     ],
     providerRequest: {
       providers: {
@@ -77,6 +103,8 @@ const providerEndpointPlugins = vi.hoisted(() => [
         openrouter: { family: "openrouter" },
         qwen: { family: "modelstudio" },
         together: { family: "together" },
+        xiaomi: { family: "xiaomi" },
+        "xiaomi-token-plan": { family: "xiaomi" },
         xai: { family: "xai" },
         zai: { family: "zai" },
       },
@@ -89,6 +117,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: providerEndpointPlugins,
     diagnostics: [],
   }),
+}));
+
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () =>
+    providerEndpointPlugins.map((manifest, index) => ({
+      pluginDir: `provider-endpoint-fixture-${index}`,
+      manifest,
+      origin: "bundled",
+    })),
 }));
 
 import {
@@ -197,16 +234,14 @@ describe("provider attribution", () => {
     });
   });
 
-  it("returns a hidden-spec OpenAI Codex attribution policy", () => {
-    expect(
-      resolveProviderAttributionPolicy("openai-codex", { OPENCLAW_VERSION: "2026.3.22" }),
-    ).toEqual({
-      provider: "openai-codex",
+  it("maps legacy OpenAI Codex attribution to canonical OpenAI policy", () => {
+    expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
+      provider: "openai",
       enabledByDefault: true,
       verification: "vendor-hidden-api-spec",
       hook: "request-headers",
       reviewNote:
-        "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
+        "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
       product: "OpenClaw",
       version: "2026.3.22",
       headers: {
@@ -241,6 +276,7 @@ describe("provider attribution", () => {
   });
 
   it("lists the current attribution support matrix", () => {
+    // Matrix order is user-facing evidence for docs/review summaries.
     expect(
       listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.22" }).map((policy) => [
         policy.provider,
@@ -252,7 +288,6 @@ describe("provider attribution", () => {
       ["openrouter", true, "vendor-documented", "request-headers"],
       ["nvidia", true, "vendor-documented", "request-headers"],
       ["openai", true, "vendor-hidden-api-spec", "request-headers"],
-      ["openai-codex", true, "vendor-hidden-api-spec", "request-headers"],
       ["xai", true, "vendor-hidden-api-spec", "request-headers"],
       ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
       ["google", false, "vendor-sdk-hook-only", "user-agent-extra"],
@@ -395,15 +430,15 @@ describe("provider attribution", () => {
 
     expectRecordFields(
       resolveProviderRequestPolicy({
-        provider: "openai-codex",
+        provider: "openai",
         api: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         transport: "stream",
         capability: "llm",
       }),
       {
-        endpointClass: "openai-codex",
-        attributionProvider: "openai-codex",
+        endpointClass: "openai",
+        attributionProvider: "openai",
         allowsHiddenAttribution: true,
       },
     );
@@ -730,6 +765,23 @@ describe("provider attribution", () => {
       googleVertexRegion: "global",
     });
 
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.eu.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.eu.rep.googleapis.com",
+      googleVertexRegion: "eu",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.us.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.us.rep.googleapis.com",
+      googleVertexRegion: "us",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://discoveryengine.eu.rep.googleapis.com"), {
+      endpointClass: "custom",
+      hostname: "discoveryengine.eu.rep.googleapis.com",
+    });
+
     expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/google"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",
@@ -811,6 +863,11 @@ describe("provider attribution", () => {
       hostname: "api.openai.com.attacker.example",
     });
 
+    expectRecordFields(resolveProviderEndpoint("https://attackerapi.openai.com"), {
+      endpointClass: "custom",
+      hostname: "attackerapi.openai.com",
+    });
+
     expectRecordFields(resolveProviderEndpoint("attacker.example/?target=api.openai.com"), {
       endpointClass: "custom",
       hostname: "attacker.example",
@@ -821,6 +878,15 @@ describe("provider attribution", () => {
       hostname: "openrouter.ai.attacker.example",
     });
   });
+
+  it.each(["https://us.api.openai.com/v1", "https://eu.api.openai.com/v1"])(
+    "classifies regional OpenAI endpoint %s as public",
+    (baseUrl) => {
+      expectRecordFields(resolveProviderEndpoint(baseUrl), {
+        endpointClass: "openai-public",
+      });
+    },
+  );
 
   it("ignores non-http schemes when normalizing native comparable base URLs", () => {
     expectRecordFields(resolveProviderEndpoint("javascript:alert(1)"), {
@@ -895,6 +961,24 @@ describe("provider attribution", () => {
       }),
       {
         endpointClass: "openai-public",
+        allowsOpenAIServiceTier: true,
+        supportsOpenAIReasoningCompatPayload: true,
+        allowsResponsesStore: true,
+        supportsResponsesStoreField: true,
+        shouldStripResponsesPromptCache: false,
+      },
+    );
+    expectRecordFields(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        capability: "llm",
+        transport: "stream",
+      }),
+      {
+        endpointClass: "openai",
+        attributionProvider: "openai",
         allowsOpenAIServiceTier: true,
         supportsOpenAIReasoningCompatPayload: true,
         allowsResponsesStore: true,
@@ -1285,19 +1369,19 @@ describe("provider attribution", () => {
       {
         name: "native OpenAI Codex responses",
         input: {
-          provider: "openai-codex",
-          api: "openai-codex-responses",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           capability: "llm" as const,
           transport: "stream" as const,
         },
         expected: {
           knownProviderFamily: "openai-family",
-          endpointClass: "openai-codex",
+          endpointClass: "openai",
           isKnownNativeEndpoint: true,
           allowsOpenAIServiceTier: true,
           supportsOpenAIReasoningCompatPayload: true,
-          allowsResponsesStore: false,
+          allowsResponsesStore: true,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: false,

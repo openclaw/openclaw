@@ -1,3 +1,4 @@
+// Simple provider option helpers normalize lightweight provider configuration.
 import type {
   Model,
   SimpleStreamOptions,
@@ -15,6 +16,7 @@ export function buildBaseOptions(
   return {
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
+    stop: options?.stop,
     signal: options?.signal,
     apiKey: apiKey || options?.apiKey,
     transport: options?.transport,

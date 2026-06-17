@@ -1,3 +1,5 @@
+// Subagent list tests cover active/recent formatting, usage summaries, and
+// stale-run filtering for the user-visible subagent status command.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +12,8 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
+
+const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -108,6 +111,8 @@ describe("buildSubagentList", () => {
   });
 
   it("keeps ended orchestrators active while descendants remain pending", () => {
+    // Parent orchestrators can finish their own turn before child workers do;
+    // list output should keep them active until descendants settle.
     const now = Date.now();
     const orchestratorRun = {
       runId: "run-orchestrator-ended",
@@ -218,6 +223,8 @@ describe("buildSubagentList", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
     } as OpenClawConfig;
+    // Prompt/cache usage is separate from visible IO so operators can spot
+    // cache-heavy sessions without misreading it as assistant output.
     const list = buildSubagentList({
       cfg,
       runs: [run],
