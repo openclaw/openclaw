@@ -21,7 +21,8 @@ function truncateSummary(value: string, maxLen = 120): string {
 }
 
 function isToolDocBlockStart(line: string): boolean {
-  const normalized = line.trim().toUpperCase();
+  const trimmed = line.trim();
+  const normalized = trimmed.toUpperCase();
   if (!normalized) {
     return false;
   }
@@ -39,8 +40,12 @@ function isToolDocBlockStart(line: string): boolean {
   ) {
     return true;
   }
+  const looksLikeUppercaseHeading = /^[A-Z]/.test(trimmed);
   return (
-    normalized.endsWith(":") && line.trim() === line.trim().toUpperCase() && normalized.length > 12
+    normalized.endsWith(":") &&
+    looksLikeUppercaseHeading &&
+    trimmed === trimmed.toUpperCase() &&
+    normalized.length > 12
   );
 }
 
