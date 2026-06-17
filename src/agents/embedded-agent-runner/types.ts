@@ -148,6 +148,7 @@ export type EmbeddedAgentRunMeta = {
   finalAssistantRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
+  terminalError?: string;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";

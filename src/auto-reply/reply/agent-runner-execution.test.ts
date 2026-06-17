@@ -26,7 +26,11 @@ import {
   resolveSessionRuntimeOverrideForProvider,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import {
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT,
+  NON_DELIVERABLE_TERMINAL_TURN_REASON,
+} from "./agent-runner-failure-copy.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
@@ -6427,6 +6431,40 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("surfaces non-deliverable terminal turns instead of generic /new fallback copy", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+        replayInvalid: false,
+        livenessState: "blocked",
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult?.payloads).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT,
+        }),
+      ]);
+      expect(result.runResult?.payloads?.[0]?.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
 

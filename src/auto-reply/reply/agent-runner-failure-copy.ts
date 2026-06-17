@@ -5,8 +5,18 @@ export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
 export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
 
+export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
+
 export const NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT =
   "⚠️ The model stopped between tool calls without producing a reply. Please try the same message again — this usually resolves on retry. If it persists, use /new or a lighter model.";
+
+export function resolveExternalRunFailureTextForTerminalError(
+  terminalError: string | undefined,
+): string | undefined {
+  return terminalError === NON_DELIVERABLE_TERMINAL_TURN_REASON
+    ? NON_DELIVERABLE_TERMINAL_TURN_FAILURE_TEXT
+    : undefined;
+}
 
 /** True when text is exactly the generic external run failure copy. */
 export function isGenericExternalRunFailureText(text: string | undefined): boolean {

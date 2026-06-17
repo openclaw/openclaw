@@ -3850,6 +3850,7 @@ async function runEmbeddedAgentInternal(
             livenessState,
             stopReason,
             yielded: attempt.yieldDetected === true,
+            terminalError: attempt.terminalError,
           });
           return {
             payloads: terminalPayloads?.length ? terminalPayloads : undefined,
@@ -3866,6 +3867,7 @@ async function runEmbeddedAgentInternal(
               finalAssistantRawText,
               replayInvalid,
               livenessState,
+              terminalError: attempt.terminalError,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               ...(attempt.yieldDetected ? { yielded: true } : {}),
               ...(emptyAssistantReplyIsSilent

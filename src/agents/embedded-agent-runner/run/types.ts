@@ -174,6 +174,7 @@ export type EmbeddedRunAttemptResult = {
   messagesSnapshot: AgentMessage[];
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  terminalError?: string;
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
@@ -230,5 +231,6 @@ export type EmbeddedRunAttemptResult = {
     timeoutPhase?: AgentRunTimeoutPhase;
     providerStarted?: boolean;
     aborted?: boolean;
+    terminalError?: string;
   }) => void;
 };

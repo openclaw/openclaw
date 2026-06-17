@@ -5586,7 +5586,6 @@ export async function runEmbeddedAttempt(
         promptError,
         promptErrorSource,
         terminalError: attemptTrajectoryTerminal.terminalError,
-        terminalStatus: attemptTrajectoryTerminal.status,
         preflightRecovery,
         sessionIdUsed,
         sessionFileUsed,

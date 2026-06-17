@@ -62,6 +62,7 @@ import {
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
+import { resolveExternalRunFailureTextForTerminalError } from "./agent-runner-failure-copy.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
@@ -1256,18 +1257,14 @@ export function createFollowupRunner(params: {
         const userFacingErrorPayload = runResult.payloads?.find(
           (payload) => payload.isError === true && typeof payload.text === "string",
         )?.text;
-        const trajectoryTerminalError =
-          runResult.meta && typeof runResult.meta === "object" && "terminalError" in runResult.meta
-            ? (runResult.meta as Record<string, unknown>).terminalError
-            : undefined;
+        const terminalErrorFailureText = resolveExternalRunFailureTextForTerminalError(
+          runResult.meta.terminalError,
+        );
         const terminalErrorMessage =
           deferredLifecycleError ??
           userFacingErrorPayload ??
-          (trajectoryTerminalError === "non_deliverable_terminal_turn"
-            ? "Agent run failed: non-deliverable terminal turn"
-            : runResult.meta?.error
-              ? "Agent run failed"
-              : undefined);
+          terminalErrorFailureText ??
+          (runResult.meta?.error ? "Agent run failed" : undefined);
         const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
         if (fallbackExhausted) {
           const exhaustionError = new Error(
@@ -1279,7 +1276,7 @@ export function createFollowupRunner(params: {
           });
           replyOperation.retainFailureUntilComplete();
           replyOperation.fail("run_failed", exhaustionError);
-        } else if (deferredLifecycleError || runResult.meta?.error) {
+        } else if (deferredLifecycleError || runResult.meta?.error || terminalErrorFailureText) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
           replyOperation.retainFailureUntilComplete();
