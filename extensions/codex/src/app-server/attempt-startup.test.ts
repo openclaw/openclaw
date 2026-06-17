@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { threadStartResult } from "./run-attempt-test-harness.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClient,
@@ -390,5 +391,89 @@ describe("startCodexAttemptThread", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("plugin/list timed out");
     expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("retries startup across transient connection-close failures with a backoff (#83959)", async () => {
+    // The app-server connection closes during startup on the first few attempts
+    // while the replacement process is still warming up. Startup must survive
+    // those transient closes (with a bounded backoff between attempts) instead
+    // of exhausting the retry budget before the server is ready.
+    const closeFailuresBeforeSuccess = 4;
+    let factoryInvocations = 0;
+    const backoffDelays: number[] = [];
+    const backoffModule = await import("openclaw/plugin-sdk/runtime-env");
+    const sleepSpy = vi
+      .spyOn(backoffModule, "sleepWithAbort")
+      .mockImplementation(async (ms: number) => {
+        backoffDelays.push(ms);
+      });
+
+    const { harness, run } = startThreadWithHarness(30_000, new AbortController().signal, {
+      attemptClientFactory:
+        () =>
+        async (...args) => {
+          factoryInvocations += 1;
+          if (factoryInvocations <= closeFailuresBeforeSuccess) {
+            throw new Error("codex app-server client is closed");
+          }
+          // On the recovering attempt, delegate to the default leased factory so
+          // the shared-client + initialize handshake path matches a real startup.
+          return getLeasedSharedCodexAppServerClient(...args);
+        },
+    });
+
+    const settled = run.then(
+      (result) => result,
+      (error: unknown) => error,
+    );
+    // The successful attempt still needs to answer the initialize handshake.
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({ id: threadStart.id, result: threadStartResult("recovered-thread") });
+
+    const result = await settled;
+    expect(result).not.toBeInstanceOf(Error);
+    expect(factoryInvocations).toBe(closeFailuresBeforeSuccess + 1);
+    // A backoff was awaited before every retry (one less than the number of
+    // failed attempts, since the last failure is followed by the successful attempt).
+    expect(backoffDelays.length).toBe(closeFailuresBeforeSuccess);
+    // Backoff is bounded and non-negative.
+    for (const delay of backoffDelays) {
+      expect(delay).toBeGreaterThanOrEqual(0);
+      expect(delay).toBeLessThanOrEqual(4_000);
+    }
+    sleepSpy.mockRestore();
+  });
+
+  it("surfaces a distinct startup-exhausted error when connection-close persists (#83959)", async () => {
+    // When the app-server connection keeps closing through the entire bounded
+    // retry window, startup must fail with a distinguishable exhaustion error
+    // (not the raw "client is closed" message) so callers can tell a startup
+    // lifecycle failure apart from a mid-turn client close.
+    const backoffModule = await import("openclaw/plugin-sdk/runtime-env");
+    const sleepSpy = vi.spyOn(backoffModule, "sleepWithAbort").mockImplementation(async () => {});
+
+    let factoryInvocations = 0;
+    const { run } = startThreadWithHarness(30_000, new AbortController().signal, {
+      attemptClientFactory: () => async () => {
+        factoryInvocations += 1;
+        throw new Error("codex app-server client is closed");
+      },
+    });
+
+    const error = await run.then(
+      () => undefined,
+      (err: unknown) => err as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    // Distinct exhaustion marker, not the raw connection-closed message.
+    expect(error?.message).not.toBe("codex app-server client is closed");
+    expect(error?.message.toLowerCase()).toContain("startup");
+    expect(error?.message.toLowerCase()).toContain("exhaust");
+    // The original connection-closed cause is preserved for diagnostics.
+    expect((error as { cause?: unknown })?.cause).toBeInstanceOf(Error);
+    // Bounded: the loop did not retry forever.
+    expect(factoryInvocations).toBeLessThanOrEqual(8);
+    sleepSpy.mockRestore();
   });
 });
