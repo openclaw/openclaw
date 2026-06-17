@@ -23,6 +23,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { formatToolAggregate } from "../tool-meta.js";
+import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 
 function isClaudeCliProvider(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
@@ -408,6 +409,7 @@ async function runCliAgentWithLifecycleInternal(
           phase: "end",
           startedAt,
           endedAt: Date.now(),
+          ...resolveAgentLifecycleTerminalMetadata(result.meta),
           ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });

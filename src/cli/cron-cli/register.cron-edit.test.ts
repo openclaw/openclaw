@@ -1,6 +1,7 @@
 // Cron edit register tests cover cron edit command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 
 const callGatewayFromCli = vi.fn();
 
@@ -227,5 +228,115 @@ describe("cron edit command", () => {
 
     expect(help).toContain("--clear-model");
     expect(help).toContain("--clear-tools");
+  });
+
+  it("clears the delivery channel with --clear-channel (CLI parity with cron.update channel:null)", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-channel"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearChannel: true }),
+      {
+        id: "job-1",
+        patch: { delivery: { channel: null } },
+      },
+    );
+  });
+
+  it("clears the delivery destination with --clear-to", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-to"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearTo: true }),
+      {
+        id: "job-1",
+        patch: { delivery: { to: null } },
+      },
+    );
+  });
+
+  it("clears the delivery thread id with --clear-thread-id", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-thread-id"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearThreadId: true }),
+      {
+        id: "job-1",
+        patch: { delivery: { threadId: null } },
+      },
+    );
+  });
+
+  it("clears the delivery account override with --clear-account", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-account"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearAccount: true }),
+      {
+        id: "job-1",
+        patch: { delivery: { accountId: null } },
+      },
+    );
+  });
+
+  it.each([
+    { set: "--channel", value: "telegram", clear: "--clear-channel" },
+    { set: "--to", value: "12345", clear: "--clear-to" },
+    { set: "--thread-id", value: "42", clear: "--clear-thread-id" },
+    { set: "--account", value: "writer", clear: "--clear-account" },
+  ])("rejects $set combined with $clear", async ({ set, value, clear }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", set, value, clear], { from: "user" });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`Use ${set} or ${clear}, not both`),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("rejects --webhook combined with a delivery clear flag", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--webhook", "https://example.invalid/hook", "--clear-channel"],
+      { from: "user" },
+    );
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("--webhook cannot be combined with chat delivery options."),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it("documents the delivery clear flags alongside the sibling --clear-model", () => {
+    const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
+    const help = editCommand?.helpInformation() ?? "";
+
+    expect(help).toContain("--clear-channel");
+    expect(help).toContain("--clear-to");
+    expect(help).toContain("--clear-thread-id");
+    expect(help).toContain("--clear-account");
   });
 });

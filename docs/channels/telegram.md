@@ -111,6 +111,10 @@ After a successful startup, OpenClaw caches the bot identity in the state direct
 
 ## Access control and activation
 
+### Group bot identity
+
+In Telegram groups and forum topics, an explicit mention of the configured bot handle (for example `@my_bot`) is treated as addressing the selected OpenClaw agent, even when the agent persona name differs from the Telegram username. The group silence policy still applies to unrelated group traffic, but the bot handle itself is not considered "someone else."
+
 <Tabs>
   <Tab title="DM policy">
     `channels.telegram.dmPolicy` controls direct message access:

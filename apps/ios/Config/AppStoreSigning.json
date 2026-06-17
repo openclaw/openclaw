@@ -1,8 +1,8 @@
 {
   "teamId": "FWJYW4S8P8",
-  "signingRepo": "git@github.com:openclaw/ios-signing.git",
-  "certificateType": "IOS_DISTRIBUTION",
-  "profileType": "IOS_APP_STORE",
+  "signingRepo": "git@github.com:openclaw/apps-signing.git",
+  "signingBranch": "main",
+  "profileType": "appstore",
   "targets": [
     {
       "target": "OpenClaw",

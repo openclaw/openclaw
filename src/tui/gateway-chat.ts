@@ -186,6 +186,10 @@ export class GatewayChatClient implements TuiBackend {
     this.client.stop();
   }
 
+  async subscribeSessionEvents() {
+    return await this.client.request("sessions.subscribe", {});
+  }
+
   async waitForReady() {
     await this.readyPromise;
   }

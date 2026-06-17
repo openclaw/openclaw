@@ -1139,6 +1139,72 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("resolves guildId from channel info when guildId is omitted in searchMessages", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "resolved-guild",
+    });
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { channelId: "C1", content: "hello" },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "resolved-guild", content: "hello" }),
+      expect.anything(),
+    );
+  });
+
+  it("normalizes channel: prefixed channelId before resolving guildId in searchMessages", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "resolved-guild",
+    });
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { channelId: "channel:C1", content: "hello" },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "resolved-guild", content: "hello", channelIds: ["C1"] }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts query as alias for content in searchMessages", async () => {
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { guildId: "G1", query: "find this" },
+      enableAllActions,
+    );
+
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", content: "find this" }),
+      expect.anything(),
+    );
+  });
+
+  it("throws descriptive error when guildId cannot be resolved in searchMessages", async () => {
+    await expect(
+      handleMessagingAction("searchMessages", { content: "hello" }, enableAllActions),
+    ).rejects.toThrow(
+      "Discord search requires guildId. Provide guildId explicitly, or provide channelId so the guild can be resolved from the channel.",
+    );
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
+  });
+
   it("sends voice messages from a local file path", async () => {
     sendVoiceMessageDiscord.mockClear();
     sendMessageDiscord.mockClear();

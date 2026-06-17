@@ -63,7 +63,9 @@ function hasToolHistory(messages: Message[]): boolean {
       return true;
     }
     if (msg.role === "assistant") {
-      if (msg.content.some((block) => block.type === "toolCall")) {
+      // Assistant content can be a raw string from transcript replay; a string
+      // never carries tool calls, so it should not count toward tool history.
+      if (Array.isArray(msg.content) && msg.content.some((block) => block.type === "toolCall")) {
         return true;
       }
     }

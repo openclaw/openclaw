@@ -313,8 +313,9 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
-  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
+  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
   const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
   const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });

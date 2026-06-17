@@ -7,11 +7,13 @@ import {
   appendTranscriptMessage,
   appendTranscriptEvent,
   cleanupSessionLifecycleArtifacts,
+  createSessionEntryWithTranscript,
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
+  persistSessionTranscriptTurn,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
@@ -20,7 +22,8 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { loadSessionStore } from "./store.js";
+import { loadSessionStore, updateSessionStoreEntry } from "./store.js";
+import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 describe("session accessor file-backed seam", () => {
@@ -89,6 +92,57 @@ describe("session accessor file-backed seam", () => {
     );
     expect(inserted?.sessionId).not.toBe(scope.sessionKey);
     expect(loadSessionEntry(scope)?.sessionId).toBe(inserted?.sessionId);
+  });
+
+  it("creates entries with initialized transcripts and normalized sessionFile metadata", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
+      expect(sessionEntries).toEqual({});
+      return {
+        ok: true,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 10,
+        },
+      };
+    });
+
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("expected session creation to succeed");
+    }
+    expect(path.basename(created.sessionFile)).toBe("session-1.jsonl");
+    expect(created.entry.sessionFile).toBe(created.sessionFile);
+  });
+
+  it("rolls back the entry when transcript initialization fails", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    fs.writeFileSync(path.join(tempDir, "blocked"), "not a directory", "utf8");
+
+    const created = await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: {
+        sessionFile: "blocked/session-1.jsonl",
+        sessionId: "session-1",
+        updatedAt: 10,
+      },
+    }));
+
+    expect(created).toMatchObject({
+      ok: false,
+      phase: "transcript",
+    });
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    expect(loadSessionStore(storePath, { skipCache: true })[scope.sessionKey]).toBeUndefined();
   });
 
   it("can borrow cached entry objects for read-only hot paths", async () => {
@@ -533,6 +587,281 @@ describe("session accessor file-backed seam", () => {
     ]);
   });
 
+  it("persists a transcript turn, touches metadata, and publishes after the write", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-lock-order",
+      sessionKey: "agent:main:lock-order",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    const updates: Array<{
+      lineCount: number;
+      sessionFile: string | undefined;
+      updatedAt: number | undefined;
+    }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      const lines = fs.readFileSync(update.sessionFile, "utf8").trim().split("\n");
+      updates.push({
+        lineCount: lines.length,
+        sessionFile: loadSessionEntry(scope)?.sessionFile,
+        updatedAt: loadSessionEntry(scope)?.updatedAt,
+      });
+    });
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      messages: [
+        {
+          message: {
+            role: "user",
+            content: "hello",
+            timestamp: 100,
+          },
+        },
+        {
+          message: {
+            role: "assistant",
+            content: "hi there",
+            timestamp: 200,
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+    unsubscribe();
+
+    expect(result.appendedCount).toBe(2);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionFile: result.sessionFile,
+      sessionId: scope.sessionId,
+      updatedAt: expect.any(Number),
+    });
+    expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThanOrEqual(10);
+    const events = await loadTranscriptEvents({ ...scope, sessionFile: result.sessionFile });
+    expect(events).toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        id: result.messages[0]?.messageId,
+        message: expect.objectContaining({ role: "user", content: "hello" }),
+        parentId: null,
+        type: "message",
+      }),
+      expect.objectContaining({
+        id: result.messages[1]?.messageId,
+        message: expect.objectContaining({ role: "assistant", content: "hi there" }),
+        parentId: result.messages[0]?.messageId,
+        type: "message",
+      }),
+    ]);
+    expect(updates).toEqual([
+      {
+        lineCount: 3,
+        sessionFile: result.sessionFile,
+        updatedAt: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("queues transcript turn appends before taking the file write lock", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    let markShouldAppendEntered!: () => void;
+    const shouldAppendEntered = new Promise<void>((resolve) => {
+      markShouldAppendEntered = resolve;
+    });
+    let resumeShouldAppend!: () => void;
+    const shouldAppendReleased = new Promise<boolean>((resolve) => {
+      resumeShouldAppend = () => resolve(true);
+    });
+
+    const turnPromise = persistSessionTranscriptTurn(scope, {
+      cwd: tempDir,
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "batch reply",
+            timestamp: 100,
+          },
+          shouldAppend: async () => {
+            markShouldAppendEntered();
+            return await shouldAppendReleased;
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+
+    await shouldAppendEntered;
+    const queuedAppendPromise = appendTranscriptMessage(scope, {
+      cwd: tempDir,
+      message: {
+        role: "user",
+        content: "queued prompt",
+        timestamp: 200,
+      },
+    });
+    resumeShouldAppend();
+
+    const results = Promise.all([turnPromise, queuedAppendPromise]);
+    const completed = await Promise.race([
+      results.then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+    expect(completed).toBe(true);
+    const [turnResult] = await results;
+
+    const events = await loadTranscriptEvents({ ...scope, sessionFile: turnResult.sessionFile });
+    expect(
+      events
+        .filter(
+          (event): event is { message?: { content?: unknown }; type?: unknown } =>
+            typeof event === "object" &&
+            event !== null &&
+            (event as { type?: unknown }).type === "message",
+        )
+        .map((event) => event.message?.content),
+    ).toEqual(["batch reply", "queued prompt"]);
+  });
+
+  it("rejects expected-session transcript turns after a queued session rebind", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-original",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    let releaseReset = () => {};
+    const resetGate = new Promise<void>((resolve) => {
+      releaseReset = resolve;
+    });
+    let markResetStarted = () => {};
+    const resetStarted = new Promise<void>((resolve) => {
+      markResetStarted = resolve;
+    });
+    const replacementSessionFile = path.join(tempDir, "session-replacement.jsonl");
+    const reset = updateSessionStoreEntry({
+      storePath,
+      sessionKey: scope.sessionKey,
+      update: async () => {
+        markResetStarted();
+        await resetGate;
+        return {
+          sessionFile: replacementSessionFile,
+          sessionId: "session-replacement",
+        };
+      },
+    });
+    await resetStarted;
+
+    const turn = persistSessionTranscriptTurn(scope, {
+      expectedSessionId: scope.sessionId,
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "late reply",
+            timestamp: 100,
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseReset();
+
+    await reset;
+    const result = await turn;
+
+    expect(result).toMatchObject({
+      appendedCount: 0,
+      rejectedReason: "session-rebound",
+    });
+    expect(fs.existsSync(path.join(tempDir, "session-original.jsonl"))).toBe(false);
+    expect(fs.existsSync(replacementSessionFile)).toBe(false);
+  });
+
+  it("publishes transcript turn appends through an active owned write lock", async () => {
+    const scope = {
+      agentId: "main",
+      sessionFile: transcriptPath,
+      sessionId: "session-owned-publish",
+      sessionKey: "agent:main:owned-publish",
+      storePath,
+    };
+    const publishOptions: Array<boolean | undefined> = [];
+    const publishedEntryBatches: unknown[][] = [];
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: transcriptPath,
+        sessionKey: scope.sessionKey,
+        withSessionWriteLock: async (run, options) => {
+          publishOptions.push(options?.publishOwnedWrite);
+          const result = await run();
+          publishedEntryBatches.push([...(options?.resolvePublishedEntries?.(result) ?? [])]);
+          return result;
+        },
+      },
+      async () =>
+        await persistSessionTranscriptTurn(scope, {
+          cwd: tempDir,
+          messages: [
+            {
+              message: {
+                role: "assistant",
+                content: "owned batch",
+                timestamp: 100,
+              },
+            },
+          ],
+          publishWhen: "always",
+          touchSessionEntry: true,
+          updateMode: "file-only",
+        }),
+    );
+
+    expect(publishOptions).toEqual([true]);
+    expect(publishedEntryBatches).toHaveLength(1);
+    expect(publishedEntryBatches[0]).toEqual([
+      expect.objectContaining({ kind: "header" }),
+      expect.objectContaining({ kind: "id" }),
+    ]);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "owned batch" }),
+        type: "message",
+      }),
+    ]);
+  });
+
   it("honors thread fallback paths when resolving transcript scope from the store", async () => {
     const scope = {
       agentId: "main",
@@ -583,6 +912,29 @@ describe("session accessor file-backed seam", () => {
     expect(fs.realpathSync(path.dirname(target.sessionFile))).toBe(fs.realpathSync(tempDir));
     expect(path.basename(target.sessionFile)).toBe("session-1.jsonl");
     expect(loadSessionEntry(scope)?.sessionFile).toBe(target.sessionFile);
+  });
+
+  it("preserves an explicitly resolved runtime transcript file target", async () => {
+    const explicitSessionFile = path.join(tempDir, "explicit-session.jsonl");
+    const scope = {
+      agentId: "main",
+      sessionFile: explicitSessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+
+    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
+
+    expect(readTarget.sessionFile).toBe(explicitSessionFile);
+    expect(writeTarget.sessionFile).toBe(explicitSessionFile);
+    expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
   });
 
   it("keeps read and write runtime targets aligned for new topic sessions", async () => {

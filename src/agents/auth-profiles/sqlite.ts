@@ -14,6 +14,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -67,8 +68,7 @@ export function resolveAuthProfileDatabasePath(agentDir?: string): string {
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
 export function resolveAuthProfileDatabaseFilePaths(agentDir?: string): string[] {
-  const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  return [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  return resolveSqliteDatabaseFilePaths(resolveAuthProfileDatabasePath(agentDir));
 }
 
 // Read-only probes must tolerate old/corrupt/missing rows. Coercion happens

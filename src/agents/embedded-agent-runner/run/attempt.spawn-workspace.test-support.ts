@@ -59,6 +59,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -208,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -830,13 +832,6 @@ vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
 
 vi.mock("./compaction-timeout.js", () => ({
   resolveRunTimeoutDuringCompaction: () => "abort",
-  resolveRunTimeoutWithCompactionGraceMs: ({
-    runTimeoutMs,
-    compactionTimeoutMs,
-  }: {
-    runTimeoutMs: number;
-    compactionTimeoutMs: number;
-  }) => runTimeoutMs + compactionTimeoutMs,
   selectCompactionTimeoutSnapshot: ({
     currentSnapshot,
     currentSessionId,

@@ -33,7 +33,20 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/DynamicToolSpec.ts",
+    snippets: [
+      '"function"',
+      "& DynamicToolFunctionSpec",
+      '"namespace"',
+      "& DynamicToolNamespaceSpec",
+    ],
+  },
+  {
+    file: "v2/DynamicToolFunctionSpec.ts",
     snippets: ["name: string", "description: string", "inputSchema: JsonValue"],
+  },
+  {
+    file: "v2/DynamicToolNamespaceSpec.ts",
+    snippets: ["name: string", "description: string", "tools: Array<DynamicToolNamespaceTool>"],
   },
   {
     file: "v2/CommandExecutionApprovalDecision.ts",

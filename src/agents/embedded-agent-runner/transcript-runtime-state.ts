@@ -12,6 +12,7 @@ import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
+  type TranscriptPersistedEntry,
   writeTranscriptFileAtomic,
 } from "./transcript-file-state.js";
 
@@ -60,7 +61,7 @@ export async function readRuntimeTranscriptState(
  * Persists an append or migration rewrite for a resolved runtime transcript.
  */
 export async function persistRuntimeTranscriptStateMutation(params: {
-  appendedEntries: SessionEntry[];
+  appendedEntries: TranscriptPersistedEntry[];
   state: TranscriptFileState;
   target: RuntimeTranscriptTarget;
 }): Promise<void> {

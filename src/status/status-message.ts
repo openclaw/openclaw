@@ -788,21 +788,24 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? (cappedAgentContextTokens ?? activeContextTokens)
         : cappedAgentContextTokens))
     : undefined;
+  const runtimeSnapshotHasFallbackProvenance =
+    initialFallbackState.active ||
+    hasSessionAutoModelFallbackProvenance(entry) ||
+    areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown", {
+      config: args.config,
+    });
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
-  // snapshot when available. Separately, callers can pass an explicit configured
-  // cap that should still apply on fallback paths, but it cannot exceed the
-  // active runtime window when that window is known. Persisted runtime snapshots
-  // still take precedence over configured caps so historical fallback sessions
-  // keep their last known live limit even if the active model later becomes
-  // unresolvable.
+  // snapshot only when it belongs to a real fallback/equivalent runtime. A
+  // transcript-derived previous model is stale after a manual switch and must
+  // not pin the newly selected model to the old context window. Separately,
+  // callers can pass an explicit configured cap that should still apply on
+  // fallback paths, but it cannot exceed the active runtime window when that
+  // window is known. Persisted runtime snapshots still take precedence over
+  // configured caps so historical fallback sessions keep their last known live
+  // limit even if the active model later becomes unresolvable.
   const contextTokens = runtimeDiffersFromSelected
-    ? (explicitRuntimeContextTokens ??
-      (() => {
-        const runtimeSnapshotHasFallbackProvenance =
-          initialFallbackState.active ||
-          hasSessionAutoModelFallbackProvenance(entry) ||
-          areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown");
+    ? (() => {
         if (!runtimeSnapshotHasFallbackProvenance) {
           if (typeof selectedContextTokens === "number") {
             if (explicitConfiguredContextTokens !== undefined) {
@@ -820,6 +823,9 @@ export function buildStatusMessage(args: StatusArgs): string {
             return agentContextTokens;
           }
           return DEFAULT_CONTEXT_TOKENS;
+        }
+        if (explicitRuntimeContextTokens !== undefined) {
+          return explicitRuntimeContextTokens;
         }
         if (cappedPersistedContextTokens !== undefined) {
           const trustedPersistedContextTokens = cappedPersistedContextTokens;
@@ -852,7 +858,7 @@ export function buildStatusMessage(args: StatusArgs): string {
           return activeContextTokens;
         }
         return DEFAULT_CONTEXT_TOKENS;
-      })())
+      })()
     : (resolveContextTokensForModel({
         cfg: contextConfig,
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),

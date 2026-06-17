@@ -475,6 +475,38 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "implicit-agent-turn",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        text: " summarize the build ",
+        model: " openai/gpt-5 ",
+        fallbacks: [" anthropic/claude-haiku-3-5 "],
+        thinking: " high ",
+        timeoutSeconds: 45,
+        lightContext: true,
+        toolsAllow: [" read "],
+        allowUnsafeExternalContent: true,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect((normalized.delivery as Record<string, unknown>).mode).toBe("announce");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize the build",
+      model: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-haiku-3-5"],
+      thinking: "high",
+      timeoutSeconds: 45,
+      lightContext: true,
+      toolsAllow: ["read"],
+      allowUnsafeExternalContent: true,
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
   it("prunes agentTurn-only payload fields from systemEvent create jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "system-event-prune",
@@ -840,6 +872,22 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.toolsAllow).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("promotes implicit text payloads with agentTurn hints to agentTurn patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        text: " continue the report ",
+        toolsAllow: [" read "],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "continue the report",
+      toolsAllow: ["read"],
+    });
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

@@ -106,7 +106,7 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
+export function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
   const trimmed = sessionFile?.trim();
   if (!trimmed) {
     return undefined;

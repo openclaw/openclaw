@@ -1,4 +1,4 @@
-// iOS release signing tests cover checked-in App Store profile pinning.
+// iOS release signing tests cover checked-in Fastlane-managed profile pinning.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -37,7 +37,9 @@ describe("scripts/ios-release-signing.mjs", () => {
     const output = runSigning("plan");
 
     expect(output).toContain("Team ID: FWJYW4S8P8");
-    expect(output).toContain("Signing repo: git@github.com:openclaw/ios-signing.git");
+    expect(output).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
+    expect(output).toContain("Signing branch: main");
+    expect(output).toContain("Signing setup and sync: Fastlane match");
     expect(output).toContain(
       "OpenClawWatchExtension: ai.openclawfoundation.app.watchkitapp.extension",
     );

@@ -601,8 +601,16 @@ describe("channel-streaming", () => {
     expect(updated[0]).toMatchObject({
       id: "tool:call-1-output",
       kind: "command-output",
+      detail: "install dependencies",
       status: "completed",
+      text: "🛠️ install dependencies",
     });
+    expect(
+      formatChannelProgressDraftText({
+        lines: updated,
+        entry: { streaming: { progress: { label: false } } },
+      }),
+    ).toBe("🛠️ install dependencies");
 
     const recoveredItemLine = buildChannelProgressDraftLine({
       event: "item",
@@ -632,7 +640,9 @@ describe("channel-streaming", () => {
       {
         id: "command-2",
         kind: "command-output",
+        detail: "install dependencies failed",
         status: "completed",
+        text: "🛠️ install dependencies failed",
       },
     ]);
   });

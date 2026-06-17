@@ -70,6 +70,7 @@ import {
   resolveExplicitBaselineVersion,
   resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
+  resolveNpmPackTarballFileName,
   resolveProviderConfig,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
@@ -568,6 +569,26 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--ignore-scripts",
       "--loglevel=notice",
     ]);
+  });
+
+  it("rejects unsafe npm pack tarball filenames before staging release artifacts", () => {
+    expect(resolveNpmPackTarballFileName("openclaw-2026.6.17.tgz")).toBe("openclaw-2026.6.17.tgz");
+
+    const unsafeFilenames = [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      "/tmp/openclaw.tgz",
+      "C:\\temp\\openclaw.tgz",
+      "openclaw\u0000.tgz",
+      "openclaw.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      expect(() => resolveNpmPackTarballFileName(filename)).toThrow(
+        "npm pack did not report a safe .tgz filename.",
+      );
+    }
   });
 
   it("keeps the Windows packaged-upgrade fallback install out of npm lifecycle scripts", () => {

@@ -108,7 +108,7 @@ type GuardedFetchInternalOptions = GuardedFetchOptions & {
   useEnvProxyForEligibleUrls?: boolean;
 };
 
-export type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
+type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
   configuredLocalOriginBaseUrl: string;
 };
 

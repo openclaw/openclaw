@@ -135,7 +135,7 @@ export type CliBackendConfig = {
   /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
-  jsonlDialect?: "claude-stream-json";
+  jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
   /** Long-lived CLI process mode. */
   liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
@@ -313,7 +313,8 @@ export type AgentDefaultsConfig = {
    */
   envelopeTimezone?: string;
   /**
-   * Include absolute timestamps in message envelopes ("on" | "off", default: "on").
+   * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
+   * and embedded model-input prefixes ("on" | "off", default: "on").
    */
   envelopeTimestamp?: "on" | "off";
   /**

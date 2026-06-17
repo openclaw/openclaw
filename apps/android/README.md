@@ -32,7 +32,7 @@ cd apps/android
 ./gradlew :app:installPlayDebug
 ./gradlew :app:testPlayDebugUnitTest
 cd ../..
-bun run android:bundle:release
+pnpm android:release:archive
 ```
 
 Third-party debug flavor:
@@ -44,10 +44,29 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
-`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
-- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+```bash
+pnpm android:version
+pnpm android:version:check
+pnpm android:version:pin -- --from-gateway
+pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
+```
+
+Generate raw Google Play screenshots:
+
+```bash
+pnpm android:screenshots
+```
+
+`pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
+
+- Play build: `openclaw-<version>-play-release.aab`
+- Third-party build: `openclaw-<version>-third-party-release.apk`
+
+`pnpm android:bundle:release` is an alias for the same archive helper.
+
+See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Flavor-specific direct Gradle tasks:
 
