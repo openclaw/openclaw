@@ -427,6 +427,9 @@ function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?
       throw new Error(`unexpected command: ${args.join(" ")}`);
     }
     if (!args.includes("--package-lock-only")) {
+      if (typeof options === "number") {
+        throw new Error("expected npm install options object");
+      }
       const npmRoot = options.cwd;
       if (!npmRoot) {
         throw new Error("expected npm install cwd");
