@@ -120,10 +120,32 @@ function deepMergePluginEntry(
   return { merged, conflicts };
 }
 
+function hasEnabledConflict(existing: JsonRecord, legacy: JsonRecord): boolean {
+  return (
+    "enabled" in existing &&
+    "enabled" in legacy &&
+    !areJsonValuesEqual(existing.enabled, legacy.enabled)
+  );
+}
+
+function collectLegacyPluginEntryPaths(
+  value: unknown,
+  path: string[] = ["plugins", "entries", LEGACY_OPENAI_CODEX_PLUGIN_ID],
+): string[] {
+  if (!isRecord(value)) {
+    return [path.join(".")];
+  }
+  const keys = Object.keys(value).toSorted();
+  if (keys.length === 0) {
+    return [path.join(".")];
+  }
+  return keys.flatMap((key) => collectLegacyPluginEntryPaths(value[key], [...path, key]));
+}
+
 type PluginEntriesRewriteResult =
   | { kind: "unchanged" }
   | { kind: "rewritten" }
-  | { kind: "merged"; conflicts: string[] };
+  | { kind: "merged"; conflicts: string[]; skippedLegacyFields: string[] };
 
 function rewritePluginEntries(value: unknown): PluginEntriesRewriteResult {
   if (!isRecord(value) || !(LEGACY_OPENAI_CODEX_PLUGIN_ID in value)) {
@@ -138,17 +160,23 @@ function rewritePluginEntries(value: unknown): PluginEntriesRewriteResult {
   const existing = value[OPENAI_PLUGIN_ID];
   const legacy = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
   let conflicts: string[] = [];
+  let skippedLegacyFields: string[] = [];
   if (isRecord(existing) && isRecord(legacy)) {
-    const merged = deepMergePluginEntry(existing, legacy);
-    value[OPENAI_PLUGIN_ID] = merged.merged;
-    conflicts = merged.conflicts;
+    if (hasEnabledConflict(existing, legacy)) {
+      value[OPENAI_PLUGIN_ID] = existing;
+      skippedLegacyFields = collectLegacyPluginEntryPaths(legacy);
+    } else {
+      const merged = deepMergePluginEntry(existing, legacy);
+      value[OPENAI_PLUGIN_ID] = merged.merged;
+      conflicts = merged.conflicts;
+    }
   } else if (!areJsonValuesEqual(existing, legacy)) {
     conflicts = ["plugins.entries.openai"];
   } else {
     value[OPENAI_PLUGIN_ID] = existing;
   }
   delete value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
-  return { kind: "merged", conflicts };
+  return { kind: "merged", conflicts, skippedLegacyFields };
 }
 
 function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): string[] {
@@ -172,6 +200,11 @@ function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): str
     if (entriesRewrite.conflicts.length > 0) {
       changes.push(
         `plugins.entries.openai-codex had conflicting values already set on plugins.entries.openai; kept plugins.entries.openai values and review manually: ${entriesRewrite.conflicts.join(", ")}.`,
+      );
+    }
+    if (entriesRewrite.skippedLegacyFields.length > 0) {
+      changes.push(
+        `plugins.entries.openai-codex had a conflicting enabled state; kept plugins.entries.openai unchanged and review skipped legacy fields manually: ${entriesRewrite.skippedLegacyFields.join(", ")}.`,
       );
     }
   }

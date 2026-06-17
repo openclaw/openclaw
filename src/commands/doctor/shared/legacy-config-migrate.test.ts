@@ -1989,15 +1989,17 @@ describe("legacy bundled provider discovery migrate", () => {
       enabled: true,
       config: {
         apiKey: "openai-key",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
       },
     });
     expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
     expect(res.changes).toContain(
       "Merged plugins.entries.openai-codex into plugins.entries.openai.",
     );
-    expect(res.changes).toContain(
+    expect(res.changes).not.toContain(
       "plugins.entries.openai-codex had conflicting values already set on plugins.entries.openai; kept plugins.entries.openai values and review manually: plugins.entries.openai.enabled, plugins.entries.openai.config.apiKey.",
+    );
+    expect(res.changes).toContain(
+      "plugins.entries.openai-codex had a conflicting enabled state; kept plugins.entries.openai unchanged and review skipped legacy fields manually: plugins.entries.openai-codex.config.apiKey, plugins.entries.openai-codex.config.baseUrl, plugins.entries.openai-codex.enabled.",
     );
   });
 
