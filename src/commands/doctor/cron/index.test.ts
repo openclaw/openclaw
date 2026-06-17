@@ -842,6 +842,9 @@ describe("maybeRepairLegacyCronStore", () => {
     const job = requirePersistedJob(jobs, 0);
     expect(job.notify).toBeUndefined();
     expect(job.delivery).toBeUndefined();
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
+    expect(persisted[0]?.notify).toBe(true);
     expectNoteContaining(
       "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
       "Doctor warnings",
