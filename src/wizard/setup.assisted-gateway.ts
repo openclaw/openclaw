@@ -167,6 +167,15 @@ function runtimeExposureMatchesGatewaySettings(params: {
   });
 }
 
+function verifiedGatewayListenerStillOwnsPort(params: {
+  port: number;
+  listenerPids: number[];
+}): boolean {
+  return findVerifiedGatewayListenerPidsOnPortSync(params.port).some((pid) =>
+    params.listenerPids.includes(pid),
+  );
+}
+
 function buildInvalidProbeAuth(
   settings: GatewayWizardSettings,
   activeAuth: GatewayProbeAuth,
@@ -200,14 +209,23 @@ async function probeVerifiedExistingGateway(params: {
   auth: GatewayProbeAuth;
   config: OpenClawConfig;
   settings: GatewayWizardSettings;
+  listenerPids: number[];
 }): Promise<boolean> {
   const invalidAuth =
     params.settings.authMode !== "none" && canSafelyProbeInvalidAuth(params)
       ? buildInvalidProbeAuth(params.settings, params.auth)
       : undefined;
+  const listenerStillOwnsPort = () =>
+    verifiedGatewayListenerStillOwnsPort({
+      port: params.settings.port,
+      listenerPids: params.listenerPids,
+    });
   // Shared-secret Gateway reuse requires proving that invalid auth is rejected.
   // Fail closed when the rate-limit policy makes that probe unsafe.
   if (params.settings.authMode !== "none" && !invalidAuth) {
+    return false;
+  }
+  if (!listenerStillOwnsPort()) {
     return false;
   }
   // Do not let cached device credentials prove a listener that rejects the
@@ -233,8 +251,14 @@ async function probeVerifiedExistingGateway(params: {
   ) {
     return false;
   }
+  if (!listenerStillOwnsPort()) {
+    return false;
+  }
   if (!invalidAuth) {
     return true;
+  }
+  if (!listenerStillOwnsPort()) {
+    return false;
   }
   const invalid = await probeGateway({
     url: params.url,
@@ -243,7 +267,7 @@ async function probeVerifiedExistingGateway(params: {
     detailLevel: "none",
     env,
   });
-  return !invalid.ok;
+  return !invalid.ok && listenerStillOwnsPort();
 }
 
 function collectOutputTail(child: ChildProcess): () => string {
@@ -433,12 +457,14 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
         auth,
         config: params.config,
         settings: params.settings,
+        listenerPids: existingListenerPids,
       }));
     if (
       existingMatches &&
-      findVerifiedGatewayListenerPidsOnPortSync(params.settings.port).some((pid) =>
-        existingListenerPids.includes(pid),
-      )
+      verifiedGatewayListenerStillOwnsPort({
+        port: params.settings.port,
+        listenerPids: existingListenerPids,
+      })
     ) {
       return NOOP_GATEWAY_RUNTIME;
     }

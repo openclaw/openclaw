@@ -178,6 +178,50 @@ describe("agent-assisted Gateway runtime", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("does not probe when the verified existing Gateway is replaced before auth", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([4321]).mockReturnValue([9999]);
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the verified existing Gateway is replaced during the active auth probe", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync
+      .mockReturnValueOnce([4321])
+      .mockReturnValueOnce([4321])
+      .mockReturnValue([9999]);
+    probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        config: {
+          gateway: {
+            auth: { mode: "token" },
+          },
+        },
+      },
+    });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(probeGateway).toHaveBeenCalledOnce();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("reuses a verified existing Gateway configured without auth", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
     probeGateway.mockResolvedValueOnce({
