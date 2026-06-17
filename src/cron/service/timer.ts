@@ -1847,14 +1847,18 @@ async function applyStartupCatchupOutcomes(
           }
           job.state.nextRunAtMs = baseNow + offset;
           offset += staggerMs;
+          // Register the deferral in service state so every recompute caller
+          // (read RPCs, empty-due ticks, finalization) preserves the staggered
+          // catch-up slot until it fires. Cleared automatically in
+          // recomputeNextRunsForMaintenance once nowMs >= nextRunAtMs.
+          state.pendingCatchupDeferralJobIds.add(jobId);
         }
       }
 
       // Preserve any new past-due nextRunAtMs values that became due while
       // startup catch-up was running. They should execute on a future tick
-      // instead of being silently advanced. Future repair is disabled here so
-      // startup overflow deferrals survive until their staggered catch-up tick.
-      recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+      // instead of being silently advanced.
+      recomputeNextRunsForMaintenance(state);
       await persist(state);
     });
     return finalizedOutcomes;

@@ -673,31 +673,29 @@ export function recomputeNextRunsForMaintenance(
     recomputeExpired?: boolean;
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
-    skipFutureRepairJobIds?: ReadonlySet<string>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
-  return walkSchedulableJobs(
+  const changed = walkSchedulableJobs(
     state,
-    ({ job, nowMs: now }) => {
-      let changed = false;
+    ({ job, nowMs }) => {
+      let jobChanged = false;
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
-          changed = true;
+        if (recomputeJobNextRunAtMs({ state, job, nowMs })) {
+          jobChanged = true;
         }
       } else if (
         repairFutureCronNextRunAtMs &&
-        !skipFutureRepairJobIds?.has(job.id) &&
-        shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
+        !state.pendingCatchupDeferralJobIds?.has(job.id) &&
+        shouldRepairFutureCronNextRunAtMs({ state, job, nowMs })
       ) {
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
-          changed = true;
+        if (recomputeJobNextRunAtMs({ state, job, nowMs })) {
+          jobChanged = true;
         }
       } else if (
         recomputeExpired &&
-        now >= job.state.nextRunAtMs &&
+        nowMs >= job.state.nextRunAtMs &&
         typeof job.state.runningAtMs !== "number"
       ) {
         // Only advance when the expired slot was already executed, or when
@@ -711,18 +709,37 @@ export function recomputeNextRunsForMaintenance(
         );
         const isStaleBackoffSlot =
           backoffUntilMs !== undefined &&
-          now < backoffUntilMs &&
+          nowMs < backoffUntilMs &&
           job.state.nextRunAtMs < backoffUntilMs;
         if (alreadyExecutedSlot || isStaleBackoffSlot) {
-          if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
-            changed = true;
+          if (recomputeJobNextRunAtMs({ state, job, nowMs })) {
+            jobChanged = true;
           }
         }
       }
-      return changed;
+      return jobChanged;
     },
     opts?.nowMs,
   );
+
+  // Clear deferral markers whose slots have been reached — the deferred
+  // catch-up tick is about to fire (or already fired), so future-slot
+  // repair is safe to apply on subsequent recompute calls.
+  if (state.pendingCatchupDeferralJobIds?.size > 0) {
+    const cleanupNowMs = opts?.nowMs ?? state.deps.nowMs();
+    const jobs = state.store?.jobs ?? [];
+    for (const job of jobs) {
+      if (
+        state.pendingCatchupDeferralJobIds.has(job.id) &&
+        hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
+        cleanupNowMs >= job.state.nextRunAtMs
+      ) {
+        state.pendingCatchupDeferralJobIds.delete(job.id);
+      }
+    }
+  }
+
+  return changed;
 }
 
 /** Returns the next enabled wake timestamp from the in-memory cron store. */

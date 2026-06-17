@@ -258,6 +258,14 @@ export async function start(state: CronServiceState) {
     deferAgentTurnJobs: true,
   });
 
+  // Persist deferral markers in service state so all recompute callers
+  // (read RPCs, finalization, empty-due ticks) preserve them instead of
+  // advancing to the natural schedule slot. Each id is cleared automatically
+  // once nowMs >= nextRunAtMs. See #93935.
+  for (const jobId of deferredCatchupJobIds) {
+    state.pendingCatchupDeferralJobIds.add(jobId);
+  }
+
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and
     // this path runs before the scheduler begins servicing regular timer ticks.
@@ -268,7 +276,6 @@ export async function start(state: CronServiceState) {
     }
     const changed = recomputeNextRunsForMaintenance(state, {
       recomputeExpired: true,
-      skipFutureRepairJobIds: deferredCatchupJobIds,
     });
     if (changed) {
       await persist(state);
