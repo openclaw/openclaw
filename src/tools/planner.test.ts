@@ -113,6 +113,22 @@ describe("buildToolPlan", () => {
     ]);
   });
 
+  it("calls onHiddenDiagnostic for each unavailable tool", () => {
+    const hidden: string[] = [];
+    buildToolPlan({
+      descriptors: [
+        descriptor("alpha"),
+        descriptor("beta", { availability: { allOf: [] } }),
+        descriptor("gamma", { availability: { anyOf: [] } }),
+      ],
+      onHiddenDiagnostic: (entry) => {
+        hidden.push(entry.descriptor.name);
+      },
+    });
+
+    expect(hidden).toEqual(["beta", "gamma"]);
+  });
+
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
     const plan = buildToolPlan({
       descriptors: [
