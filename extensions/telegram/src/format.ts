@@ -81,7 +81,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       code: { open: "<code>", close: "</code>" },
       code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
-      blockquote: { open: "<blockquote>", close: "</blockquote>" },
+      blockquote: { open: "<blockquote expandable>", close: "</blockquote>" },
       heading_1: { open: "<h1>", close: "</h1>" },
       heading_2: { open: "<h2>", close: "</h2>" },
       heading_3: { open: "<h3>", close: "</h3>" },

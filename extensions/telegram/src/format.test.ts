@@ -44,7 +44,7 @@ describe("markdownToTelegramHtml", () => {
     const input = [
       "✉️ <b>Morning Email Rollup</b>",
       "",
-      "<blockquote>✅ No important emails in the last 24 hours.</blockquote>",
+      "<blockquote expandable>✅ No important emails in the last 24 hours.</blockquote>",
       "",
       "<pre><code>oauth2: invalid_grant</code></pre>",
     ].join("\n");
@@ -223,28 +223,28 @@ describe("markdownToTelegramHtml", () => {
 
   it("renders blockquotes as native Telegram blockquote tags", () => {
     const res = markdownToTelegramHtml("> Quote");
-    expect(res).toContain("<blockquote>");
+    expect(res).toContain("<blockquote expandable>");
     expect(res).toContain("Quote");
     expect(res).toContain("</blockquote>");
   });
 
   it("renders blockquotes with inline formatting", () => {
     const res = markdownToTelegramHtml("> **bold** quote");
-    expect(res).toContain("<blockquote>");
+    expect(res).toContain("<blockquote expandable>");
     expect(res).toContain("<b>bold</b>");
     expect(res).toContain("</blockquote>");
   });
 
   it("renders multiline blockquotes as a single Telegram blockquote", () => {
     const res = markdownToTelegramHtml("> first\n> second");
-    expect(res).toBe("<blockquote>first\nsecond</blockquote>");
+    expect(res).toBe("<blockquote expandable>first\nsecond</blockquote>");
   });
 
   it("renders separated quoted paragraphs as distinct blockquotes", () => {
     const res = markdownToTelegramHtml("> first\n\n> second");
-    expect(res).toContain("<blockquote>first");
-    expect(res).toContain("<blockquote>second</blockquote>");
-    expect(res.match(/<blockquote>/g)).toHaveLength(2);
+    expect(res).toContain("<blockquote expandable>first");
+    expect(res).toContain("<blockquote expandable>second</blockquote>");
+    expect(res.match(/<blockquote\b/g)).toHaveLength(2);
   });
 
   it("renders fenced code block languages for Telegram native copy buttons", () => {
