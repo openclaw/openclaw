@@ -1,7 +1,7 @@
 // Builds compact plugin health summaries for chat status surfaces.
 import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
 
-export type StatusPluginDependencyStatus = {
+type StatusPluginDependencyStatus = {
   hasDependencies?: boolean;
   requiredInstalled?: boolean;
   missing?: string[];
@@ -23,7 +23,7 @@ export type PluginDiagnosticRecord = {
   code?: PluginDiagnosticCode;
 };
 
-export type ContextEngineQuarantineRecord = {
+type ContextEngineQuarantineRecord = {
   engineId: string;
   owner?: string;
   operation: string;

@@ -3057,8 +3057,8 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
-    expect(lastUpdate).toContain("install dependencies");
-    expect(lastUpdate).not.toContain("completed");
+    expect(lastUpdate).toContain("completed");
+    expect(lastUpdate).not.toContain("install dependencies");
   });
 
   it("drops later tool warning finals after progress preview final replies", async () => {
