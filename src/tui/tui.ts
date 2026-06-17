@@ -233,7 +233,10 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
+    // Some terminals (WSL2/Ubuntu) send ^? (0x7f) instead of ^H (0x08) for backspace.
+    // Normalize so the TUI framework recognizes it as backspace regardless.
+    const normalized = data === "\x7f" ? "\x08" : data;
+    if (normalized !== "\x08" && !matchesKey(normalized, Key.backspace)) {
       return data;
     }
     const ts = now();
