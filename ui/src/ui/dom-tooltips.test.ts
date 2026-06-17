@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveFloatingTooltips,
+  prepareActiveFloatingTooltipsForRender,
   promoteNativeTitleTooltip,
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
@@ -168,6 +169,7 @@ describe("native title tooltip promotion", () => {
     root.append(button);
 
     promoteNativeTitleTooltip(button, root, "pointer");
+    prepareActiveFloatingTooltipsForRender(root);
     button.title = "Hide archived cards";
     refreshActiveFloatingTooltip(root);
 
@@ -182,6 +184,49 @@ describe("native title tooltip promotion", () => {
     restoreNativeTitleTooltip(button, root, "pointer");
 
     expect(button.getAttribute("title")).toBe("Hide archived cards");
+  });
+
+  it("keeps a generated tooltip after a render leaves its title unchanged", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    button.className = "btn";
+    button.title = "Refresh";
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+    prepareActiveFloatingTooltipsForRender(root);
+    refreshActiveFloatingTooltip(root);
+
+    expect(button.getAttribute("title")).toBe("");
+    expect(button.getAttribute("data-tooltip")).toBe("Refresh");
+    expect(button.getAttribute("data-native-tooltip-title")).toBe("Refresh");
+    expect(button.getAttribute("data-floating-tooltip-active")).toBe("true");
+    expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe("Refresh");
+  });
+
+  it("clears a generated tooltip after a render removes its title", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    button.className = "btn";
+    button.title = "Form view can't safely edit some fields";
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+    prepareActiveFloatingTooltipsForRender(root);
+    button.title = "";
+    refreshActiveFloatingTooltip(root);
+
+    expect(button.getAttribute("title")).toBeNull();
+    expect(button.getAttribute("data-tooltip")).toBeNull();
+    expect(button.getAttribute("data-native-tooltip-title")).toBeNull();
+    expect(button.getAttribute("data-floating-tooltip-active")).toBeNull();
+    expect(button.getAttribute("aria-label")).toBeNull();
+    expect(document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open).toBe(
+      "false",
+    );
+
+    expect(restoreNativeTitleTooltip(button, root, "pointer")).toBeNull();
+    expect(button.getAttribute("title")).toBeNull();
   });
 
   it("hides the floating tooltip after the active target is removed", () => {

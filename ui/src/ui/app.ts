@@ -118,6 +118,7 @@ import type {
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import {
   clearActiveFloatingTooltips,
+  prepareActiveFloatingTooltipsForRender,
   promoteNativeTitleTooltip,
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
@@ -851,6 +852,10 @@ export class OpenClawApp extends LitElement {
 
   protected override firstUpdated() {
     handleFirstUpdated(this as unknown as Parameters<typeof handleFirstUpdated>[0]);
+  }
+
+  protected override willUpdate() {
+    prepareActiveFloatingTooltipsForRender(this);
   }
 
   override disconnectedCallback() {
