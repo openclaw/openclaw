@@ -366,6 +366,20 @@ describe("Codex app-server config", () => {
           authToken: "capability-token",
           connectionClass: "remote",
           remoteAppsSubstrate: "preconfigured",
+          remoteWorkspace: {
+            localRoot: "/Users/kevinlin/code/openclaw",
+            remoteRoot: "/home/oai/openclaw-workspaces",
+          },
+        },
+      }),
+    ).toStrictEqual({});
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          remoteWorkspace: {
+            localRoot: "/Users/kevinlin/code/openclaw",
+            remoteRoot: "/home/oai/openclaw-workspaces",
+          },
         },
       }),
     ).toStrictEqual({});
@@ -387,10 +401,7 @@ describe("Codex app-server config", () => {
           transport: "websocket",
           url: "wss://codex-app-server.example.internal/ws",
           authToken: "capability-token",
-          remoteWorkspace: {
-            localRoot: " /Users/kevinlin/code/openclaw ",
-            remoteRoot: " /home/oai/openclaw-workspaces ",
-          },
+          remoteWorkspaceRoot: " /home/oai/openclaw-workspaces ",
         },
       },
     });
@@ -398,10 +409,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       connectionClass: "remote",
       remoteAppsSubstrate: "preconfigured",
-      remoteWorkspace: {
-        localRoot: "/Users/kevinlin/code/openclaw",
-        remoteRoot: "/home/oai/openclaw-workspaces",
-      },
+      remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
     });
   });
 

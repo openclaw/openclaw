@@ -40,7 +40,7 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
 export function buildCodexAppServerRuntimeFingerprint(params: {
   appServer: Pick<
     CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspace"
+    "start" | "connectionClass" | "remoteWorkspaceRoot"
   >;
   appServerVersion?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
@@ -48,7 +48,7 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
   return JSON.stringify({
     endpoint: resolveCodexPluginAppCacheEndpoint(params.appServer),
     connectionClass: params.appServer.connectionClass,
-    remoteWorkspace: params.appServer.remoteWorkspace ?? null,
+    remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot ?? null,
     appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion ?? null,
     runtimeIdentity: params.runtimeIdentity ?? null,
   });

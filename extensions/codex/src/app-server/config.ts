@@ -30,10 +30,6 @@ type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
 export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
-export type CodexAppServerRemoteWorkspaceMapping = {
-  localRoot: string;
-  remoteRoot: string;
-};
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -178,7 +174,7 @@ export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   connectionClass: CodexAppServerConnectionClass;
   remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
-  remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
+  remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
@@ -218,7 +214,7 @@ export type CodexPluginConfig = {
     authToken?: string;
     headers?: Record<string, string>;
     clearEnv?: string[];
-    remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
+    remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
@@ -252,7 +248,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
-  "remoteWorkspace",
+  "remoteWorkspaceRoot",
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
@@ -320,12 +316,7 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
-const codexAppServerRemoteWorkspaceSchema = z
-  .object({
-    localRoot: z.string().trim().min(1),
-    remoteRoot: z.string().trim().min(1),
-  })
-  .strict();
+const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
@@ -399,7 +390,7 @@ const codexPluginConfigSchema = z
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
-        remoteWorkspace: codexAppServerRemoteWorkspaceSchema.optional(),
+        remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
@@ -544,7 +535,7 @@ export function resolveCodexAppServerRuntimeOptions(
   const url = readNonEmptyString(config.url);
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
-  const remoteWorkspace = normalizeRemoteWorkspaceMapping(config.remoteWorkspace);
+  const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
     execPolicy: params.execPolicy,
@@ -671,7 +662,7 @@ export function resolveCodexAppServerRuntimeOptions(
     },
     connectionClass,
     remoteAppsSubstrate,
-    ...(remoteWorkspace ? { remoteWorkspace } : {}),
+    ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
@@ -1040,12 +1031,8 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
 }
 
-function normalizeRemoteWorkspaceMapping(
-  value: CodexAppServerRemoteWorkspaceMapping | undefined,
-): CodexAppServerRemoteWorkspaceMapping | undefined {
-  const localRoot = readNonEmptyString(value?.localRoot);
-  const remoteRoot = readNonEmptyString(value?.remoteRoot);
-  return localRoot && remoteRoot ? { localRoot, remoteRoot } : undefined;
+function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
+  return readNonEmptyString(value);
 }
 
 function inferCodexAppServerConnectionClass(params: {

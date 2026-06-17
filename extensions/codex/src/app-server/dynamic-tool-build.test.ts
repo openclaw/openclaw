@@ -148,29 +148,39 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("discord");
   });
 
-  it("maps local gateway workspace paths to remote Codex app-server paths", () => {
+  it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {
     expect(
-      mapCodexAppServerRemoteWorkspacePath(
-        "/Users/kevinlin/code/openclaw/packages/example",
-        {
-          localRoot: "/Users/kevinlin/code/openclaw",
-          remoteRoot: "/home/oai/openclaw-workspaces",
-        },
-      ),
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "/Users/kevinlin/code/openclaw/packages/example",
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
     ).toBe("/home/oai/openclaw-workspaces/packages/example");
     expect(
-      mapCodexAppServerRemoteWorkspacePath("/Users/kevinlin/code/other", {
-        localRoot: "/Users/kevinlin/code/openclaw",
-        remoteRoot: "/home/oai/openclaw-workspaces",
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "/Users/kevinlin/code/openclaw",
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
       }),
-    ).toBe("/Users/kevinlin/code/other");
+    ).toBe("/home/oai/openclaw-workspaces");
+  });
+
+  it("fails closed when remote cwd projection cannot stay under the remote workspace root", () => {
+    expect(() =>
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "/Users/kevinlin/code/other",
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
+      }),
+    ).toThrow("outside OpenClaw workspace root");
   });
 
   it("maps Windows child paths through remote Codex app-server workspaces", () => {
     expect(
-      mapCodexAppServerRemoteWorkspacePath("C:\\Users\\kevinlin\\code\\openclaw\\packages\\example", {
-        localRoot: "C:\\Users\\kevinlin\\code\\openclaw",
-        remoteRoot: "/home/oai/openclaw-workspaces",
+      mapCodexAppServerRemoteWorkspacePath({
+        value: "C:\\Users\\kevinlin\\code\\openclaw\\packages\\example",
+        localWorkspaceRoot: "C:\\Users\\kevinlin\\code\\openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
       }),
     ).toBe("/home/oai/openclaw-workspaces/packages/example");
   });
@@ -184,10 +194,8 @@ describe("Codex app-server dynamic tool build", () => {
           cwd: "/Users/kevinlin/code/openclaw/sandbox",
         } as never,
         nativeToolSurfaceEnabled: true,
-        remoteWorkspace: {
-          localRoot: "/Users/kevinlin/code/openclaw",
-          remoteRoot: "/home/oai/openclaw-workspaces",
-        },
+        localWorkspaceRoot: "/Users/kevinlin/code/openclaw",
+        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
       }),
     ).toBe("/home/oai/openclaw-workspaces/sandbox");
   });

@@ -301,9 +301,10 @@ export async function startCodexAttemptThread(params: {
             );
             const startupExecutionCwd = resolveCodexAppServerExecutionCwd({
               effectiveCwd: params.effectiveCwd,
+              localWorkspaceRoot: params.effectiveWorkspace,
               environment: startupSandboxEnvironment,
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
-              remoteWorkspace: params.appServer.remoteWorkspace,
+              remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot,
             });
             const startupSandboxPolicy = startupSandboxEnvironment
               ? resolveCodexExternalSandboxPolicyForOpenClawSandbox(params.sandbox)

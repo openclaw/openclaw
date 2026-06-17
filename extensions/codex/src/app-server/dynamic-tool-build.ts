@@ -21,7 +21,6 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   readCodexPluginConfig,
-  type CodexAppServerRemoteWorkspaceMapping,
   type CodexPluginConfig,
 } from "./config.js";
 import {
@@ -589,35 +588,46 @@ export function resolveCodexSandboxEnvironmentSelection(
 /** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {
   effectiveCwd: string;
+  localWorkspaceRoot: string;
   environment?: CodexSandboxExecEnvironment;
   nativeToolSurfaceEnabled: boolean;
-  remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping;
+  remoteWorkspaceRoot?: string;
 }): string {
   const cwd = params.environment && params.nativeToolSurfaceEnabled
     ? params.environment.cwd
     : params.effectiveCwd;
-  return mapCodexAppServerRemoteWorkspacePath(cwd, params.remoteWorkspace);
+  return mapCodexAppServerRemoteWorkspacePath({
+    value: cwd,
+    localWorkspaceRoot: params.localWorkspaceRoot,
+    remoteWorkspaceRoot: params.remoteWorkspaceRoot,
+  });
 }
 
-/** Maps a local OpenClaw workspace path to the equivalent remote Codex app-server path. */
-export function mapCodexAppServerRemoteWorkspacePath(
-  value: string,
-  remoteWorkspace?: CodexAppServerRemoteWorkspaceMapping,
-): string {
-  if (!remoteWorkspace) {
-    return value;
+/** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
+export function mapCodexAppServerRemoteWorkspacePath(params: {
+  value: string;
+  localWorkspaceRoot: string;
+  remoteWorkspaceRoot?: string;
+}): string {
+  if (!params.remoteWorkspaceRoot) {
+    return params.value;
   }
-  const localRoot = normalizeRemoteWorkspaceMatchPath(remoteWorkspace.localRoot);
-  const remoteRoot = normalizeRemoteWorkspaceMatchPath(remoteWorkspace.remoteRoot);
-  const normalizedValue = normalizeRemoteWorkspaceMatchPath(value);
+  const localRoot = normalizeRemoteWorkspaceMatchPath(params.localWorkspaceRoot);
+  const remoteRoot = normalizeRemoteWorkspaceMatchPath(params.remoteWorkspaceRoot);
+  const normalizedValue = normalizeRemoteWorkspaceMatchPath(params.value);
+  if (!localRoot || !remoteRoot) {
+    throw new Error("Codex remoteWorkspaceRoot requires non-empty workspace roots.");
+  }
   if (normalizedValue === localRoot) {
     return remoteRoot;
   }
   const prefix = `${localRoot}/`;
   if (!normalizedValue.startsWith(prefix)) {
-    return value;
+    throw new Error(
+      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
+    );
   }
-  return `${remoteRoot}/${normalizedValue.slice(prefix.length)}`;
+  return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));
 }
 
 function normalizeRemoteWorkspaceMatchPath(value: string): string {
@@ -626,6 +636,10 @@ function normalizeRemoteWorkspaceMatchPath(value: string): string {
 
 function trimTrailingPathSeparator(value: string): string {
   return value.length > 1 ? value.replace(/[\\/]+$/u, "") : value;
+}
+
+function joinRemoteWorkspacePath(remoteRoot: string, suffix: string): string {
+  return remoteRoot === "/" ? `/${suffix}` : `${remoteRoot}/${suffix}`;
 }
 
 /** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */

@@ -161,14 +161,8 @@
             "type": "array",
             "items": { "type": "string" }
           },
-          "remoteWorkspace": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "localRoot": { "type": "string" },
-              "remoteRoot": { "type": "string" }
-            },
-            "required": ["localRoot", "remoteRoot"]
+          "remoteWorkspaceRoot": {
+            "type": "string"
           },
           "codeModeOnly": {
             "type": "boolean",
@@ -395,9 +389,9 @@
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
-    "appServer.remoteWorkspace": {
-      "label": "Remote Workspace",
-      "help": "Maps a local OpenClaw workspace path prefix to the equivalent remote Codex app-server path prefix.",
+    "appServer.remoteWorkspaceRoot": {
+      "label": "Remote Workspace Root",
+      "help": "Remote Codex app-server workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
       "advanced": true
     },
     "appServer.codeModeOnly": {
