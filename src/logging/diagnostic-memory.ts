@@ -61,7 +61,7 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
 function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
 ): Required<DiagnosticMemoryThresholds> {
-  return {
+  const resolved: Required<DiagnosticMemoryThresholds> = {
     rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
     rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
     heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES,
@@ -71,6 +71,26 @@ function resolveThresholds(
     growthWindowMs: thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS,
     pressureRepeatMs: thresholds?.pressureRepeatMs ?? DEFAULT_PRESSURE_REPEAT_MS,
   };
+  // Validate warning thresholds do not exceed critical thresholds.
+  if (resolved.rssWarningBytes > resolved.rssCriticalBytes) {
+    log.warn(
+      `config: diagnostics.memoryPressureThresholds.rssWarningBytes (${resolved.rssWarningBytes}) exceeds rssCriticalBytes (${resolved.rssCriticalBytes}), clamping to critical value`,
+    );
+    resolved.rssWarningBytes = resolved.rssCriticalBytes;
+  }
+  if (resolved.heapUsedWarningBytes > resolved.heapUsedCriticalBytes) {
+    log.warn(
+      `config: diagnostics.memoryPressureThresholds.heapUsedWarningBytes (${resolved.heapUsedWarningBytes}) exceeds heapUsedCriticalBytes (${resolved.heapUsedCriticalBytes}), clamping to critical value`,
+    );
+    resolved.heapUsedWarningBytes = resolved.heapUsedCriticalBytes;
+  }
+  if (resolved.rssGrowthWarningBytes > resolved.rssGrowthCriticalBytes) {
+    log.warn(
+      `config: diagnostics.memoryPressureThresholds.rssGrowthWarningBytes (${resolved.rssGrowthWarningBytes}) exceeds rssGrowthCriticalBytes (${resolved.rssGrowthCriticalBytes}), clamping to critical value`,
+    );
+    resolved.rssGrowthWarningBytes = resolved.rssGrowthCriticalBytes;
+  }
+  return resolved;
 }
 
 function pickThresholdPressure(params: {

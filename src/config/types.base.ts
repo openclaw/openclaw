@@ -348,6 +348,25 @@ export type DiagnosticsConfig = {
   stuckSessionAbortMs?: number;
   /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
   memoryPressureSnapshot?: boolean;
+  /** Override default memory pressure thresholds. All fields optional — unset fields use built-in defaults. */
+  memoryPressureThresholds?: {
+    /** RSS threshold in bytes for warning level. Default: 1.5 GiB. */
+    rssWarningBytes?: number;
+    /** RSS threshold in bytes for critical level. Default: 3 GiB. */
+    rssCriticalBytes?: number;
+    /** Heap used threshold in bytes for warning level. Default: 1 GiB. */
+    heapUsedWarningBytes?: number;
+    /** Heap used threshold in bytes for critical level. Default: 2 GiB. */
+    heapUsedCriticalBytes?: number;
+    /** RSS growth threshold in bytes for warning level within growthWindowMs. Default: 512 MiB. */
+    rssGrowthWarningBytes?: number;
+    /** RSS growth threshold in bytes for critical level within growthWindowMs. Default: 1 GiB. */
+    rssGrowthCriticalBytes?: number;
+    /** Time window in milliseconds for RSS growth detection. Default: 600000 (10 min). */
+    growthWindowMs?: number;
+    /** Minimum interval in milliseconds between repeated same-level/reason pressure events. Default: 300000 (5 min). */
+    pressureRepeatMs?: number;
+  };
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

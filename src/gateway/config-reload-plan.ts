@@ -75,6 +75,8 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "diagnostics.stuckSessionAbortMs", kind: "none" },
   { prefix: "diagnostics.memoryPressureSnapshot", kind: "hot" },
+  // Threshold values only read at heartbeat init — require restart to take effect.
+  { prefix: "diagnostics.memoryPressureThresholds", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
