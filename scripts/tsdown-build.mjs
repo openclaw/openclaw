@@ -853,10 +853,12 @@ if (isMainModule()) {
     console.log(tsdownBuildUsage());
     process.exit(0);
   }
-  pruneSourceCheckoutBundledPluginNodeModules();
-  pruneUntrackedGeneratedSourceDeclarations();
-  pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
+  if (process.env.CI !== "true") {
+    pruneSourceCheckoutBundledPluginNodeModules();
+    pruneUntrackedGeneratedSourceDeclarations();
+    pruneStaleRuntimeSymlinks();
+    cleanTsdownOutputRoots();
+  }
   const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
   let result;
   for (const invocation of invocations) {
