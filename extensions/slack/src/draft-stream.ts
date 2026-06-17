@@ -88,6 +88,7 @@ export function createSlackDraftStream(params: {
           cfg: params.cfg,
           token: params.token,
           accountId: params.accountId,
+          identity: params.identity,
           ...(blocks ? { blocks } : {}),
         });
         return;

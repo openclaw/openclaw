@@ -11,6 +11,7 @@ import { buildSlackEditTextPayload } from "./edit-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
+import type { SlackSendIdentity } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
 export type SlackActionClientOpts = {
@@ -272,15 +273,28 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[]; identity?: SlackSendIdentity } = {},
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  // Build identity payload for chat.update, mirroring the send path logic.
+  // Slack Web API models icon_url and icon_emoji as mutually exclusive.
+  const identity = opts.identity;
+  const identityPayload = identity
+    ? identity.iconUrl
+      ? { username: identity.username, icon_url: identity.iconUrl }
+      : identity.iconEmoji
+        ? { username: identity.username, icon_emoji: identity.iconEmoji }
+        : identity.username
+          ? { username: identity.username }
+          : {}
+    : {};
   await client.chat.update({
     channel: channelId,
     ts: messageId,
     text: buildSlackEditTextPayload(content, blocks),
     ...(blocks ? { blocks } : {}),
+    ...identityPayload,
   });
 }
 
