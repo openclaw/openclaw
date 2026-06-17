@@ -1,0 +1,180 @@
+name: QA Lab Smoke Profile
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or SHA to test. Empty uses the workflow ref.
+        required: false
+        default: ""
+      qa_profile:
+        description: QA profile to run when scenario_id is empty.
+        required: false
+        default: smoke-ci
+      surface:
+        description: Optional taxonomy surface filter for qa_profile runs.
+        required: false
+        default: ""
+      category:
+        description: Optional taxonomy category filter for qa_profile runs.
+        required: false
+        default: ""
+      scenario_id:
+        description: Optional direct scenario target, e.g. the UX Matrix scenario from PR 3.
+        required: false
+        default: ""
+      concurrency:
+        description: QA suite worker concurrency.
+        required: false
+        default: "1"
+      evidence_mode:
+        description: qa-evidence.json detail level for profile runs.
+        required: false
+        default: slim
+        type: choice
+        options:
+          - slim
+          - full
+      fast:
+        description: Enable provider fast mode where supported.
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: qa-lab-smoke-profile-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.x
+  TARGET_REF: ${{ inputs.ref || github.sha }}
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  OPENCLAW_LIVE_OPENAI_KEY: ""
+  OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+  OPENCLAW_LIVE_GEMINI_KEY: ""
+  OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0"
+
+jobs:
+  qa_lab_smoke_profile:
+    name: Run QA Lab smoke profile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ env.TARGET_REF }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node scripts/build-all.mjs qaRuntime
+
+      - name: Run QA evidence lane
+        id: run_qa
+        env:
+          INPUT_QA_PROFILE: ${{ inputs.qa_profile }}
+          INPUT_SURFACE: ${{ inputs.surface }}
+          INPUT_CATEGORY: ${{ inputs.category }}
+          INPUT_SCENARIO_ID: ${{ inputs.scenario_id }}
+          INPUT_CONCURRENCY: ${{ inputs.concurrency }}
+          INPUT_EVIDENCE_MODE: ${{ inputs.evidence_mode }}
+          INPUT_FAST: ${{ inputs.fast }}
+        run: |
+          set -euo pipefail
+
+          selected="${INPUT_SCENARIO_ID:-$INPUT_QA_PROFILE}"
+          artifact_label="${selected//[^A-Za-z0-9._-]/-}"
+          output_dir=".artifacts/qa-e2e/${artifact_label}"
+
+          if [[ -n "$INPUT_SCENARIO_ID" ]]; then
+            command=(
+              pnpm openclaw qa suite
+              --provider-mode mock-openai
+              --scenario "$INPUT_SCENARIO_ID"
+              --concurrency "$INPUT_CONCURRENCY"
+              --output-dir "$output_dir"
+            )
+          else
+            command=(
+              pnpm openclaw qa run
+              --qa-profile "$INPUT_QA_PROFILE"
+              --provider-mode mock-openai
+              --concurrency "$INPUT_CONCURRENCY"
+              --evidence-mode "$INPUT_EVIDENCE_MODE"
+              --output-dir "$output_dir"
+            )
+            if [[ -n "$INPUT_SURFACE" ]]; then
+              command+=(--surface "$INPUT_SURFACE")
+            fi
+            if [[ -n "$INPUT_CATEGORY" ]]; then
+              command+=(--category "$INPUT_CATEGORY")
+            fi
+          fi
+
+          if [[ "$INPUT_FAST" == "true" ]]; then
+            command+=(--fast)
+          fi
+
+          printf 'Running QA command:'
+          printf ' %q' "${command[@]}"
+          printf '\n'
+          "${command[@]}"
+
+          {
+            echo "qa_output_dir=$output_dir"
+            echo "qa_target=${INPUT_SCENARIO_ID:-profile:$INPUT_QA_PROFILE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summarize QA artifacts
+        if: always()
+        env:
+          QA_OUTPUT_DIR: ${{ steps.run_qa.outputs.qa_output_dir }}
+          QA_TARGET: ${{ steps.run_qa.outputs.qa_target }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### QA Lab Smoke Profile"
+            echo
+            echo "- Ref: \`${TARGET_REF}\`"
+            echo "- Target: \`${QA_TARGET:-unknown}\`"
+            echo "- Output: \`${QA_OUTPUT_DIR:-.artifacts/qa-e2e}\`"
+            echo
+            echo "Evidence files:"
+            find .artifacts/qa-e2e -type f \
+              \( -name 'qa-evidence.json' \
+                -o -name 'qa-suite-summary.json' \
+                -o -name '*.md' \
+                -o -name '*.log' \
+                -o -name '*.jsonl' \
+                -o -name '*.png' \
+                -o -name '*.jpg' \
+                -o -name '*.jpeg' \
+                -o -name '*.webm' \
+                -o -name '*.mp4' \) \
+              | sort \
+              | sed 's#^#- `#; s#$#`#' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload QA evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-lab-smoke-profile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
