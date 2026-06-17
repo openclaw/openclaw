@@ -27,6 +27,7 @@ vi.mock("../gateway/call.js", () => ({
   })),
   callGateway,
   isGatewayCredentialsRequiredError,
+  isGatewayTransportError: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/credentials.js", () => ({

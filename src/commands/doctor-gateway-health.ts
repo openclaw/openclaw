@@ -7,6 +7,7 @@ import {
   buildGatewayProbeConnectionDetails,
   callGateway,
   isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
@@ -129,7 +130,18 @@ export async function checkGatewayHealth(params: {
     const message = String(err);
     if (message.includes("gateway closed")) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      note("Gateway not running.", "Gateway");
+      if (isGatewayTransportError(err) && err.kind === "closed") {
+        // WebSocket was connected and then closed (protocol mismatch, auth
+        // rejection, etc.) — the gateway listener is alive even though the
+        // health RPC failed. Show the specific close reason instead of the
+        // misleading "Gateway not running." message.
+        note(
+          `Gateway connect failed: gateway closed (${err.code}): ${err.reason ?? "no close reason"}`,
+          "Gateway",
+        );
+      } else {
+        note("Gateway not running.", "Gateway");
+      }
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));
