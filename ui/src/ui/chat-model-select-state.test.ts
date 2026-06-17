@@ -19,6 +19,7 @@ function createChatModelState(
   return {
     sessionKey: "main",
     chatModelOverrides: {},
+    chatModelSwitchPromises: {},
     chatModelCatalog: [],
     sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
     ...params,
@@ -209,5 +210,57 @@ describe("chat-model-select-state", () => {
         label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
       },
     ]);
+  });
+
+  it("shows effective server model when cache differs and no pending switch exists (fallback detection)", () => {
+    // Scenario: user selected codex/gpt-5.5, runtime fell back to ollama/qwen3.5:9b
+    // The session row now reflects the effective model after fallback cleared selectedModel.
+    const state = createChatModelState({
+      chatModelOverrides: { main: { kind: "qualified", value: "codex/gpt-5.5" } },
+      chatModelSwitchPromises: {}, // No pending switch
+      sessionsResult: createSessionsListResult({
+        model: "ollama/qwen3.5:9b",
+        modelProvider: "ollama",
+      }),
+    });
+
+    // When cache differs from effective server model and no switch is pending,
+    // the dropdown should show the effective runtime model.
+    expect(resolveChatModelOverrideValue(state)).toBe("ollama/qwen3.5:9b");
+  });
+
+  it("preserves cached pending selection during model switch RPC round-trip", () => {
+    // Scenario: user switches from codex/gpt-5.5 to anthropic/claude-sonnet-4-6
+    // switchChatModel wrote cache = claude-sonnet-4-6 immediately, but sessions.patch
+    // hasn't completed yet, so activeRow.model is still the old codex/gpt-5.5.
+    const pendingPromise = Promise.resolve(true);
+    const state = createChatModelState({
+      chatModelOverrides: {
+        main: { kind: "qualified", value: "anthropic/claude-sonnet-4-6" },
+      },
+      chatModelSwitchPromises: { main: pendingPromise }, // RPC in flight
+      sessionsResult: createSessionsListResult({
+        model: "codex/gpt-5.5", // stale — hasn't refreshed yet
+        modelProvider: "codex",
+      }),
+    });
+
+    // While sessions.patch is in flight, the dropdown must keep showing the
+    // user's pending selection, not the stale session row model.
+    expect(resolveChatModelOverrideValue(state)).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("returns cached value when cache and effective server model match", () => {
+    // Normal case: user selected a model that matches the running session.
+    const state = createChatModelState({
+      chatModelOverrides: { main: { kind: "qualified", value: "anthropic/claude-sonnet-4-6" } },
+      chatModelSwitchPromises: {},
+      sessionsResult: createSessionsListResult({
+        model: "anthropic/claude-sonnet-4-6",
+        modelProvider: "anthropic",
+      }),
+    });
+
+    expect(resolveChatModelOverrideValue(state)).toBe("anthropic/claude-sonnet-4-6");
   });
 });

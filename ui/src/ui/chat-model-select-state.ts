@@ -12,7 +12,11 @@ import type { ModelCatalogEntry } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
   AppViewState,
-  "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "sessionsResult"
+  | "sessionKey"
+  | "chatModelOverrides"
+  | "chatModelSwitchPromises"
+  | "chatModelCatalog"
+  | "sessionsResult"
 >;
 
 export type ChatModelSelectOption = {
@@ -34,11 +38,29 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
-
-  // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
+
+  // When a local override is cached, also resolve the effective server model
+  // so the dropdown reflects the actual runtime model after fallback/default drift.
   if (cached) {
-    return normalizeChatModelOverrideValue(cached, catalog);
+    const cachedValue = normalizeChatModelOverrideValue(cached, catalog);
+    const activeRow = resolveActiveSessionRow(state);
+    const serverValue = resolvePreferredServerChatModelValue(
+      activeRow?.model,
+      activeRow?.modelProvider,
+      catalog,
+    );
+    // If the effective session model differs from the cached override, the
+    // runtime may have fallen back or drifted — show the effective model.
+    // BUT: never override the cache while a sessions.patch RPC is in flight.
+    // switchChatModel writes the cache immediately so the picker tracks the
+    // user's pending selection; activeRow.model is stale until the RPC
+    // completes and sessionsResult refreshes.
+    const hasPendingSwitch = state.chatModelSwitchPromises?.[state.sessionKey] != null;
+    if (serverValue && cachedValue !== serverValue && !hasPendingSwitch) {
+      return serverValue;
+    }
+    return cachedValue;
   }
   if (cached === null) {
     return "";
