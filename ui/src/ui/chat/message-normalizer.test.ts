@@ -90,6 +90,27 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("normalizes persisted Responses text blocks as renderable text", () => {
+      const user = normalizeMessage({
+        role: "user",
+        content: [{ type: "input_text", text: "Persisted user question" }],
+      });
+      const assistant = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "output_text", text: "Persisted assistant answer" }],
+      });
+
+      expect(user.content).toEqual([
+        {
+          type: "text",
+          text: "Persisted user question",
+          name: undefined,
+          args: undefined,
+        },
+      ]);
+      expect(assistant.content).toEqual([{ type: "text", text: "Persisted assistant answer" }]);
+    });
+
     it("normalizes structured base64 audio content blocks as renderable attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

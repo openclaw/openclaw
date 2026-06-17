@@ -44,6 +44,21 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe("Final user answer");
   });
 
+  it("extracts text from persisted Responses content blocks", () => {
+    expect(
+      extractText({
+        role: "user",
+        content: [{ type: "input_text", text: "Persisted user question" }],
+      }),
+    ).toBe("Persisted user question");
+    expect(
+      extractText({
+        role: "assistant",
+        content: [{ type: "output_text", text: "Persisted assistant answer" }],
+      }),
+    ).toBe("Persisted assistant answer");
+  });
+
   it("prefers final_answer assistant text over commentary text", () => {
     const message = {
       role: "assistant",
