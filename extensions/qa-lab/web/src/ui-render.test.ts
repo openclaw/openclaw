@@ -84,6 +84,53 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
 }
 
 describe("QA Lab UI evidence render", () => {
+  it("maps blocked and skipped evidence statuses to styled tones", () => {
+    const html = renderQaLabUi(
+      evidenceState({
+        evidence: {
+          counts: { blocked: 1, fail: 0, pass: 0, skipped: 1 },
+          entries: [
+            {
+              artifacts: [],
+              coverage: [{ id: "qa.blocked", role: "primary" }],
+              failureReason: "Environment unavailable",
+              id: "qa-lab.blocked",
+              kind: "script-test",
+              sourcePath: "scripts/blocked.ts",
+              status: "blocked",
+              title: "Blocked evidence",
+            },
+            {
+              artifacts: [],
+              coverage: [{ id: "qa.skipped", role: "primary" }],
+              failureReason: null,
+              id: "qa-lab.skipped",
+              kind: "vitest-test",
+              sourcePath: "extensions/qa-lab/src/skipped.test.ts",
+              status: "skipped",
+              title: "Skipped evidence",
+            },
+          ],
+          evidenceMode: "full",
+          evidencePath: ".artifacts/qa-e2e/suite/qa-evidence.json",
+          generatedAt: "2026-06-17T12:00:00.000Z",
+          producerContext: null,
+          profile: null,
+          schemaVersion: 2,
+        },
+        selectedEvidenceEntryId: "qa-lab.blocked",
+      }),
+    );
+
+    expect(html).toContain("badge-pending");
+    expect(html).toContain("badge-skip");
+    expect(html).toContain("scenario-item-dot-pending");
+    expect(html).toContain("scenario-item-dot-skip");
+    expect(html).not.toContain("badge-blocked");
+    expect(html).not.toContain("badge-skipped");
+    expect(html).not.toContain("scenario-item-dot-blocked");
+  });
+
   it("links executed UX Matrix cells to evidence entries and leaves proof gaps unlinked", () => {
     const html = renderQaLabUi(
       evidenceState({

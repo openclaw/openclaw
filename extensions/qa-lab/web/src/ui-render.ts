@@ -1056,8 +1056,40 @@ function statusDotClass(status: ScenarioOutcome["status"] | "pending"): string {
   return `scenario-item-dot scenario-item-dot-${status}`;
 }
 
+function statusTone(status: string): string {
+  if (status === "failed") {
+    return "fail";
+  }
+  if (status === "completed") {
+    return "pass";
+  }
+  if (status === "skipped") {
+    return "skip";
+  }
+  if (status === "blocked") {
+    return "pending";
+  }
+  return status;
+}
+
+function statusDotTone(status: string): string {
+  if (status === "failed") {
+    return "fail";
+  }
+  if (status === "completed") {
+    return "pass";
+  }
+  if (status === "skipped") {
+    return "skip";
+  }
+  if (status === "blocked") {
+    return "pending";
+  }
+  return status;
+}
+
 function badgeHtml(status: string): string {
-  const tone = status === "failed" ? "fail" : status === "completed" ? "pass" : status;
+  const tone = statusTone(status);
   return `<span class="badge badge-${esc(tone)}">${esc(status)}</span>`;
 }
 
@@ -1688,7 +1720,7 @@ function renderEvidenceEntryButton(entry: EvidenceEntryView, selected: boolean):
       : '<span class="text-dimmed text-sm">No artifacts</span>';
   return `<button class="evidence-entry-card${selected ? " selected" : ""}" data-evidence-entry-id="${esc(entry.id)}" type="button">
     <div class="evidence-entry-card-top">
-      <span class="result-card-dot scenario-item-dot-${entry.status === "skipped" ? "skip" : entry.status}"></span>
+      <span class="result-card-dot scenario-item-dot-${statusDotTone(entry.status)}"></span>
       <div>
         <div class="evidence-entry-title">${esc(entry.title)}</div>
         <div class="evidence-entry-meta">${esc(entry.kind)} · ${esc(entry.id)}</div>
