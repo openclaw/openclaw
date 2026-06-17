@@ -28,10 +28,7 @@ export {
   type InternalMessageChannel,
   type NativeApprovalChannel,
 } from "./message-channel-constants.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  type InternalMessageChannel,
-} from "./message-channel-constants.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 /**
