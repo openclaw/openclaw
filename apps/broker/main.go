@@ -1378,6 +1378,7 @@ func run() error {
 	mux.HandleFunc("/ws", wsHandler)
 	mux.HandleFunc("/fs/tree", runtimeFSTreeHandler)
 	mux.HandleFunc("/fs/file", runtimeFSFileHandler)
+	mux.HandleFunc("/fs/skill-write", skillWriteHandler)
 	mux.HandleFunc("/spawn", spawnHandler)
 	mux.HandleFunc("/materialize-secret", materializeSecretHandler)
 	mux.HandleFunc("/secret-list", secretListHandler)

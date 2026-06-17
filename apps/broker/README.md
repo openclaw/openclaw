@@ -123,6 +123,31 @@ proxy can pipe an xterm.js session through to the user's browser.
   `playground_inference_unavailable`. The broker does not execute
   GPU, torch, or model-weight inference.
 
+- `POST /fs/skill-write`
+  Write ONE skill directory into the tenant's writable skill overlay
+  (`$OPENCLAW_SKILLS_DIR`, default `$HOME/.claude/skills`). Body:
+  ```json
+  {
+    "name": "my-skill",
+    "files": [
+      { "path": "SKILL.md", "content": "..." },
+      { "path": "scripts/run.sh", "content": "..." }
+    ]
+  }
+  ```
+  `name` must match `^[a-z][a-z0-9-]{0,63}$`. Each file `path` is relative to
+  the skill dir; absolute paths, backslashes, `..`, NUL bytes, and symlink escapes are
+  rejected — every file is confined under `<overlay>/<name>/`. Caps: 64 files,
+  256 KiB/file, 2 MiB/skill, UTF-8 only. The push replaces the skill dir
+  wholesale (staged then swapped, so a partial write never shadows the live
+  skill). Only the per-tenant OVERLAY is writable; the operator-global
+  platform-skills baked into the image are never touched here. Auth matches the
+  other `/fs/*` routes (broker token + tenant id).
+  Returns:
+  ```json
+  { "name": "my-skill", "path": "/home/runtime/.claude/skills/my-skill", "files_written": 2, "bytes_written": 1234 }
+  ```
+
 ## Auth
 
 The broker reads its expected token from the env var

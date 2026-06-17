@@ -243,10 +243,19 @@ PY
 # Both are published as npm packages; @anthropic-ai/claude-code is the
 # canonical name for the Claude Code CLI and @openai/codex is the canonical
 # name for OpenAI's Codex CLI (Apache-2.0).
+#
+# PIN the claude-code version. An unpinned `@latest` means every image
+# rebuild silently bakes whatever claude-code shipped that day, so the CLI
+# the broker talks to can change underneath us without a code change — a
+# stdin/stream-json contract drift would then strand /chat-pty in prod with
+# no diff to point at. The version a tenant runs is owned CENTRALLY (image
+# SHA + fleet rollout), so the CLI version must be too. Bump deliberately
+# (and re-run the broker real-CLI smoke test) — never via `@latest` drift.
+ARG CLAUDE_CODE_VERSION=2.1.178
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g @anthropic-ai/claude-code @openai/codex || \
+    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" @openai/codex || \
     (echo "Falling back to per-package install if combined fails" >&2 && \
-     npm install -g @anthropic-ai/claude-code && \
+     npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && \
      npm install -g @openai/codex)
 
 # Verify both binaries resolved (cheap fail-fast at build time).
