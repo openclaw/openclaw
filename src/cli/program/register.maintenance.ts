@@ -29,6 +29,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .option("--lint", "Run read-only health checks and report findings", false)
+    .option("--explain", "Explain structured health findings in plain English", false)
     .option(
       "--post-upgrade",
       "Emit plugin-compat findings only (machine-readable with --json)",
@@ -37,31 +38,80 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--json", "With --lint or --post-upgrade: emit machine-readable JSON output", false)
     .option(
       "--severity-min <level>",
-      "With --lint: drop findings below this severity (info|warning|error)",
+      "With --lint or --explain: drop findings below this severity (info|warning|error)",
     )
     .option(
       "--skip <id>",
-      "With --lint: skip a specific check id (repeatable)",
+      "With --lint or --explain: skip a specific check id (repeatable)",
       (v: string, prev: string[]) => [...prev, v],
       [],
     )
     .option(
       "--only <id>",
-      "With --lint: run only the specified check id (repeatable)",
+      "With --lint, --explain, or --fix: run only the specified check id (repeatable)",
       (v: string, prev: string[]) => [...prev, v],
       [],
     )
     .action(async (opts) => {
-      if (opts.lint === true) {
+      if (opts.explain === true && opts.postUpgrade === true) {
+        defaultRuntime.error("doctor --explain cannot be combined with --post-upgrade.");
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.lint === true && opts.explain === true) {
+        defaultRuntime.error("doctor --lint cannot be combined with --explain.");
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.explain === true && opts.json === true) {
+        defaultRuntime.error("doctor --explain cannot be combined with --json.");
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.lint === true || opts.explain === true) {
         await runCommandWithRuntime(
           defaultRuntime,
           async () => {
             const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
+            const confirmRepairCheck =
+              opts.explain === true ? await createExplainRepairConfirmer(opts) : undefined;
             const exitCode = await runDoctorLintCli(defaultRuntime, {
               json: Boolean(opts.json),
+              explain: Boolean(opts.explain),
               severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
               skipIds: Array.isArray(opts.skip) ? opts.skip : [],
               onlyIds: Array.isArray(opts.only) ? opts.only : [],
+              allowExec: Boolean(opts.allowExec),
+              nonInteractive: Boolean(opts.nonInteractive),
+              confirmRepairCheck,
+            });
+            defaultRuntime.exit(exitCode);
+          },
+          (err) => {
+            defaultRuntime.error(String(err));
+            defaultRuntime.exit(2);
+          },
+        );
+        return;
+      }
+      if (
+        (Boolean(opts.repair) || Boolean(opts.fix)) &&
+        Array.isArray(opts.only) &&
+        opts.only.length > 0
+      ) {
+        if (hasUnsupportedFocusedRepairOptions(opts)) {
+          defaultRuntime.error(
+            "doctor --fix --only supports --allow-exec only; use --lint or --explain for filtering output.",
+          );
+          defaultRuntime.exit(2);
+          return;
+        }
+        await runCommandWithRuntime(
+          defaultRuntime,
+          async () => {
+            const { runDoctorSelectedRepairCli } = await import("../../commands/doctor-lint.js");
+            const exitCode = await runDoctorSelectedRepairCli(defaultRuntime, {
+              onlyIds: opts.only,
               allowExec: Boolean(opts.allowExec),
             });
             defaultRuntime.exit(exitCode);
@@ -73,9 +123,9 @@ export function registerMaintenanceCommands(program: Command) {
         );
         return;
       }
-      if (hasLintOnlyDoctorOptions(opts)) {
+      if (hasStructuredOnlyDoctorOptions(opts)) {
         defaultRuntime.error(
-          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+          "doctor structured health options require --lint, --explain, or --fix --only.",
         );
         defaultRuntime.exit(2);
         return;
@@ -175,7 +225,32 @@ export function registerMaintenanceCommands(program: Command) {
     });
 }
 
-function hasLintOnlyDoctorOptions(opts: {
+async function createExplainRepairConfirmer(opts: {
+  readonly yes?: boolean;
+  readonly repair?: boolean;
+  readonly fix?: boolean;
+  readonly force?: boolean;
+  readonly nonInteractive?: boolean;
+}) {
+  const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
+  const prompter = createDoctorPrompter({
+    runtime: defaultRuntime,
+    options: {
+      yes: Boolean(opts.yes),
+      repair: Boolean(opts.repair) || Boolean(opts.fix),
+      force: Boolean(opts.force),
+      nonInteractive: Boolean(opts.nonInteractive),
+    },
+  });
+  return async (params: { checkId: string; label: string }) =>
+    await prompter.confirmRuntimeRepair({
+      message: `Fix findings for ${params.label} (${params.checkId})?`,
+      initialValue: false,
+      requiresInteractiveConfirmation: true,
+    });
+}
+
+function hasStructuredOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
   readonly severityMin?: unknown;
@@ -187,5 +262,17 @@ function hasLintOnlyDoctorOptions(opts: {
     typeof opts.severityMin === "string" ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)
+  );
+}
+
+function hasUnsupportedFocusedRepairOptions(opts: {
+  readonly json?: boolean;
+  readonly severityMin?: unknown;
+  readonly skip?: unknown;
+}): boolean {
+  return (
+    opts.json === true ||
+    typeof opts.severityMin === "string" ||
+    (Array.isArray(opts.skip) && opts.skip.length > 0)
   );
 }

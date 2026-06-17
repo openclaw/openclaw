@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     exit: vi.fn(),
   },
   runDoctorLintCli: vi.fn(),
+  runDoctorSelectedRepairCli: vi.fn(),
 }));
 
 const {
@@ -23,6 +24,7 @@ const {
   uninstallCommand,
   runtime,
   runDoctorLintCli,
+  runDoctorSelectedRepairCli,
 } = mocks;
 
 vi.mock("../../commands/doctor.js", () => ({
@@ -43,6 +45,7 @@ vi.mock("../../commands/uninstall.js", () => ({
 
 vi.mock("../../commands/doctor-lint.js", () => ({
   runDoctorLintCli: mocks.runDoctorLintCli,
+  runDoctorSelectedRepairCli: mocks.runDoctorSelectedRepairCli,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -122,21 +125,72 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
       json: true,
+      explain: false,
       severityMin: "error",
       skipIds: ["a"],
       onlyIds: ["b"],
       allowExec: true,
+      nonInteractive: false,
+      confirmRepairCheck: undefined,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("rejects lint selectors outside doctor lint mode", async () => {
-    await runMaintenanceCli(["doctor", "--fix", "--only", "policy/channels-denied-provider"]);
+  it("runs focused doctor repair for --fix --only", async () => {
+    runDoctorSelectedRepairCli.mockResolvedValue(0);
+
+    await runMaintenanceCli(["doctor", "--fix", "--only", "core/doctor/skills-readiness"]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-    );
+    expect(runDoctorSelectedRepairCli).toHaveBeenCalledWith(runtime, {
+      onlyIds: ["core/doctor/skills-readiness"],
+      allowExec: false,
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("runs doctor explain mode through the structured health path", async () => {
+    runDoctorLintCli.mockResolvedValue(1);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--explain",
+      "--severity-min",
+      "warning",
+      "--only",
+      "core/doctor/gateway-config",
+      "--non-interactive",
+    ]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+      json: false,
+      explain: true,
+      severityMin: "warning",
+      skipIds: [],
+      onlyIds: ["core/doctor/gateway-config"],
+      allowExec: false,
+      nonInteractive: true,
+      confirmRepairCheck: expect.any(Function),
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects JSON explain output", async () => {
+    await runMaintenanceCli(["doctor", "--explain", "--json"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("doctor --explain cannot be combined with --json.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects combined lint and explain modes", async () => {
+    await runMaintenanceCli(["doctor", "--lint", "--explain"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("doctor --lint cannot be combined with --explain.");
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
@@ -155,7 +209,24 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+      "doctor structured health options require --lint, --explain, or --fix --only.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects unsupported focused repair filters", async () => {
+    await runMaintenanceCli([
+      "doctor",
+      "--fix",
+      "--only",
+      "core/doctor/skills-readiness",
+      "--skip",
+      "core/doctor/gateway-config",
+    ]);
+
+    expect(runDoctorSelectedRepairCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor --fix --only supports --allow-exec only; use --lint or --explain for filtering output.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
