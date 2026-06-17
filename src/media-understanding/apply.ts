@@ -40,7 +40,7 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-export type ApplyMediaUnderstandingResult = {
+type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
   decisions: MediaUnderstandingDecision[];
   appliedImage: boolean;
