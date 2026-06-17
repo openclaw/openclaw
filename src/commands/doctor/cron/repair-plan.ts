@@ -4,8 +4,8 @@ import { normalizeOptionalString } from "../../../../packages/normalization-core
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 
-export type CronLegacyIssueCounts = Partial<Record<string, number>>;
-export type CronLegacyIssueDetails = {
+type CronLegacyIssueCounts = Partial<Record<string, number>>;
+type CronLegacyIssueDetails = {
   unresolvedAgentTurnShellToolPrompt?: string[];
 };
 
