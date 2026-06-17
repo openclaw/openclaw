@@ -4,13 +4,17 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveControlUiLinks } from "../commands/onboard-helpers.js";
 import { DEFAULT_GATEWAY_PORT, resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
-import { probeGateway } from "../gateway/probe.js";
+import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -193,6 +197,23 @@ function buildInvalidProbeAuth(
   return undefined;
 }
 
+function invalidAuthProbeProvesEnforcement(params: {
+  settings: GatewayWizardSettings;
+  probe: GatewayProbeResult;
+}): boolean {
+  const expectedCode =
+    params.settings.authMode === "token"
+      ? ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
+      : params.settings.authMode === "password" || params.settings.authMode === "trusted-proxy"
+        ? ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH
+        : undefined;
+  return (
+    expectedCode !== undefined &&
+    !params.probe.ok &&
+    readConnectErrorDetailCode(params.probe.connectErrorDetails) === expectedCode
+  );
+}
+
 function canSafelyProbeInvalidAuth(params: { url: string; config: OpenClawConfig }): boolean {
   if (params.config.gateway?.auth?.rateLimit?.exemptLoopback === false) {
     return false;
@@ -267,7 +288,10 @@ async function probeVerifiedExistingGateway(params: {
     detailLevel: "none",
     env,
   });
-  return !invalid.ok && listenerStillOwnsPort();
+  return (
+    listenerStillOwnsPort() &&
+    invalidAuthProbeProvesEnforcement({ settings: params.settings, probe: invalid })
+  );
 }
 
 function collectOutputTail(child: ChildProcess): () => string {

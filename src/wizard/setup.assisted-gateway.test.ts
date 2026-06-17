@@ -157,7 +157,10 @@ describe("agent-assisted Gateway runtime", () => {
           },
         },
       })
-      .mockResolvedValueOnce({ ok: false });
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
 
     const result = await ensureAgentAssistedGatewayRuntime({
       config: {},
@@ -175,6 +178,34 @@ describe("agent-assisted Gateway runtime", () => {
         detailLevel: "full",
       }),
     );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects reuse when the invalid-auth probe fails without an auth rejection", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              auth: { mode: "token" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false, error: "timeout" });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(probeGateway).toHaveBeenCalledTimes(2);
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -275,7 +306,10 @@ describe("agent-assisted Gateway runtime", () => {
           },
         },
       })
-      .mockResolvedValueOnce({ ok: false });
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
 
     const result = await ensureAgentAssistedGatewayRuntime({
       config: {},
@@ -560,7 +594,10 @@ describe("agent-assisted Gateway runtime", () => {
           },
         },
       })
-      .mockResolvedValueOnce({ ok: false });
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_PASSWORD_MISMATCH" },
+      });
 
     const result = await ensureAgentAssistedGatewayRuntime({
       config: {
