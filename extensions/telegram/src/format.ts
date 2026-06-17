@@ -56,6 +56,11 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   if (isAutoLinkedFileRef(href, label)) {
     return null;
   }
+  // Suppress links with local/relative paths (e.g. [text](./local/file))
+  // that Telegram rejects with RICH_MESSAGE_URL_INVALID
+  if (!/^(https?|tg|mailto):/i.test(href)) {
+    return null;
+  }
   const safeHref = escapeHtmlAttr(href);
   return {
     start: link.start,
