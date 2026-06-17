@@ -1026,6 +1026,7 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
         defaults: {
           cliBackends: {
             "google-gemini-cli": {
+              command: "gemini",
               args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
               resumeArgs: [
                 "--skip-trust",
@@ -1061,6 +1062,7 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
         defaults: {
           cliBackends: {
             "google-gemini-cli": {
+              command: "gemini",
               args: ["--skip-trust", "-o", "stream-json", "--prompt", "{prompt}"],
               resumeArgs: [
                 "--skip-trust",

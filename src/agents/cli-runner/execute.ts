@@ -693,8 +693,8 @@ export async function executePreparedCliRun(
             delete next[key];
           }
           const backendEnv = {
-            ...(backend.env ?? {}),
-            ...(context.preparedBackend.env ?? {}),
+            ...backend.env,
+            ...context.preparedBackend.env,
           };
           if (Object.keys(backendEnv).length > 0) {
             Object.assign(
@@ -1380,7 +1380,7 @@ export async function executePreparedCliRun(
           runOutput = {
             ...parsed,
             diagnostics: {
-              ...(parsed.diagnostics ?? {}),
+              ...parsed.diagnostics,
               process: processDiagnostics,
             },
             rawText,
