@@ -39,6 +39,7 @@ describe("session accessor boundary guard", () => {
         "src/gateway/sessions-resolve.ts",
         "src/gateway/server-methods/sessions.ts",
         "src/infra/outbound/message-action-tts.ts",
+        "src/tui/embedded-backend.ts",
       ]),
     );
   });
@@ -77,6 +78,7 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-reset-model.ts",
         "src/auto-reply/reply/session-updates.ts",
         "src/auto-reply/reply/session-usage.ts",
+        "src/tui/embedded-backend.ts",
       ]),
     );
   });

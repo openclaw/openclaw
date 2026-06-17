@@ -29,6 +29,7 @@ import {
   shouldUseDirectCodexDynamicToolsForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
@@ -401,7 +402,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldUseDirectCodexDynamicToolsForModel("gpt-5.4-nano")).toBe(true);
     expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.4-nano")).toBe("direct");
     expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.5")).toBe("searchable");
-    const webSearch = toolBridge.specs.find((tool) => tool.name === "web_search");
+    const webSearch = flattenCodexDynamicToolFunctions(toolBridge.specs).find(
+      (tool) => tool.name === "web_search",
+    );
     expect(webSearch).not.toHaveProperty("deferLoading");
     expect(webSearch).not.toHaveProperty("namespace");
   });
@@ -1308,6 +1311,28 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableMessageTool = false;
     params.sourceReplyDeliveryMode = "automatic";
     expect(shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("can retain message in the registered schema when disabled for the current turn", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = [];
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
+    );
+
+    const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
+    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      ignoreDisableMessageTool: true,
+      ignoreRuntimePlan: true,
+    });
+
+    expect(availableTools.map((tool) => tool.name)).not.toContain("message");
+    expect(registeredTools.map((tool) => tool.name)).toContain("message");
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {

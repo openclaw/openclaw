@@ -37,6 +37,7 @@ vi.mock("./views/chat.ts", () => ({
     chatProps.current = props;
     return html`<div data-testid="chat">${props.composerControls}</div>`;
   },
+  resetChatViewState: vi.fn(),
 }));
 
 vi.mock("./app-render.helpers.ts", async (importOriginal) => {
@@ -381,6 +382,37 @@ describe("renderApp assistant avatar routing", () => {
     expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBe(
       "node list failed",
     );
+  });
+
+  it("shows a retryable Workboard config error after config loading fails", async () => {
+    const request = vi.fn(async () => ({
+      config: {},
+      hash: "hash-reloaded",
+      issues: [],
+      raw: "{}",
+      valid: true,
+    }));
+    const state = createState({
+      tab: "workboard",
+      client: { request } as unknown as AppViewState["client"],
+      configLoading: false,
+      configSnapshot: null,
+      lastError: "config.get failed",
+    });
+    const container = document.createElement("div");
+
+    await vi.waitFor(() => {
+      render(renderApp(state), container);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("config.get failed");
+    });
+
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Retry")
+      ?.click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("config.get", {});
+    });
   });
 
   it("routes chat errors through the chat view instead of the shared header", () => {

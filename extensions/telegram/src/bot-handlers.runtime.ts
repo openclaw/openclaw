@@ -2769,7 +2769,12 @@ export const registerTelegramHandlers = ({
         } catch (err) {
           throw new TelegramRetryableCallbackError(err);
         }
-        const { byProvider, providers, modelNames } = modelData;
+        const {
+          byProvider,
+          providers,
+          modelNames,
+          resolvedDefault: activeResolvedDefault,
+        } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -2843,8 +2848,10 @@ export const registerTelegramHandlers = ({
           const totalPages = calculateTotalPages(models.length, pageSize);
           const safePage = Math.max(1, Math.min(page, totalPages));
 
-          // Resolve current model from session (prefer overrides)
-          const currentModel = sessionState.model;
+          // Resolve current model from session (prefer overrides), then the active default.
+          const currentModel =
+            sessionState.model ||
+            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
 
           const buttons = buildModelsKeyboard({
             provider,

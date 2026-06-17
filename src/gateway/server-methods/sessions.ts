@@ -57,7 +57,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionPatchProjection,
+  createSessionEntryWithTranscript,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -116,7 +119,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import { applySessionsPatchToStore } from "../sessions-patch.js";
+import { applySessionsPatchToStore, projectSessionsPatchEntry } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
@@ -2066,21 +2069,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
-    const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: requestedAgentId,
-        patch: p,
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
+    const applied = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: ({ entries }) => {
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store,
+          agentId: requestedAgentId,
+        });
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      project: async ({ primaryKey, existingEntry, entries }) =>
+        await projectSessionsPatchEntry({
+          cfg,
+          entries,
+          existingEntry,
+          storeKey: primaryKey,
+          agentId: requestedAgentId,
+          patch: p,
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        }),
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);

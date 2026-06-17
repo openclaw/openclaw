@@ -22,7 +22,7 @@ import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-reg
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
-export type HostCandidate = {
+type HostCandidate = {
   /** Runtime or harness id that will host an agent run. */
   runtimeId: string;
   /** Context-engine host capability descriptor for the runtime. */

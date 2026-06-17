@@ -6,7 +6,6 @@ import { loadSessionStore, updateSessionStore } from "../config/sessions/store.j
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   abortEmbeddedAgentRun,
-  consumeEmbeddedRunModelSwitch,
   requestEmbeddedRunModelSwitch,
   type EmbeddedRunModelSwitchRequest,
 } from "./embedded-agent-runner/runs.js";
@@ -89,12 +88,6 @@ export function requestLiveSessionModelSwitch(params: {
   }
   requestEmbeddedRunModelSwitch(sessionId, params.selection);
   return true;
-}
-
-export function consumeLiveSessionModelSwitch(
-  sessionId: string,
-): LiveSessionModelSelection | undefined {
-  return consumeEmbeddedRunModelSwitch(sessionId);
 }
 
 function isAlreadyAppliedOpenAICodexRuntimePromotion(
