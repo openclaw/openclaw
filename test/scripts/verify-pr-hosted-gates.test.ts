@@ -7,6 +7,7 @@ import {
 } from "../../scripts/verify-pr-hosted-gates.mjs";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
+const BUILD_ARTIFACTS_WORKFLOW = "Blacksmith Build Artifacts Testbox";
 
 function successfulRun(name: string, id: number, updatedAt: string) {
   return {
@@ -139,6 +140,110 @@ describe("verify-pr-hosted-gates", () => {
         ],
       }),
     ).toThrow("Missing successful exact-head CI workflow");
+  });
+
+  it("covers a queued artifact Testbox only with a completed exact CI fallback", () => {
+    expect(
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun(`CI release gate ${sha}`, 1, "2026-06-17T10:49:00Z"),
+            event: "workflow_dispatch",
+            display_title: `CI release gate ${sha}`,
+          },
+          successfulRun("CI", 3, "2026-06-17T10:51:00Z"),
+          successfulRun("Blacksmith Testbox", 4, "2026-06-17T10:52:00Z"),
+          successfulRun("Blacksmith ARM Testbox", 5, "2026-06-17T10:53:00Z"),
+          successfulRun("Workflow Sanity", 6, "2026-06-17T10:54:00Z"),
+          {
+            ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, 2, "2026-06-17T10:50:00Z"),
+            status: "queued",
+            conclusion: null,
+          },
+        ],
+      }),
+    ).toEqual({
+      headSha: sha,
+      workflows: [
+        expect.objectContaining({ name: "CI", id: 3 }),
+        expect.objectContaining({ name: "Blacksmith Testbox", id: 4 }),
+        expect.objectContaining({ name: "Blacksmith ARM Testbox", id: 5 }),
+        expect.objectContaining({ name: "Workflow Sanity", id: 6 }),
+      ],
+      fallbackCoveredWorkflows: [
+        {
+          name: BUILD_ARTIFACTS_WORKFLOW,
+          coveredBy: "CI release gate",
+          reason: "scheduled workflow is queued",
+        },
+      ],
+    });
+  });
+
+  it("does not cover queued artifacts until all supporting workflow gates pass", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun(`CI release gate ${sha}`, 1, "2026-06-17T10:49:00Z"),
+            event: "workflow_dispatch",
+            display_title: `CI release gate ${sha}`,
+          },
+          {
+            ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, 2, "2026-06-17T10:50:00Z"),
+            status: "queued",
+            conclusion: null,
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head Blacksmith Build Artifacts Testbox workflow");
+  });
+
+  it("keeps active or terminal non-successful artifact Testboxes blocking", () => {
+    const ciFallback = {
+      ...successfulRun(`CI release gate ${sha}`, 1, "2026-06-17T10:49:00Z"),
+      event: "workflow_dispatch",
+      display_title: `CI release gate ${sha}`,
+    };
+
+    for (const artifactRun of [
+      {
+        ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, 2, "2026-06-17T10:50:00Z"),
+        status: "in_progress",
+        conclusion: null,
+      },
+      {
+        ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, 3, "2026-06-17T10:51:00Z"),
+        conclusion: "failure",
+      },
+    ]) {
+      expect(() =>
+        collectHostedGateEvidence({
+          sha,
+          workflowRuns: [ciFallback, artifactRun],
+        }),
+      ).toThrow("Missing successful exact-head Blacksmith Build Artifacts Testbox workflow");
+    }
+
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          ciFallback,
+          {
+            ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, 4, "2026-06-17T10:52:00Z"),
+            conclusion: "failure",
+          },
+          {
+            ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, 5, "2026-06-17T10:53:00Z"),
+            status: "queued",
+            conclusion: null,
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head Blacksmith Build Artifacts Testbox workflow");
   });
 
   it("rejects an unmarked manual CI run", () => {

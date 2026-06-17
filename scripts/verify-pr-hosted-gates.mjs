@@ -11,6 +11,12 @@ export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Workflow Sanity",
 ];
 const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+const BUILD_ARTIFACTS_WORKFLOW = "Blacksmith Build Artifacts Testbox";
+const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
+  "Blacksmith Testbox",
+  "Blacksmith ARM Testbox",
+  "Workflow Sanity",
+];
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
@@ -116,6 +122,36 @@ function successfulRunOrThrow(runs, workflowName, sha) {
   return run;
 }
 
+function successfulReleaseGateFallback(workflowRuns, sha) {
+  const fallback = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
+  if (fallback?.status !== "completed" || fallback.conclusion !== "success") {
+    return null;
+  }
+  return fallback;
+}
+
+function canCoverQueuedBuildArtifacts(workflowRuns, sha) {
+  if (!successfulReleaseGateFallback(workflowRuns, sha)) {
+    return false;
+  }
+  const supportingGatesPassed = ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS.every((workflowName) => {
+    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha));
+    return run?.status === "completed" && run.conclusion === "success";
+  });
+  if (!supportingGatesPassed) {
+    return false;
+  }
+  const buildArtifactRuns = matchingAuthoritativeRuns(workflowRuns, BUILD_ARTIFACTS_WORKFLOW, sha);
+  const latestBuildArtifactRun = latestRun(buildArtifactRuns);
+  return (
+    latestBuildArtifactRun?.status === "queued" &&
+    buildArtifactRuns.every(
+      (run) =>
+        run.status === "queued" || (run.status === "completed" && run.conclusion === "success"),
+    )
+  );
+}
+
 function stripAnsi(raw) {
   const escape = String.fromCharCode(27);
   return raw.replace(new RegExp(`${escape}\\[[0-?]*[ -/]*[@-~]`, "gu"), "");
@@ -130,16 +166,30 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
     throw new Error("workflowRuns must be an array.");
   }
   const workflows = [];
+  const fallbackCoveredWorkflows = [];
+  let ciRun;
   if (!changelogOnly) {
-    workflows.push(successfulRunOrThrow(workflowRuns, "CI", sha));
+    ciRun = successfulRunOrThrow(workflowRuns, "CI", sha);
+    workflows.push(ciRun);
   }
   for (const workflowName of SCHEDULED_HOSTED_WORKFLOWS) {
     const matchingRuns = matchingAuthoritativeRuns(workflowRuns, workflowName, sha);
     if (matchingRuns.length > 0) {
+      if (
+        workflowName === BUILD_ARTIFACTS_WORKFLOW &&
+        canCoverQueuedBuildArtifacts(workflowRuns, sha)
+      ) {
+        fallbackCoveredWorkflows.push({
+          name: workflowName,
+          coveredBy: "CI release gate",
+          reason: "scheduled workflow is queued",
+        });
+        continue;
+      }
       workflows.push(successfulRunOrThrow(workflowRuns, workflowName, sha));
     }
   }
-  return {
+  const evidence = {
     headSha: sha,
     workflows: workflows.map((run) => ({
       id: run.id,
@@ -152,6 +202,10 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
       url: run.html_url,
     })),
   };
+  if (fallbackCoveredWorkflows.length > 0) {
+    evidence.fallbackCoveredWorkflows = fallbackCoveredWorkflows;
+  }
+  return evidence;
 }
 
 function loadWorkflowRuns(repo, sha) {

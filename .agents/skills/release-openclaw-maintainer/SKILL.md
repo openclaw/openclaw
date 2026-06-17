@@ -92,7 +92,7 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   the change. If the current canonical gate cannot validate the new policy,
   stop for explicit maintainer direction rather than weakening that boundary.
 - In maintainer Testbox mode, use `OPENCLAW_TESTBOX=1 scripts/pr prepare-run
-  <PR>` only after the exact PR head has passed `CI` and every scheduled
+<PR>` only after the exact PR head has passed `CI` and every scheduled
   hosted gate. For a workflow change, that means `Blacksmith Testbox`,
   `Blacksmith ARM Testbox`, `Blacksmith Build Artifacts Testbox`, and
   `Workflow Sanity`; only gates GitHub actually scheduled for that exact head
@@ -107,11 +107,17 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   stalled, a maintainer may dispatch the explicit GitHub-hosted fallback from
   the PR head branch:
   `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-  target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
   Use it only for an observed provider queue stall, never for failed CI or as a
   routine shortcut. The run must be named `CI release gate <full-pr-sha>` and
   pass on that exact SHA; the native hosted-gate verifier rejects generic manual
-  CI runs. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>`.
+  CI runs. If `Blacksmith Build Artifacts Testbox` is the only remaining
+  required gate and it is still queued without a runner, the same completed
+  fallback CI may cover it because its `build-artifacts` job builds, packages,
+  and smoke tests those artifacts. The verifier records that coverage. Never
+  use this coverage when the artifact workflow has started, failed, been
+  cancelled, or been skipped. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr
+prepare-run <PR>`.
 - Generate the changelog before every beta, beta rerun, stable release, or
   stable rerun, before version/tag preparation. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if

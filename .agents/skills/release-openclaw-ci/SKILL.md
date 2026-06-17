@@ -149,10 +149,15 @@ Stop watchers before ending the turn or switching strategy.
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    From the PR head branch, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-   target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.
+   If `Blacksmith Build Artifacts Testbox` is the only remaining required gate
+   and remains queued without a runner, that completed exact fallback may cover
+   it because CI's `build-artifacts` job already builds, packages, and smoke
+   tests the artifacts. Do not use this coverage after the artifact workflow
+   starts or completes non-successfully.
 
 ## Evidence
 
