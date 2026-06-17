@@ -43,6 +43,19 @@ export async function startGatewayTailscaleExposure(params: {
           return null;
         }
       }
+      // Reset stale serve entries before applying a fresh route.
+      // tailscale serve is append-only: without an explicit reset, each
+      // gateway restart accumulates duplicate entries that can cause
+      // ERR_SSL_PROTOCOL_ERROR or ERR_CONNECTION_REFUSED (issue #93932).
+      try {
+        if (serviceName) {
+          await disableTailscaleServe(undefined, serviceName);
+        } else {
+          await disableTailscaleServe();
+        }
+      } catch {
+        // Best-effort cleanup — stale entries may not exist yet.
+      }
       if (serviceName) {
         await enableTailscaleServe(params.port, undefined, serviceName);
       } else {
