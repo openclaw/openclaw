@@ -166,11 +166,14 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           restartRecords.set(key, record);
 
           try {
-            if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId, {
-                manual: false,
-              });
-            }
+            // Always stop before restart — even when status.running is false.
+            // A wedged channel (disconnected but task never settled) needs
+            // stopChannel to abort the stale task before startChannel can
+            // create a fresh one. Skipping stopChannel for !running accounts
+            // causes the health monitor to loop forever without recovery.
+            await channelManager.stopChannel(channelId as ChannelId, accountId, {
+              manual: false,
+            });
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
           } catch (err) {
