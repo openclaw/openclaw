@@ -889,6 +889,32 @@ describe("readSystemdServiceRuntime", () => {
       },
     });
   });
+
+  // Regression for #84698: status probes must bound the systemctl subprocess so a
+  // wedged systemd socket cannot hang `openclaw status` (which advertises --timeout).
+  it("passes a kill-backed timeout to systemctl when a read deadline is set", async () => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME }, { timeoutMs: 1234 });
+    expect(execFileMock).toHaveBeenCalled();
+    for (const call of execFileMock.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBe(1234);
+      expect(opts.killSignal).toBe("SIGKILL");
+    }
+  });
+
+  it("leaves systemctl unbounded when no read deadline is set", async () => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(execFileMock).toHaveBeenCalled();
+    for (const call of execFileMock.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBeUndefined();
+      expect(opts.killSignal).toBeUndefined();
+    }
+  });
 });
 
 describe("resolveSystemdUserUnitPath", () => {

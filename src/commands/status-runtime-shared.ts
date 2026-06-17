@@ -163,9 +163,17 @@ export async function resolveStatusLastHeartbeat(params: {
   }).catch(() => null);
 }
 
+// Default bound for service-manager probes when status runs without an explicit
+// --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
+const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
+
 /** Resolves launchd/systemd summaries for the gateway and node services together. */
-export async function resolveStatusServiceSummaries() {
-  return await Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]);
+export async function resolveStatusServiceSummaries(timeoutMs?: number) {
+  const probeTimeoutMs = timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS;
+  return await Promise.all([
+    getDaemonStatusSummary(probeTimeoutMs),
+    getNodeDaemonStatusSummary(probeTimeoutMs),
+  ]);
 }
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
@@ -216,7 +224,7 @@ export async function resolveStatusRuntimeDetails(params: {
         gatewayReachable: params.gatewayReachable,
       })
     : null;
-  const [gatewayService, nodeService] = await resolveStatusServiceSummaries();
+  const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
   const result = {
     usage,
     health,
