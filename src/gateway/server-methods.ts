@@ -630,8 +630,7 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
-  const methodRegistry =
-    opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const methodRegistry = createRequestGatewayMethodRegistry(opts.extraHandlers);
   const authError = authorizeGatewayMethod(req.method, client, req.params);
   if (authError) {
     respond(false, undefined, authError);
