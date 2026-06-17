@@ -134,6 +134,34 @@ export async function resolveQaEvidenceArtifactFile(params: {
   evidencePath: string;
   repoRoot: string;
 }): Promise<string> {
+  const evidencePath = await resolveQaEvidenceFile({
+    inputPath: params.evidencePath,
+    repoRoot: params.repoRoot,
+  });
+  const summary = validateQaEvidenceSummaryJson(
+    JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
+  );
+  const artifactFile = await resolveExistingQaEvidenceArtifactFile({
+    artifactPath: params.artifactPath,
+    evidencePath,
+    repoRoot: params.repoRoot,
+  });
+  const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
+    evidencePath,
+    repoRoot: params.repoRoot,
+    summaryEntries: summary.entries,
+  });
+  if (allowedArtifactFiles.has(artifactFile)) {
+    return artifactFile;
+  }
+  throw new Error("Evidence artifact is not declared by this evidence summary.");
+}
+
+async function resolveExistingQaEvidenceArtifactFile(params: {
+  artifactPath: string;
+  evidencePath: string;
+  repoRoot: string;
+}): Promise<string> {
   const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const evidenceDir = path.dirname(
     await resolveQaEvidenceFile({
@@ -162,6 +190,50 @@ export async function resolveQaEvidenceArtifactFile(params: {
     }
   }
   throw new Error("Evidence artifact not found.");
+}
+
+async function collectDeclaredQaEvidenceArtifactFiles(params: {
+  evidencePath: string;
+  repoRoot: string;
+  summaryEntries: readonly QaEvidenceSummaryEntry[];
+}): Promise<Set<string>> {
+  const allowed = new Set<string>();
+  for (const entry of params.summaryEntries) {
+    for (const artifact of entry.execution?.artifacts ?? []) {
+      const artifactPath = await resolveExistingQaEvidenceArtifactFile({
+        artifactPath: artifact.path,
+        evidencePath: params.evidencePath,
+        repoRoot: params.repoRoot,
+      }).catch(() => null);
+      if (artifactPath) {
+        allowed.add(artifactPath);
+      }
+    }
+  }
+  const producerRoot = await findUxMatrixProducerRoot({
+    evidencePath: params.evidencePath,
+    repoRoot: params.repoRoot,
+    summaryEntries: params.summaryEntries,
+  });
+  if (producerRoot) {
+    const producerFiles = [
+      "commands.txt",
+      "manifest.json",
+      "matrix.json",
+      "qa-evidence.json",
+      "release-ledger.json",
+      "scorecard.md",
+      path.join("preflight", "adb-devices.txt"),
+      path.join("preflight", "memory.txt"),
+    ];
+    for (const producerFile of producerFiles) {
+      const realProducerFile = await realpathIfExists(path.join(producerRoot, producerFile));
+      if (realProducerFile) {
+        allowed.add(realProducerFile);
+      }
+    }
+  }
+  return allowed;
 }
 
 function classifyArtifact(kind: string, filePath: string): QaEvidenceArtifactView["mediaKind"] {
@@ -445,7 +517,7 @@ async function candidateProducerRoots(params: {
   const roots = new Set<string>([path.dirname(params.evidencePath)]);
   for (const entry of params.summaryEntries) {
     for (const artifact of entry.execution?.artifacts ?? []) {
-      const artifactPath = await resolveQaEvidenceArtifactFile({
+      const artifactPath = await resolveExistingQaEvidenceArtifactFile({
         artifactPath: artifact.path,
         evidencePath: params.evidencePath,
         repoRoot,

@@ -364,20 +364,55 @@ describe("evidence gallery", () => {
       "preflight/adb-devices.txt",
     );
     expect(model.producerContext?.preflight.adbDevices?.preview).toBe("List of devices\n");
+    await expect(
+      resolveQaEvidenceArtifactFile({
+        artifactPath:
+          ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1/scorecard.md",
+        evidencePath: suiteDir,
+        repoRoot,
+      }),
+    ).resolves.toBe(await fs.realpath(path.join(runDir, "scorecard.md")));
   });
 
-  it("resolves evidence and artifacts inside the repo root only", async () => {
+  it("resolves evidence and declared artifacts inside the repo root only", async () => {
     const repoRoot = await createTempRepo();
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "suite");
     const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
+    await fs.writeFile(path.join(repoRoot, "package.json"), '{"private":true}\n', "utf8");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(path.join(outputDir, "artifact.log"), "ok\n", "utf8");
     await writeJson(evidencePath, {
       kind: "openclaw.qa.evidence-summary",
       schemaVersion: 2,
       generatedAt: "2026-06-17T12:00:00.000Z",
       evidenceMode: "full",
-      entries: [],
+      entries: [
+        {
+          test: {
+            kind: "vitest-test",
+            id: "qa-lab.declared-artifact",
+            title: "Declared artifact",
+          },
+          coverage: [{ id: "qa.artifact", role: "primary" }],
+          execution: {
+            runner: "vitest",
+            environment: {
+              ref: "gallery-test",
+              os: "darwin",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "mock-openai",
+              live: false,
+              model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+            },
+            packageSource: { kind: "source-checkout" },
+            artifacts: [{ kind: "log", path: "artifact.log", source: "vitest" }],
+          },
+          result: { status: "pass" },
+        },
+      ],
     });
-    await fs.writeFile(path.join(outputDir, "artifact.log"), "ok\n", "utf8");
 
     await expect(resolveQaEvidenceFile({ inputPath: outputDir, repoRoot })).resolves.toBe(
       await fs.realpath(evidencePath),
@@ -389,6 +424,13 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).resolves.toBe(await fs.realpath(path.join(outputDir, "artifact.log")));
+    await expect(
+      resolveQaEvidenceArtifactFile({
+        artifactPath: "package.json",
+        evidencePath,
+        repoRoot,
+      }),
+    ).rejects.toThrow("Evidence artifact is not declared by this evidence summary.");
     await expect(
       resolveQaEvidenceFile({ inputPath: "/tmp/not-openclaw-evidence.json", repoRoot }),
     ).rejects.toThrow("Evidence path must exist inside the repo root.");
