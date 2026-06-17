@@ -9,6 +9,7 @@ import {
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
+import { onToolActivity } from "./tool-activity-heartbeat.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -296,9 +297,11 @@ export function streamWithIdleTimeout(
             clearTimer();
           };
           const unsubscribeActivity = onLlmRequestActivity(streamAbortController.signal, armTimer);
+          const unsubscribeToolActivity = onToolActivity(streamAbortController.signal, armTimer);
           const cleanupIterator = () => {
             stopWaiting();
             unsubscribeActivity();
+            unsubscribeToolActivity();
             cleanupSourceSignal();
           };
 
