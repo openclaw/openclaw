@@ -43,7 +43,7 @@ function loadManifestCatalogRowsForPluginIds(params: {
       .filter((entry) =>
         params.mode === "static-authoritative"
           ? entry.discovery === "static"
-          : entry.discovery !== "runtime",
+          : entry.discovery !== "runtime" && entry.discovery !== "refreshable",
       )
       .map((entry) => entry.provider),
   );
