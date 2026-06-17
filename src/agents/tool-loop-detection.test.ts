@@ -637,7 +637,11 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps changing exec output below the global no-progress breaker", () => {
+    // #93917: In the old code, varying exec output prevented the global circuit
+    // breaker from firing. After stripping output from the exec hash, repeated
+    // exec calls with the same status+exitCode+timedOut now correctly escalate
+    // to the breaker even when output text varies.
+    it("escalates repeated exec calls to the global breaker when status and exitCode are stable", () => {
       const state = createState();
       const params = { command: "date" };
 
@@ -662,12 +666,14 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
       }
     });
 
-    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+    // #93917: Same fix — stable exec hash (status+exitCode+timedOut) means
+    // repeated failed exec calls with varying text now reach the breaker.
+    it("escalates repeated failed exec calls to the global breaker when status and exitCode are stable", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -692,8 +698,8 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
       }
     });
 
