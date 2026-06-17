@@ -26,8 +26,13 @@ import {
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "openclaw/plugin-sdk/windows-spawn";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
-import { splitCommandParts } from "./command-line.js";
+import { quoteCommandPart, splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
@@ -661,6 +666,55 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
+/**
+ * On Windows, rewrites agent commands so they spawn a real .exe (node.exe) instead
+ * of a .cmd/.bat/.ps1 wrapper script, avoiding spawn EINVAL on Node ≥18.20.2.
+ *
+ * Falls back to the original command when Windows resolution cannot discover a
+ * safe executable entrypoint (e.g. unrecognized .cmd wrappers).
+ */
+function createWindowsSafeAgentRegistry(
+  baseRegistry: AcpAgentRegistry,
+  platform: NodeJS.Platform = process.platform,
+): AcpAgentRegistry {
+  if (platform !== "win32") {
+    return baseRegistry;
+  }
+
+  return {
+    resolve(agentName: string): string {
+      const command = baseRegistry.resolve(agentName);
+      if (!command) {
+        return command;
+      }
+      const parts = splitCommandParts(command);
+      if (parts.length === 0) {
+        return command;
+      }
+      const executable = parts[0];
+      const restArgs = parts.slice(1);
+
+      try {
+        const candidate = resolveWindowsSpawnProgramCandidate({ command: executable });
+        // Skip transformation for commands that are already safe to spawn
+        // (real .exe files or bare names that the OS resolves natively).
+        if (candidate.resolution === "direct") {
+          return command;
+        }
+        const program = applyWindowsSpawnProgramPolicy({ candidate, allowShellFallback: false });
+        const invocation = materializeWindowsSpawnProgram(program, restArgs);
+        return [invocation.command, ...invocation.argv].map(quoteCommandPart).join(" ");
+      } catch {
+        // Resolution can fail for unrecognized wrappers; keep the original command.
+        return command;
+      }
+    },
+    list(): string[] {
+      return baseRegistry.list();
+    },
+  };
+}
+
 /** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
 export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
@@ -691,7 +745,7 @@ export class AcpxRuntime implements AcpRuntime {
       leaseStore: this.processLeaseStore,
       launchScope: this.launchLeaseScope,
     });
-    this.agentRegistry = options.agentRegistry;
+    this.agentRegistry = createWindowsSafeAgentRegistry(options.agentRegistry);
     this.scopedAgentRegistry = createModelScopedAgentRegistry({
       agentRegistry: this.agentRegistry,
       scope: this.codexAcpModelOverrideScope,
