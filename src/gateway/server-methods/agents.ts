@@ -9,6 +9,7 @@ import {
   formatValidationErrors,
   validateAgentsCreateParams,
   validateAgentsDeleteParams,
+  validateAgentsFilesBrowseParams,
   validateAgentsFilesGetParams,
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
@@ -139,6 +140,7 @@ type FileMeta = {
 };
 
 type WorkspaceRoot = Awaited<ReturnType<typeof root>>;
+type WorkspaceDirEntry = Awaited<ReturnType<WorkspaceRoot["list"]>>[number];
 
 function isRegularWorkspaceFileStat(stat: {
   isFile: boolean | (() => boolean);
@@ -880,6 +882,98 @@ export const agentsHandlers: GatewayRequestHandlers = {
           updatedAtMs: meta?.updatedAtMs,
           content,
         },
+      },
+      undefined,
+    );
+  },
+  "agents.files.browse": async ({ params, respond, context }) => {
+    if (!validateAgentsFilesBrowseParams(params)) {
+      respondInvalidMethodParams(
+        respond,
+        "agents.files.browse",
+        validateAgentsFilesBrowseParams.errors,
+      );
+      return;
+    }
+    const rawAgentId = params.agentId;
+    const agentId = resolveAgentIdOrError(
+      typeof rawAgentId === "string" ? rawAgentId : "",
+      context.getRuntimeConfig(),
+    );
+    if (!agentId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+    const workspaceDir = resolveAgentWorkspaceDir(context.getRuntimeConfig(), agentId);
+    const browsePath = typeof params.path === "string" ? params.path : ".";
+
+    let workspaceRoot: WorkspaceRoot;
+    try {
+      workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+    } catch {
+      respond(
+        true,
+        {
+          agentId,
+          workspace: workspaceDir,
+          path: browsePath,
+          entries: [],
+        },
+        undefined,
+      );
+      return;
+    }
+
+    let entries: WorkspaceDirEntry[];
+    try {
+      entries = await workspaceRoot.list(browsePath, { withFileTypes: true });
+    } catch {
+      respond(
+        true,
+        {
+          agentId,
+          workspace: workspaceDir,
+          path: browsePath,
+          entries: [],
+        },
+        undefined,
+      );
+      return;
+    }
+
+    const MAX_BROWSER_ENTRIES = 500;
+    const TRUNCATED = entries.length > MAX_BROWSER_ENTRIES;
+    const trimmed = TRUNCATED ? entries.slice(0, MAX_BROWSER_ENTRIES) : entries;
+
+    const mapped = [];
+    for (const entry of trimmed) {
+      const kind =
+        entry.kind === "directory"
+          ? "directory"
+          : entry.kind === "file"
+            ? "file"
+            : null;
+      if (!kind) {
+        continue;
+      }
+      const relativePath = browsePath === "." ? entry.name : `${browsePath}/${entry.name}`;
+      mapped.push({
+        name: entry.name,
+        path: relativePath,
+        kind,
+        ...(kind === "file" ? { size: entry.size } : {}),
+        updatedAtMs: Math.floor(entry.mtimeMs),
+      });
+    }
+
+    respond(
+      true,
+      {
+        agentId,
+        workspace: workspaceDir,
+        path: browsePath,
+        entries: mapped,
+        ...(TRUNCATED ? { truncated: true } : {}),
       },
       undefined,
     );

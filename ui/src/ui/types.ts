@@ -387,6 +387,24 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+/** One entry in a workspace directory listing. */
+export type WorkspaceFileBrowseEntry = {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  size?: number;
+  updatedAtMs?: number;
+};
+
+/** Result of agents.files.browse RPC. */
+export type AgentsFilesBrowseResult = {
+  agentId: string;
+  workspace: string;
+  path: string;
+  entries: WorkspaceFileBrowseEntry[];
+  truncated?: boolean;
+};
+
 export type SessionWorkspaceFileEntry = {
   path: string;
   name: string;

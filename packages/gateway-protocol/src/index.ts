@@ -39,6 +39,12 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type AgentsFilesBrowseParams,
+  AgentsFilesBrowseParamsSchema,
+  type AgentsFilesBrowseResult,
+  AgentsFilesBrowseResultSchema,
+  type WorkspaceFileBrowseEntry,
+  WorkspaceFileBrowseEntrySchema,
   type ArtifactsDownloadParams,
   ArtifactsDownloadParamsSchema,
   type ArtifactsDownloadResult,
@@ -568,6 +574,9 @@ export const validateAgentsFilesGetParams = lazyCompile<AgentsFilesGetParams>(
 );
 export const validateAgentsFilesSetParams = lazyCompile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
+);
+export const validateAgentsFilesBrowseParams = lazyCompile<AgentsFilesBrowseParams>(
+  AgentsFilesBrowseParamsSchema,
 );
 export const validateArtifactsListParams =
   lazyCompile<ArtifactsListParams>(ArtifactsListParamsSchema);
@@ -1126,6 +1135,9 @@ export {
   AgentsFilesGetResultSchema,
   AgentsFilesSetParamsSchema,
   AgentsFilesSetResultSchema,
+  AgentsFilesBrowseParamsSchema,
+  AgentsFilesBrowseResultSchema,
+  WorkspaceFileBrowseEntrySchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
   CommandsListParamsSchema,
@@ -1281,6 +1293,9 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  AgentsFilesBrowseParams,
+  AgentsFilesBrowseResult,
+  WorkspaceFileBrowseEntry,
   SessionFileBrowserEntry,
   SessionFileBrowserResult,
   SessionFileEntry,

@@ -572,6 +572,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.files.list",
       "agents.files.get",
       "agents.files.set",
+      "agents.files.browse",
     ],
     loadHandlers: loadAgentsHandlers,
   }),
