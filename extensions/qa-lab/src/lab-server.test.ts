@@ -356,11 +356,9 @@ describe("qa-lab server", () => {
             reject(new Error("gateway stop failed"));
             return;
           }
-          abortSignal.addEventListener(
-            "abort",
-            () => reject(new Error("gateway stop failed")),
-            { once: true },
-          );
+          abortSignal.addEventListener("abort", () => reject(new Error("gateway stop failed")), {
+            once: true,
+          });
         }),
     );
 
@@ -450,6 +448,75 @@ describe("qa-lab server", () => {
     expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
 
     await expectFileMissing(outputPath);
+  });
+
+  it("serves evidence artifact HEAD metadata and streams GET bodies", async () => {
+    const repoRoot = await createQaLabRepoRootFixture();
+    const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "server");
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(path.join(evidenceDir, "artifact.log"), "streamed body\n", "utf8");
+    await writeFile(
+      path.join(evidenceDir, "qa-evidence.json"),
+      `${JSON.stringify(
+        {
+          kind: "openclaw.qa.evidence-summary",
+          schemaVersion: 2,
+          generatedAt: "2026-06-17T12:00:00.000Z",
+          evidenceMode: "full",
+          entries: [
+            {
+              test: {
+                kind: "vitest-test",
+                id: "qa-lab.server-artifact",
+                title: "Server artifact",
+              },
+              coverage: [{ id: "qa.artifact", role: "primary" }],
+              execution: {
+                runner: "vitest",
+                environment: {
+                  ref: "server-test",
+                  os: "darwin",
+                  nodeVersion: "v24.0.0",
+                },
+                provider: {
+                  id: "mock-openai",
+                  live: false,
+                  model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+                },
+                packageSource: { kind: "source-checkout" },
+                artifacts: [{ kind: "log", path: "artifact.log", source: "vitest" }],
+              },
+              result: { status: "pass" },
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const lab = await startQaLabServerForTest({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    const artifactUrl = new URL("/api/evidence/artifact", lab.baseUrl);
+    artifactUrl.searchParams.set("evidencePath", ".artifacts/qa-e2e/server/qa-evidence.json");
+    artifactUrl.searchParams.set("artifactPath", "artifact.log");
+
+    const headResponse = await fetchWithRetry(artifactUrl.toString(), { method: "HEAD" });
+    expect(headResponse.status).toBe(200);
+    expect(headResponse.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(headResponse.headers.get("content-length")).toBe("14");
+    expect(await headResponse.text()).toBe("");
+
+    const getResponse = await fetchWithRetry(artifactUrl.toString());
+    expect(getResponse.status).toBe(200);
+    expect(getResponse.headers.get("content-length")).toBe("14");
+    expect(await getResponse.text()).toBe("streamed body\n");
   });
 
   it("returns controlled errors for oversized JSON body reads", async () => {
