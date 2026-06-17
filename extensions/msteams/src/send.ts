@@ -44,6 +44,8 @@ type SendMSTeamsMessageParams = {
   filename?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  /** Force a new root post in the channel (channel only; ignored for DMs/group chats) */
+  topLevel?: boolean;
 };
 
 type SendMSTeamsMessageResult = {
@@ -128,6 +130,8 @@ type SendMSTeamsCardParams = {
   to: string;
   /** Adaptive Card JSON object */
   card: Record<string, unknown>;
+  /** Force a new root post in the channel (channel only; ignored for DMs/group chats) */
+  topLevel?: boolean;
 };
 
 type SendMSTeamsCardResult = {
@@ -149,13 +153,17 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile, topLevel } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
   });
   const messageText = convertMarkdownTables(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const ctx = await resolveMSTeamsSendContext({
+    cfg,
+    to,
+    replyStyleOverride: topLevel ? "top-level" : undefined,
+  });
   const {
     app,
     conversationId,
@@ -542,10 +550,11 @@ export async function sendPollMSTeams(
 export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
-  const { cfg, to, card } = params;
+  const { cfg, to, card, topLevel } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
+    replyStyleOverride: topLevel ? "top-level" : undefined,
   });
 
   log.debug?.("sending adaptive card", {

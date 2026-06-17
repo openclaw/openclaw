@@ -417,17 +417,30 @@ function describeMSTeamsMessageTool({
       : [],
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
-      ? {
-          actions: ["unpin"],
-          properties: {
-            pinnedMessageId: Type.Optional(
-              Type.String({
-                description:
-                  "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
-              }),
-            ),
+      ? [
+          {
+            actions: ["unpin"],
+            properties: {
+              pinnedMessageId: Type.Optional(
+                Type.String({
+                  description:
+                    "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
+                }),
+              ),
+            },
           },
-        }
+          {
+            actions: ["send"],
+            properties: {
+              topLevel: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "Force a new root post in the channel (channel only; ignored for DMs/group chats). Omit or set false to use the configured replyStyle.",
+                }),
+              ),
+            },
+          },
+        ]
       : null,
   };
 }
@@ -785,6 +798,35 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     channel: "msteams",
                     messageId: result.messageId,
                     ...(result.pendingUploadId ? { pendingUploadId: result.pendingUploadId } : {}),
+                  },
+                );
+              },
+            });
+          }
+          if (ctx.action === "send") {
+            return await runWithRequiredActionTarget({
+              actionLabel: "Send",
+              toolParams: ctx.params,
+              run: async (to) => {
+                const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
+                const result = await sendMessageMSTeams({
+                  cfg: ctx.cfg,
+                  to,
+                  text: resolveActionContent(ctx.params),
+                  topLevel: ctx.params.topLevel === true ? true : undefined,
+                });
+                return jsonActionResultWithDetails(
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    action: "send",
+                    messageId: result.messageId,
+                    conversationId: result.conversationId,
+                  },
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    messageId: result.messageId,
                   },
                 );
               },
