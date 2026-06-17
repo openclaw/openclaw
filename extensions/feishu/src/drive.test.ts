@@ -109,6 +109,18 @@ function expectRequestCall(
 
 describe("registerFeishuDriveTools", () => {
   const requestMock = vi.fn();
+  const driveFileListMock = vi.fn();
+
+  function createMockClient() {
+    return {
+      request: requestMock,
+      drive: {
+        file: {
+          list: driveFileListMock,
+        },
+      },
+    };
+  }
 
   beforeAll(async () => {
     ({ registerFeishuDriveTools } = await import("./drive.js"));
@@ -136,9 +148,7 @@ describe("registerFeishuDriveTools", () => {
       bitable: false,
       base: false,
     });
-    createFeishuToolClientMock.mockReturnValue({
-      request: requestMock,
-    });
+    createFeishuToolClientMock.mockReturnValue(createMockClient());
     cleanupAmbientCommentTypingReactionMock.mockResolvedValue(false);
   });
 
@@ -1236,5 +1246,248 @@ describe("registerFeishuDriveTools", () => {
     expect((result.details as { error?: string }).error).toBe(
       "block_id is only supported for docx comments",
     );
+  });
+
+  it("list action returns files with pagination fields", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret",
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    driveFileListMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        files: [
+          { token: "f1", name: "file1", type: "file", url: "u1", created_time: "t1", modified_time: "t2", owner_id: "o1" },
+        ],
+        has_more: true,
+        next_page_token: "page2token",
+      },
+    });
+
+    const result = await tool.execute("call-list", {
+      action: "list",
+      folder_token: "folder_abc",
+    });
+    expect(driveFileListMock).toHaveBeenCalledTimes(1);
+    expect(driveFileListMock.mock.calls[0][0]).toEqual({
+      params: { folder_token: "folder_abc" },
+    });
+    const details = result.details as {
+      files?: Array<{ token?: string }>;
+      has_more?: boolean;
+      next_page_token?: string;
+    };
+    expect(details.files).toHaveLength(1);
+    expect(details.files?.[0]?.token).toBe("f1");
+    expect(details.has_more).toBe(true);
+    expect(details.next_page_token).toBe("page2token");
+  });
+
+  it("list action passes page_size and page_token to API", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret",
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    driveFileListMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        files: [
+          { token: "f2", name: "file2", type: "file", url: "u2", created_time: "t3", modified_time: "t4", owner_id: "o2" },
+        ],
+        has_more: false,
+        next_page_token: undefined,
+      },
+    });
+
+    const result = await tool.execute("call-list-page", {
+      action: "list",
+      folder_token: "folder_abc",
+      page_size: 20,
+      page_token: "page2token",
+    });
+    expect(driveFileListMock).toHaveBeenCalledTimes(1);
+    expect(driveFileListMock.mock.calls[0][0]).toEqual({
+      params: { folder_token: "folder_abc", page_size: "20", page_token: "page2token" },
+    });
+    const details = result.details as { files?: Array<{ token?: string }>; has_more?: boolean };
+    expect(details.files).toHaveLength(1);
+    expect(details.has_more).toBe(false);
+  });
+
+  it("info action follows has_more pagination to find file on page 2", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret",
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    driveFileListMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          files: [
+            { token: "f1", name: "file1", type: "file", url: "u1", created_time: "t1", modified_time: "t2", owner_id: "o1" },
+          ],
+          has_more: true,
+          next_page_token: "page2token",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          files: [
+            { token: "target_file", name: "target", type: "docx", url: "u3", created_time: "t5", modified_time: "t6", owner_id: "o3" },
+          ],
+          has_more: false,
+          next_page_token: undefined,
+        },
+      });
+
+    const result = await tool.execute("call-info-paginated", {
+      action: "info",
+      file_token: "target_file",
+      type: "docx",
+    });
+    expect(driveFileListMock).toHaveBeenCalledTimes(2);
+    expect(driveFileListMock.mock.calls[0][0]).toEqual({ params: {} });
+    expect(driveFileListMock.mock.calls[1][0]).toEqual({ params: { page_token: "page2token" } });
+    const details = result.details as {
+      token?: string;
+      name?: string;
+      type?: string;
+    };
+    expect(details.token).toBe("target_file");
+    expect(details.name).toBe("target");
+  });
+
+  it("info action throws File not found when file is absent across all pages", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret",
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    driveFileListMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        files: [
+          { token: "f1", name: "file1", type: "file", url: "u1", created_time: "t1", modified_time: "t2", owner_id: "o1" },
+        ],
+        has_more: false,
+        next_page_token: undefined,
+      },
+    });
+
+    const result = await tool.execute("call-info-missing", {
+      action: "info",
+      file_token: "nonexistent",
+      type: "file",
+    });
+    expect(driveFileListMock).toHaveBeenCalledTimes(1);
+    expect((result.details as { error?: string }).error).toBe("File not found: nonexistent");
+  });
+
+  it("info action finds file on first page without pagination", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret",
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    driveFileListMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        files: [
+          { token: "f1", name: "file1", type: "file", url: "u1", created_time: "t1", modified_time: "t2", owner_id: "o1" },
+          { token: "target_file", name: "target", type: "docx", url: "u3", created_time: "t5", modified_time: "t6", owner_id: "o3" },
+        ],
+        has_more: false,
+        next_page_token: undefined,
+      },
+    });
+
+    const result = await tool.execute("call-info-first-page", {
+      action: "info",
+      file_token: "target_file",
+      type: "docx",
+    });
+    expect(driveFileListMock).toHaveBeenCalledTimes(1);
+    const details = result.details as { token?: string; name?: string };
+    expect(details.token).toBe("target_file");
+    expect(details.name).toBe("target");
   });
 });

@@ -1,5 +1,8 @@
 // Feishu helper module supports drive schema behavior.
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type, type Static } from "typebox";
+
+const DRIVE_PAGE_SIZE_MAX = 50;
 
 const FileType = Type.Union([
   Type.Literal("doc"),
@@ -26,6 +29,11 @@ export const FeishuDriveSchema = Type.Union([
     folder_token: Type.Optional(
       Type.String({ description: "Folder token (optional, omit for root directory)" }),
     ),
+    page_size: optionalPositiveIntegerSchema({
+      maximum: DRIVE_PAGE_SIZE_MAX,
+      description: "Page size (1-50, default 50)",
+    }),
+    page_token: Type.Optional(Type.String({ description: "Pagination token for next page" })),
   }),
   Type.Object({
     action: Type.Literal("info"),
