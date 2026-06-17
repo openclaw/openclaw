@@ -171,11 +171,9 @@ export async function sendMessageMSTeams(
   // Derive threadActivityId for threaded attachment sends.
   // When replyStyle is "thread" and this is a channel conversation,
   // pass the thread root ID so attachments land in the correct thread.
-  const isChannel = conversationType === "channel" || conversationType === "group";
+  const isChannel = conversationType === "channel" || conversationType === "groupChat";
   const threadActivityId =
-    replyStyle === "thread" && isChannel
-      ? (ref.threadId ?? ref.activityId)
-      : undefined;
+    replyStyle === "thread" && isChannel ? (ref.threadId ?? ref.activityId) : undefined;
 
   log.debug?.("sending proactive message", {
     conversationId,
@@ -489,7 +487,13 @@ async function sendProactiveActivity({
   threadActivityId,
 }: ProactiveActivityParams): Promise<string> {
   try {
-    return await sendProactiveActivityRaw({ app, ref, activity, serviceUrlBoundary, threadActivityId });
+    return await sendProactiveActivityRaw({
+      app,
+      ref,
+      activity,
+      serviceUrlBoundary,
+      threadActivityId,
+    });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
