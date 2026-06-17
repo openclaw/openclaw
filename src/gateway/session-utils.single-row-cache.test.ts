@@ -271,7 +271,9 @@ describe("single gateway session row child-session cache", () => {
         });
 
         expect(syncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(
+          1,
+        );
         expect(
           subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
         ).not.toHaveBeenCalled();
@@ -286,7 +288,9 @@ describe("single gateway session row child-session cache", () => {
         });
 
         expect(asyncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(
+          1,
+        );
         expect(
           subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
         ).not.toHaveBeenCalled();

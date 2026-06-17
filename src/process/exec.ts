@@ -460,7 +460,11 @@ export async function runCommandWithTimeout(
       } else {
         killIssuedByAbort = true;
       }
-      if (killProcessTree && typeof child.pid === "number" && child.pid > 0) {
+      if (
+        killProcessTree &&
+        typeof child.pid === "number" &&
+        child.pid > 0
+      ) {
         if (process.platform === "win32") {
           try {
             spawn("taskkill", ["/PID", String(child.pid), "/T"], {

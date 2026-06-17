@@ -129,7 +129,9 @@ describe("stripInferenceProfilePrefix", () => {
   });
 
   it("strips apac prefix", () => {
-    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe(
+      "cohere.embed-v4:0",
+    );
   });
 
   it("strips au prefix", () => {
