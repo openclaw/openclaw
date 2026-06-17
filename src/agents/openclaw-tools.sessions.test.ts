@@ -1396,6 +1396,89 @@ describe("sessions tools", () => {
     expect(sendParams.message).toBe("announce now");
   });
 
+  it("sessions_send hydrates a truncated delayed same-session reply before delivery", async () => {
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    const targetKey = "agent:main:discord:channel:target-room";
+    const fullReply = `${"a".repeat(8_000)}\ncomplete reply tail`;
+    let historyCallCount = 0;
+    let sentMessage: string | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "chat.history") {
+        historyCallCount += 1;
+        return {
+          messages:
+            historyCallCount === 1
+              ? [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "previous reply" }],
+                    timestamp: 1,
+                  },
+                ]
+              : [
+                  {
+                    role: "assistant",
+                    content: [
+                      { type: "text", text: `${fullReply.slice(0, 8_000)}\n...(truncated)...` },
+                    ],
+                    __openclaw: { id: "reply-full" },
+                    timestamp: 2,
+                  },
+                ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-truncated", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-truncated", status: "ok" };
+      }
+      if (request.method === "chat.message.get") {
+        return {
+          ok: true,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: fullReply }],
+            __openclaw: { id: "reply-full" },
+          },
+        };
+      }
+      if (request.method === "send") {
+        sentMessage = request.params?.message as string | undefined;
+        return { messageId: "delivered" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: targetKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-truncated-delivery", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details).status).toBe("accepted");
+    await waitForCalls(() => calls.filter((call) => call.method === "send").length, 1);
+    const messageGetCall = calls.find((call) => call.method === "chat.message.get");
+    expect(messageGetCall?.params).toEqual({
+      sessionKey: targetKey,
+      messageId: "reply-full",
+      maxChars: 2_000_000,
+    });
+    expect(sentMessage).toBe(fullReply);
+    expect(sentMessage).not.toContain("...(truncated)...");
+  });
+
   it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:main:main";

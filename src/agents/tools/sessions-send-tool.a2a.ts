@@ -97,6 +97,7 @@ export async function runSessionsSendA2AFlow(params: {
       if (wait.status === "ok") {
         const latestSnapshot = await readLatestAssistantReplySnapshot({
           sessionKey: params.targetSessionKey,
+          fullText: true,
           callGateway: sessionsSendA2ADeps.callGateway,
         });
         const baselineFingerprint = params.baseline?.fingerprint;

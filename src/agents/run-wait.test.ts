@@ -190,6 +190,253 @@ describe("readLatestAssistantReply", () => {
 
     expect(result).toBe("Hi there");
   });
+
+  it("keeps chat.history display markers for generic reply reads", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Partial reply\n...(truncated)..." }],
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toContain("Partial reply");
+    expect(result).toContain("...(truncated)...");
+  });
+
+  it("keeps fullText marker text when there is no history row provenance", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Copied log\n...(truncated)...\nDone" }],
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReplySnapshot({
+      sessionKey: "agent:main:child",
+      fullText: true,
+    });
+
+    expect(result.text).toBe("Copied log\n...(truncated)...\nDone");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates a full assistant reply when the delivery history row is truncated", async () => {
+    const fullText = `${"a".repeat(8_000)}\ncomplete reply tail`;
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: `${fullText.slice(0, 8_000)}\n...(truncated)...` }],
+              __openclaw: { id: "reply-full" },
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.message.get") {
+        return {
+          ok: true,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: fullText }],
+            __openclaw: { id: "reply-full" },
+          },
+        };
+      }
+      throw new Error(`unexpected gateway method: ${request.method}`);
+    });
+
+    const result = await readLatestAssistantReplySnapshot({
+      sessionKey: "agent:main:child",
+      fullText: true,
+    });
+
+    expect(result.text).toBe(fullText);
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.message.get",
+      params: {
+        sessionKey: "agent:main:child",
+        messageId: "reply-full",
+        maxChars: 2_000_000,
+      },
+    });
+  });
+
+  it("hydrates split final-answer history rows when one block has the display truncation marker", async () => {
+    const fullText = `${"a".repeat(8_000)}\ncomplete reply tail`;
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: `${fullText.slice(0, 8_000)}\n...(truncated)...`,
+                  textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
+                },
+                {
+                  type: "text",
+                  text: "trailing display block",
+                  textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
+                },
+              ],
+              __openclaw: { id: "reply-split-full" },
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.message.get") {
+        return {
+          ok: true,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: fullText }],
+            __openclaw: { id: "reply-split-full" },
+          },
+        };
+      }
+      throw new Error(`unexpected gateway method: ${request.method}`);
+    });
+
+    const result = await readLatestAssistantReplySnapshot({
+      sessionKey: "agent:main:child",
+      fullText: true,
+    });
+
+    expect(result.text).toBe(fullText);
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.message.get",
+      params: {
+        sessionKey: "agent:main:child",
+        messageId: "reply-split-full",
+        maxChars: 2_000_000,
+      },
+    });
+  });
+
+  it("returns hydrated full replies that include literal truncation-marker text", async () => {
+    const fullText = "Here is the exact marker:\n...(truncated)...\nKeep this line.";
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: fullText }],
+              __openclaw: { id: "reply-literal-marker" },
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.message.get") {
+        return {
+          ok: true,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: fullText }],
+            __openclaw: { id: "reply-literal-marker" },
+          },
+        };
+      }
+      throw new Error(`unexpected gateway method: ${request.method}`);
+    });
+
+    const result = await readLatestAssistantReplySnapshot({
+      sessionKey: "agent:main:child",
+      fullText: true,
+    });
+
+    expect(result.text).toBe(fullText);
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.message.get",
+      params: {
+        sessionKey: "agent:main:child",
+        messageId: "reply-literal-marker",
+        maxChars: 2_000_000,
+      },
+    });
+  });
+
+  it("does not return a truncated reply when full delivery hydration is unavailable", async () => {
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Partial reply\n...(truncated)..." }],
+              __openclaw: { id: "reply-missing" },
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.message.get") {
+        return { ok: false, unavailableReason: "not_found" };
+      }
+      throw new Error(`unexpected gateway method: ${request.method}`);
+    });
+
+    await expect(
+      readLatestAssistantReplySnapshot({
+        sessionKey: "agent:main:child",
+        fullText: true,
+      }),
+    ).resolves.toEqual({});
+  });
+
+  it("keeps truncated message-tool mirror rows when hydration resolves to a tool row", async () => {
+    const truncatedMirror = "Long message-tool reply\n...(truncated)...";
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: truncatedMirror }],
+              openclawMessageToolMirror: { toolName: "message" },
+              __openclaw: { id: "tool-result-row" },
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.message.get") {
+        return {
+          ok: true,
+          message: {
+            role: "toolResult",
+            toolName: "message",
+            content: { ok: true, messageId: "delivered" },
+            __openclaw: { id: "tool-result-row" },
+          },
+        };
+      }
+      throw new Error(`unexpected gateway method: ${request.method}`);
+    });
+
+    const result = await readLatestAssistantReplySnapshot({
+      sessionKey: "agent:main:child",
+      fullText: true,
+    });
+
+    expect(result.text).toBe(truncatedMirror);
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.message.get",
+      params: {
+        sessionKey: "agent:main:child",
+        messageId: "tool-result-row",
+        maxChars: 2_000_000,
+      },
+    });
+  });
 });
 
 describe("waitForAgentRun", () => {
