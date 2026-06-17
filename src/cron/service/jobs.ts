@@ -676,6 +676,15 @@ export function recomputeNextRunsForMaintenance(
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
+      // Clear pending catch-up deferral once the staggered slot is reached.
+      if (
+        state.pendingCatchupDeferralJobIds.has(job.id) &&
+        hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
+        now >= job.state.nextRunAtMs
+      ) {
+        state.pendingCatchupDeferralJobIds.delete(job.id);
+      }
+
       let changed = false;
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
@@ -683,6 +692,9 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
+        // Skip future-slot repair for jobs with pending catch-up deferrals.
+        // Their staggered slot must survive until it fires.
+        !state.pendingCatchupDeferralJobIds.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {

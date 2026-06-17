@@ -209,6 +209,13 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
+  /**
+   * Job ids with pending startup catch-up deferrals that should be exempt from
+   * future-slot repair until their staggered catch-up slot fires.
+   * Populated by `applyStartupCatchupOutcomes`; cleared when the deferred slot
+   * is reached (`now >= nextRunAtMs`) or the job is removed.
+   */
+  pendingCatchupDeferralJobIds: Set<string>;
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */
@@ -228,6 +235,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
+    pendingCatchupDeferralJobIds: new Set<string>(),
   };
 }
 
