@@ -60,6 +60,7 @@ import {
   appendWorkspaceMountArgs,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
+  resolveUserBindContainerPaths,
   SANDBOX_MOUNT_FORMAT_VERSION,
 } from "./workspace-mounts.js";
 
@@ -370,6 +371,7 @@ export async function ensureSandboxBrowser(params: {
     appendReadOnlyWorkspaceSkillMountArgs({
       args,
       readOnlyWorkspaceSkillMounts,
+      skipContainerPaths: resolveUserBindContainerPaths(browserDockerCfg.binds),
     });
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (noVncEnabled) {

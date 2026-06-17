@@ -187,6 +187,7 @@ import {
   appendWorkspaceMountArgs,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
+  resolveUserBindContainerPaths,
   SANDBOX_MOUNT_FORMAT_VERSION,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
@@ -595,6 +596,7 @@ async function createSandboxContainer(params: {
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+    skipContainerPaths: resolveUserBindContainerPaths(cfg.binds),
   });
   args.push(cfg.image, "sleep", "infinity");
 

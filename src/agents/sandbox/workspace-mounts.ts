@@ -118,12 +118,43 @@ export function formatReadOnlyWorkspaceSkillMountHashState(
   return mounts.map((mount) => `${mount.hostPath}:${mount.containerPath}:ro`);
 }
 
+/** Extract normalized container paths from user-defined Docker bind specs. */
+export function resolveUserBindContainerPaths(
+  binds: readonly string[] | undefined,
+): Set<string> {
+  const paths = new Set<string>();
+  if (!binds?.length) {
+    return paths;
+  }
+  for (const spec of binds) {
+    const trimmed = spec.trim();
+    if (!trimmed) continue;
+    // Format: hostPath:containerPath[:options] — split on first two colons.
+    const firstColon = trimmed.indexOf(":");
+    if (firstColon < 0) continue;
+    const secondColon = trimmed.indexOf(":", firstColon + 1);
+    const containerToken = secondColon >= 0
+      ? trimmed.slice(firstColon + 1, secondColon).trim()
+      : trimmed.slice(firstColon + 1).trim();
+    if (containerToken && containerToken.startsWith("/")) {
+      paths.add(containerToken.replace(/\/+$/, "") || "/");
+    }
+  }
+  return paths;
+}
+
 /** Appends Docker `-v` args for read-only skill mounts. */
 export function appendReadOnlyWorkspaceSkillMountArgs(params: {
   args: string[];
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
+  /** Container paths already claimed by user-defined binds; skip conflicting skill mounts. */
+  skipContainerPaths?: Set<string>;
 }): void {
   for (const mount of params.readOnlyWorkspaceSkillMounts) {
+    const normalized = mount.containerPath.replace(/\/+$/, "") || "/";
+    if (params.skipContainerPaths?.has(normalized)) {
+      continue;
+    }
     params.args.push(
       "-v",
       formatManagedWorkspaceBind({
