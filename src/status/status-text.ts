@@ -85,7 +85,11 @@ function resolveStatusChannelFeatureLine(params: {
   );
   const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
   if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.1 sendRichMessage enabled";
+    return (
+      "Telegram rich messages: on · Bot API 10.1 sendRichMessage enabled\n" +
+      "  ⚠️ Web/Desktop clients may not render these messages (shows as unsupported).\n" +
+      "  → Set channels.telegram.richMessages: false to use standard sendMessage for compatibility."
+    );
   }
   return accountConfig?.richMessages === false
     ? "Telegram rich messages: off · enable richMessages for this Telegram account"
