@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -74,6 +74,10 @@ describe("resolveNpmChannelTag", () => {
     runCommand = runCommandMock as unknown as NpmMetadataCommandRunner;
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("delegates package target metadata to npm view with global config scope", async () => {
     versionByTag.latest = "1.0.4";
     const env = { ...process.env, NPM_CONFIG_USERCONFIG: "/tmp/openclaw-user-npmrc" };
@@ -82,6 +86,7 @@ describe("resolveNpmChannelTag", () => {
       fetchNpmPackageTargetStatus({
         target: "latest",
         spec: "openclaw@latest",
+        command: "/opt/openclaw/node/bin/npm",
         timeoutMs: 1000,
         cwd: "/tmp/openclaw-project",
         env,
@@ -94,7 +99,15 @@ describe("resolveNpmChannelTag", () => {
     });
 
     expect(runCommandMock).toHaveBeenCalledWith(
-      ["npm", "view", "openclaw@latest", "version", "engines.node", "--json", "--global"],
+      [
+        "/opt/openclaw/node/bin/npm",
+        "view",
+        "openclaw@latest",
+        "version",
+        "engines.node",
+        "--json",
+        "--global",
+      ],
       expect.objectContaining({
         timeoutMs: 1000,
         cwd: "/tmp/openclaw-project",
@@ -153,6 +166,7 @@ describe("resolveNpmChannelTag", () => {
         await expect(
           fetchNpmPackageTargetStatus({
             target: "latest",
+            command: "npm",
             timeoutMs: 10_000,
             cwd: project,
             env: {
@@ -178,6 +192,31 @@ describe("resolveNpmChannelTag", () => {
         });
       }
     });
+  });
+
+  it("uses the public registry when no npm command is available", async () => {
+    const fetch = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          version: "2026.6.8",
+          engines: { node: ">=22.19.0" },
+        }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "2026.6.8",
+      nodeEngine: ">=22.19.0",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://registry.npmjs.org/openclaw/latest",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("falls back to latest when beta is older", async () => {

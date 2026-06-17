@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
@@ -103,6 +104,38 @@ function formatNpmViewError(res: { stdout: string; stderr: string }): string {
 function packageTargetSpec(params: { target: string; spec?: string }): string {
   const spec = params.spec?.trim();
   return spec || `openclaw@${params.target.trim() || "latest"}`;
+}
+
+async function fetchPublicNpmPackageTargetStatus(params: {
+  target: string;
+  timeoutMs: number;
+}): Promise<NpmPackageTargetStatus> {
+  try {
+    const res = await fetchWithTimeout(
+      `https://registry.npmjs.org/openclaw/${encodeURIComponent(params.target)}`,
+      {},
+      Math.max(250, params.timeoutMs),
+    );
+    if (!res.ok) {
+      return {
+        target: params.target,
+        version: null,
+        nodeEngine: null,
+        error: `HTTP ${res.status}`,
+      };
+    }
+    const json = (await res.json()) as {
+      version?: unknown;
+      engines?: { node?: unknown };
+    };
+    return {
+      target: params.target,
+      version: toOptionalTrimmedString(json.version),
+      nodeEngine: toOptionalTrimmedString(json.engines?.node),
+    };
+  } catch (err) {
+    return { target: params.target, version: null, nodeEngine: null, error: String(err) };
+  }
 }
 
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
@@ -387,17 +420,21 @@ export async function fetchNpmPackageTargetStatus(params: {
   target: string;
   timeoutMs?: number;
   spec?: string;
+  command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
 }): Promise<NpmPackageTargetStatus> {
   const timeoutMs = params.timeoutMs ?? 3500;
   const target = params.target;
+  if (!params.command && !params.runCommand) {
+    return await fetchPublicNpmPackageTargetStatus({ target, timeoutMs });
+  }
   const runCommand = params.runCommand ?? runCommandWithTimeout;
   try {
     const res = await runCommand(
       [
-        "npm",
+        params.command ?? "npm",
         "view",
         packageTargetSpec({ target, spec: params.spec }),
         "version",
@@ -431,6 +468,7 @@ export async function fetchNpmTagVersion(params: {
   tag: string;
   timeoutMs?: number;
   spec?: string;
+  command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
@@ -439,6 +477,7 @@ export async function fetchNpmTagVersion(params: {
     target: params.tag,
     timeoutMs: params.timeoutMs,
     spec: params.spec,
+    command: params.command,
     cwd: params.cwd,
     env: params.env,
     runCommand: params.runCommand,
@@ -453,6 +492,7 @@ export async function fetchNpmTagVersion(params: {
 export async function resolveNpmChannelTag(params: {
   channel: UpdateChannel;
   timeoutMs?: number;
+  command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
@@ -461,6 +501,7 @@ export async function resolveNpmChannelTag(params: {
   const channelStatus = await fetchNpmTagVersion({
     tag: channelTag,
     timeoutMs: params.timeoutMs,
+    command: params.command,
     cwd: params.cwd,
     env: params.env,
     runCommand: params.runCommand,
@@ -472,6 +513,7 @@ export async function resolveNpmChannelTag(params: {
   const latestStatus = await fetchNpmTagVersion({
     tag: "latest",
     timeoutMs: params.timeoutMs,
+    command: params.command,
     cwd: params.cwd,
     env: params.env,
     runCommand: params.runCommand,
