@@ -4632,3 +4632,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #92076 coverage: the cap function and route-registry fallback are exercised
+// by the live repro (scripts/repro/issue-92076-subagent-direct-fallback.mts)
+// and by the integration tests in src/infra/task-completion-route.test.ts.
+// Unit tests at the deliverTextCompletionDirect level need the test wrapper
+// to force a specific path that the existing wrapper shape does not cover;
+// those checks will be added in a follow-up if the route-registry fallback
+// path needs additional unit-level proof before merge.
+// ---------------------------------------------------------------------------
