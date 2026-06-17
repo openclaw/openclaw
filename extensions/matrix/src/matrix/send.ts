@@ -338,7 +338,7 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const followup = buildTextContent(text, followupRelation);
+          const followup = buildTextContent(text, followupRelation, { msgtype: opts.msgtype });
           await enrichMatrixFormattedContent({
             client,
             content: followup,
@@ -356,7 +356,7 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const content = buildTextContent(text, relation);
+          const content = buildTextContent(text, relation, { msgtype: opts.msgtype });
           await enrichMatrixFormattedContent({
             client,
             content,

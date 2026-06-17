@@ -102,6 +102,8 @@ export type MatrixSendOpts = {
   extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Override the text message type (e.g. MsgType.Notice for reasoning). Defaults to MsgType.Text. */
+  msgtype?: MatrixTextMsgType;
 };
 
 export type MatrixMediaMsgType =
