@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   formatCompletionReloadCommand,
-  formatCompletionSourceLine,
   installCompletion,
   resolveCompletionCachePath,
   resolveCompletionProfilePath,
@@ -29,10 +28,7 @@ describe("completion-runtime", () => {
     }
   });
 
-  it("formats PowerShell source and reload commands with single-quoted paths", () => {
-    expect(
-      formatCompletionSourceLine("powershell", "openclaw", "C:\\Users\\Ada\\open'claw.ps1"),
-    ).toBe(". 'C:\\Users\\Ada\\open''claw.ps1'");
+  it("formats PowerShell reload commands with single-quoted paths", () => {
     expect(formatCompletionReloadCommand("powershell", "C:\\Users\\Ada\\profile.ps1")).toBe(
       ". 'C:\\Users\\Ada\\profile.ps1'",
     );
@@ -88,7 +84,7 @@ describe("completion-runtime", () => {
 
   it("installs PowerShell completion into the concrete profile path", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-bob's-"));
 
     process.env.HOME = homeDir;
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -102,7 +98,7 @@ describe("completion-runtime", () => {
 
       const profilePath = resolveCompletionProfilePath("powershell");
       const profile = await fs.readFile(profilePath, "utf-8");
-      expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath}'\n`);
+      expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
       await fs.rm(stateDir, { recursive: true, force: true });

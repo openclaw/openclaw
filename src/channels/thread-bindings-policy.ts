@@ -12,7 +12,6 @@ import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/th
 
 export {
   resolveThreadBindingLifecycle,
-  type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;

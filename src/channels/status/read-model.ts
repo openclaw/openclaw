@@ -56,7 +56,7 @@ export function normalizeRuntimeChannelAccountSnapshots(
 }
 
 /** Resolves a stable account id from runtime status record fallbacks. */
-export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
+function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
   return (
     normalizeOptionalString(account.accountId) ??
     normalizeOptionalString(account.id) ??
@@ -66,7 +66,7 @@ export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): 
 }
 
 /** Finds a runtime account, including singleton default-account fallback. */
-export function findRuntimeChannelAccount(params: {
+function findRuntimeChannelAccount(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
 }): RuntimeChannelAccount | null {

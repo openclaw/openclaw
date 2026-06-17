@@ -2,14 +2,11 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildCliRespawnPlan,
-  EXPERIMENTAL_WARNING_FLAG,
-  OPENCLAW_NODE_EXTRA_CA_CERTS_READY,
-  OPENCLAW_NODE_OPTIONS_READY,
-  resolveCliRespawnCommand,
-  runCliRespawnPlan,
-} from "./entry.respawn.js";
+import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
+
+const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 
 type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
 
@@ -211,23 +208,6 @@ describe("buildCliRespawnPlan", () => {
       "/usr/local/bin/openclaw",
       "status",
     ]);
-  });
-});
-
-describe("resolveCliRespawnCommand", () => {
-  it("keeps normal node paths absolute", () => {
-    expect(resolveCliRespawnCommand({ execPath: "/usr/bin/node", platform: "linux" })).toBe(
-      "/usr/bin/node",
-    );
-  });
-
-  it("maps Volta's Unix shim target back to the named node shim", () => {
-    expect(
-      resolveCliRespawnCommand({
-        execPath: "/home/alice/.volta/bin/volta-shim",
-        platform: "linux",
-      }),
-    ).toBe("node");
   });
 });
 
