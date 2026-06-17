@@ -1,6 +1,7 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -66,8 +67,9 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 function createMessageDynamicTool(
   description: string,
   actions: string[] = ["send"],
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+): CodexDynamicToolFunctionSpec {
   return {
+    type: "function",
     name: "message",
     description,
     inputSchema: {
@@ -84,10 +86,9 @@ function createMessageDynamicTool(
   };
 }
 
-function createNamedDynamicTool(
-  name: string,
-): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+function createNamedDynamicTool(name: string): CodexDynamicToolFunctionSpec {
   return {
+    type: "function",
     name,
     description: `${name} test tool`,
     inputSchema: {
@@ -102,9 +103,10 @@ function createDeferredNamedDynamicTool(
   name: string,
 ): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
   return {
-    ...createNamedDynamicTool(name),
-    namespace: "openclaw",
-    deferLoading: true,
+    type: "namespace",
+    name: "openclaw",
+    description: "",
+    tools: [{ ...createNamedDynamicTool(name), deferLoading: true }],
   };
 }
 

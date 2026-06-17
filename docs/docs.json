@@ -1418,6 +1418,7 @@
                   "providers/cerebras",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
+                  "providers/clawrouter",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",

@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertOkOrThrowProviderError,
   assertOkOrThrowHttpError,
+  createProviderHttpError,
   extractProviderErrorDetail,
-  extractProviderErrorInfo,
   extractProviderRequestId,
   ProviderHttpError,
   readProviderBinaryResponse,
@@ -124,19 +124,8 @@ describe("provider error utils", () => {
       },
     );
 
-    const info = await extractProviderErrorInfo(response.clone());
-    expect(info).toMatchObject({
-      code: "insufficient_quota",
-      type: "rate_limit_error",
-      requestId: "req_456",
-    });
-    expect(info.detail).toContain("Quota exceeded");
-    expect(info.body).toContain("Quota exceeded");
-    expect(info.body).not.toContain("sk-secret1234567890abcd");
-
-    await expect(
-      assertOkOrThrowProviderError(response, "Provider API error"),
-    ).rejects.toMatchObject({
+    const error = await createProviderHttpError(response, "Provider API error");
+    expect(error).toMatchObject({
       name: "ProviderHttpError",
       status: 429,
       statusCode: 429,
@@ -145,6 +134,10 @@ describe("provider error utils", () => {
       errorType: "rate_limit_error",
       requestId: "req_456",
     } satisfies Partial<ProviderHttpError>);
+    const providerError = error as ProviderHttpError;
+    expect(providerError.message).toContain("Quota exceeded");
+    expect(providerError.errorBody).toContain("Quota exceeded");
+    expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
   });
 
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {

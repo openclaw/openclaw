@@ -17,8 +17,6 @@ const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
   findActiveVideoGenerationTaskForSession: vi.fn(),
-  getVideoGenerationTaskProviderId: vi.fn(),
-  isActiveVideoGenerationTask: vi.fn(() => false),
   VIDEO_GENERATION_TASK_KIND: "video_generation",
 }));
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
