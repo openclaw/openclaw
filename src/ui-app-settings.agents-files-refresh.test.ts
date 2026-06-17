@@ -50,11 +50,11 @@ vi.mock("../ui/src/ui/controllers/cron.ts", () => ({
   loadCronStatus: vi.fn(async () => undefined),
 }));
 
-import { refreshActiveTab } from "../ui/src/ui/app-settings.ts";
+import { refreshActiveRoute } from "../ui/src/app/active-route.ts";
 
 type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 
-function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTab>[0] {
+function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveRoute>[0] {
   return {
     tab: "agents",
     connected: true,
@@ -94,10 +94,10 @@ function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTa
     dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
-  } as Parameters<typeof refreshActiveTab>[0];
+  } as Parameters<typeof refreshActiveRoute>[0];
 }
 
-describe("refreshActiveTab (agents/files)", () => {
+describe("refreshActiveRoute (agents/files)", () => {
   beforeEach(() => {
     loadAgentsMock.mockClear();
     loadConfigMock.mockClear();
@@ -110,7 +110,7 @@ describe("refreshActiveTab (agents/files)", () => {
 
   it("loads agent files when the active agents panel is files", async () => {
     const host = createHost("files");
-    await refreshActiveTab(host);
+    await refreshActiveRoute(host);
 
     expect(loadAgentFilesMock).toHaveBeenCalledTimes(1);
     expect(loadAgentFilesMock).toHaveBeenCalledWith(host, "main");
@@ -118,7 +118,7 @@ describe("refreshActiveTab (agents/files)", () => {
 
   it("does not load agent files on non-files panels", async () => {
     const host = createHost("overview");
-    await refreshActiveTab(host);
+    await refreshActiveRoute(host);
 
     expect(loadAgentFilesMock).not.toHaveBeenCalled();
   });

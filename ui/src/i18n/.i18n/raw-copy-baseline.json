@@ -3,6 +3,62 @@
   "entries": [
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/app/active-route.ts",
+      "text": "This connection does not have the operator.read scope. Some features may be unavailable."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/app/active-route.ts",
+      "text": "Gateway Error"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/app/active-route.ts",
+      "text": "Missing operator.read scope"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/app/active-route.ts",
+      "text": "Skills with missing dependencies"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/routes/route-registry.ts",
+      "text": "agent"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/routes/route-registry.ts",
+      "text": "chat"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/routes/route-registry.ts",
+      "text": "control"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/routes/route-registry.ts",
+      "text": "settings"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/app-render.ts",
@@ -91,34 +147,6 @@
       "name": "label",
       "path": "ui/src/ui/app-render.ts",
       "text": "WhatsApp"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/ui/app-settings.ts",
-      "text": "This connection does not have the operator.read scope. Some features may be unavailable."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/app-settings.ts",
-      "text": "Gateway Error"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/app-settings.ts",
-      "text": "Missing operator.read scope"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/ui/app-settings.ts",
-      "text": "Skills with missing dependencies"
     },
     {
       "count": 1,
@@ -511,34 +539,6 @@
       "name": "text",
       "path": "ui/src/ui/components/file-preview-modal.ts",
       "text": "No files match."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/navigation.ts",
-      "text": "agent"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/navigation.ts",
-      "text": "chat"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/navigation.ts",
-      "text": "control"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/navigation.ts",
-      "text": "settings"
     },
     {
       "count": 1,
