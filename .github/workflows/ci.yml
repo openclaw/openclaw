@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      release_gate:
+        description: Run an exact-SHA maintainer release-gate fallback when PR CI is capacity-stalled.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths-ignore:
@@ -25,6 +30,8 @@ on:
 
 permissions:
   contents: read
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI' }}
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
@@ -75,6 +82,23 @@ jobs:
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Validate release-gate dispatch
+        if: github.event_name == 'workflow_dispatch' && inputs.release_gate
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_gate requires target_ref to be a full commit SHA" >&2
+            exit 1
+          fi
+
+          if [[ "$GITHUB_SHA" != "$TARGET_REF" ]]; then
+            echo "release_gate must run from the branch at target_ref" >&2
+            exit 1
+          fi
+
       - name: Checkout
         env:
           CHECKOUT_REPO: ${{ github.repository }}
@@ -159,7 +183,7 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}

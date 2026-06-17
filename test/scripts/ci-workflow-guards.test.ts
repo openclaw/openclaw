@@ -50,6 +50,36 @@ function findUnpinnedExternalActions(): string[] {
 }
 
 describe("ci workflow guards", () => {
+  it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
+    const workflow = readCiWorkflow();
+    const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
+
+    expect(releaseGate).toEqual({
+      description:
+        "Run an exact-SHA maintainer release-gate fallback when PR CI is capacity-stalled.",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI' }}",
+    );
+    const preflightSteps = workflow.jobs.preflight.steps;
+    const validationStep = preflightSteps.find(
+      (step) => step.name === "Validate release-gate dispatch",
+    );
+    expect(validationStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.release_gate",
+    );
+    expect(validationStep.run).toContain(
+      "release_gate requires target_ref to be a full commit SHA",
+    );
+    expect(validationStep.run).toContain("release_gate must run from the branch at target_ref");
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+    );
+  });
+
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });

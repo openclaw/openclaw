@@ -62,10 +62,22 @@ function formatObservedRuns(runs) {
     .join(", ");
 }
 
-function matchingPullRequestRuns(runs, workflowName, sha) {
-  return runs.filter(
-    (run) => run?.name === workflowName && run?.event === "pull_request" && run?.head_sha === sha,
+function isReleaseGateCiRun(run, sha) {
+  return (
+    run?.name === "CI" &&
+    run?.event === "workflow_dispatch" &&
+    run?.head_sha === sha &&
+    run?.display_title === `CI release gate ${sha}`
   );
+}
+
+function matchingAuthoritativeRuns(runs, workflowName, sha) {
+  return runs.filter((run) => {
+    if (run?.name !== workflowName || run?.head_sha !== sha) {
+      return false;
+    }
+    return run.event === "pull_request" || (workflowName === "CI" && isReleaseGateCiRun(run, sha));
+  });
 }
 
 function latestRun(runs) {
@@ -75,7 +87,7 @@ function latestRun(runs) {
 }
 
 function successfulRunOrThrow(runs, workflowName, sha) {
-  const matchingRuns = matchingPullRequestRuns(runs, workflowName, sha);
+  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha);
   const run = latestRun(matchingRuns);
   if (!run || run.status !== "completed" || run.conclusion !== "success") {
     throw new Error(
@@ -103,7 +115,7 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
     workflows.push(successfulRunOrThrow(workflowRuns, "CI", sha));
   }
   for (const workflowName of SCHEDULED_HOSTED_WORKFLOWS) {
-    const matchingRuns = matchingPullRequestRuns(workflowRuns, workflowName, sha);
+    const matchingRuns = matchingAuthoritativeRuns(workflowRuns, workflowName, sha);
     if (matchingRuns.length > 0) {
       workflows.push(successfulRunOrThrow(workflowRuns, workflowName, sha));
     }

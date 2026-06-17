@@ -145,6 +145,14 @@ Stop watchers before ending the turn or switching strategy.
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
 6. Fix narrowly, run local/changed proof, commit, push, rerun the smallest matching group.
+7. If a required PR CI run is capacity-stalled with queued jobs and no active
+   jobs, do not cancel unrelated work or accept a generic manual dispatch.
+   From the PR head branch, dispatch the explicit exact-SHA fallback:
+   `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
+   target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+   It runs on GitHub-hosted runners and is accepted only when its run title is
+   `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
+   fallback run in release evidence.
 
 ## Evidence
 

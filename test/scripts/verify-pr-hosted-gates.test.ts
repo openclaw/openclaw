@@ -78,6 +78,39 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("accepts the explicit exact-SHA manual CI release gate", () => {
+    expect(
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            event: "workflow_dispatch",
+            display_title: `CI release gate ${sha}`,
+          },
+        ],
+      }),
+    ).toEqual({
+      headSha: sha,
+      workflows: [expect.objectContaining({ name: "CI", id: 1 })],
+    });
+  });
+
+  it("rejects an unmarked manual CI run", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            event: "workflow_dispatch",
+            display_title: "CI",
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head CI workflow");
+  });
+
   it("requires CI for docs unless the head changes only CHANGELOG.md", () => {
     expect(() => collectHostedGateEvidence({ sha, workflowRuns: [] })).toThrow(
       "Missing successful exact-head CI workflow",

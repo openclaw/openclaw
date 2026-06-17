@@ -103,6 +103,15 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   changes still require CI. If `merge-run` requires a mainline sync, run
   `OPENCLAW_TESTBOX=1 scripts/pr prepare-sync-head <PR>`, wait for those hosted
   gates on the newly pushed SHA, then run `prepare-run` again.
+- If an exact PR-head CI run has no active jobs because Blacksmith capacity is
+  stalled, a maintainer may dispatch the explicit GitHub-hosted fallback from
+  the PR head branch:
+  `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
+  target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+  Use it only for an observed provider queue stall, never for failed CI or as a
+  routine shortcut. The run must be named `CI release gate <full-pr-sha>` and
+  pass on that exact SHA; the native hosted-gate verifier rejects generic manual
+  CI runs. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>`.
 - Generate the changelog before every beta, beta rerun, stable release, or
   stable rerun, before version/tag preparation. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
