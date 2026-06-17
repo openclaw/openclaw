@@ -26,11 +26,12 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
   });
 
-  test("prefers session label over first user message when present", () => {
+  test("prefers session label over first user message and origin label when present", () => {
     const entry = {
       sessionId: "abc123",
       updatedAt: Date.now(),
       label: "My App - Dashboard",
+      origin: { label: "Discord: Engineering" },
     } as SessionEntry;
     expect(deriveSessionTitle(entry, "heartbeat")).toBe("My App - Dashboard");
   });
@@ -55,7 +56,7 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBe("Room Title");
   });
 
-  test("falls back to origin label only when no transcript or explicit label exists", () => {
+  test("keeps origin label behind first user message", () => {
     const entry = {
       sessionId: "abc123",
       updatedAt: Date.now(),
@@ -114,7 +115,7 @@ describe("deriveSessionTitle", () => {
     expect(result!.includes("  ")).toBe(false);
   });
 
-  test("falls back to sessionId prefix without date when updatedAt is zero", () => {
+  test("omits date from sessionId fallback when updatedAt is zero", () => {
     const entry = {
       sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
       updatedAt: 0,

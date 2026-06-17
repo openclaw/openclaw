@@ -82,13 +82,6 @@ function createModelDefaultsConfig(params: {
   } as OpenClawConfig;
 }
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
@@ -2405,8 +2398,19 @@ describe("resolveSessionDisplayModelIdentityRef", () => {
 });
 
 describe("deriveSessionTitle compatibility re-export", () => {
-  test("deriveSessionTitle is re-exported from session-utils", () => {
+  test("deriveSessionTitle is re-exported from session-utils with gateway precedence", () => {
     expect(typeof deriveSessionTitle).toBe("function");
+    expect(
+      deriveSessionTitle(
+        {
+          sessionId: "abc123",
+          updatedAt: Date.now(),
+          label: "Pinned session",
+          origin: { label: "openclaw-tui" },
+        } as SessionEntry,
+        "heartbeat",
+      ),
+    ).toBe("Pinned session");
   });
 });
 
