@@ -46,6 +46,16 @@ describe("registerSetupCommand", () => {
     await program.parseAsync(args, { from: "user" });
   }
 
+  function getSetupOptionFlags(): string[] {
+    const program = new Command();
+    registerSetupCommand(program);
+    const setup = program.commands.find((command) => command.name() === "setup");
+    if (!setup) {
+      throw new Error("expected setup command");
+    }
+    return setup.options.map((option) => option.long);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     setupCommandMock.mockResolvedValue(undefined);
@@ -94,6 +104,11 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()?.importSource).toBe("/tmp/hermes");
     expect(lastWizardOptions()?.importSecrets).toBe(true);
     expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("does not expose onboard-only health and daemon flags", () => {
+    expect(getSetupOptionFlags()).not.toContain("--install-daemon");
+    expect(getSetupOptionFlags()).not.toContain("--skip-health");
   });
 
   it("reports setup errors through runtime", async () => {

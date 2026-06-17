@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -763,6 +764,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("explains local health failure when no daemon was requested", async () => {
     await withStateDir("state-local-health-hint-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      const installDaemonCommand = formatCliCommand(
+        "openclaw onboard --non-interactive --accept-risk ... --install-daemon",
+      );
+      const skipHealthCommand = formatCliCommand(
+        "openclaw onboard --non-interactive --accept-risk ... --skip-health",
+      );
       waitForGatewayReachableMock = vi.fn(async () => ({
         ok: false,
         detail: "socket closed: 1006 abnormal closure",
@@ -773,7 +781,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           {
             nonInteractive: true,
             mode: "local",
-            workspace: path.join(stateDir, "openclaw"),
+            workspace,
             authChoice: "skip",
             skipSkills: true,
             skipHealth: false,
@@ -783,7 +791,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           runtime,
         ),
       ).rejects.toThrow(
-        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+        new RegExp(
+          [
+            "only waits for an already-running gateway unless you run",
+            `\`${installDaemonCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\``,
+            `\`${skipHealthCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\``,
+          ].join("[\\s\\S]*"),
+        ),
       );
     });
   }, 60_000);
