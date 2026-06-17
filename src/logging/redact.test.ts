@@ -1121,6 +1121,80 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-access-token-value");
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
+
+  it("does not corrupt kebab-case identifiers in generic text/error fields", () => {
+    // Regression: APP_SPECIFIC_PASSWORD_RE matches any 4×4-char lowercase kebab token.
+    // Generic field names must NOT unconditionally trigger the sweep; a nearby apple/icloud
+    // context anchor is required.
+    const output = redactSecrets({
+      type: "text",
+      text: "open the help-desk-team-page link and rerun kube-node-pool-spec",
+    });
+    expect((output as { text: string }).text).toBe(
+      "open the help-desk-team-page link and rerun kube-node-pool-spec",
+    );
+  });
+
+  it("does not corrupt kebab-case identifiers in standalone error field values", () => {
+    expect(redactSensitiveFieldValue("error", "module load-some-bare-init crashed")).toBe(
+      "module load-some-bare-init crashed",
+    );
+  });
+
+  it("still masks a real Apple app-specific password in an apple-specific field", () => {
+    // Field key 'apple' is in STRUCTURED_APP_PASSWORD_FIELD_RE — mask unconditionally.
+    expect(redactSensitiveFieldValue("apple", "abcd-efgh-ijkl-mnop")).not.toBe(
+      "abcd-efgh-ijkl-mnop",
+    );
+    expect(redactSensitiveFieldValue("icloud", "abcd-efgh-ijkl-mnop")).not.toBe(
+      "abcd-efgh-ijkl-mnop",
+    );
+  });
+
+  it("still masks an Apple app password when iCloud context appears in the value", () => {
+    // Even in a generic field, if the surrounding text mentions iCloud/apple the sweep fires.
+    expect(redactSensitiveFieldValue("error", "iCloud rejected abcd-efgh-ijkl-mnop")).not.toContain(
+      "abcd-efgh-ijkl-mnop",
+    );
+    expect(
+      redactSensitiveFieldValue("message", "app password qrst-uvwx-yzab-cdef is invalid"),
+    ).not.toContain("qrst-uvwx-yzab-cdef");
+  });
+
+  it("does not over-mask kebab identifiers in large values when apple/icloud is far away (>32 KiB chunk bug)", () => {
+    // Regression for the chunk-offset mismatch: replacePatternBounded splits inputs >32 KiB
+    // into 16 KiB chunks and calls `.replace` per chunk, so the `offset` passed to the
+    // replacer callback is chunk-relative (0..16383), not whole-text-relative. The old code
+    // used the closed-over whole-`text` for the context window slice with that chunk-relative
+    // offset, causing the window to land near position 0 of the whole string. If an
+    // apple/icloud keyword happened to sit near position 0, every 4×4-char kebab in subsequent
+    // chunks was falsely masked.
+    const CHUNK_SIZE = 16_384;
+    const CHUNK_THRESHOLD = 32_768;
+
+    // Build a value with "apple" at position 0 and "help-desk-team-page" placed exactly at the
+    // start of chunk 2 (whole-text offset CHUNK_THRESHOLD). The buggy code computes a window
+    // starting at `max(0, 0 - 50) = 0` in the whole text, which includes "apple" → false
+    // positive. The fixed code windows within the chunk text where there is no apple context.
+    const value =
+      "apple sign-in: " +
+      "x".repeat(CHUNK_THRESHOLD - 15) +
+      "help-desk-team-page" +
+      "z".repeat(100);
+    expect(value.length).toBeGreaterThan(CHUNK_THRESHOLD);
+    // apple/icloud is >32 KiB away from the kebab — must NOT be masked.
+    expect(redactSensitiveFieldValue("message", value)).toContain("help-desk-team-page");
+
+    // A >32 KiB value where the real app-password has iCloud context right beside it in the
+    // same chunk IS still masked — the fixed window is anchored to the chunk, so the nearby
+    // keyword is visible.
+    const prefix = "x".repeat(CHUNK_SIZE * 2 + 100);
+    const valueWithRealPw = prefix + " iCloud app password: abcd-efgh-ijkl-mnop " + "z".repeat(100);
+    expect(valueWithRealPw.length).toBeGreaterThan(CHUNK_THRESHOLD);
+    expect(redactSensitiveFieldValue("message", valueWithRealPw)).not.toContain(
+      "abcd-efgh-ijkl-mnop",
+    );
+  });
 });
 
 describe("redactSensitiveLines", () => {

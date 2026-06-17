@@ -91,9 +91,21 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
   String.raw`^(?:api[-_]?key|apiKey|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key[-_]?material|keyMaterial|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
+// Only apple/icloud-specific field names and structured error-record fields trigger the
+// app-password sweep unconditionally.  Generic transcript fields (text, error, message, …) were
+// removed because a 4×4-char kebab identifier such as `help-desk-team-page` matches
+// APP_SPECIFIC_PASSWORD_RE and would be silently corrupted in transcript output.
+// `errorMessage` is kept here because it is a structured audit/error-record field (not a
+// free-form transcript field) and the audit persistence path expects app-password-shaped tokens
+// in error messages to be redacted before they land on disk (io.audit.test.ts:208).
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
-  /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
+  /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|errorMessage)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
+// Mirrors the Discord-bot-token pattern: require an apple/icloud context token within
+// APP_PASSWORD_CONTEXT_WINDOW chars of the candidate before masking in generic fields.
+const APP_PASSWORD_CONTEXT_RE =
+  /apple|icloud|app[.\s_-]?specific|app[.\s_-]?password|application[.\s_-]?password/i;
+const APP_PASSWORD_CONTEXT_WINDOW = 50;
 const BENIGN_APP_PASSWORD_WORDS = new Set([
   "case",
   "claw",
@@ -939,11 +951,36 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
   return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
 }
 
-function redactAppSpecificPasswords(text: string): string {
-  return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
-    looksLikeAppSpecificPassword(token)
-      ? redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE)
-      : match,
+// When fieldKey is an apple/icloud-specific name the mask is unconditional (field-gate path).
+// Otherwise, require an apple/icloud context token within APP_PASSWORD_CONTEXT_WINDOW chars of
+// the candidate — mirroring the Discord bot-token pattern's nearby-literal anchor.
+function redactAppSpecificPasswords(text: string, fieldKey?: string): string {
+  const fieldIsApple = fieldKey !== undefined && STRUCTURED_APP_PASSWORD_FIELD_RE.test(fieldKey);
+  return replacePatternBounded(
+    text,
+    APP_SPECIFIC_PASSWORD_RE,
+    // `localText` is the per-chunk string that `.replace` passes as its last positional arg.
+    // Using it (with chunk-relative `offset`) keeps the 50-char context window correct even
+    // when replacePatternBounded splits large inputs into 16 KiB chunks — the closed-over
+    // `text` is the whole value, so slicing it with a chunk-relative offset would land near
+    // the beginning of the string rather than near the actual match.
+    (match: string, token: string, offset: number, localText: string) => {
+      if (!looksLikeAppSpecificPassword(token)) {
+        return match;
+      }
+      if (fieldIsApple) {
+        return redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE);
+      }
+      const windowStart = Math.max(0, offset - APP_PASSWORD_CONTEXT_WINDOW);
+      const windowEnd = Math.min(
+        localText.length,
+        offset + match.length + APP_PASSWORD_CONTEXT_WINDOW,
+      );
+      if (!APP_PASSWORD_CONTEXT_RE.test(localText.slice(windowStart, windowEnd))) {
+        return match;
+      }
+      return redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE);
+    },
   );
 }
 
@@ -1039,12 +1076,11 @@ function redactSensitiveFieldValueWithOptions(
   const redacted = redactText(value, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
   });
-  const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
-  if (shouldRedactAppPassword) {
-    const appRedacted = redactAppSpecificPasswords(redacted);
-    if (appRedacted !== value) {
-      return appRedacted;
-    }
+  // Always attempt the app-password sweep; the function's own context gate decides whether
+  // any given candidate is masked (field-key anchor or nearby apple/icloud text anchor).
+  const appRedacted = redactAppSpecificPasswords(redacted, key);
+  if (appRedacted !== value) {
+    return appRedacted;
   }
   if (redacted !== value) {
     return redacted;
