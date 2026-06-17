@@ -744,11 +744,20 @@ async function resolveExecRefs(params: {
   }
 
   const childEnv: NodeJS.ProcessEnv = {};
-  for (const key of params.providerConfig.passEnv ?? []) {
-    const value = params.env[key];
-    if (value !== undefined) {
-      childEnv[key] = value;
+  const explicitPassEnv = params.providerConfig.passEnv;
+  if (explicitPassEnv !== undefined) {
+    // Explicit whitelist: only forward the named variables.
+    for (const key of explicitPassEnv) {
+      const value = params.env[key];
+      if (value !== undefined) {
+        childEnv[key] = value;
+      }
     }
+  } else {
+    // No explicit passEnv configured: inherit the full parent environment
+    // so self-hosted setups (BWS_SERVER_URL etc.) work without requiring
+    // every variable to be enumerated.
+    Object.assign(childEnv, params.env);
   }
   for (const [key, value] of Object.entries(params.providerConfig.env ?? {})) {
     childEnv[key] = value;
