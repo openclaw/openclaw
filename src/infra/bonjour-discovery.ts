@@ -70,7 +70,7 @@ export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | 
   return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
 }
 
-export type GatewayBonjourDiscoverOpts = {
+type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];
   wideAreaDomain?: string | null;

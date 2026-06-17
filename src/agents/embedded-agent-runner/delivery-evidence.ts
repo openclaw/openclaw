@@ -21,7 +21,7 @@ type AgentPayloadLike = {
   isReasoning?: unknown;
 };
 
-export type AgentDeliveryEvidence = {
+type AgentDeliveryEvidence = {
   payloads?: unknown;
   deliveryStatus?: {
     status?: unknown;

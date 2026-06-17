@@ -29,7 +29,7 @@ const FILE_LEDGER_LOCK_OPTIONS = {
   stale: 15_000,
 } as const;
 
-export type AcpEventLedgerEntry = {
+type AcpEventLedgerEntry = {
   seq: number;
   at: number;
   sessionId: string;
