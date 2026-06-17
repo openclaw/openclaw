@@ -7,6 +7,12 @@ import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  parseScreenSnapshotPayload,
+  screenSnapshotTempPath,
+  writeScreenSnapshotToFile,
+} from "../../cli/nodes-screen.js";
+
+import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
@@ -165,7 +171,8 @@ export async function executeNodeCommandAction(params: {
         timeoutMs: invokeTimeoutMs,
         idempotencyKey: crypto.randomUUID(),
       });
-      return jsonResult(raw ?? {});
+      const sanitized = await sanitizeInvokeResult(invokeCommandNormalized, raw);
+      return sanitized;
     }
   }
   throw new Error("Unsupported node command action");
@@ -185,4 +192,69 @@ async function invokeNodeCommandPayload(params: {
     idempotencyKey: crypto.randomUUID(),
   });
   return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
+}
+
+/**
+ * Sanitize an invoke result to prevent base64 bloat in tool output.
+ *
+ * When a node command returns a large base64 payload (e.g. screen.snapshot,
+ * camera.snap), offload the binary data to a temp file and return a
+ * base64-free result that includes only the file path.
+ *
+ * This prevents tool output truncation that corrupts large base64 payloads
+ * and makes them unusable for downstream operations.
+ */
+async function sanitizeInvokeResult(
+  command: string,
+  raw: unknown,
+): Promise<{ content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> } | ReturnType<typeof jsonResult>> {
+  if (!raw || typeof raw !== "object") return jsonResult(raw ?? {});
+  const result = raw as Record<string, unknown>;
+
+  // Only process responses that have a payload with large base64 data
+  const payload = result.payload;
+  if (!payload || typeof payload !== "object") return jsonResult(raw ?? {});
+  const payloadObj = payload as Record<string, unknown>;
+  const base64 = payloadObj.base64;
+  if (typeof base64 !== "string" || base64.length <= 1024) {
+    return jsonResult(raw ?? {});
+  }
+
+  // Offload base64 to a temp file
+  try {
+    // Try screen snapshot handler first (most common large-payload case)
+    if (command === "screen.snapshot" || command === "screen.record") {
+      const parsed = parseScreenSnapshotPayload(payload);
+      const ext = parsed.format === "png" ? ".png" : ".jpg";
+      const filePath = screenSnapshotTempPath({ ext });
+      const written = await writeScreenSnapshotToFile(filePath, parsed.base64);
+      return {
+        content: [{ type: "text", text: `FILE:${written.path}` }],
+        details: {
+          path: written.path,
+          format: parsed.format,
+          width: parsed.width,
+          height: parsed.height,
+          screenIndex: parsed.screenIndex,
+        },
+      };
+    }
+
+    // Generic fallback: write base64 to temp file
+    const fmt = typeof payloadObj.format === "string" ? payloadObj.format : "bin";
+    const ext = fmt === "png" ? ".png" : fmt === "jpg" || fmt === "jpeg" ? ".jpg" : `.${fmt}`;
+    const filePath = screenSnapshotTempPath({ ext });
+    const written = await writeScreenSnapshotToFile(filePath, base64);
+    return {
+      content: [{ type: "text", text: `FILE:${written.path}` }],
+      details: {
+        ...payloadObj,
+        base64: undefined,
+        path: written.path,
+      },
+    };
+  } catch {
+    // If sanitization fails, fall back to raw result
+    return jsonResult(raw ?? {});
+  }
 }
