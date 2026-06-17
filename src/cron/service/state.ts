@@ -196,6 +196,11 @@ export type CronServiceState = {
   running: boolean;
   stopped: boolean;
   restartRecoveryPending: boolean;
+  /** Job ids whose startup catch-up was deferred to a staggered slot.
+   *  `recomputeNextRunsForMaintenance` must not advance these to their natural
+   *  next run until the deferred slot fires.  Each id is removed once its
+   *  staggered slot is reached (now >= nextRunAtMs). */
+  pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutRestartNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
@@ -220,6 +225,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     stopped: false,
     restartRecoveryPending: false,
+    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutRestartNotified: false,
     op: Promise.resolve(),

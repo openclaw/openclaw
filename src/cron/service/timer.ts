@@ -1848,6 +1848,11 @@ async function applyStartupCatchupOutcomes(
           job.state.nextRunAtMs = baseNow + offset;
           offset += staggerMs;
         }
+        // Record deferred ids so every maintenance recompute path exempts them
+        // from future-slot repair until the staggered slot fires.
+        for (const deferred of plan.deferredJobs) {
+          state.pendingCatchupDeferralJobIds.add(deferred.jobId);
+        }
       }
 
       // Preserve any new past-due nextRunAtMs values that became due while
