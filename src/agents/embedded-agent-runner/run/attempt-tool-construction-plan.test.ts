@@ -41,7 +41,14 @@ function expectConstructionPlan(
 
 describe("applyEmbeddedAttemptToolsAllow", () => {
   it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
+    const tools = [
+      { name: "exec" },
+      { name: "read" },
+      { name: "grep" },
+      { name: "find" },
+      { name: "ls" },
+      { name: "message" },
+    ];
 
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
@@ -84,15 +91,28 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   });
 
   it("honors wildcard and group allowlists in the final filter", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
+    const tools = [
+      { name: "exec" },
+      { name: "read" },
+      { name: "grep" },
+      { name: "find" },
+      { name: "ls" },
+      { name: "message" },
+    ];
 
     expect(applyEmbeddedAttemptToolsAllow(tools, ["*"]).map((tool) => tool.name)).toEqual([
       "exec",
       "read",
+      "grep",
+      "find",
+      "ls",
       "message",
     ]);
     expect(applyEmbeddedAttemptToolsAllow(tools, ["group:fs"]).map((tool) => tool.name)).toEqual([
       "read",
+      "grep",
+      "find",
+      "ls",
     ]);
   });
 
