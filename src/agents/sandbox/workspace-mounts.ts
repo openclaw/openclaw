@@ -128,10 +128,10 @@ export function resolveUserBindContainerPaths(
   }
   for (const spec of binds) {
     const trimmed = spec.trim();
-    if (!trimmed) continue;
+    if (!trimmed) { continue; }
     // Format: hostPath:containerPath[:options] — split on first two colons.
     const firstColon = trimmed.indexOf(":");
-    if (firstColon < 0) continue;
+    if (firstColon < 0) { continue; }
     const secondColon = trimmed.indexOf(":", firstColon + 1);
     const containerToken = secondColon >= 0
       ? trimmed.slice(firstColon + 1, secondColon).trim()
