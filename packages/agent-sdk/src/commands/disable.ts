@@ -1,7 +1,7 @@
 // @openclaw/agent-sdk — Disable command: remove files, unregister, clean up.
 
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Command } from "commander";
 import { hashFile } from "../hash.js";
 import type { AgentPackageManifest, IntegrityManifest } from "../index.js";
@@ -20,6 +20,22 @@ function loadIntegrityManifest(packagePath: string): IntegrityManifest | null {
   return JSON.parse(readFileSync(integrityPath, "utf8")) as IntegrityManifest;
 }
 
+function isInsideRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function resolveWorkspacePath(workspacePath: string, dest: string): string {
+  if (!dest || isAbsolute(dest)) {
+    throw new Error(`workspace destination must be workspace-relative: ${dest}`);
+  }
+  const resolved = resolve(workspacePath, dest);
+  if (!isInsideRoot(workspacePath, resolved)) {
+    throw new Error(`workspace destination escapes workspace root: ${dest}`);
+  }
+  return resolved;
+}
+
 /**
  * Remove copied files from workspace only if they haven't been modified.
  * Compares current hash against the integrity manifest.
@@ -35,7 +51,7 @@ function removeCopiedFiles(
   const skipped: string[] = [];
 
   for (const entry of manifest.files.copy) {
-    const destPath = resolve(workspacePath, entry.dest);
+    const destPath = resolveWorkspacePath(workspacePath, entry.dest);
 
     if (!existsSync(destPath)) {
       // Already gone, nothing to do
@@ -114,7 +130,7 @@ export const disableCommand = new Command("disable")
       if (options.force) {
         // Force-remove skipped files
         for (const dest of skipped) {
-          const destPath = resolve(workspacePath, dest);
+          const destPath = resolveWorkspacePath(workspacePath, dest);
           rmSync(destPath, { force: true });
           removed.push(dest);
         }

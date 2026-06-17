@@ -20,11 +20,15 @@
       "default": "./dist/test.mjs"
     }
   },
+  "bin": {
+    "openclaw-agent": "./dist/cli.mjs"
+  },
   "scripts": {
-    "build": "tsdown src/index.ts src/hash.ts src/commands/validate.ts src/commands/enable.ts src/commands/disable.ts src/policy/secrets.ts src/policy/network.ts src/compiler/compiler.ts src/compiler/live.ts src/compiler/upgrade.ts src/quarantine/mutation.ts src/test.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/cli.ts src/hash.ts src/commands/pack.ts src/commands/validate.ts src/commands/enable.ts src/commands/disable.ts src/commands/test.ts src/policy/secrets.ts src/policy/network.ts src/compiler/compiler.ts src/compiler/live.ts src/compiler/upgrade.ts src/quarantine/mutation.ts src/test.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/agent-core": "workspace:*",
+    "@openclaw/net-policy": "workspace:*",
     "commander": "14.0.3"
   }
 }

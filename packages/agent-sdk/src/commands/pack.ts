@@ -1,7 +1,7 @@
 // @openclaw/agent-sdk — Pack command: validate manifest, hash files, generate integrity manifest.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Command } from "commander";
 import { hashFile } from "../hash.js";
 import type {
@@ -34,6 +34,33 @@ function validateRequiredFields(manifest: AgentPackageManifest): string[] {
   return errors;
 }
 
+function isInsideRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function resolvePackageFile(packagePath: string, src: string): { path?: string; error?: string } {
+  if (!src || isAbsolute(src)) return { error: `absolute source paths are not allowed: ${src}` };
+  const resolved = resolve(packagePath, src);
+  if (!isInsideRoot(packagePath, resolved)) return { error: `source escapes package root: ${src}` };
+  if (!existsSync(resolved)) return { error: `src not found: ${src} (resolved: ${resolved})` };
+  if (!lstatSync(resolved).isFile()) return { error: `source must be a regular file: ${src}` };
+  const real = realpathSync(resolved);
+  if (!isInsideRoot(packagePath, real)) {
+    return { error: `source resolves outside package root: ${src}` };
+  }
+  return { path: real };
+}
+
+function validateWorkspaceRelativeDest(dest: string): string | null {
+  if (!dest || isAbsolute(dest)) return `absolute destination paths are not allowed: ${dest}`;
+  const normalized = relative(".", dest);
+  if (normalized.startsWith("..") || isAbsolute(normalized)) {
+    return `destination escapes workspace root: ${dest}`;
+  }
+  return null;
+}
+
 function validateCopyEntries(
   manifest: AgentPackageManifest,
   packagePath: string,
@@ -42,12 +69,17 @@ function validateCopyEntries(
   const errors: string[] = [];
 
   for (const entry of manifest.files.copy) {
-    const srcPath = resolve(packagePath, entry.src);
-    if (!existsSync(srcPath)) {
-      errors.push(`files.copy: src not found: ${entry.src} (resolved: ${srcPath})`);
+    const source = resolvePackageFile(packagePath, entry.src);
+    if (source.error || !source.path) {
+      errors.push(`files.copy: ${source.error}`);
       continue;
     }
-    const hash = hashFile(srcPath);
+    const destError = validateWorkspaceRelativeDest(entry.dest);
+    if (destError) {
+      errors.push(`files.copy: ${destError}`);
+      continue;
+    }
+    const hash = hashFile(source.path);
     resolved.set(entry.dest, hash);
   }
 
@@ -64,15 +96,16 @@ function hashSkillFiles(
   if (!skills) return { resolved, errors };
 
   for (const skill of skills) {
-    const skillMdPath = resolve(packagePath, skill.path, "SKILL.md");
-    if (!existsSync(skillMdPath)) {
+    const skillSource = `${skill.path}/SKILL.md`;
+    const skillMd = resolvePackageFile(packagePath, skillSource);
+    if (skillMd.error || !skillMd.path) {
       if (skill.required !== false) {
-        errors.push(`skills: required SKILL.md not found: ${skill.path}/SKILL.md`);
+        errors.push(`skills: required SKILL.md invalid: ${skillSource}: ${skillMd.error}`);
       }
       continue;
     }
-    const relPath = `${skill.path}/SKILL.md`;
-    const hash = hashFile(skillMdPath);
+    const relPath = skillSource;
+    const hash = hashFile(skillMd.path);
     resolved.set(relPath, hash);
   }
 

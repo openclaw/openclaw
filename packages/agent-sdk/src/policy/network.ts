@@ -1,5 +1,12 @@
 // @openclaw/agent-sdk — Network policy enforcement (DNS rebinding protection, egress control).
 
+import {
+  isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
+  isIpv4Address,
+  isIpv6Address,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
 import { DEFAULT_DENY_PRIVATE_RANGES } from "../index.js";
 import type { NetworkPolicy } from "../index.js";
 
@@ -104,79 +111,16 @@ export function isPrivateIp(
   isPrivate: boolean;
   matchedRange?: string;
 } {
-  // Handle IPv4
-  if (ip.includes(".")) {
-    const parts = ip.split(".").map(Number);
-    if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
-      return { isPrivate: false };
-    }
-
-    const [a, b] = parts;
-
-    // 10.0.0.0/8
-    if (a === 10 && denyRanges.includes("10.0.0.0/8")) {
-      return { isPrivate: true, matchedRange: "10.0.0.0/8" };
-    }
-    // 172.16.0.0/12 (172.16.0.0 – 172.31.255.255)
-    if (a === 172 && b >= 16 && b <= 31 && denyRanges.includes("172.16.0.0/12")) {
-      return { isPrivate: true, matchedRange: "172.16.0.0/12" };
-    }
-    // 192.168.0.0/16
-    if (a === 192 && b === 168 && denyRanges.includes("192.168.0.0/16")) {
-      return { isPrivate: true, matchedRange: "192.168.0.0/16" };
-    }
-    // 127.0.0.0/8
-    if (a === 127 && denyRanges.includes("127.0.0.0/8")) {
-      return { isPrivate: true, matchedRange: "127.0.0.0/8" };
-    }
+  void denyRanges;
+  const parsed = parseCanonicalIpAddress(ip);
+  if (!parsed) return { isPrivate: false };
+  if (isIpv4Address(parsed) && isBlockedSpecialUseIpv4Address(parsed)) {
+    return { isPrivate: true, matchedRange: parsed.range() };
   }
-
-  // Handle IPv6
-  if (ip.includes(":")) {
-    const lower = ip.toLowerCase();
-    // ::1/128
-    if (lower === "::1" && denyRanges.includes("::1/128")) {
-      return { isPrivate: true, matchedRange: "::1/128" };
-    }
-    // fd00::/8 (starts with fd)
-    // Handle compressed forms too: ::fd00, fd00::, etc.
-    const expanded = expandIpv6(lower);
-    if (expanded && expanded.startsWith("fd") && denyRanges.includes("fd00::/8")) {
-      return { isPrivate: true, matchedRange: "fd00::/8" };
-    }
+  if (isIpv6Address(parsed) && isBlockedSpecialUseIpv6Address(parsed)) {
+    return { isPrivate: true, matchedRange: parsed.range() };
   }
-
   return { isPrivate: false };
-}
-
-/**
- * Minimal IPv6 expansion for private range checking.
- * Handles common compressed forms like ::1, fd00::, ::fd00.
- */
-function expandIpv6(ip: string): string | null {
-  try {
-    // Handle :: abbreviation
-    let expanded = ip;
-    if (expanded.includes("::")) {
-      const parts = expanded.split("::");
-      const left = parts[0] ? parts[0].split(":") : [];
-      const right = parts[1] ? parts[1].split(":") : [];
-      const missing = 8 - left.length - right.length;
-      const middle = new Array(missing).fill("0");
-      expanded = [...left, ...middle, ...right].join(":");
-    }
-
-    // Pad each group to 4 hex digits
-    const groups = expanded.split(":");
-    if (groups.length !== 8) return null;
-
-    return groups
-      .map((g) => g.padStart(4, "0"))
-      .join(":")
-      .toLowerCase();
-  } catch {
-    return null;
-  }
 }
 
 /**

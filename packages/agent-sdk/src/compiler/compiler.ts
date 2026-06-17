@@ -61,6 +61,8 @@ const KNOWN_PATHS = new Set([
   "agentPackages.policy.denyMutableInstructionFiles",
   "agentPackages.policy.allowMutableUserInstructionFiles",
   "agentPackages.registry",
+  "agentPackages.upgradedAt",
+  "agentPackages.previousVersion",
 ]);
 
 /**

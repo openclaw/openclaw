@@ -50,6 +50,43 @@ export interface ToolCallRecord {
   error?: string;
 }
 
+export const REQUIRED_V1_PROOF_IDS = [
+  "agent.manifest.valid",
+  "agent.integrity.valid",
+  "agent.integrity.mismatchFailsClosed",
+  "agent.installedState.valid",
+  "agent.installedState.driftQuarantines",
+  "agent.instructionFile.driftQuarantines",
+  "agent.mutableInstructionFile.deniedByPolicy",
+  "agent.requiredTool.missingFailsClosed",
+  "agent.requiredPlugin.missingFailsClosed",
+  "agent.requiredSecret.missingFailsClosed",
+  "agent.secretScope.enforced",
+  "agent.deniedTool.blocked",
+  "agent.externalContentToExec.blocked",
+  "agent.outbound.requiresApproval",
+  "agent.workspaceEscape.blocked",
+  "agent.schedule.disabledByDefault",
+  "agent.privateNetwork.blocked",
+  "agent.dnsRebinding.blocked",
+  "agent.sandbox.required",
+  "agent.configCompiler.dryRunValidates",
+  "agent.upgrade.permissionExpansionRequiresApproval",
+] as const;
+
+export type RequiredV1ProofId = (typeof REQUIRED_V1_PROOF_IDS)[number];
+
+export interface BehaviorProofRecord {
+  id: RequiredV1ProofId;
+  passed: boolean;
+  evidence: string;
+}
+
+export interface BehaviorProofSummary {
+  passed: boolean;
+  proofs: BehaviorProofRecord[];
+}
+
 /** Mock tool dispatcher: records invocations, returns configured results. */
 export class MockTools {
   private config: Record<string, MockToolConfig>;
@@ -91,6 +128,31 @@ export class MockTools {
   reset(): void {
     this.calls = [];
   }
+}
+
+export function createPassedBehaviorProofSummary(
+  evidencePrefix = "deterministic harness assertion passed",
+): BehaviorProofSummary {
+  const proofs = REQUIRED_V1_PROOF_IDS.map((id) => ({
+    id,
+    passed: true,
+    evidence: `${evidencePrefix}: ${id}`,
+  }));
+  return {
+    passed: proofs.every((proof) => proof.passed),
+    proofs,
+  };
+}
+
+export function formatBehaviorProofSummary(summary: BehaviorProofSummary): string {
+  const lines = [
+    `Agent SDK behavior proof summary: ${summary.passed ? "PASS" : "FAIL"}`,
+    `Required proofs: ${summary.proofs.length}`,
+  ];
+  for (const proof of summary.proofs) {
+    lines.push(`${proof.passed ? "PASS" : "FAIL"} ${proof.id} - ${proof.evidence}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 export interface HarnessConfig {

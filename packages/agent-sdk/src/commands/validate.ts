@@ -1,7 +1,7 @@
 // @openclaw/agent-sdk — Validate command: schema + integrity + mutable instruction policy.
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Command } from "commander";
 import { hashFile } from "../hash.js";
 import { INSTRUCTION_FILES } from "../index.js";
@@ -74,12 +74,61 @@ function validateSchema(manifest: AgentPackageManifest): string[] {
   return errors;
 }
 
+function hasFileArrays(manifest: AgentPackageManifest): boolean {
+  return (
+    typeof manifest.files === "object" &&
+    manifest.files !== null &&
+    Array.isArray(manifest.files.copy) &&
+    Array.isArray(manifest.files.mutable)
+  );
+}
+
+function isInsideRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function validatePackageFile(packagePath: string, src: string): string | null {
+  if (!src || isAbsolute(src)) return "absolute source paths are not allowed";
+  const resolved = resolve(packagePath, src);
+  if (!isInsideRoot(packagePath, resolved)) return "source path escapes package root";
+  if (!existsSync(resolved)) return `source file missing: ${src}`;
+  if (!lstatSync(resolved).isFile()) return "source must be a regular file";
+  const real = realpathSync(resolved);
+  if (!isInsideRoot(packagePath, real)) return "source resolves outside package root";
+  return null;
+}
+
+function validateWorkspacePath(workspacePath: string, dest: string): string | null {
+  if (!dest || isAbsolute(dest)) return "absolute destination paths are not allowed";
+  const resolved = resolve(workspacePath, dest);
+  if (!isInsideRoot(workspacePath, resolved)) return "destination path escapes workspace root";
+  return null;
+}
+
+function validateFilePaths(manifest: AgentPackageManifest, packagePath: string): string[] {
+  const errors: string[] = [];
+  if (!hasFileArrays(manifest)) return errors;
+  for (const entry of manifest.files.copy) {
+    const srcError = validatePackageFile(packagePath, entry.src);
+    if (srcError) errors.push(`files.copy src "${entry.src}": ${srcError}`);
+    const destError = validateWorkspacePath(packagePath, entry.dest);
+    if (destError) errors.push(`files.copy dest "${entry.dest}": ${destError}`);
+  }
+  for (const entry of manifest.files.mutable) {
+    const destError = validateWorkspacePath(packagePath, entry.dest);
+    if (destError) errors.push(`files.mutable "${entry.dest}": ${destError}`);
+  }
+  return errors;
+}
+
 function validateIntegrity(
   manifest: AgentPackageManifest,
   integrity: IntegrityManifest,
   packagePath: string,
 ): string[] {
   const errors: string[] = [];
+  if (!hasFileArrays(manifest)) return errors;
 
   // Check package identity matches
   if (integrity.package.name !== manifest.name) {
@@ -124,6 +173,7 @@ function validateIntegrity(
 
 function validateMutableInstructionPolicy(manifest: AgentPackageManifest): string[] {
   const errors: string[] = [];
+  if (!hasFileArrays(manifest)) return errors;
   const denyMutable = manifest.policy?.denyMutableInstructionFiles !== false; // default true
 
   if (!denyMutable) return errors;
@@ -199,6 +249,12 @@ export function runValidation(packagePath: string): {
 
   // Schema validation
   errors.push(...validateSchema(manifest).map((m) => ({ path: "agent-package.json", message: m })));
+  errors.push(
+    ...validateFilePaths(manifest, resolved).map((m) => ({
+      path: "agent-package.json",
+      message: m,
+    })),
+  );
 
   // Integrity check
   let integrity: IntegrityManifest | null = null;

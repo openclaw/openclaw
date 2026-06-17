@@ -1,7 +1,15 @@
 // @openclaw/agent-sdk — Enable command: validate → compile → copy files → write config.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { Command } from "commander";
 import { compileManifest } from "../compiler/compiler.js";
 import type { AgentPackageManifest, IntegrityManifest } from "../index.js";
@@ -15,6 +23,43 @@ function loadManifest(packagePath: string): AgentPackageManifest {
   return JSON.parse(readFileSync(manifestPath, "utf8")) as AgentPackageManifest;
 }
 
+function isInsideRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function resolvePackageFile(packagePath: string, src: string): string {
+  if (!src || isAbsolute(src)) {
+    throw new Error(`files.copy src must be package-relative: ${src}`);
+  }
+  const resolved = resolve(packagePath, src);
+  if (!isInsideRoot(packagePath, resolved)) {
+    throw new Error(`files.copy src escapes package root: ${src}`);
+  }
+  if (!existsSync(resolved)) {
+    throw new Error(`files.copy src not found: ${src}`);
+  }
+  if (!lstatSync(resolved).isFile()) {
+    throw new Error(`files.copy src must be a regular file: ${src}`);
+  }
+  const real = realpathSync(resolved);
+  if (!isInsideRoot(packagePath, real)) {
+    throw new Error(`files.copy src resolves outside package root: ${src}`);
+  }
+  return real;
+}
+
+function resolveWorkspacePath(workspacePath: string, dest: string): string {
+  if (!dest || isAbsolute(dest)) {
+    throw new Error(`workspace destination must be workspace-relative: ${dest}`);
+  }
+  const resolved = resolve(workspacePath, dest);
+  if (!isInsideRoot(workspacePath, resolved)) {
+    throw new Error(`workspace destination escapes workspace root: ${dest}`);
+  }
+  return resolved;
+}
+
 function copyFilesToWorkspace(
   manifest: AgentPackageManifest,
   packagePath: string,
@@ -22,9 +67,9 @@ function copyFilesToWorkspace(
 ): string[] {
   const written: string[] = [];
   for (const entry of manifest.files.copy) {
-    const srcPath = resolve(packagePath, entry.src);
-    const destPath = resolve(workspacePath, entry.dest);
-    const destDir = resolve(destPath, "..");
+    const srcPath = resolvePackageFile(packagePath, entry.src);
+    const destPath = resolveWorkspacePath(workspacePath, entry.dest);
+    const destDir = dirname(destPath);
     if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
     copyFileSync(srcPath, destPath);
     written.push(entry.dest);
@@ -34,7 +79,7 @@ function copyFilesToWorkspace(
 
 function ensureMutableDirs(manifest: AgentPackageManifest, workspacePath: string): void {
   for (const entry of manifest.files.mutable) {
-    const dirPath = resolve(workspacePath, entry.dest);
+    const dirPath = resolveWorkspacePath(workspacePath, entry.dest);
     if (!existsSync(dirPath)) mkdirSync(dirPath, { recursive: true });
   }
 }

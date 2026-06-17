@@ -136,7 +136,7 @@ export function liftQuarantine(workspacePath: string): boolean {
  * Get the list of tools allowed in quarantine mode (read-only).
  */
 export function getQuarantineToolAllowlist(): string[] {
-  return ["read", "write", "edit", "memory_get", "memory_search"];
+  return ["read", "memory_get", "memory_search"];
 }
 
 /**

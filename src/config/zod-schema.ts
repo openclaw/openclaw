@@ -135,6 +135,33 @@ const SecuritySchema = z
   .strict()
   .optional();
 
+const AgentPackagesSchema = z
+  .object({
+    enabled: z.array(z.string().min(1)).optional(),
+    registry: z
+      .record(
+        z.string().min(1),
+        z
+          .object({
+            version: z.string().optional(),
+            description: z.string().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    policy: z
+      .object({
+        denyMutableInstructionFiles: z.boolean().optional(),
+        allowMutableUserInstructionFiles: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    upgradedAt: z.string().optional(),
+    previousVersion: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 const AccessGroupsSchema = z
   .record(
     z.string().min(1),
@@ -807,6 +834,7 @@ export const OpenClawSchema = z
     models: ModelsConfigSchema,
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
+    agentPackages: AgentPackagesSchema,
     tools: ToolsSchema,
     security: SecuritySchema,
     bindings: BindingsSchema,

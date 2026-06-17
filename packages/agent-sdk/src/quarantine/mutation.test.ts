@@ -207,13 +207,13 @@ describe("quarantine", () => {
 describe("quarantine tool restrictions", () => {
   it("allows read-only tools", () => {
     expect(isToolAllowedInQuarantine("read")).toBe(true);
-    expect(isToolAllowedInQuarantine("write")).toBe(true);
-    expect(isToolAllowedInQuarantine("edit")).toBe(true);
     expect(isToolAllowedInQuarantine("memory_get")).toBe(true);
     expect(isToolAllowedInQuarantine("memory_search")).toBe(true);
   });
 
   it("blocks dangerous tools", () => {
+    expect(isToolAllowedInQuarantine("write")).toBe(false);
+    expect(isToolAllowedInQuarantine("edit")).toBe(false);
     expect(isToolAllowedInQuarantine("exec")).toBe(false);
     expect(isToolAllowedInQuarantine("browser")).toBe(false);
     expect(isToolAllowedInQuarantine("web_fetch")).toBe(false);

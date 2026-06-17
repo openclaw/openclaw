@@ -1813,6 +1813,9 @@ importers:
       '@openclaw/agent-core':
         specifier: workspace:*
         version: link:../agent-core
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../net-policy
       commander:
         specifier: 14.0.3
         version: 14.0.3
