@@ -16,7 +16,7 @@ import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 export type { FetchLike };
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
-export const fetchWithUndici: FetchLike = async (url, init) =>
+const fetchWithUndici: FetchLike = async (url, init) =>
   (await loadUndiciRuntimeDeps().fetch(
     url,
     init as Parameters<ReturnType<typeof loadUndiciRuntimeDeps>["fetch"]>[1],

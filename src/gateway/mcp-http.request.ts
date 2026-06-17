@@ -50,6 +50,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 
 type McpRequestContext = {
   sessionKey: string;
+  sessionId: string | undefined;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
@@ -354,6 +355,10 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
+export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefined {
+  return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
@@ -361,6 +366,7 @@ export function resolveMcpRequestContext(
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),

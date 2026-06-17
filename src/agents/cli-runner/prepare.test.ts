@@ -117,6 +117,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
         headers: {
           Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
           "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+          "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
@@ -128,6 +129,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
           "x-openclaw-require-explicit-message-target":
             "${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}",
+          "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
         },
       },
     },
@@ -1099,6 +1101,70 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("invalidates CLI session reuse when explicit message-target policy changes", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-message-policy",
+        sourceReplyDeliveryMode: "message_tool_only",
+        requireExplicitMessageTarget: true,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          messageToolPolicyHash: hashCliSessionText(
+            JSON.stringify({
+              sourceReplyDeliveryMode: "message_tool_only",
+              requireExplicitMessageTarget: false,
+            }),
+          ),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.messageToolPolicyHash).toBeDefined();
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires explicit message targets by default for CLI subagents", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:subagent:child",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-subagent-message-policy",
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.requireExplicitMessageTarget).toBe(true);
+      expect(context.messageToolPolicyHash).toBe(
+        hashCliSessionText(
+          JSON.stringify({
+            sourceReplyDeliveryMode: "message_tool_only",
+            requireExplicitMessageTarget: true,
+          }),
+        ),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses cwd for CLI system prompt workspace guidance", async () => {
     const { dir, sessionFile } = createSessionFile();
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
@@ -1444,6 +1510,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
+        requireExplicitMessageTarget: false,
+        senderIsOwner: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -1532,6 +1600,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.systemPromptReport.tools.entries).toEqual([]);
       expect(context.promptToolNamesHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();
+      expect(context.mcpDeliveryCapture).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1547,10 +1616,23 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send a message",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
         ensureMcpLoopbackServer,
         createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
       });
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -1563,7 +1645,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             config: {
               command: "native-cli",
               args: ["--print"],
-              output: "text",
               input: "arg",
               sessionMode: "existing",
             },
@@ -1592,6 +1673,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_SESSION_ID: "session-test",
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
         OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
@@ -1600,6 +1682,71 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
         OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: "true",
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+      });
+      expect(context.mcpDeliveryCapture).toBe(true);
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requireExplicitMessageTarget: true,
+        }),
+      );
+      expect(context.systemPrompt).toContain(
+        "include `target` and `message`; `target` is required for this turn",
+      );
+      expect(context.systemPrompt).not.toContain(
+        "The target defaults to the current source channel",
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("enables gateway delivery capture for Claude-style JSONL bundle MCP", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              jsonlDialect: "claude-stream-json",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-claude-delivery-capture",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.mcpDeliveryCapture).toBe(true);
+      expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

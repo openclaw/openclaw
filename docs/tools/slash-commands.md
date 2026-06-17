@@ -231,7 +231,8 @@ plugins.
     | `/help` | Show the short help summary |
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
-    | `/status` | Show execution/runtime status, Gateway and system uptime, plus provider usage/quota |
+    | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel failures, dependency issues, compatibility notices |
     | `/goal [status\|start\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |

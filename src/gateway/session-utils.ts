@@ -74,6 +74,7 @@ import { listSessionEntries as listAccessorSessionEntries } from "../config/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -98,10 +99,10 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import {
-  readRecentSessionUsageFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-  readSessionTitleFieldsFromTranscript,
-} from "./session-utils.fs.js";
+  readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync as readScopedSessionTitleFieldsFromTranscriptAsync,
+  readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript,
+} from "./session-transcript-readers.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -113,6 +114,10 @@ import type {
 export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
+  resolveSessionHistoryTranscriptPathAsync,
+  resolveSessionTranscriptCandidates,
+} from "./session-utils.fs.js";
+export {
   attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
@@ -130,11 +135,12 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
   readSessionMessagesWithSourceAsync,
-  resolveSessionHistoryTranscriptPathAsync,
   visitSessionMessagesAsync,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
+export type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadScope,
+} from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
@@ -877,11 +883,13 @@ function resolveTranscriptUsageFallback(params: {
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
     : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
-  const snapshot = readRecentSessionUsageFromTranscript(
-    entry.sessionId,
-    params.storePath,
-    entry.sessionFile,
-    agentId,
+  const snapshot = readScopedRecentSessionUsageFromTranscript(
+    {
+      agentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+      storePath: params.storePath,
+    },
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
   if (!snapshot) {
@@ -2188,12 +2196,12 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript(
-      entry.sessionId,
+    const fields = readScopedSessionTitleFieldsFromTranscript({
+      agentId: sessionAgentId,
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
       storePath,
-      entry.sessionFile,
-      sessionAgentId,
-    );
+    });
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -2817,109 +2825,116 @@ export async function listSessionsFromStoreAsync(params: {
   modelCatalog?: ModelCatalogEntry[];
   opts: SessionsListParams;
 }): Promise<SessionsListResult> {
-  const { cfg, storePath, store, opts } = params;
-  const now = Date.now();
-  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
-  const sessionListTranscriptFieldRows = 100;
-  let rowContext: SessionListRowContext | undefined;
-  const getRowContext = () => {
-    rowContext ??= buildSessionListRowContext({ store, now });
-    return rowContext;
-  };
-  const includeDerivedTitles = opts.includeDerivedTitles === true;
-  const includeLastMessage = opts.includeLastMessage === true;
-  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
+  // Pin the active plugin-registry workspace dir for the duration of this
+  // call so per-row metadata lookups use a stable memo key. Without this pin,
+  // concurrent agent turns / crons mutate the process-global workspace dir
+  // between rows, the memo never hits, and each row triggers a full
+  // loadPluginMetadataSnapshot scan (~100 ms).
+  return withPinnedActivePluginRegistryWorkspaceDir(async () => {
+    const { cfg, storePath, store, opts } = params;
+    const now = Date.now();
+    const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+    const sessionListTranscriptFieldRows = 100;
+    let rowContext: SessionListRowContext | undefined;
+    const getRowContext = () => {
+      rowContext ??= buildSessionListRowContext({ store, now });
+      return rowContext;
+    };
+    const includeDerivedTitles = opts.includeDerivedTitles === true;
+    const includeLastMessage = opts.includeLastMessage === true;
+    const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const selection = selectSessionEntries({
-    cfg,
-    store,
-    opts,
-    now,
-    getRowContext:
-      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
-        ? getRowContext
-        : undefined,
-    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
-  });
-  const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
-  const fullRowContext =
-    rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
-      ? getRowContext()
-      : undefined;
-  const sharedRowContext =
-    fullRowContext ??
-    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
-
-  const sessions: GatewaySessionRow[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const [key, entry] = entries[i];
-    const includeTranscriptFields = i < sessionListTranscriptFieldRows;
-    const rowAgentId =
-      key === "global" && typeof opts.agentId === "string"
-        ? normalizeAgentId(opts.agentId)
-        : undefined;
-    const storeChildSessionsByKey =
-      fullRowContext?.storeChildSessionsByKey ??
-      buildSingleRowStoreChildSessionsByKey({ store, storePath, key, now });
-    const row = buildGatewaySessionRow({
+    const selection = selectSessionEntries({
       cfg,
-      storePath,
       store,
-      key,
-      entry,
-      agentId: rowAgentId,
-      modelCatalog: params.modelCatalog,
+      opts,
       now,
-      includeDerivedTitles: false,
-      includeLastMessage: false,
-      transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
-      storeChildSessionsByKey,
-      rowContext: sharedRowContext,
-      skipTranscriptUsageFallback: true,
-      lightweightListRow: true,
+      getRowContext:
+        hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
+          ? getRowContext
+          : undefined,
+      defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     });
-    if (
-      entry?.sessionId &&
-      includeTranscriptFields &&
-      (includeDerivedTitles || includeLastMessage)
-    ) {
-      const parsed = parseAgentSessionKey(key);
-      const sessionAgentId =
-        rowAgentId ??
-        (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
-      const fields = await readSessionTitleFieldsFromTranscriptAsync(
-        entry.sessionId,
-        storePath,
-        entry.sessionFile,
-        sessionAgentId,
-      );
-      if (includeDerivedTitles) {
-        row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
-      }
-      if (includeLastMessage && fields.lastMessagePreview) {
-        row.lastMessagePreview = fields.lastMessagePreview;
-      }
-    }
-    sessions.push(row);
-    // Yield to the event loop between batches so WebSocket heartbeats,
-    // channel I/O, and concurrent RPC calls are not starved.
-    if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
-  }
+    const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
+    const fullRowContext =
+      rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
+        ? getRowContext()
+        : undefined;
+    const sharedRowContext =
+      fullRowContext ??
+      (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
-  return {
-    ts: now,
-    path: storePath,
-    count: sessions.length,
-    totalCount,
-    limitApplied,
-    offset: offset > 0 ? offset : undefined,
-    nextOffset,
-    hasMore,
-    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
-    sessions,
-  };
+    const sessions: GatewaySessionRow[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const [key, entry] = entries[i];
+      const includeTranscriptFields = i < sessionListTranscriptFieldRows;
+      const rowAgentId =
+        key === "global" && typeof opts.agentId === "string"
+          ? normalizeAgentId(opts.agentId)
+          : undefined;
+      const storeChildSessionsByKey =
+        fullRowContext?.storeChildSessionsByKey ??
+        buildSingleRowStoreChildSessionsByKey({ store, storePath, key, now });
+      const row = buildGatewaySessionRow({
+        cfg,
+        storePath,
+        store,
+        key,
+        entry,
+        agentId: rowAgentId,
+        modelCatalog: params.modelCatalog,
+        now,
+        includeDerivedTitles: false,
+        includeLastMessage: false,
+        transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
+        storeChildSessionsByKey,
+        rowContext: sharedRowContext,
+        skipTranscriptUsageFallback: true,
+        lightweightListRow: true,
+      });
+      if (
+        entry?.sessionId &&
+        includeTranscriptFields &&
+        (includeDerivedTitles || includeLastMessage)
+      ) {
+        const parsed = parseAgentSessionKey(key);
+        const sessionAgentId =
+          rowAgentId ??
+          (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
+        const fields = await readScopedSessionTitleFieldsFromTranscriptAsync({
+          agentId: sessionAgentId,
+          sessionFile: entry.sessionFile,
+          sessionId: entry.sessionId,
+          storePath,
+        });
+        if (includeDerivedTitles) {
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          row.lastMessagePreview = fields.lastMessagePreview;
+        }
+      }
+      sessions.push(row);
+      // Yield to the event loop between batches so WebSocket heartbeats,
+      // channel I/O, and concurrent RPC calls are not starved.
+      if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+    }
+
+    return {
+      ts: now,
+      path: storePath,
+      count: sessions.length,
+      totalCount,
+      limitApplied,
+      offset: offset > 0 ? offset : undefined,
+      nextOffset,
+      hasMore,
+      defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
+      sessions,
+    };
+  });
 }

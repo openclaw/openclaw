@@ -126,7 +126,7 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
-  allocateToolOutcomeOrdinal?: () => number;
+  allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
   skillCommand?: {
     commandName: string;
@@ -302,6 +302,7 @@ export function finalizeToolTerminalPresentation(params: {
   isError: boolean;
   observer?: ToolOutcomeObserver;
   toolName?: string;
+  toolCallOrdinal?: number;
 }): void {
   const key = buildAdjustedParamsKey({
     runId: params.runId,
@@ -313,11 +314,12 @@ export function finalizeToolTerminalPresentation(params: {
   if (!observer) {
     return;
   }
+  const toolCallOrdinal = pending?.toolCallOrdinal ?? params.toolCallOrdinal;
   observer({
     toolName: pending?.tool.name || params.toolName || "tool",
     argsHash: "",
     resultHash: "",
-    ...(pending?.toolCallOrdinal !== undefined ? { toolCallOrdinal: pending.toolCallOrdinal } : {}),
+    ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
     terminalPresentation: params.isError
       ? undefined
       : pending
@@ -1292,7 +1294,7 @@ export function wrapToolWithBeforeToolCallHook(
     execute: async (toolCallId, params, signal, onUpdate) => {
       // Allocate before any async preparation so parallel completions retain
       // the assistant message's tool-call order.
-      const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.();
+      const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
       const preparedParams = prepare
         ? await prepare(params, {

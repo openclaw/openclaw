@@ -42,6 +42,10 @@ import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/li
 import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/macos-smoke.ts";
 import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
+import {
+  posixCodexPlatformPackageRepairFunction,
+  windowsCodexPlatformPackageRepairFunction,
+} from "../../scripts/e2e/parallels/plugin-isolation.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
@@ -160,6 +164,8 @@ describe("Parallels smoke model selection", () => {
   let missingProviderKeyResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidModelTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
@@ -196,6 +202,14 @@ describe("Parallels smoke model selection", () => {
     );
     invalidHostPortResult = spawnNodeEvalSync(
       `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.linux}", "--host-port", "1e4"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "0x4800"]; await import("./${TS_PATHS.windows}");`,
       { env: process.env, imports: ["tsx"] },
     );
     invalidLinuxAgentTimeoutResult = spawnNodeEvalSync(
@@ -273,6 +287,20 @@ describe("Parallels smoke model selection", () => {
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("modelId");
     }
+  });
+
+  it("repairs only the exact missing Codex platform package failure with a fresh npm cache", () => {
+    const posixRepair = posixCodexPlatformPackageRepairFunction();
+    const windowsRepair = windowsCodexPlatformPackageRepairFunction();
+
+    for (const repair of [posixRepair, windowsRepair]) {
+      expect(repair).toContain("Missing optional dependency @openai/codex-");
+      expect(repair).toContain("NPM_CONFIG_CACHE");
+      expect(repair).toContain("--ignore-scripts");
+      expect(repair).toContain("codex-platform-repair: managed npm install completed");
+    }
+    expect(posixRepair).toContain("repair_missing_codex_platform_package");
+    expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
   });
 
   it("writes full model ids as config map keys in provider batches", () => {
@@ -574,6 +602,7 @@ set -euo pipefail
 if [[ "$1" == "list" ]]; then
   cat <<'JSON'
 [
+  {"name": "Ubuntu 9007199254740993.04"},
   {"name": "Ubuntu 26.04"},
   {"name": "Ubuntu 25.10"},
   {"name": "Ubuntu 23.10"},
@@ -591,6 +620,7 @@ const isPrlctl = [process.argv0, process.execPath].some((value) =>
 if (isPrlctl) {
   if (process.argv.some((arg) => arg.includes("list"))) {
     console.log(JSON.stringify([
+      { name: "Ubuntu 9007199254740993.04" },
       { name: "Ubuntu 26.04" },
       { name: "Ubuntu 25.10" },
       { name: "Ubuntu 23.10" },
@@ -607,6 +637,49 @@ if (isPrlctl) {
       const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
 
       expect(output).toBe("Ubuntu 26.04");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("skips unsafe Ubuntu version names in fallback resolver", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  cat <<'JSON'
+[
+  {"name": "Ubuntu 9007199254740993.04"},
+  {"name": "Ubuntu 23.10"}
+]
+JSON
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([
+      { name: "Ubuntu 9007199254740993.04" },
+      { name: "Ubuntu 23.10" },
+    ]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
+
+      expect(output).toBe("Ubuntu 23.10");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
@@ -739,7 +812,15 @@ if (isPrlctl) {
   it("waits for apt locks during Linux snapshot bootstrap", () => {
     const script = readFileSync(TS_PATHS.linux, "utf8");
 
-    expect(script).toContain("DPkg::Lock::Timeout=300");
+    expect(script).toContain("APT_LOCK_RETRY_SECONDS = 900");
+    expect(script).toContain("BOOTSTRAP_TIMEOUT_SECONDS = 1200");
+    expect(script).toContain("command -v wget");
+    expect(script).toContain("run_apt_with_lock_retry");
+    expect(script).toContain('"Could not get lock"');
+    expect(script).toContain('"Unable to acquire the dpkg frontend lock"');
+    expect(script).toContain('"Unable to lock directory"');
+    expect(script).toContain("downloadGuestFile");
+    expect(script).toContain("this.downloadGuestFile(tgzUrl");
   });
 
   it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {
@@ -934,6 +1015,14 @@ if (isPrlctl) {
     const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
 
     expect(guestTransports.match(/umask 022/g)).toHaveLength(2);
+  });
+
+  it("hardens restored macOS install lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain('rm -rf "$HOME/.npm/_cacache"');
+    expect(macos.match(/\.onboard-ref", 420/g)).toHaveLength(2);
+    expect(macos).toContain('echo "npm install attempt $attempt failed; retrying in 5s"');
   });
 
   it("provisions portable Git before Windows dev update lanes", () => {
@@ -1366,6 +1455,12 @@ setInterval(() => {}, 1000);
 
     expect(invalidHostPortResult.status).toBe(1);
     expect(invalidHostPortResult.stderr).toContain("invalid --host-port: 18425x");
+
+    expect(invalidLinuxHostPortResult.status).toBe(1);
+    expect(invalidLinuxHostPortResult.stderr).toContain("invalid --host-port: 1e4");
+
+    expect(invalidWindowsHostPortResult.status).toBe(1);
+    expect(invalidWindowsHostPortResult.stderr).toContain("invalid --host-port: 0x4800");
 
     expect(invalidLinuxAgentTimeoutResult.status).toBe(1);
     expect(invalidLinuxAgentTimeoutResult.stderr).toContain(

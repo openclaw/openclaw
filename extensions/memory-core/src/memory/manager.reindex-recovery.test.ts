@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
+import {
+  acquireMemoryReindexSwapReadLock,
+  tryAcquireMemoryReindexSwapLock,
+} from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
@@ -235,6 +239,51 @@ describe("memory manager reindex recovery", () => {
     expect(sessionSyncCalls[0]?.targetSessionFiles).toBeUndefined();
     expect(harness.sessionsDirty).toBe(false);
     expect(harness.sessionsFullRetryDirty).toBe(false);
+  });
+
+  it("restores the live database guard after a peer blocks safe reindex", async () => {
+    const storePath = path.join(workspaceDir, "index-peer-contention.sqlite");
+    const memoryManager = await openManager(
+      createCfg({
+        storePath,
+        provider: "none",
+        sources: ["memory"],
+      }),
+    );
+    const harness = memoryManager as unknown as ReindexHarness;
+    const peerLock = acquireMemoryReindexSwapReadLock(storePath);
+
+    try {
+      await expect(harness.runSafeReindex({ reason: "test", force: true })).rejects.toThrow(
+        /another process is using the live database/,
+      );
+    } finally {
+      peerLock.release();
+    }
+
+    const exclusiveLock = tryAcquireMemoryReindexSwapLock(storePath);
+    expect(exclusiveLock).toBeUndefined();
+    exclusiveLock?.release();
+    expect(harness.db.prepare("SELECT 1 AS ok").get()).toEqual({ ok: 1 });
+  });
+
+  it("releases the live database guard after constructor schema failure", async () => {
+    const storePath = path.join(workspaceDir, "index-incompatible-schema.sqlite");
+    const db = new DatabaseSync(storePath);
+    db.exec("CREATE TABLE chunks (id TEXT PRIMARY KEY)");
+    db.close();
+
+    const { getMemorySearchManager } = await import("./index.js");
+    const result = await getMemorySearchManager({
+      cfg: createCfg({ storePath, provider: "none", sources: ["memory"] }),
+      agentId: "main",
+    });
+
+    expect(result.manager).toBeNull();
+    expect(result.error).toMatch(/no such column: path/);
+    const exclusiveLock = tryAcquireMemoryReindexSwapLock(storePath);
+    expect(exclusiveLock).toBeDefined();
+    exclusiveLock?.release();
   });
 
   it("full-reindexes sessions-only retry state when metadata is mismatched", async () => {

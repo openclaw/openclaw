@@ -24,6 +24,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
@@ -582,6 +583,7 @@ function recordFailedCandidateAttempt(params: {
     model: params.candidate.model,
     error,
     reason: described.reason ?? "unknown",
+    authMode: described.authMode,
     status: described.status,
     code: described.code,
   });
@@ -617,6 +619,7 @@ function appendFailedCandidateAttempt(params: {
     model: params.candidate.model,
     error: resolveCandidateAttemptError(described, params.candidate),
     reason: described.reason ?? "unknown",
+    authMode: described.authMode,
     status: described.status,
     code: described.code,
   });
@@ -1427,6 +1430,10 @@ export async function runWithModelFallback<T>(
           authStore,
           profileIds,
         });
+        const authMode =
+          decision.reason === "billing"
+            ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
+            : undefined;
 
         if (decision.type === "suspend_lanes") {
           const error = `Provider ${candidate.provider} is in cooldown (suspending lanes)`;
@@ -1435,6 +1442,7 @@ export async function runWithModelFallback<T>(
             model: candidate.model,
             error,
             reason: decision.reason,
+            authMode,
           });
 
           if (params.sessionId) {
@@ -1484,6 +1492,7 @@ export async function runWithModelFallback<T>(
             model: candidate.model,
             error: decision.error,
             reason: decision.reason,
+            authMode,
           });
           await observeDecision({
             decision: "skip_candidate",
@@ -1521,6 +1530,7 @@ export async function runWithModelFallback<T>(
               model: candidate.model,
               error,
               reason: decision.reason,
+              authMode,
             });
             await observeDecision({
               decision: "skip_candidate",

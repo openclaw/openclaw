@@ -17,7 +17,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+} from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
@@ -188,6 +188,8 @@ export type PreparedCliRunContext = {
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
+  mcpDeliveryCapture?: true;
 };

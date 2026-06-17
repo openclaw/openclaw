@@ -25,8 +25,8 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { readSessionEntry } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -157,7 +157,9 @@ async function forwardFollowupProgressEvent(params: {
 }) {
   const { evt, opts } = params;
   const emitChannelProgress = params.emitChannelProgress !== false;
-  if (!emitChannelProgress && evt.stream !== "compaction") {
+  const allowQuietToolLifecycle =
+    evt.stream === "tool" && opts?.allowToolLifecycleWhenProgressHidden === true;
+  if (!emitChannelProgress && evt.stream !== "compaction" && !allowQuietToolLifecycle) {
     return;
   }
 
@@ -529,7 +531,10 @@ export function createFollowupRunner(params: {
       const resolveCurrentVerboseLevel = () => {
         if (replySessionKey && storePath) {
           try {
-            const level = readSessionEntry(storePath, replySessionKey)?.verboseLevel;
+            const level = loadSessionEntry({
+              storePath,
+              sessionKey: replySessionKey,
+            })?.verboseLevel;
             if (typeof level === "string" && level.trim()) {
               return level;
             }
@@ -605,7 +610,10 @@ export function createFollowupRunner(params: {
         const admittedSessionEntry = replySessionKey
           ? (sessionStore?.[replySessionKey] ??
             (storePath
-              ? (readSessionEntry(storePath, replySessionKey) as SessionEntry | undefined)
+              ? loadSessionEntry({
+                  storePath,
+                  sessionKey: replySessionKey,
+                })
               : undefined))
           : undefined;
         if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
@@ -790,16 +798,33 @@ export function createFollowupRunner(params: {
         if (!storePath) {
           return;
         }
-        await updateSessionStore(storePath, (store) => {
-          const persistedEntry = store[replySessionKey];
-          if (!persistedEntry) {
-            return;
-          }
+        await updateSessionEntry({ storePath, sessionKey: replySessionKey }, (persistedEntry) => {
           if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-            return;
+            return null;
           }
+          const shouldClearAuthProfile =
+            persistedEntry.authProfileOverrideSource === "auto" ||
+            (persistedEntry.authProfileOverrideSource === undefined &&
+              persistedEntry.authProfileOverrideCompactionCount !== undefined);
           clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-          store[replySessionKey] = persistedEntry;
+          return {
+            providerOverride: undefined,
+            modelOverride: undefined,
+            modelOverrideSource: undefined,
+            modelOverrideFallbackOriginProvider: undefined,
+            modelOverrideFallbackOriginModel: undefined,
+            ...(shouldClearAuthProfile
+              ? {
+                  authProfileOverride: undefined,
+                  authProfileOverrideSource: undefined,
+                  authProfileOverrideCompactionCount: undefined,
+                }
+              : {}),
+            fallbackNoticeSelectedModel: undefined,
+            fallbackNoticeActiveModel: undefined,
+            fallbackNoticeReason: undefined,
+            updatedAt: persistedEntry.updatedAt,
+          };
         });
       };
       fallbackProvider = run.provider;

@@ -14,7 +14,8 @@ import {
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "../../agents/run-termination.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import {
   emitAgentEvent,
@@ -22,6 +23,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { formatToolAggregate } from "../tool-meta.js";
+import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 
 function isClaudeCliProvider(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
@@ -189,9 +191,13 @@ export async function clearDroppedCliSessionBinding(params: {
   if (!params.storePath || !params.sessionKey) {
     return;
   }
-  await updateSessionStore(params.storePath, (store) => {
-    clearEntry(store[params.sessionKey!]);
-  });
+  await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (entry) => {
+      clearEntry(entry);
+      return entry;
+    },
+  );
 }
 
 function createToolEventBridge(params: {
@@ -403,6 +409,7 @@ async function runCliAgentWithLifecycleInternal(
           phase: "end",
           startedAt,
           endedAt: Date.now(),
+          ...resolveAgentLifecycleTerminalMetadata(result.meta),
           ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });

@@ -15,6 +15,7 @@ import {
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -24,6 +25,7 @@ export type QaTestFileScenario = QaSeedScenarioWithSource & {
 export type QaTestFileExecutionKind = "vitest" | "playwright";
 
 export type QaTestFileScenarioRunParams = {
+  evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
   outputDir: string;
   primaryModel: string;
@@ -250,11 +252,13 @@ function buildTestFileEvidence(params: {
   primaryModel: string;
   providerMode: QaProviderMode;
   results: readonly QaTestFileScenarioResult[];
+  evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
 }) {
   const definition = testFileRunnerDefinitions[params.kind];
   const evidence = definition.buildEvidenceSummary({
     artifactPaths: params.artifactPaths,
+    evidenceMode: params.evidenceMode,
     env: params.env,
     generatedAt: params.generatedAt,
     primaryModel: params.primaryModel,
@@ -271,6 +275,7 @@ function buildTestFileEvidence(params: {
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
+    evidenceMode: evidence.evidenceMode,
     profile: evidence.profile,
     entries: evidence.entries,
   });
@@ -341,6 +346,7 @@ export async function runQaTestFileScenarios(
   });
   const evidence = buildTestFileEvidence({
     artifactPaths,
+    evidenceMode: params.evidenceMode,
     env,
     generatedAt,
     kind,

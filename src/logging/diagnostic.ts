@@ -1007,11 +1007,14 @@ export function logSessionAttention(
     { sessionId: state.sessionId, sessionKey: state.sessionKey },
     Date.now(),
   );
+  const stuckSessionAbortMs =
+    params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
+    stuckSessionAbortMs,
   });
   const recoveryEligible =
     classification.recoveryEligible ||
@@ -1019,8 +1022,7 @@ export function logSessionAttention(
       classification,
       activity,
       ageMs: params.ageMs,
-      stuckSessionAbortMs:
-        params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
+      stuckSessionAbortMs,
     });
   // The warning backoff throttles repeated log lines/events only. It must never
   // gate recovery: a recovery-eligible session has to return its classification

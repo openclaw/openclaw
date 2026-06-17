@@ -60,7 +60,7 @@ const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
-export type ClientToolCallRecorder =
+type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
   | {
       reserve?: (toolCallId: string, toolName: string) => void;

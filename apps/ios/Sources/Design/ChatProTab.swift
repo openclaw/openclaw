@@ -6,7 +6,7 @@ struct ChatProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: OpenClawChatViewModel?
-    @State private var viewModelUsesAppleReviewDemoTransport = false
+    @State private var viewModelTransportModeID = ""
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let headerSubtitle: String?
@@ -64,6 +64,7 @@ struct ChatProTab: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .safeAreaPadding(.top, 8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationBarHidden(true)
@@ -75,6 +76,10 @@ struct ChatProTab: View {
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
+            self.syncChatViewModel()
+            self.viewModel?.refresh()
+        }
+        .onChange(of: self.appModel.isScreenshotFixtureModeEnabled) { _, _ in
             self.syncChatViewModel()
             self.viewModel?.refresh()
         }
@@ -103,7 +108,6 @@ struct ChatProTab: View {
             self.connectionPillButton
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.top, 8)
         .padding(.bottom, 4)
     }
 
@@ -135,14 +139,12 @@ struct ChatProTab: View {
 
     private func syncChatViewModel() {
         let sessionKey = self.appModel.chatSessionKey
-        let usesDemoTransport = self.appModel.isAppleReviewDemoModeEnabled
+        let transportModeID = self.appModel.chatTransportModeID
         guard let viewModel else {
-            self.viewModelUsesAppleReviewDemoTransport = usesDemoTransport
+            self.viewModelTransportModeID = transportModeID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
-                transport: usesDemoTransport
-                    ? AppleReviewDemoChatTransport()
-                    : IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
+                transport: self.appModel.makeChatTransport(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -151,13 +153,11 @@ struct ChatProTab: View {
                 })
             return
         }
-        if self.viewModelUsesAppleReviewDemoTransport != usesDemoTransport {
-            self.viewModelUsesAppleReviewDemoTransport = usesDemoTransport
+        if self.viewModelTransportModeID != transportModeID {
+            self.viewModelTransportModeID = transportModeID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
-                transport: usesDemoTransport
-                    ? AppleReviewDemoChatTransport()
-                    : IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
+                transport: self.appModel.makeChatTransport(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -226,7 +226,7 @@ struct ChatProTab: View {
         guard self.gatewayDisplayState == .connected else {
             return false
         }
-        return self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
+        return self.appModel.isLocalChatFixtureEnabled || self.appModel.isOperatorGatewayConnected
     }
 
     private var gatewayDisplayState: GatewayDisplayState {

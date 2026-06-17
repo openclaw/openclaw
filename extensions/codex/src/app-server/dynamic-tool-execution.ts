@@ -126,7 +126,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
   signal: AbortSignal;
   timeoutMs: number;
+  toolCallOrdinal?: number;
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
+  onFallbackSelected?: () => void;
   onTimeout?: () => void;
 }): Promise<CodexDynamicToolCallResponse> {
   // Timeout or run abort can win while a tool ignores cancellation. Keep the
@@ -159,6 +161,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
   };
   if (params.signal.aborted) {
     const message = "OpenClaw dynamic tool call aborted before execution.";
+    params.onFallbackSelected?.();
     notifyFailedToolResult(message);
     return failedDynamicToolResponse(message);
   }
@@ -169,6 +172,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
   let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
   const abortFromRun = () => {
     const message = "OpenClaw dynamic tool call aborted.";
+    params.onFallbackSelected?.();
     controller.abort(params.signal.reason ?? new Error(message));
     notifyFailedToolResult(message);
     resolveAbort?.(failedDynamicToolResponse(message, { sideEffectEvidence: true }));
@@ -181,6 +185,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     timeout = setTimeout(() => {
       timedOut = true;
       const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
+      params.onFallbackSelected?.();
       controller.abort(new Error(timeoutDetails.responseMessage));
       params.onTimeout?.();
       embeddedAgentLog.warn("codex dynamic tool call timed out", {
@@ -204,6 +209,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
       params.toolBridge.handleToolCall(params.call, {
         signal: controller.signal,
         onAgentToolResult: notifyAgentToolResult,
+        toolCallOrdinal: params.toolCallOrdinal,
       }),
       abortPromise,
       timeoutPromise,

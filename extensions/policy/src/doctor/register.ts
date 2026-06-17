@@ -1,4 +1,5 @@
 // Policy plugin module implements register behavior.
+import os from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import {
@@ -18,6 +19,7 @@ import {
   type PolicyAgentWorkspaceEvidence,
   type PolicyDataHandlingEvidence,
   type PolicyEvidence,
+  type PolicyExecApprovalEvidence,
   type PolicyIngressEvidence,
   type PolicySandboxPostureEvidence,
   type PolicyToolPostureEvidence,
@@ -85,6 +87,13 @@ const CHECK_IDS = {
   policySecretsInsecureProvider: "policy/secrets-insecure-provider",
   policyAuthProfileInvalidMetadata: "policy/auth-profile-invalid-metadata",
   policyAuthProfileUnapprovedMode: "policy/auth-profile-unapproved-mode",
+  policyExecApprovalsMissing: "policy/exec-approvals-missing",
+  policyExecApprovalsInvalid: "policy/exec-approvals-invalid",
+  policyExecApprovalsDefaultSecurityUnapproved: "policy/exec-approvals-default-security-unapproved",
+  policyExecApprovalsAgentSecurityUnapproved: "policy/exec-approvals-agent-security-unapproved",
+  policyExecApprovalsAutoAllowSkillsEnabled: "policy/exec-approvals-auto-allow-skills-enabled",
+  policyExecApprovalsAllowlistMissing: "policy/exec-approvals-allowlist-missing",
+  policyExecApprovalsAllowlistUnexpected: "policy/exec-approvals-allowlist-unexpected",
   policyMissingToolOwner: "policy/tools-missing-owner",
   policyMissingToolRisk: "policy/tools-missing-risk-level",
   policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
@@ -144,6 +153,13 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policySecretsInsecureProvider,
   CHECK_IDS.policyAuthProfileInvalidMetadata,
   CHECK_IDS.policyAuthProfileUnapprovedMode,
+  CHECK_IDS.policyExecApprovalsMissing,
+  CHECK_IDS.policyExecApprovalsInvalid,
+  CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+  CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+  CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+  CHECK_IDS.policyExecApprovalsAllowlistMissing,
+  CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
   CHECK_IDS.policyMissingToolRisk,
   CHECK_IDS.policyUnknownToolRisk,
   CHECK_IDS.policyMissingToolSensitivity,
@@ -500,6 +516,49 @@ export const POLICY_RULE_METADATA = [
     valueType: "boolean",
     checkIds: [CHECK_IDS.policySecretsInsecureProvider],
   },
+
+  {
+    policyPath: ["execApprovals", "requireFile"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyExecApprovalsMissing],
+  },
+  {
+    policyPath: ["execApprovals", "defaults", "allowSecurity"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved],
+    emptyList: "disabled",
+    allowedValues: ["deny", "allowlist", "full"],
+  },
+  {
+    policyPath: ["execApprovals", "agents", "allowSecurity"],
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved],
+    emptyList: "disabled",
+    allowedValues: ["deny", "allowlist", "full"],
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["execApprovals", "agents", "allowAutoAllowSkills"],
+    strictness: "requires-false",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled],
+    scopeSelectors: ["agentIds"],
+  },
+  {
+    policyPath: ["execApprovals", "agents", "allowlist", "expected"],
+    strictness: "exact-list",
+    valueType: "string-list",
+    checkIds: [
+      CHECK_IDS.policyExecApprovalsAllowlistMissing,
+      CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
+    ],
+    emptyList: "meaningful",
+    caseSensitive: true,
+    scopeSelectors: ["agentIds"],
+  },
   {
     policyPath: ["auth", "profiles", "requireMetadata"],
     strictness: "denylist-superset",
@@ -529,6 +588,7 @@ const SUPPORTED_POLICY_SECTIONS = [
   "agents",
   "channels",
   "dataHandling",
+  "execApprovals",
   "gateway",
   "ingress",
   "mcp",
@@ -565,6 +625,7 @@ const SUPPORTED_TOOL_PROFILES = ["minimal", "coding", "messaging", "full"] as co
 const SUPPORTED_TOOL_EXEC_SECURITY = ["deny", "allowlist", "full"] as const;
 const SUPPORTED_TOOL_EXEC_ASK = ["off", "on-miss", "always"] as const;
 const SUPPORTED_TOOL_EXEC_HOST = ["auto", "sandbox", "gateway", "node"] as const;
+const SUPPORTED_EXEC_APPROVAL_SECURITY = ["deny", "allowlist", "full"] as const;
 const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -641,6 +702,13 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policySecretsInsecureProviderCheck);
   registerHealthCheck(policyAuthProfileInvalidMetadataCheck);
   registerHealthCheck(policyAuthProfileUnapprovedModeCheck);
+  registerHealthCheck(policyExecApprovalsMissingCheck);
+  registerHealthCheck(policyExecApprovalsInvalidCheck);
+  registerHealthCheck(policyExecApprovalsDefaultSecurityUnapprovedCheck);
+  registerHealthCheck(policyExecApprovalsAgentSecurityUnapprovedCheck);
+  registerHealthCheck(policyExecApprovalsAutoAllowSkillsEnabledCheck);
+  registerHealthCheck(policyExecApprovalsAllowlistMissingCheck);
+  registerHealthCheck(policyExecApprovalsAllowlistUnexpectedCheck);
   registerHealthCheck(policyToolsMissingRiskCheck);
   registerHealthCheck(policyToolsUnknownRiskCheck);
   registerHealthCheck(policyToolsMissingSensitivityCheck);
@@ -1240,6 +1308,92 @@ const policyAuthProfileUnapprovedModeCheck: HealthCheck = {
   },
 };
 
+const policyExecApprovalsMissingCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsMissing,
+  kind: "plugin",
+  description: "Required exec approvals artifact is present for policy conformance.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyExecApprovalsMissing);
+  },
+};
+
+const policyExecApprovalsInvalidCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsInvalid,
+  kind: "plugin",
+  description: "Exec approvals artifact parses before policy checks run.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyExecApprovalsInvalid);
+  },
+};
+
+const policyExecApprovalsDefaultSecurityUnapprovedCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+  kind: "plugin",
+  description: "Exec approval defaults use a policy-approved security mode.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+    );
+  },
+};
+
+const policyExecApprovalsAgentSecurityUnapprovedCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+  kind: "plugin",
+  description: "Per-agent exec approval settings use policy-approved security modes.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+    );
+  },
+};
+
+const policyExecApprovalsAutoAllowSkillsEnabledCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+  kind: "plugin",
+  description:
+    "Exec approval agents do not implicitly auto-allow skill CLIs unless policy allows it.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+    );
+  },
+};
+
+const policyExecApprovalsAllowlistMissingCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsAllowlistMissing,
+  kind: "plugin",
+  description: "Exec approval allowlists include every pattern required by policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyExecApprovalsAllowlistMissing,
+    );
+  },
+};
+
+const policyExecApprovalsAllowlistUnexpectedCheck: HealthCheck = {
+  id: CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
+  kind: "plugin",
+  description: "Exec approval allowlists do not contain patterns outside policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(
+      await evaluatePolicy(ctx),
+      CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
+    );
+  },
+};
+
 const policyToolsMissingRiskCheck: HealthCheck = {
   id: CHECK_IDS.policyMissingToolRisk,
   kind: "plugin",
@@ -1301,6 +1455,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     includeSandboxPosture: false,
     includeSecrets: false,
     includeAuthProfiles: false,
+    includeExecApprovals: false,
   });
   const findings: HealthFinding[] = [];
 
@@ -1392,6 +1547,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
   const includeDataHandling = policyHasDataHandlingRules(policy);
   const includeSandboxPosture = policyHasSandboxPostureRules(policy);
+  const includeExecApprovals = policyHasExecApprovalsRules(policy);
+  const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
@@ -1404,6 +1561,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       includeSandboxPosture,
       includeSecrets,
       includeAuthProfiles,
+      includeExecApprovals,
+      execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
     });
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
@@ -1415,6 +1574,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       includeSandboxPosture,
       includeSecrets,
       includeAuthProfiles,
+      includeExecApprovals,
+      execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
     });
   }
   const policyFindings: HealthFinding[] = [
@@ -1430,6 +1591,14 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...sandboxPostureFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...dataHandlingFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...execApprovalsFindings(
+      policy,
+      policyFile.displayName,
+      policyFile.ocDocName,
+      evidence,
+      execApprovalsFile,
+      execApprovalsDisplayName(),
+    ),
     ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,
   ];
@@ -1921,6 +2090,14 @@ export function policyContainerShapeFindings(
       ];
     }
   }
+
+  const execApprovalsFinding = execApprovalsPolicyShapeFinding(policy.execApprovals, {
+    policyDocName,
+    policyPath,
+  });
+  if (execApprovalsFinding !== undefined) {
+    return [execApprovalsFinding];
+  }
   const sandboxFinding = sandboxPolicyShapeFinding(policy.sandbox, {
     policyDocName,
     policyPath,
@@ -2070,6 +2247,146 @@ function ingressPolicyShapeFinding(
   return undefined;
 }
 
+function execApprovalsPolicyShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly targetPrefix?: string;
+    readonly propertyPrefix?: string;
+    readonly allowDefaults?: boolean;
+  },
+): HealthFinding | undefined {
+  const targetPrefix = params.targetPrefix ?? "execApprovals";
+  const propertyPrefix = params.propertyPrefix ?? "execApprovals";
+  const allowDefaults = params.allowDefaults ?? true;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}`,
+      `${params.policyPath} ${propertyPrefix} must be an object.`,
+      `Fix ${params.policyPath} so ${propertyPrefix} is an object.`,
+    );
+  }
+  const unsupportedTopLevel = unsupportedPolicyKey(
+    value,
+    allowDefaults ? ["agents", "defaults", "requireFile"] : ["agents"],
+  );
+  if (unsupportedTopLevel !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedTopLevel)}`,
+      `${params.policyPath} ${propertyPrefix}.${unsupportedTopLevel} is not supported in exec approvals policy.`,
+      `Remove ${propertyPrefix}.${unsupportedTopLevel} or use a supported execApprovals rule.`,
+    );
+  }
+  if (value.requireFile !== undefined && typeof value.requireFile !== "boolean") {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/requireFile`,
+      `${params.policyPath} ${propertyPrefix}.requireFile must be a boolean.`,
+      `Set execApprovals.requireFile to true or false.`,
+    );
+  }
+  for (const section of (allowDefaults ? ["defaults", "agents"] : ["agents"]) as readonly (
+    | "agents"
+    | "defaults"
+  )[]) {
+    if (value[section] !== undefined && !isRecord(value[section])) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/${targetPrefix}/${section}`,
+        `${params.policyPath} ${propertyPrefix}.${section} must be an object.`,
+        `Fix ${params.policyPath} so ${propertyPrefix}.${section} is an object.`,
+      );
+    }
+  }
+  const defaults = allowDefaults && isRecord(value.defaults) ? value.defaults : {};
+  const unsupportedDefaultsKey = unsupportedPolicyKey(defaults, ["allowSecurity"]);
+  if (unsupportedDefaultsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/defaults/${ocPathSegment(unsupportedDefaultsKey)}`,
+      `${params.policyPath} ${propertyPrefix}.defaults.${unsupportedDefaultsKey} is not supported in exec approvals policy.`,
+      `Use execApprovals.defaults.allowSecurity or remove the unsupported rule.`,
+    );
+  }
+  const defaultsSecurityFinding = policyStringArrayPropertyShapeFinding(defaults.allowSecurity, {
+    allowed: SUPPORTED_EXEC_APPROVAL_SECURITY,
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.defaults.allowSecurity`,
+    target: `${targetPrefix}/defaults/allowSecurity`,
+    valueName: "exec approval security mode",
+  });
+  if (defaultsSecurityFinding !== undefined) {
+    return defaultsSecurityFinding;
+  }
+  const agents = isRecord(value.agents) ? value.agents : {};
+  const unsupportedAgentsKey = unsupportedPolicyKey(agents, [
+    "allowAutoAllowSkills",
+    "allowSecurity",
+    "allowlist",
+  ]);
+  if (unsupportedAgentsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/${ocPathSegment(unsupportedAgentsKey)}`,
+      `${params.policyPath} ${propertyPrefix}.agents.${unsupportedAgentsKey} is not supported in exec approvals policy.`,
+      `Use execApprovals.agents.allowSecurity, execApprovals.agents.allowAutoAllowSkills, or execApprovals.agents.allowlist.expected.`,
+    );
+  }
+  const agentSecurityFinding = policyStringArrayPropertyShapeFinding(agents.allowSecurity, {
+    allowed: SUPPORTED_EXEC_APPROVAL_SECURITY,
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.agents.allowSecurity`,
+    target: `${targetPrefix}/agents/allowSecurity`,
+    valueName: "exec approval security mode",
+  });
+  if (agentSecurityFinding !== undefined) {
+    return agentSecurityFinding;
+  }
+  if (
+    agents.allowAutoAllowSkills !== undefined &&
+    typeof agents.allowAutoAllowSkills !== "boolean"
+  ) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/allowAutoAllowSkills`,
+      `${params.policyPath} ${propertyPrefix}.agents.allowAutoAllowSkills must be a boolean.`,
+      `Set execApprovals.agents.allowAutoAllowSkills to true or false.`,
+    );
+  }
+  if (agents.allowlist !== undefined && !isRecord(agents.allowlist)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/allowlist`,
+      `${params.policyPath} ${propertyPrefix}.agents.allowlist must be an object.`,
+      `Fix ${params.policyPath} so ${propertyPrefix}.agents.allowlist is an object.`,
+    );
+  }
+  const allowlist = isRecord(agents.allowlist) ? agents.allowlist : {};
+  const unsupportedAllowlistKey = unsupportedPolicyKey(allowlist, ["expected"]);
+  if (unsupportedAllowlistKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/allowlist/${ocPathSegment(unsupportedAllowlistKey)}`,
+      `${params.policyPath} ${propertyPrefix}.agents.allowlist.${unsupportedAllowlistKey} is not supported in exec approvals policy.`,
+      `Use execApprovals.agents.allowlist.expected or remove the unsupported rule.`,
+    );
+  }
+  return execApprovalAllowlistExpectedShapeFinding(allowlist.expected, {
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.agents.allowlist.expected`,
+    target: `${targetPrefix}/agents/allowlist/expected`,
+  });
+}
+
 function agentsPolicyShapeFinding(
   value: unknown,
   params: {
@@ -2181,6 +2498,7 @@ function scopedPolicyShapeFinding(
     if (
       (overlay.agents !== undefined ||
         overlay.dataHandling !== undefined ||
+        overlay.execApprovals !== undefined ||
         overlay.tools !== undefined ||
         overlay.sandbox !== undefined) &&
       !hasAgentIds
@@ -2198,6 +2516,7 @@ function scopedPolicyShapeFinding(
         key !== "channelIds" &&
         key !== "agents" &&
         key !== "dataHandling" &&
+        key !== "execApprovals" &&
         key !== "tools" &&
         key !== "sandbox" &&
         key !== "ingress",
@@ -2207,7 +2526,7 @@ function scopedPolicyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedKey)}`,
         `${params.policyPath} scopes.${scopeName}.${unsupportedKey} is not a supported scoped policy section.`,
-        `Use agentIds with agents.workspace, dataHandling.memory, tools, or sandbox, and channelIds with ingress.channels.`,
+        `Use agentIds with agents.workspace, dataHandling.memory, execApprovals, tools, or sandbox, and channelIds with ingress.channels.`,
       );
     }
     if (overlay.dataHandling !== undefined && !isRecord(overlay.dataHandling)) {
@@ -2255,6 +2574,17 @@ function scopedPolicyShapeFinding(
     });
     if (workspaceFinding !== undefined) {
       return workspaceFinding;
+    }
+
+    const scopedExecApprovalsFinding = execApprovalsPolicyShapeFinding(overlay.execApprovals, {
+      policyDocName: params.policyDocName,
+      policyPath: params.policyPath,
+      targetPrefix: `${targetPrefix}/execApprovals`,
+      propertyPrefix: `scopes.${scopeName}.execApprovals`,
+      allowDefaults: false,
+    });
+    if (scopedExecApprovalsFinding !== undefined) {
+      return scopedExecApprovalsFinding;
     }
     if (overlay.tools !== undefined && !isRecord(overlay.tools)) {
       return policyShapeFinding(
@@ -3003,6 +3333,40 @@ function policyStringArrayShapeFinding(
     }
   }
   return undefined;
+}
+
+function execApprovalAllowlistExpectedShapeFinding(
+  value: unknown,
+  params: {
+    readonly property: string;
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly target: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.target}`,
+      `${params.policyPath} ${params.property} must be an array.`,
+      `Fix ${params.policyPath} so ${params.property} is an array of exec approval allowlist entries.`,
+    );
+  }
+  const invalidIndex = value.findIndex(
+    (entry) => execApprovalAllowlistRequirement(entry) === undefined,
+  );
+  if (invalidIndex < 0) {
+    return undefined;
+  }
+  return policyShapeFinding(
+    params.policyPath,
+    `oc://${params.policyDocName}/${params.target}/#${invalidIndex}`,
+    `${params.policyPath} ${params.property}[${invalidIndex}] must be a non-empty string or an object with pattern and optional argPattern strings.`,
+    `Use entries such as "deploy" or { "pattern": "deploy", "argPattern": "^--prod$" }.`,
+  );
 }
 
 function policyStringArrayPropertyShapeFinding(
@@ -3989,6 +4353,502 @@ function agentScopedWorkspaceFindings(
     );
   }
   return findings;
+}
+
+function execApprovalsFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+  file:
+    | { readonly raw: string; readonly displayName: string; readonly ocDocName: string }
+    | null
+    | undefined,
+  displayName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy)) {
+    return [];
+  }
+  const findings: HealthFinding[] = [];
+  const entries = evidence.execApprovals ?? [];
+  const defaults = entries.find((entry) => entry.kind === "defaults");
+  const defaultSecurity = defaults?.security ?? "full";
+
+  if (isRecord(policy.execApprovals)) {
+    const shapeFinding = execApprovalsPolicyShapeFinding(policy.execApprovals, {
+      policyDocName,
+      policyPath,
+    });
+    if (shapeFinding !== undefined) {
+      return [shapeFinding];
+    }
+    const fileFindings = execApprovalsFileFindings(policy.execApprovals, {
+      policyDocName,
+      file,
+      displayName,
+      requirementBase: "execApprovals",
+    });
+    findings.push(...fileFindings);
+    if (fileFindings.length > 0) {
+      return findings;
+    }
+    findings.push(
+      ...execApprovalsRuleFindings(policy.execApprovals, {
+        entries,
+        defaultSecurity,
+        defaults,
+        displayName,
+        fileDisplayName: file?.displayName,
+        policyDocName,
+        requirementBase: "execApprovals",
+      }),
+    );
+  }
+
+  if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
+    return findings;
+  }
+  const scopedFileFindingScopes = new Set<string>();
+  for (const target of agentScopedPolicyTargets(policy)) {
+    if (!isRecord(target.overlay.execApprovals)) {
+      continue;
+    }
+    const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/execApprovals`;
+    const shapeFinding = execApprovalsPolicyShapeFinding(target.overlay.execApprovals, {
+      policyDocName,
+      policyPath,
+      targetPrefix: requirementBase,
+      propertyPrefix: `scopes.${target.scopeName}.execApprovals`,
+      allowDefaults: false,
+    });
+    if (shapeFinding !== undefined) {
+      findings.push(shapeFinding);
+      continue;
+    }
+    const fileFindings = execApprovalsFileFindings(target.overlay.execApprovals, {
+      policyDocName,
+      file,
+      displayName,
+      requirementBase,
+    });
+    if (fileFindings.length > 0) {
+      if (!scopedFileFindingScopes.has(target.scopeName)) {
+        findings.push(...fileFindings);
+        scopedFileFindingScopes.add(target.scopeName);
+      }
+      continue;
+    }
+    findings.push(
+      ...execApprovalsRuleFindings(target.overlay.execApprovals, {
+        entries,
+        defaultSecurity,
+        defaults,
+        displayName,
+        fileDisplayName: file?.displayName,
+        policyDocName,
+        requirementBase,
+        targetAgentId: target.agentId,
+      }),
+    );
+  }
+  return findings;
+}
+
+function execApprovalsFileFindings(
+  execApprovalsPolicy: Record<string, unknown>,
+  params: {
+    readonly policyDocName: string;
+    readonly file:
+      | { readonly raw: string; readonly displayName: string; readonly ocDocName: string }
+      | null
+      | undefined;
+    readonly displayName: string;
+    readonly requirementBase: string;
+  },
+): readonly HealthFinding[] {
+  const requireFile = readPolicyBoolean(execApprovalsPolicy, ["requireFile"]) === true;
+  const needsArtifactEvidence =
+    requireFile || execApprovalsPolicyNeedsArtifactEvidence(execApprovalsPolicy);
+  if (needsArtifactEvidence && params.file === null) {
+    return [
+      {
+        checkId: CHECK_IDS.policyExecApprovalsMissing,
+        severity: "error",
+        message: "exec-approvals.json evidence is required by policy but was not found.",
+        source: "policy",
+        path: params.displayName,
+        target: "oc://exec-approvals.json",
+        requirement: `oc://${params.policyDocName}/${
+          requireFile ? `${params.requirementBase}/requireFile` : params.requirementBase
+        }`,
+        fixHint: "Restore the approved exec approvals artifact or update policy after review.",
+      },
+    ];
+  }
+  if (params.file === null || params.file === undefined) {
+    return [];
+  }
+  const parsed = parseExecApprovalsFile(params.file.raw);
+  if (parsed.ok || !needsArtifactEvidence) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyExecApprovalsInvalid,
+      severity: "error",
+      message: `${params.file.displayName} could not be parsed: ${parsed.message}`,
+      source: "policy",
+      path: params.file.displayName,
+      target: `oc://${params.file.ocDocName}`,
+      requirement: `oc://${params.policyDocName}/${params.requirementBase}`,
+      fixHint: "Fix exec-approvals.json so it is valid JSON.",
+    },
+  ];
+}
+
+function execApprovalsPolicyNeedsArtifactEvidence(
+  execApprovalsPolicy: Record<string, unknown>,
+): boolean {
+  return isRecord(execApprovalsPolicy.defaults) || isRecord(execApprovalsPolicy.agents);
+}
+
+function execApprovalsRuleFindings(
+  execApprovalsPolicy: Record<string, unknown>,
+  params: {
+    readonly entries: readonly PolicyExecApprovalEvidence[];
+    readonly defaultSecurity: string;
+    readonly defaults?: PolicyExecApprovalEvidence;
+    readonly displayName: string;
+    readonly fileDisplayName?: string;
+    readonly policyDocName: string;
+    readonly requirementBase: string;
+    readonly targetAgentId?: string;
+  },
+): readonly HealthFinding[] {
+  const findings: HealthFinding[] = [];
+  const allowedDefaults = new Set(
+    readStringList(execApprovalsPolicy, ["defaults", "allowSecurity"]),
+  );
+  if (
+    params.targetAgentId === undefined &&
+    allowedDefaults.size > 0 &&
+    !allowedDefaults.has(params.defaultSecurity.toLowerCase())
+  ) {
+    findings.push(
+      execApprovalFinding(params.defaults, {
+        checkId: CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+        message: `exec approvals defaults use unapproved security mode '${params.defaultSecurity}'.`,
+        requirement: `oc://${params.policyDocName}/${params.requirementBase}/defaults/allowSecurity`,
+        fixHint: "Set defaults.security to an approved mode or update policy after review.",
+      }),
+    );
+  }
+
+  const allowedAgents = new Set(readStringList(execApprovalsPolicy, ["agents", "allowSecurity"]));
+  if (allowedAgents.size > 0) {
+    const agentEntries =
+      params.targetAgentId === undefined
+        ? globalExecApprovalAgentSecurityEntries(params.entries, params.defaults)
+        : [
+            effectiveExecApprovalAgentSecurityEntry(params.entries, params.targetAgentId) ??
+              params.defaults ??
+              syntheticExecApprovalAgentEntry(params.targetAgentId),
+          ];
+    for (const entry of agentEntries) {
+      const security = entry.security ?? params.defaultSecurity;
+      if (allowedAgents.has(security.toLowerCase())) {
+        continue;
+      }
+      findings.push(
+        execApprovalFinding(entry, {
+          checkId: CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+          message: `exec approvals agent '${entry.agentId ?? params.targetAgentId ?? "inherited defaults"}' uses unapproved security mode '${security}'.`,
+          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowSecurity`,
+          fixHint:
+            "Set the agent approval security mode to an approved value or update policy after review.",
+        }),
+      );
+    }
+  }
+
+  const allowAutoAllowSkills = readPolicyBoolean(execApprovalsPolicy, [
+    "agents",
+    "allowAutoAllowSkills",
+  ]);
+  if (allowAutoAllowSkills === false) {
+    const autoAllowEntries =
+      params.targetAgentId === undefined
+        ? globalExecApprovalAgentAutoAllowSkillsEntries(params.entries, params.defaults)
+        : [
+            effectiveExecApprovalAgentAutoAllowSkillsEntry(params.entries, params.targetAgentId) ??
+              params.defaults ??
+              syntheticExecApprovalAgentEntry(params.targetAgentId),
+          ];
+    for (const entry of autoAllowEntries) {
+      if (entry.autoAllowSkills !== true) {
+        continue;
+      }
+      findings.push(
+        execApprovalFinding(entry, {
+          checkId: CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+          message: `exec approvals agent '${entry.agentId ?? params.targetAgentId ?? "inherited defaults"}' enables autoAllowSkills outside policy.`,
+          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowAutoAllowSkills`,
+          fixHint:
+            "Set autoAllowSkills to false or update policy after reviewing implicit skill CLI trust.",
+        }),
+      );
+    }
+  }
+
+  const expected = readExecApprovalAllowlistRequirements(execApprovalsPolicy, [
+    "agents",
+    "allowlist",
+    "expected",
+  ]);
+  if (expected !== undefined) {
+    const expectedSet = new Set(expected.map((entry) => entry.key));
+    const actualEntries = execApprovalAllowlistEntries(params.entries, params.targetAgentId).filter(
+      (entry) => entry.pattern !== undefined,
+    );
+    const actual = actualEntries
+      .map((entry) =>
+        execApprovalAllowlistRequirementKey(entry.pattern as string, entry.argPattern),
+      )
+      .toSorted();
+    const actualSet = new Set(actual);
+    for (const entry of expected.toSorted((a, b) => a.key.localeCompare(b.key))) {
+      if (!actualSet.has(entry.key)) {
+        const requirement = `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`;
+        const target = execApprovalAllowlistMissingTarget(params.targetAgentId);
+        findings.push({
+          checkId: CHECK_IDS.policyExecApprovalsAllowlistMissing,
+          severity: "error",
+          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistRequirement(entry)}'.`,
+          source: "policy",
+          path: params.fileDisplayName ?? params.displayName,
+          target,
+          requirement,
+          fixHint: "Add the expected approval pattern or update policy after review.",
+        });
+      }
+    }
+    for (const key of actualSet) {
+      if (expectedSet.has(key)) {
+        continue;
+      }
+      const entry = actualEntries.find(
+        (candidate) =>
+          candidate.pattern !== undefined &&
+          execApprovalAllowlistRequirementKey(candidate.pattern, candidate.argPattern) === key,
+      );
+      findings.push(
+        execApprovalFinding(entry, {
+          checkId: CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
+          message: `exec approvals allowlist has unexpected pattern '${formatExecApprovalAllowlistEntry(entry)}'.`,
+          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`,
+          fixHint: "Remove the unexpected approval pattern or update policy after review.",
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+function globalExecApprovalAgentSecurityEntries(
+  entries: readonly PolicyExecApprovalEvidence[],
+  defaults: PolicyExecApprovalEvidence | undefined,
+): readonly PolicyExecApprovalEvidence[] {
+  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
+  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
+  const securityEntries = agentEntries.filter(
+    (entry) =>
+      entry.agentId === "*" || entry.security !== undefined || entry.securityConfigured === true,
+  );
+  return wildcard === undefined
+    ? [...securityEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
+    : securityEntries;
+}
+
+function globalExecApprovalAgentAutoAllowSkillsEntries(
+  entries: readonly PolicyExecApprovalEvidence[],
+  defaults: PolicyExecApprovalEvidence | undefined,
+): readonly PolicyExecApprovalEvidence[] {
+  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
+  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
+  const explicitEntries = agentEntries.filter((entry) => entry.autoAllowSkills !== undefined);
+  return wildcard?.autoAllowSkills === undefined
+    ? [...explicitEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
+    : explicitEntries;
+}
+
+type ExecApprovalAllowlistRequirement = {
+  readonly key: string;
+  readonly pattern: string;
+  readonly argPattern?: string;
+};
+
+function readExecApprovalAllowlistRequirements(
+  policy: unknown,
+  path: readonly string[],
+): readonly ExecApprovalAllowlistRequirement[] | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  if (!Array.isArray(current)) {
+    return undefined;
+  }
+  const entries = current.map(execApprovalAllowlistRequirement);
+  return entries.every((entry): entry is ExecApprovalAllowlistRequirement => entry !== undefined)
+    ? entries
+    : undefined;
+}
+
+function execApprovalAllowlistRequirement(
+  value: unknown,
+): ExecApprovalAllowlistRequirement | undefined {
+  if (typeof value === "string") {
+    const pattern = value.trim();
+    return pattern === "" ? undefined : execApprovalAllowlistRequirementFromParts(pattern);
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (unsupportedPolicyKey(value, ["argPattern", "pattern"]) !== undefined) {
+    return undefined;
+  }
+  const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";
+  if (pattern === "") {
+    return undefined;
+  }
+  const argPattern = typeof value.argPattern === "string" ? value.argPattern.trim() : undefined;
+  if (value.argPattern !== undefined && argPattern === undefined) {
+    return undefined;
+  }
+  return execApprovalAllowlistRequirementFromParts(
+    pattern,
+    argPattern === "" ? undefined : argPattern,
+  );
+}
+
+function execApprovalAllowlistRequirementFromParts(
+  pattern: string,
+  argPattern?: string,
+): ExecApprovalAllowlistRequirement {
+  return {
+    key: execApprovalAllowlistRequirementKey(pattern, argPattern),
+    pattern,
+    ...(argPattern === undefined ? {} : { argPattern }),
+  };
+}
+
+function execApprovalAllowlistRequirementKey(
+  pattern: string,
+  argPattern: string | undefined,
+): string {
+  return `${pattern}\0${argPattern ?? ""}`;
+}
+
+function execApprovalAllowlistMissingTarget(agentId: string | undefined): string {
+  return agentId === undefined
+    ? "oc://exec-approvals.json"
+    : `oc://exec-approvals.json/agents/${ocPathSegment(agentId)}/allowlist`;
+}
+
+function formatExecApprovalAllowlistRequirement(entry: ExecApprovalAllowlistRequirement): string {
+  return formatExecApprovalAllowlistParts(entry.pattern, entry.argPattern);
+}
+
+function formatExecApprovalAllowlistEntry(entry: PolicyExecApprovalEvidence | undefined): string {
+  return formatExecApprovalAllowlistParts(entry?.pattern ?? "", entry?.argPattern);
+}
+
+function formatExecApprovalAllowlistParts(pattern: string, argPattern: string | undefined): string {
+  return argPattern === undefined ? pattern : `${pattern} argPattern=${argPattern}`;
+}
+
+function effectiveExecApprovalAgentSecurityEntry(
+  entries: readonly PolicyExecApprovalEvidence[],
+  agentId: string,
+): PolicyExecApprovalEvidence | undefined {
+  const exact = entries.find(
+    (entry) =>
+      entry.kind === "agent" &&
+      entry.agentId !== undefined &&
+      normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
+  );
+  const wildcard = entries.find((entry) => entry.kind === "agent" && entry.agentId === "*");
+  if (exact?.security !== undefined || exact?.securityConfigured === true) {
+    return exact;
+  }
+  return wildcard?.security === undefined ? (exact ?? wildcard) : wildcard;
+}
+
+function effectiveExecApprovalAgentAutoAllowSkillsEntry(
+  entries: readonly PolicyExecApprovalEvidence[],
+  agentId: string,
+): PolicyExecApprovalEvidence | undefined {
+  const exact = entries.find(
+    (entry) =>
+      entry.kind === "agent" &&
+      entry.agentId !== undefined &&
+      normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
+  );
+  if (exact?.autoAllowSkills !== undefined) {
+    return exact;
+  }
+  const wildcard = entries.find((entry) => entry.kind === "agent" && entry.agentId === "*");
+  return wildcard?.autoAllowSkills === undefined ? undefined : wildcard;
+}
+
+function syntheticExecApprovalAgentEntry(agentId: string): PolicyExecApprovalEvidence {
+  return {
+    id: `agent:${agentId}:runtime-defaults`,
+    kind: "agent",
+    source: "oc://exec-approvals.json",
+    agentId,
+  };
+}
+
+function execApprovalAllowlistEntries(
+  entries: readonly PolicyExecApprovalEvidence[],
+  agentId: string | undefined,
+): readonly PolicyExecApprovalEvidence[] {
+  if (agentId === undefined) {
+    return entries.filter((entry) => entry.kind === "allowlist");
+  }
+  return entries.filter(
+    (entry) =>
+      entry.kind === "allowlist" &&
+      entry.agentId !== undefined &&
+      (normalizeAgentId(entry.agentId) === normalizeAgentId(agentId) || entry.agentId === "*"),
+  );
+}
+
+function execApprovalFinding(
+  entry: PolicyExecApprovalEvidence | undefined,
+  params: {
+    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
+    readonly message: string;
+    readonly requirement: string;
+    readonly fixHint: string;
+  },
+): HealthFinding {
+  const target = entry?.source ?? "oc://exec-approvals.json";
+  return {
+    checkId: params.checkId,
+    severity: "error",
+    message: params.message,
+    source: "policy",
+    path: "exec-approvals.json",
+    ocPath: target,
+    target,
+    requirement: params.requirement,
+    fixHint: params.fixHint,
+  };
 }
 
 function toolPostureFindings(
@@ -5238,6 +6098,25 @@ function dataHandlingLabel(entry: PolicyDataHandlingEvidence): string {
   return entry.agentId === undefined ? "Global data handling config" : `agent '${entry.agentId}'`;
 }
 
+function policyHasExecApprovalsRules(policy: unknown): boolean {
+  if (!isRecord(policy)) {
+    return false;
+  }
+  if (execApprovalsPolicyHasRules(policy.execApprovals)) {
+    return true;
+  }
+  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
+    execApprovalsPolicyHasRules(overlay.execApprovals),
+  );
+}
+
+function execApprovalsPolicyHasRules(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.requireFile !== undefined || isRecord(value.defaults) || isRecord(value.agents))
+  );
+}
+
 function policyHasSecretRules(policy: unknown): boolean {
   if (!isRecord(policy) || !isRecord(policy.secrets)) {
     return false;
@@ -5695,7 +6574,17 @@ function policyStringList(
   if (metadata.valueType === "channel-provider-deny-rules") {
     return channelProviderDenyRuleList(value, metadata);
   }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  if (metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected") {
+    const entries = value.map(execApprovalAllowlistRequirement);
+    if (!entries.every((entry): entry is ExecApprovalAllowlistRequirement => entry !== undefined)) {
+      return undefined;
+    }
+    return entries.map((entry) => entry.key);
+  }
+  if (!value.every((entry) => typeof entry === "string")) {
     return undefined;
   }
   return value
@@ -6138,6 +7027,26 @@ async function readPolicyFile(
   }
 }
 
+async function readExecApprovalsFile(
+  ctx: HealthCheckContext,
+): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
+  const artifact = execApprovalsArtifactLocation(ctx);
+  try {
+    const fs = await loadFsPromisesModule();
+    return {
+      raw: await fs.readFile(artifact.path, "utf-8"),
+      path: artifact.path,
+      displayName: artifact.displayName,
+      ocDocName: "exec-approvals.json",
+    };
+  } catch (err) {
+    if (isNotFound(err)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 async function readWorkspaceFile(
   ctx: HealthCheckContext,
   fileName: string,
@@ -6154,6 +7063,57 @@ async function readWorkspaceFile(
   }
 }
 
+function resolvePolicyArtifactPath(ctx: HealthCheckContext, fileName: string): string {
+  if (fileName.startsWith("~/") || fileName.startsWith("~\\")) {
+    const home = resolvePolicyArtifactHomeDir();
+    if (home !== undefined) {
+      return resolve(home, fileName.slice(2));
+    }
+  }
+  return resolveWorkspacePath(ctx, fileName);
+}
+
+function resolvePolicyArtifactHomeDir(): string | undefined {
+  const explicitHome = normalizedEnvValue(process.env.OPENCLAW_HOME);
+  if (explicitHome !== undefined) {
+    if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
+      return resolvePolicyHomeRelativePath(explicitHome);
+    }
+    return resolve(explicitHome);
+  }
+  return resolveOsPolicyHomeDir();
+}
+
+function resolvePolicyHomeRelativePath(value: string): string {
+  const fallbackHome = resolveOsPolicyHomeDir();
+  return fallbackHome === undefined
+    ? resolve(value)
+    : resolve(value.replace(/^~(?=$|[\\/])/, fallbackHome));
+}
+
+function resolveOsPolicyHomeDir(): string | undefined {
+  return (
+    normalizedEnvValue(process.env.HOME) ??
+    normalizedEnvValue(process.env.USERPROFILE) ??
+    safeOsHomeDir()
+  );
+}
+
+function safeOsHomeDir(): string | undefined {
+  try {
+    return normalizedEnvValue(os.homedir());
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedEnvValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" || trimmed === "undefined" || trimmed === "null"
+    ? undefined
+    : trimmed;
+}
+
 function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string {
   if (isAbsolute(fileName)) {
     return fileName;
@@ -6163,6 +7123,25 @@ function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string
 
 function isNotFound(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+}
+
+function parseExecApprovalsFile(
+  raw: string,
+):
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message: string } {
+  try {
+    const value = JSON.parse(raw);
+    if (!isRecord(value) || value.version !== 1) {
+      return { ok: false, message: "unsupported exec approvals version" };
+    }
+    return { ok: true, value };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 function parsePolicyFile(
@@ -6452,6 +7431,37 @@ function normalizePolicyToolName(value: string): string {
 
 function normalizePolicyChannelId(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function canonicalExecApprovalsPath(): string {
+  return "~/.openclaw/exec-approvals.json";
+}
+
+function execApprovalsArtifactLocation(ctx: HealthCheckContext): {
+  readonly path: string;
+  readonly displayName: string;
+} {
+  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir !== undefined) {
+    const path = resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
+    return { path, displayName: path };
+  }
+  return {
+    path: resolvePolicyArtifactPath(ctx, canonicalExecApprovalsPath()),
+    displayName: canonicalExecApprovalsPath(),
+  };
+}
+
+function execApprovalsDisplayName(): string {
+  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir === undefined) {
+    return canonicalExecApprovalsPath();
+  }
+  return resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
+}
+
+function resolvePolicyStateDir(stateDir: string): string {
+  return stateDir.startsWith("~") ? resolvePolicyHomeRelativePath(stateDir) : resolve(stateDir);
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

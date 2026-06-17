@@ -204,6 +204,65 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
+  it("loads only the branch selected by transcript leaf controls", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-leaf-control",
+      messages: ["active root"],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      [
+        {
+          type: "message",
+          id: "side-entry",
+          parentId: "msg-0",
+          timestamp: new Date(2).toISOString(),
+          message: { role: "assistant", content: "side delivery", timestamp: 2 },
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-entry",
+          timestamp: new Date(3).toISOString(),
+          targetId: "msg-0",
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: "msg-0",
+          timestamp: new Date(4).toISOString(),
+          message: { role: "assistant", content: "active tail", timestamp: 4 },
+        },
+        {
+          type: "metadata",
+          id: "opaque-after-active-tail",
+          parentId: "side-entry",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        const history = await loadCliSessionHistoryMessages({
+          sessionId: "session-leaf-control",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        });
+        expect(history).toHaveLength(2);
+        expectMessageFields(history[0], { role: "user", content: "active root" });
+        expectMessageFields(history[1], { role: "assistant", content: "active tail" });
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps complete history for context-engine snapshots", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const sessionFile = createSessionTranscript({

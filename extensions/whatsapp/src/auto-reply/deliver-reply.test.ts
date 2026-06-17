@@ -673,6 +673,51 @@ describe("deliverWebReply", () => {
     expect(replyText(msg)).not.toContain("boom");
   });
 
+  it("notifies user when a non-first media send fails instead of dropping silently", async () => {
+    vi.clearAllMocks();
+    const msg = makeMsg();
+    // Two media items: first load succeeds and sends, second load succeeds but send fails.
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img1"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img2"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    // First sendMedia resolves; second sendMedia rejects.
+    (
+      msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "media-first-ok"));
+    (
+      msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(new Error("upload failed"));
+
+    await deliverWebReply({
+      replyResult: {
+        text: "caption",
+        mediaUrls: ["http://example.com/img1.jpg", "http://example.com/img2.jpg"],
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    // First media succeeded — no text reply for it.
+    // Second media failed — user must be notified, not silently dropped.
+    expect(msg.platform.reply).toHaveBeenCalledTimes(1);
+    expect(replyText(msg)).toContain("⚠️ Media unavailable");
+    expect(replyText(msg)).not.toContain("upload failed");
+  });
+
   it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {
     const sendWhatsApp = vi.fn(async (_to: string, _text: string) => ({
       messageId: "wa-1",

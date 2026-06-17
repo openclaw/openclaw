@@ -6156,6 +6156,7 @@ public struct CronListParams: Codable, Sendable {
     public let sortby: AnyCodable?
     public let sortdir: AnyCodable?
     public let agentid: String?
+    public let compact: Bool?
 
     public init(
         includedisabled: Bool?,
@@ -6167,7 +6168,8 @@ public struct CronListParams: Codable, Sendable {
         lastrunstatus: AnyCodable?,
         sortby: AnyCodable?,
         sortdir: AnyCodable?,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        compact: Bool? = nil)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -6179,6 +6181,7 @@ public struct CronListParams: Codable, Sendable {
         self.sortby = sortby
         self.sortdir = sortdir
         self.agentid = agentid
+        self.compact = compact
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6192,6 +6195,7 @@ public struct CronListParams: Codable, Sendable {
         case sortby = "sortBy"
         case sortdir = "sortDir"
         case agentid = "agentId"
+        case compact
     }
 }
 

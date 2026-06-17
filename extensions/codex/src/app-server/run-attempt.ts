@@ -85,6 +85,8 @@ import {
   isCurrentThreadTurnRequestParams,
   isNativeResponseStreamDeltaNotification,
   isTerminalTurnStatus,
+  readCodexNotificationItem,
+  readRawResponseToolCallId,
 } from "./attempt-notifications.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -147,7 +149,6 @@ import {
   filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
   includeForcedCodexDynamicToolAllow,
-  isCodexNativeExecutionBlockedByNodeExecHost,
   resolveCodexAppServerHookChannelId,
   resolveCodexMessageToolProvider,
   resolveOpenClawCodingToolsSessionKeys,
@@ -215,6 +216,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
@@ -232,6 +234,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
@@ -259,6 +262,7 @@ import {
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -627,18 +631,12 @@ export async function runCodexAppServerAttempt(
         startOptions: appServer.start,
       });
   preDynamicStartupStages.mark("auth-cache");
-  const nodeExecBlocksNativeExecution = isCodexNativeExecutionBlockedByNodeExecHost(params, {
-    agentId: sessionAgentId,
-    runtimeSessionKey: sandboxSessionKey,
-    sandbox,
-  });
-  preDynamicStartupStages.mark("native-exec-policy");
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: supportsModelTools(params.model),
     disableTools: params.disableTools,
-    toolsAllow: nodeExecBlocksNativeExecution ? [] : params.toolsAllow,
+    toolsAllow: params.toolsAllow,
   });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
@@ -648,6 +646,31 @@ export async function runCodexAppServerAttempt(
     sandboxExecServerEnabled,
   });
   preDynamicStartupStages.mark("native-tool-surface");
+  const nativeProviderWebSearchSupport =
+    resolveCodexWebSearchPlan({
+      config: params.config,
+      disableTools: params.disableTools,
+      nativeToolSurfaceEnabled,
+    }).kind === "native-hosted"
+      ? await resolveCodexProviderWebSearchSupport({
+          clientFactory: attemptClientFactory,
+          appServer,
+          authProfileId: startupAuthProfileId,
+          agentDir,
+          config: params.config,
+          modelProviderOverride: resolveCodexAppServerThreadModelSelection({
+            provider: params.provider,
+            model: params.modelId,
+            binding: startupBinding,
+            authProfileId: startupAuthProfileId,
+            authProfileStore: params.authProfileStore,
+            agentDir,
+            config: params.config,
+          }).modelProvider,
+          signal: runAbortController.signal,
+        })
+      : "unsupported";
+  preDynamicStartupStages.mark("provider-capabilities");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -677,14 +700,54 @@ export async function runCodexAppServerAttempt(
     );
   }
   let yieldDetected = false;
+  const toolOutcomeOrdinals = new Map<string, number>();
+  const suppressedDynamicToolOutcomeOrdinals = new Set<number>();
+  const onCodexToolOutcome = params.onToolOutcome
+    ? (observation: Parameters<NonNullable<typeof params.onToolOutcome>>[0]) => {
+        if (
+          observation.toolCallOrdinal !== undefined &&
+          suppressedDynamicToolOutcomeOrdinals.has(observation.toolCallOrdinal)
+        ) {
+          return;
+        }
+        params.onToolOutcome?.(observation);
+      }
+    : undefined;
+  const baseAllocateToolOutcomeOrdinal = params.allocateToolOutcomeOrdinal;
+  const allocateCodexToolOutcomeOrdinal = baseAllocateToolOutcomeOrdinal
+    ? (toolCallId?: string): number => {
+        const reservedOrdinal = toolCallId ? toolOutcomeOrdinals.get(toolCallId) : undefined;
+        if (reservedOrdinal !== undefined) {
+          return reservedOrdinal;
+        }
+        const ordinal = baseAllocateToolOutcomeOrdinal(toolCallId);
+        if (toolCallId) {
+          toolOutcomeOrdinals.set(toolCallId, ordinal);
+        }
+        return ordinal;
+      }
+    : undefined;
+  const dynamicToolParams =
+    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
+      ? {
+          ...params,
+          ...(allocateCodexToolOutcomeOrdinal
+            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+            : {}),
+          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+        }
+      : params;
+  let persistentWebSearchAllowed: boolean | undefined;
+  let webSearchAllowed = false;
   const tools = await buildDynamicTools({
-    params,
+    params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -693,15 +756,22 @@ export async function runCodexAppServerAttempt(
       yieldDetected = true;
     },
     onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onPersistentWebSearchPolicyResolved: (allowed) => {
+      persistentWebSearchAllowed = allowed;
+    },
+    onWebSearchPolicyResolved: (allowed) => {
+      webSearchAllowed = allowed;
+    },
   });
   const registeredTools = await buildDynamicTools({
-    params,
+    params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -732,7 +802,8 @@ export async function runCodexAppServerAttempt(
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
-      onToolOutcome: params.onToolOutcome,
+      onToolOutcome: onCodexToolOutcome,
+      allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
@@ -783,6 +854,12 @@ export async function runCodexAppServerAttempt(
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      requestedModelId: params.requestedModelId,
+      modelId: params.modelId,
+      fallbackReason: params.fallbackReason,
+      degradedReason: params.degradedReason,
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -847,6 +924,11 @@ export async function runCodexAppServerAttempt(
       ),
       citationsMode: params.config?.memory?.citations,
       modelId: params.modelId,
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      requestedModelId: params.requestedModelId,
+      fallbackReason: params.fallbackReason,
+      degradedReason: params.degradedReason,
       prompt: params.prompt,
     });
     if (!assembled) {
@@ -1229,10 +1311,13 @@ export async function runCodexAppServerAttempt(
       effectiveWorkspace,
       effectiveCwd,
       dynamicTools: toolBridge.specs,
+      persistentWebSearchAllowed,
+      webSearchAllowed,
       developerInstructions: promptBuild.developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
+      nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,
@@ -1703,6 +1788,20 @@ export async function runCodexAppServerAttempt(
       correlation.matchesActiveTurn === true ||
       (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
       nativeResponseStreamDeltaMatchesActiveTurn;
+    if (correlation.matchesActiveTurn === true) {
+      const modelToolCallId = readRawResponseToolCallId(notification);
+      if (modelToolCallId) {
+        // Raw response items arrive in model order before Codex schedules tool
+        // futures, so later lifecycle races reuse this authoritative position.
+        allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
+      }
+      const nativeItem = readCodexNotificationItem(notification.params);
+      if (nativeItem?.type === "webSearch") {
+        // Upstream omits the raw web-search id. Its lifecycle still follows the
+        // model stream, so reserve synchronously before queued projection.
+        projector.recordNativeToolOutcome(nativeItem);
+      }
+    }
     if (notificationMatchesActiveTurn) {
       // If Codex app-server exposes raw response deltas, treat them as activity
       // only when scoped to this turn or attributable to a single lease.
@@ -1818,6 +1917,7 @@ export async function runCodexAppServerAttempt(
       if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
         return undefined;
       }
+      const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       armCompletionWatchOnResponse = true;
       markCurrentTurnRequestProgress();
       turnCrossedToolHandoff = true;
@@ -1888,7 +1988,13 @@ export async function runCodexAppServerAttempt(
           toolBridge,
           signal: runAbortController.signal,
           timeoutMs: dynamicToolTimeoutMs,
+          toolCallOrdinal,
           onAgentToolResult: params.onAgentToolResult,
+          onFallbackSelected: () => {
+            if (toolCallOrdinal !== undefined) {
+              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+            }
+          },
           onTimeout: () => {
             trajectoryRecorder?.recordEvent("tool.timeout", {
               threadId: call.threadId,
@@ -1900,6 +2006,19 @@ export async function runCodexAppServerAttempt(
           },
         });
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+        if (!protocolResponse.success && toolCallOrdinal !== undefined) {
+          // The underlying tool may ignore cancellation and finish after the
+          // timeout response. Its late presentation must not replace this failure.
+          suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+          params.onToolOutcome?.({
+            toolName: call.tool,
+            argsHash: "",
+            resultHash: "",
+            toolCallOrdinal,
+            terminalPresentation: undefined,
+            presentationOnly: true,
+          });
+        }
         const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
         trajectoryRecorder?.recordEvent("tool.result", {
           threadId: call.threadId,
@@ -1986,6 +2105,7 @@ export async function runCodexAppServerAttempt(
         }
         throw error;
       } finally {
+        toolOutcomeOrdinals.delete(call.callId);
         unsubscribeToolDiagnosticObserver();
       }
     } finally {
@@ -2371,12 +2491,17 @@ export async function runCodexAppServerAttempt(
     prompt: codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
   });
-  projectorRef.current = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
-    nativePostToolUseRelayEnabled:
-      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
-      nativeHookRelay.shouldRelayEvent("post_tool_use"),
-    trajectoryRecorder,
-  });
+  projectorRef.current = new CodexAppServerEventProjector(
+    dynamicToolParams,
+    thread.threadId,
+    activeTurnId,
+    {
+      nativePostToolUseRelayEnabled:
+        nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+        nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      trajectoryRecorder,
+    },
+  );
   if (
     isTerminalTurnStatus(turn.turn.status) ||
     pendingNotifications.some((notification) =>
@@ -2679,6 +2804,12 @@ export async function runCodexAppServerAttempt(
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
         }),
+        contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+        providerId: params.provider,
+        requestedModelId: params.requestedModelId,
+        modelId: params.modelId,
+        fallbackReason: params.fallbackReason,
+        degradedReason: params.degradedReason,
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),

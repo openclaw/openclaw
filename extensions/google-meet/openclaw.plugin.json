@@ -527,6 +527,9 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.google-meet.config.realtime.provider"]
+    "compatibilityMigrationPaths": ["plugins.entries.google-meet.config.realtime.provider"],
+    "secretInputs": {
+      "paths": [{ "path": "realtime.providers.*.apiKey", "expected": "string" }]
+    }
   }
 }
