@@ -6,7 +6,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js"
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -273,30 +273,6 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
 }
 
 /**
- * AsyncLocalStorage-based re-entrant guard for triggerInternalHook.
- *
- * Prevents infinite loops when a handler re-triggers the same hook event
- * (e.g., a command:new handler that spawns an embedded agent turn which
- * triggers command:new again).
- *
- * Uses AsyncLocalStorage to propagate the active-dispatch guard set through
- * the async call chain. This ensures:
- * - **Re-entrant calls within the same handler chain** are blocked (handler →
- *   triggerInternalHook → same key → sees inherited store → dropped)
- * - **Independent concurrent calls** are not blocked (fireAndForgetHook starts
- *   a new async context with no inherited store → proceeds normally)
- *
- * This preserves at-least-once delivery semantics for real-world concurrent
- * events (e.g., two independent message:received events for the same session)
- * while still preventing infinite re-entrant amplification.
- */
-const TRIGGER_GUARD_KEY = Symbol.for("openclaw.internalHookTriggerGuard");
-const dispatchContext = resolveGlobalSingleton<AsyncLocalStorage<Set<string>>>(
-  TRIGGER_GUARD_KEY,
-  () => new AsyncLocalStorage<Set<string>>(),
-);
-
-/**
  * Trigger a hook event
  *
  * Calls all handlers registered for:
@@ -305,13 +281,6 @@ const dispatchContext = resolveGlobalSingleton<AsyncLocalStorage<Set<string>>>(
  *
  * Handlers are called in registration order. Errors are caught and logged
  * but don't prevent other handlers from running.
- *
- * A re-entrant guard using AsyncLocalStorage prevents the same
- * `type\0action\0sessionKey` combination from being triggered within the
- * same async call chain (e.g., when a handler spawns an embedded agent turn
- * that triggers the same hook again). Independent concurrent triggers for
- * the same key from different async contexts (e.g., two independent
- * message:received events) proceed normally.
  *
  * @param event - The event to trigger
  */
@@ -323,36 +292,88 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  // Use \0 as separator — cannot appear in type/action/sessionKey values.
-  const guardKey = `${event.type}\0${event.action}\0${event.sessionKey}`;
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
 
-  // Check for re-entrancy within the current async call chain only.
-  const activeKeys = dispatchContext.getStore();
-  if (activeKeys?.has(guardKey)) {
-    log.debug(`Skipping re-entrant trigger for ${event.type}:${event.action}:${event.sessionKey}`);
+  for (const handler of allHandlers) {
+    try {
+      await handler(event);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
+    }
+  }
+}
+
+/**
+ * Cycle guard for known-recursive hook producers.
+ *
+ * A small number of internal hook event families have producers (call sites
+ * in core code) that can be re-entered through a handler chain:
+ *
+ * - `command:new` — fired when a new session is created. A handler that
+ *   triggers another `command:new` (e.g., by creating a child session or
+ *   starting an embedded turn) can recurse infinitely without this guard.
+ * - `agent:bootstrap` — fired when an agent's bootstrap files are applied.
+ *   A handler that spawns another embedded agent run can re-enter.
+ *
+ * The guard is opt-in: producers that want cycle protection call
+ * `triggerInternalHookWithCycleGuard` instead of `triggerInternalHook`. The
+ * shared dispatcher remains "unconditional delivery" for all other events
+ * and call sites, preserving the existing hook contract.
+ *
+ * Mechanics:
+ * - A per-`AsyncLocalStorage` set tracks the active `(type, action,
+ *   sessionKey)` keys for the current async call chain.
+ * - A guarded call whose key is already in the set is silently dropped with a
+ *   debug log.
+ * - The guard key is removed from the set after dispatch completes, so
+ *   delayed same-key hooks scheduled by handlers (e.g. via `setTimeout`) are
+ *   delivered once the original dispatch returns.
+ * - Independent concurrent triggers (e.g. two `message:received` events for
+ *   the same session arriving on different async roots) each see an empty
+ *   store and proceed normally.
+ */
+const CYCLE_GUARD_KEY = Symbol.for("openclaw.internalHookCycleGuard");
+const cycleGuard = resolveGlobalSingleton<AsyncLocalStorage<Set<string>>>(
+  CYCLE_GUARD_KEY,
+  () => new AsyncLocalStorage<Set<string>>(),
+);
+
+/**
+ * Trigger a hook event with cycle protection for known-recursive producers.
+ *
+ * Use this only at the call sites that have been demonstrated to recurse
+ * (see the comment above {@link CYCLE_GUARD_KEY}). All other call sites
+ * should continue to use {@link triggerInternalHook}.
+ *
+ * @param event - The event to trigger
+ */
+export async function triggerInternalHookWithCycleGuard(event: InternalHookEvent): Promise<void> {
+  if (!internalHooksEnabledState.enabled) {
+    return;
+  }
+  if (!hasInternalHookListeners(event.type, event.action)) {
     return;
   }
 
-  // Run the dispatch inside AsyncLocalStorage.run() so that any re-entrant
-  // call from within the handler chain inherits the store with this guardKey.
-  // The guard key is removed from the Set after dispatch completes, so that
-  // delayed same-key hooks scheduled by handlers (e.g. via setTimeout) are
-  // not blocked after the original dispatch returns.
-  const guardSet = activeKeys ? new Set([...activeKeys, guardKey]) : new Set([guardKey]);
-  await dispatchContext.run(guardSet, async () => {
-    try {
-      const typeHandlers = handlers.get(event.type) ?? [];
-      const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-      const allHandlers = [...typeHandlers, ...specificHandlers];
+  // \0 cannot appear in InternalHookEventType values (a closed union of
+  // short ASCII strings) or in well-formed sessionKey/action values.
+  const guardKey = `${event.type}\0${event.action}\0${event.sessionKey}`;
 
-      for (const handler of allHandlers) {
-        try {
-          await handler(event);
-        } catch (err) {
-          const message = formatErrorMessage(err);
-          log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
-        }
-      }
+  const activeKeys = cycleGuard.getStore();
+  if (activeKeys?.has(guardKey)) {
+    log.debug(
+      `Skipping re-entrant cycle for ${event.type}:${event.action}:${event.sessionKey}`,
+    );
+    return;
+  }
+
+  const guardSet = activeKeys ? new Set([...activeKeys, guardKey]) : new Set([guardKey]);
+  await cycleGuard.run(guardSet, async () => {
+    try {
+      await triggerInternalHook(event);
     } finally {
       guardSet.delete(guardKey);
     }

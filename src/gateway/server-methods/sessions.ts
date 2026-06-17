@@ -65,6 +65,7 @@ import {
   createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
+  triggerInternalHookWithCycleGuard,
 } from "../../hooks/internal-hooks.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -1480,7 +1481,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           cfg,
           workspaceDir,
         });
-        await triggerInternalHook(hookEvent);
+        // Use the cycle-guarded variant because `command:new` is a known
+        // recursive producer: a handler that creates another session (or
+        // otherwise re-enters this path) would otherwise recurse infinitely.
+        await triggerInternalHookWithCycleGuard(hookEvent);
       }
       const parentTarget = resolveGatewaySessionStoreTarget({
         cfg,
