@@ -12,6 +12,7 @@ const killProcessTree = vi.hoisted(() => vi.fn());
 const detach = vi.hoisted(() => vi.fn());
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() => vi.fn(() => [] as number[]));
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn(() => "loopback"));
+const resolveSetupSecretInputString = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -55,9 +56,7 @@ vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
 }));
 
-vi.mock("./setup.secret-input.js", () => ({
-  resolveSetupSecretInputString: vi.fn(async () => "test-password"),
-}));
+vi.mock("./setup.secret-input.js", () => ({ resolveSetupSecretInputString }));
 
 type MockChild = EventEmitter & {
   pid: number | undefined;
@@ -96,6 +95,11 @@ describe("agent-assisted Gateway runtime", () => {
     killProcessTree.mockReset();
     detach.mockReset();
     findVerifiedGatewayListenerPidsOnPortSync.mockReset().mockReturnValue([]);
+    resolveSetupSecretInputString
+      .mockReset()
+      .mockImplementation(async ({ value }: { value?: unknown }) =>
+        typeof value === "string" ? value : undefined,
+      );
     resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["/usr/bin/node", "/app/openclaw.mjs", "gateway", "--port", "18789"],
       workingDirectory: "/app",
@@ -256,6 +260,99 @@ describe("agent-assisted Gateway runtime", () => {
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(probeGateway).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("reuses a verified existing trusted-proxy Gateway with a password fallback", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "trusted-proxy" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: false });
+
+    const result = await ensureAgentAssistedGatewayRuntime({
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            password: "fallback-password",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      settings: {
+        ...settings,
+        authMode: "trusted-proxy",
+        gatewayToken: undefined,
+      },
+      prompter: createWizardPrompter(),
+    });
+
+    expect(result.temporary).toBe(false);
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    expect(probeGateway.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ auth: { password: "fallback-password" } }),
+    );
+    expect(probeGateway.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        auth: { password: expect.stringMatching(/^openclaw-setup-invalid-/) },
+      }),
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a trusted-proxy Gateway that accepts an invalid fallback password", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4321]);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: {
+          path: "/tmp/openclaw.json",
+          config: {
+            gateway: {
+              port: 18789,
+              bind: "loopback",
+              auth: { mode: "trusted-proxy" },
+              tailscale: { mode: "off" },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {
+          gateway: {
+            auth: {
+              mode: "trusted-proxy",
+              password: "fallback-password",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
+          },
+        },
+        settings: {
+          ...settings,
+          authMode: "trusted-proxy",
+          gatewayToken: undefined,
+        },
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("cannot verify that it matches the active Gateway security settings");
+
+    expect(probeGateway).toHaveBeenCalledTimes(2);
     expect(spawn).not.toHaveBeenCalled();
   });
 

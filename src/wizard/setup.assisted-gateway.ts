@@ -66,12 +66,18 @@ function snapshotMatchesGatewaySettings(params: {
   );
 }
 
-function buildInvalidProbeAuth(settings: GatewayWizardSettings): GatewayProbeAuth | undefined {
+function buildInvalidProbeAuth(
+  settings: GatewayWizardSettings,
+  activeAuth: GatewayProbeAuth,
+): GatewayProbeAuth | undefined {
   const invalidSecret = `openclaw-setup-invalid-${randomUUID()}`;
   if (settings.authMode === "token") {
     return { token: invalidSecret };
   }
-  if (settings.authMode === "password") {
+  if (
+    settings.authMode === "password" ||
+    (settings.authMode === "trusted-proxy" && activeAuth.password)
+  ) {
     return { password: invalidSecret };
   }
   return undefined;
@@ -104,7 +110,7 @@ async function probeVerifiedExistingGateway(params: {
   ) {
     return false;
   }
-  const invalidAuth = buildInvalidProbeAuth(params.settings);
+  const invalidAuth = buildInvalidProbeAuth(params.settings, params.auth);
   if (!invalidAuth) {
     return true;
   }
@@ -222,8 +228,10 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
   // Never send active Gateway credentials until the listener owner is verified.
   const existingListenerPids = findVerifiedGatewayListenerPidsOnPortSync(params.settings.port);
   if (existingListenerPids.length > 0) {
+    const canVerifyExisting =
+      params.settings.authMode !== "trusted-proxy" || Boolean(auth.password);
     const existingMatches =
-      params.settings.authMode !== "trusted-proxy" &&
+      canVerifyExisting &&
       (await probeVerifiedExistingGateway({
         url: links.wsUrl,
         auth,
