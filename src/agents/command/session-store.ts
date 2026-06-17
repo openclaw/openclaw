@@ -300,6 +300,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     },
     (_currentEntry, context) => {
       if (!context.existingEntry && sessionStore[sessionKey]) {
+        // sessions.delete removed the persisted row while this run retained an old snapshot.
+        // Do not let the stale finalizer recreate the deleted key.
         return null;
       }
       return metadataPatch;

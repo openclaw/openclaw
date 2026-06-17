@@ -1849,7 +1849,10 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("does not recreate a missing persisted row while preserving user-facing state", async () => {
+  it.each([
+    ["normal", false],
+    ["user-facing state preserving", true],
+  ])("does not recreate a missing persisted row after a %s run", async (_mode, preserve) => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:missing-visible-row";
@@ -1872,7 +1875,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionStore,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
-        preserveUserFacingSessionModelState: true,
+        preserveUserFacingSessionModelState: preserve,
         result: {
           meta: {
             durationMs: 1,
@@ -1892,6 +1895,41 @@ describe("updateSessionStoreAfterAgentRun", () => {
         model: "gpt-5.5",
       });
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    });
+  });
+
+  it("creates a missing persisted row for a new normal run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:new-normal-row";
+      const sessionId = "new-normal-row-session";
+      const sessionStore: Record<string, SessionEntry> = {};
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]).toMatchObject({ sessionId });
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
+        sessionId,
+      });
     });
   });
 
