@@ -684,6 +684,41 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "captures and reapplies distinct executable-mask overrides",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-executable-mask-" },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.chmod(indexPath, 0o755);
+          await writePackageDistInventory(packageRoot);
+          await fs.chmod(indexPath, 0o700);
+
+          const plan = await captureLocalPackageOverrides({ packageRoot });
+          expect(plan).not.toBeNull();
+          expect(plan?.result.modified).toBe(1);
+
+          await writePackageRoot(packageRoot, "2.0.0");
+          await fs.chmod(indexPath, 0o755);
+          await writePackageDistInventory(packageRoot);
+
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(result.status).toBe("applied");
+          expect(result.applied).toBe(1);
+          expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o744);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "ignores non-executable mode normalization during capture",
     async () => {
       await withTempDir(

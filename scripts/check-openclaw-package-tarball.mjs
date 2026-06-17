@@ -454,7 +454,7 @@ if (packageEntrySet.has("dist/postinstall-inventory.json")) {
   try {
     const allowLegacyPrivateQaInventoryOmissions =
       isLegacyPackageAcceptanceCompatVersion(packageVersion);
-    const inventory = JSON.parse(readPackageTarEntry("dist/postinstall-inventory.json"));
+    const inventory = JSON.parse(readPackageMetadataTarEntry("dist/postinstall-inventory.json"));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push("invalid dist/postinstall-inventory.json");
     } else {
@@ -510,7 +510,7 @@ if (packageEntrySet.has("dist/postinstall-inventory.json")) {
 if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
   try {
     const contentInventory = JSON.parse(
-      readPackageTarEntry("dist/postinstall-content-inventory.json"),
+      readPackageMetadataTarEntry("dist/postinstall-content-inventory.json"),
     );
     if (
       !Array.isArray(contentInventory) ||
@@ -585,10 +585,7 @@ if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
         if (content.length !== contentEntry.size) {
           errors.push(`content inventory size mismatch for ${contentEntry.path}`);
         }
-        if (
-          process.platform !== "win32" &&
-          Boolean(mode & 0o111) !== Boolean(contentEntry.mode & 0o111)
-        ) {
+        if (process.platform !== "win32" && (mode & 0o111) !== (contentEntry.mode & 0o111)) {
           errors.push(`content inventory executable mode mismatch for ${contentEntry.path}`);
         }
       }

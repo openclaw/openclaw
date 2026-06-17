@@ -682,7 +682,7 @@ export async function readPackageDistContentInventoryIfPresent(
 }
 
 function formatContentInventoryEntry(entry: PackageDistContentInventoryEntry): string {
-  const executable = process.platform === "win32" ? "" : Boolean(entry.mode & 0o111);
+  const executable = process.platform === "win32" ? "" : entry.mode & 0o111;
   return `${entry.path}:${entry.sha256}:${entry.size}:${executable}`;
 }
 

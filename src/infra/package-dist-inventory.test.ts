@@ -286,6 +286,39 @@ describe("package dist inventory", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "reports distinct executable-bit content inventory masks",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-dist-content-inventory-executable-mask-" },
+        async (packageRoot) => {
+          const currentFile = path.join(packageRoot, "dist", "current.js");
+          await fs.mkdir(path.dirname(currentFile), { recursive: true });
+          await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+          await fs.chmod(currentFile, 0o700);
+
+          await writePackageDistInventory(packageRoot);
+          const contentInventory = await readPackageDistContentInventoryIfPresent(packageRoot);
+          expect(contentInventory).toHaveLength(1);
+          const contentInventoryPath = path.join(
+            packageRoot,
+            "dist",
+            "postinstall-content-inventory.json",
+          );
+          await fs.writeFile(
+            contentInventoryPath,
+            `${JSON.stringify([{ ...contentInventory?.[0], mode: 0o755 }], null, 2)}\n`,
+            "utf8",
+          );
+
+          await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toEqual([
+            expect.stringContaining("executable bits"),
+          ]);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "ignores executable-bit content inventory differences on Windows",
     async () => {
       await withTempDir(

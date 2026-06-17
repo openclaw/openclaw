@@ -297,7 +297,7 @@ function normalizeFileMode(mode: number): number {
 function fileModesHaveSameExecutableSemantics(left: number, right: number): boolean {
   return (
     process.platform === "win32" ||
-    Boolean(normalizeFileMode(left) & 0o111) === Boolean(normalizeFileMode(right) & 0o111)
+    (normalizeFileMode(left) & 0o111) === (normalizeFileMode(right) & 0o111)
   );
 }
 

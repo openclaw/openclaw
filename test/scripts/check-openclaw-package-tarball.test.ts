@@ -29,8 +29,10 @@ function withTarball(
     includeContentInventory?: boolean;
     includeControlUi?: boolean;
     includeShrinkwrap?: boolean;
+    contentInventoryModes?: Record<string, number>;
     extraRootFiles?: Record<string, string>;
     extraPackEntries?: string[];
+    packageFifos?: string[];
     packageModes?: Record<string, number>;
     packageSymlinks?: Record<string, string>;
   } = {},
@@ -112,7 +114,7 @@ function withTarball(
           return {
             path: relativePath,
             sha256: createHash("sha256").update(body).digest("hex"),
-            mode: 0o644,
+            mode: options.contentInventoryModes?.[relativePath] ?? 0o644,
             size: Buffer.byteLength(body),
           };
         });
@@ -120,6 +122,13 @@ function withTarball(
         join(packageRoot, "dist", "postinstall-content-inventory.json"),
         JSON.stringify(contentInventory),
       );
+    }
+    for (const relativePath of options.packageFifos ?? []) {
+      const filePath = join(packageRoot, relativePath);
+      mkdirSync(dirname(filePath), { recursive: true });
+      rmSync(filePath, { force: true });
+      const mkfifo = spawnSync("mkfifo", [filePath], { encoding: "utf8" });
+      expect(mkfifo.status, mkfifo.stderr).toBe(0);
     }
 
     const tarball = join(root, "openclaw.tgz");
@@ -436,6 +445,54 @@ describe("check-openclaw-package-tarball", () => {
       { packageModes: { "dist/index.js": 0o755 } },
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects distinct content inventory executable masks",
+    () => {
+      const body = "export {};\n";
+      withTarball(
+        ["dist/index.js"],
+        { "dist/index.js": body },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(
+            "content inventory executable mode mismatch for dist/index.js",
+          );
+        },
+        "2026.5.21",
+        {
+          contentInventoryModes: { "dist/index.js": 0o755 },
+          packageModes: { "dist/index.js": 0o700 },
+        },
+      );
+    },
+  );
+
+  it
+    .runIf(process.platform !== "win32")
+    .each(["dist/postinstall-inventory.json", "dist/postinstall-content-inventory.json"])(
+    "rejects FIFO package metadata at %s without blocking",
+    (relativePath) => {
+      withTarball(
+        [],
+        {},
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], {
+            encoding: "utf8",
+            timeout: 5_000,
+          });
+
+          expect(result.error).toBeUndefined();
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(`unsafe package metadata tar entry ${relativePath}`);
+        },
+        "2026.5.21",
+        { packageFifos: [relativePath] },
+      );
+    },
+  );
 
   it("rejects duplicate normalized content inventory paths", () => {
     const body = "export {};\n";
