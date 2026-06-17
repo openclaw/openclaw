@@ -245,6 +245,11 @@ export const SessionsCreateParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
+    // Apply the session's reasoning effort + reasoning toggle at create time so a
+    // caller with only operator.write (e.g. a flyway seat) can set them without the
+    // operator.admin scope that sessions.patch requires. Validated like the patch.
+    thinkingLevel: Type.Optional(NonEmptyString),
+    reasoningLevel: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),

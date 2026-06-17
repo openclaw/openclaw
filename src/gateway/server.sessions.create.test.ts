@@ -89,6 +89,111 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(header.id).toBe(created.payload?.sessionId);
 });
 
+test("sessions.create applies thinkingLevel + reasoningLevel at create (operator.write, no admin patch)", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        thinkingLevel: "off",
+        reasoningLevel: "off",
+      }),
+    },
+  });
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      providerOverride?: string;
+      modelOverride?: string;
+      thinkingLevel?: string;
+      reasoningLevel?: string;
+    };
+  }>("sessions.create", {
+    agentId: "ops",
+    parentSessionKey: "main",
+    thinkingLevel: "high",
+    reasoningLevel: "on",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.providerOverride).toBe("openai");
+  expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
+  expect(created.payload?.entry?.reasoningLevel).toBe("on");
+
+  const rawStore = readSessionStore(storePath);
+  const key = created.payload?.key as string;
+  expect(rawStore[key]?.thinkingLevel).toBe("high");
+  expect(rawStore[key]?.reasoningLevel).toBe("on");
+});
+
+test("sessions.create validates thinkingLevel against inherited parent model", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "no-reason", name: "No Reason", provider: "openai", reasoning: false },
+  ];
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent", {
+        providerOverride: "openai",
+        modelOverride: "no-reason",
+      }),
+    },
+  });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "ops",
+    parentSessionKey: "main",
+    thinkingLevel: "high",
+  });
+
+  expect(created.ok).toBe(false);
+  expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+    'thinkingLevel "high" is not supported for openai/no-reason',
+  );
+  const storeKeys = Object.keys(readSessionStore(storePath));
+  expect(storeKeys).toHaveLength(1);
+  expect(storeKeys.some((key) => key.startsWith("agent:ops:dashboard:"))).toBe(false);
+});
+
+test("sessions.create treats omitted thinkingLevel as inherited state, not explicit patch input", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "no-reason", name: "No Reason", provider: "openai", reasoning: false },
+  ];
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent", {
+        providerOverride: "openai",
+        modelOverride: "no-reason",
+        thinkingLevel: "high",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      modelOverride?: string;
+      thinkingLevel?: string;
+    };
+  }>("sessions.create", {
+    agentId: "ops",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.modelOverride).toBe("no-reason");
+  expect(created.payload?.entry?.thinkingLevel).toBe("off");
+
+  const rawStore = readSessionStore(storePath);
+  const key = created.payload?.key as string;
+  expect(rawStore[key]?.thinkingLevel).toBe("off");
+});
+
 test("sessions.create inherits parent runtime model selection when model is omitted", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({

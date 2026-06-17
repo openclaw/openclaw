@@ -1509,30 +1509,45 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             mainKey: cfg.session?.mainKey,
           })
       : buildDashboardSessionKey(agentId);
+    const requestedModel = normalizeOptionalString(p.model);
+    const requestedThinkingLevel = normalizeOptionalString(p.thinkingLevel);
+    const requestedReasoningLevel = normalizeOptionalString(p.reasoningLevel);
     const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId });
     const targetAgentId = target.agentId;
     const created = await updateSessionStore(target.storePath, async (store) => {
+      const inheritedSelection =
+        canonicalParentSessionKey && !requestedModel
+          ? inheritSessionRuntimeSelection(parentSessionEntry)
+          : {};
+      const patchStore =
+        Object.keys(inheritedSelection).length > 0
+          ? {
+              ...store,
+              [target.canonicalKey]: {
+                ...store[target.canonicalKey],
+                ...inheritedSelection,
+              },
+            }
+          : store;
       const patched = await applySessionsPatchToStore({
         cfg,
-        store,
+        store: patchStore,
         storeKey: target.canonicalKey,
         agentId: targetAgentId,
         patch: {
           key: target.canonicalKey,
           label: normalizeOptionalString(p.label),
-          model: normalizeOptionalString(p.model),
+          model: requestedModel,
+          ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
+          ...(requestedReasoningLevel ? { reasoningLevel: requestedReasoningLevel } : {}),
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
       if (!patched.ok || !canonicalParentSessionKey) {
         return patched;
       }
-      const inheritedSelection = normalizeOptionalString(p.model)
-        ? {}
-        : inheritSessionRuntimeSelection(parentSessionEntry);
       const nextEntry: SessionEntry = {
         ...patched.entry,
-        ...inheritedSelection,
         parentSessionKey: canonicalParentSessionKey,
       };
       store[target.canonicalKey] = nextEntry;
