@@ -1123,8 +1123,8 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             autoGenerate: z.boolean().optional(),
-            certPath: z.string().optional(),
-            keyPath: z.string().optional(),
+            certPath: z.string().trim().min(1).optional(),
+            keyPath: z.string().trim().min(1).optional(),
             caPath: z.string().optional(),
           })
           .optional(),

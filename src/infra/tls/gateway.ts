@@ -62,8 +62,12 @@ async function generateSelfSignedCert(params: {
     "-subj",
     "/CN=openclaw-gateway",
   ]);
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
+  await fs.chmod(params.keyPath, 0o600).catch((err) => {
+    throw new Error(`failed to chmod key file ${params.keyPath}: ${String(err)}`);
+  });
+  await fs.chmod(params.certPath, 0o600).catch((err) => {
+    throw new Error(`failed to chmod cert file ${params.certPath}: ${String(err)}`);
+  });
   params.log?.info?.(
     `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
   );
@@ -80,8 +84,16 @@ export async function loadGatewayTlsRuntime(
 
   const autoGenerate = cfg.autoGenerate !== false;
   const baseDir = path.join(CONFIG_DIR, "gateway", "tls");
-  const certPath = resolveUserPath(cfg.certPath ?? path.join(baseDir, "gateway-cert.pem"));
-  const keyPath = resolveUserPath(cfg.keyPath ?? path.join(baseDir, "gateway-key.pem"));
+  const certPath = resolveUserPath(
+    typeof cfg.certPath === "string" && cfg.certPath.trim()
+      ? cfg.certPath.trim()
+      : path.join(baseDir, "gateway-cert.pem"),
+  );
+  const keyPath = resolveUserPath(
+    typeof cfg.keyPath === "string" && cfg.keyPath.trim()
+      ? cfg.keyPath.trim()
+      : path.join(baseDir, "gateway-key.pem"),
+  );
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
 
   const hasCert = await pathExists(certPath);
