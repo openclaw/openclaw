@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Api, Model } from "../llm/types.js";
 import { resolveProviderStreamFn, wrapProviderStreamFn } from "../plugins/provider-runtime.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
+import {
+  createBoundaryAwareStreamFnForModel,
+  createTransportAwareStreamFnForModel,
+} from "./provider-transport-stream.js";
 import type { StreamFn } from "./runtime/index.js";
 
 /** Resolves and registers the stream function for a provider-backed model. */
@@ -20,6 +23,12 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   allowRuntimePluginLoad?: boolean;
   applyProviderWrapper?: boolean;
 }): StreamFn | undefined {
+  const transportContext = {
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  };
   const baseStreamFn =
     resolveProviderStreamFn({
       provider: params.model.provider,
@@ -36,12 +45,10 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
         model: params.model,
       },
     }) ??
-    createTransportAwareStreamFnForModel(params.model, {
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
+    createTransportAwareStreamFnForModel(params.model, transportContext) ??
+    (params.applyProviderWrapper
+      ? createBoundaryAwareStreamFnForModel(params.model, transportContext)
+      : undefined);
   if (!baseStreamFn) {
     return undefined;
   }

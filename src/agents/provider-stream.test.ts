@@ -3,6 +3,7 @@ import type { Model } from "../llm/types.js";
 
 const mocks = vi.hoisted(() => ({
   ensureCustomApiRegistered: vi.fn(),
+  createBoundaryAwareStreamFnForModel: vi.fn(),
   createTransportAwareStreamFnForModel: vi.fn(),
   resolveProviderStreamFn: vi.fn(),
   wrapProviderStreamFn: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered: mocks.ensureCustomApiRegistered,
 }));
 vi.mock("./provider-transport-stream.js", () => ({
+  createBoundaryAwareStreamFnForModel: mocks.createBoundaryAwareStreamFnForModel,
   createTransportAwareStreamFnForModel: mocks.createTransportAwareStreamFnForModel,
 }));
 
@@ -39,10 +41,10 @@ describe("registerProviderStreamForModel", () => {
     vi.clearAllMocks();
   });
 
-  it("applies an opted-in provider wrapper after selecting the managed transport", () => {
+  it("applies an opted-in provider wrapper after selecting the boundary transport", () => {
     const baseStream = vi.fn();
     const wrappedStream = vi.fn();
-    mocks.createTransportAwareStreamFnForModel.mockReturnValue(baseStream);
+    mocks.createBoundaryAwareStreamFnForModel.mockReturnValue(baseStream);
     mocks.wrapProviderStreamFn.mockReturnValue(wrappedStream);
 
     expect(
@@ -54,6 +56,12 @@ describe("registerProviderStreamForModel", () => {
         applyProviderWrapper: true,
       }),
     ).toBe(wrappedStream);
+    expect(mocks.createBoundaryAwareStreamFnForModel).toHaveBeenCalledWith(MODEL, {
+      cfg: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      env: undefined,
+    });
     expect(mocks.wrapProviderStreamFn).toHaveBeenCalledWith({
       provider: "clawrouter",
       config: { models: {} },
