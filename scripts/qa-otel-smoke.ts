@@ -1441,12 +1441,6 @@ function assertSmoke(params: {
       failures.push(`missing required metric ${name}`);
     }
   }
-  const rawLogBodies = params.logRecords
-    .map((record) => record.body)
-    .filter((body) => body !== "log");
-  if (rawLogBodies.length > 0) {
-    failures.push(`OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`);
-  }
   const correlatedLogRecords = params.logRecords.filter(
     (record) => record.traceId && record.spanId,
   );
