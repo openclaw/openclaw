@@ -1414,6 +1414,7 @@ export function buildWorkspaceSkillSnapshot(
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
+      skillKey: entry.metadata?.skillKey,
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
