@@ -1186,5 +1186,13 @@
   {
     "source": "Cohere",
     "target": "Cohere"
+  },
+  {
+    "source": "Cohere plugin",
+    "target": "Cohere 插件"
+  },
+  {
+    "source": "cohere",
+    "target": "cohere"
   }
 ]
