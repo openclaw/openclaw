@@ -12,6 +12,8 @@ import {
   formatScanResult,
   sortQualifiedCandidates,
 } from "../../scripts/issue-fix-agent-lib/candidates.ts";
+import type { CommandRunner } from "../../scripts/issue-fix-agent-lib/command-runner.ts";
+import { fetchOpenIssueCandidates } from "../../scripts/issue-fix-agent-lib/github.ts";
 import {
   appendIssueFixAgentEvent,
   createIssueFixAgentRun,
@@ -149,5 +151,49 @@ describe("issue-fix-agent sqlite state", () => {
       transitionIssueFixAgentRun(store, run.runId, "discovered", { reason: "backward" }),
     ).toThrow("invalid issue-fix-agent transition");
     store.close();
+  });
+});
+
+describe("issue-fix-agent github reads", () => {
+  it("reads open issues through gitcrawl and normalizes candidates", async () => {
+    const calls: string[][] = [];
+    const runCommand: CommandRunner = async (command, args) => {
+      calls.push([command, ...args]);
+      return {
+        code: 0,
+        stderr: "",
+        stdout: `${JSON.stringify({
+          author: { login: "external-user" },
+          body: "Repro: TypeError in src/commands/status.ts",
+          labels: ["bug"],
+          number: 12345,
+          title: "status crashes",
+          updatedAt: "2026-06-01T00:00:00Z",
+          url: "https://github.com/openclaw/openclaw/issues/12345",
+        })}\n`,
+      };
+    };
+
+    await expect(fetchOpenIssueCandidates({ limit: 5, runCommand })).resolves.toMatchObject([
+      {
+        author: "external-user",
+        isPullRequest: false,
+        number: 12345,
+      },
+    ]);
+    expect(calls[0]).toEqual([
+      "gitcrawl",
+      "search",
+      "issues",
+      "repo:openclaw/openclaw state:open",
+      "-R",
+      "openclaw/openclaw",
+      "--state",
+      "open",
+      "--json",
+      "number,title,url,body,labels,author,updatedAt",
+      "--limit",
+      "5",
+    ]);
   });
 });
