@@ -220,6 +220,9 @@ type OtelContextFlags = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  protocol?: NonNullable<
+    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
+  >["protocol"];
   logsExporter?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["logsExporter"];
@@ -233,6 +236,7 @@ function createOtelContext(
     traces = false,
     metrics = false,
     logs = false,
+    protocol = OTEL_TEST_PROTOCOL,
     logsExporter,
     captureContent,
   }: OtelContextFlags = {},
@@ -244,7 +248,7 @@ function createOtelContext(
         otel: {
           enabled: true,
           endpoint,
-          protocol: OTEL_TEST_PROTOCOL,
+          protocol,
           traces,
           metrics,
           logs,
@@ -1107,6 +1111,39 @@ describe("diagnostics-otel service", () => {
     expect(logEmit).not.toHaveBeenCalled();
 
     await service.stop?.(ctx);
+  });
+
+  test("starts stdout-only logs when OTLP protocol is unsupported", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: false,
+      metrics: false,
+      logs: true,
+      protocol: "grpc",
+      logsExporter: "stdout",
+    });
+    const capture = captureStdoutWrites();
+    try {
+      await service.start(ctx);
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "INFO",
+        message: "stdout only log",
+      });
+      await flushDiagnosticEvents();
+
+      const line = parseSingleStdoutDiagnosticLogLine(capture.writes);
+      expect(line.body).toBe("log");
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      expect(traceExporterCtor).not.toHaveBeenCalled();
+      expect(metricExporterCtor).not.toHaveBeenCalled();
+      expect(ctx.logger.warn).not.toHaveBeenCalledWith(
+        "diagnostics-otel: unsupported protocol grpc",
+      );
+    } finally {
+      capture.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
   });
 
   test("exports trusted security events as stdout JSONL logs", async () => {

@@ -113,7 +113,7 @@ describe("qa-otel-smoke receiver bounds", () => {
         "--provider-mode",
         "mock-openai",
         "--scenario",
-        "otel-trace-smoke",
+        "otel-stdout-log-smoke",
         "--logs-exporter",
         "stdout",
       ]),
@@ -121,8 +121,22 @@ describe("qa-otel-smoke receiver bounds", () => {
       collectorMode: "docker",
       logsExporter: "stdout",
       providerMode: "mock-openai",
-      scenarioId: "otel-trace-smoke",
+      scenarioId: "otel-stdout-log-smoke",
     });
+  });
+
+  it("selects the matching scenario for the requested log exporter", () => {
+    expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
+    expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
+      "otel-stdout-log-smoke",
+    );
+    expect(testing.parseArgs(["--logs-exporter", "both"]).scenarioId).toBe("otel-both-log-smoke");
+  });
+
+  it("rejects explicit scenarios that do not match the log exporter", () => {
+    expect(() =>
+      testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "otel-trace-smoke"]),
+    ).toThrow("--logs-exporter stdout requires --scenario otel-stdout-log-smoke");
   });
 
   it("parses body-size limit env values as strict positive integers", () => {

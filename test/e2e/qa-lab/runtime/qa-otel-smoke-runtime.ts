@@ -99,6 +99,11 @@ type StdoutDiagnosticLogRecord = {
 };
 
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
+const LOGS_EXPORTER_SCENARIO_IDS = {
+  otlp: "otel-trace-smoke",
+  stdout: "otel-stdout-log-smoke",
+  both: "otel-both-log-smoke",
+} satisfies Record<OtelLogsExporter, string>;
 const DEFAULT_DOCKER_COLLECTOR_IMAGE =
   process.env.OPENCLAW_QA_OTEL_COLLECTOR_IMAGE || "otel/opentelemetry-collector:0.104.0";
 const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
@@ -198,6 +203,7 @@ Collector container in front of the receiver.
 
 function parseArgs(argv: string[]): CliOptions {
   const args = stripLeadingPackageManagerSeparator(argv);
+  let scenarioExplicit = false;
   const options: CliOptions = {
     collectorMode: "local",
     logsExporter: "otlp",
@@ -241,6 +247,7 @@ function parseArgs(argv: string[]): CliOptions {
       options.providerMode = readValue();
     } else if (arg === "--scenario") {
       options.scenarioId = readValue();
+      scenarioExplicit = true;
     } else if (arg === "--model") {
       options.primaryModel = readValue();
     } else if (arg === "--alt-model") {
@@ -248,6 +255,17 @@ function parseArgs(argv: string[]): CliOptions {
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
+  }
+
+  const expectedScenarioId = LOGS_EXPORTER_SCENARIO_IDS[options.logsExporter];
+  if (scenarioExplicit && options.scenarioId !== expectedScenarioId) {
+    throw new Error(
+      `--logs-exporter ${options.logsExporter} requires --scenario ${expectedScenarioId}; ` +
+        `got ${options.scenarioId}`,
+    );
+  }
+  if (!scenarioExplicit) {
+    options.scenarioId = expectedScenarioId;
   }
 
   return options;

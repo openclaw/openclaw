@@ -1350,6 +1350,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const logsExporter: OtelLogsExporter = otel.logsExporter ?? "otlp";
       const logsToOtlp = logsEnabled && (logsExporter === "otlp" || logsExporter === "both");
       const logsToStdout = logsEnabled && (logsExporter === "stdout" || logsExporter === "both");
+      const otlpSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
+        ...(tracesEnabled ? (["traces"] as const) : []),
+        ...(metricsEnabled ? (["metrics"] as const) : []),
+        ...(logsToOtlp ? (["logs"] as const) : []),
+      ];
       const enabledSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
         ...(tracesEnabled ? (["traces"] as const) : []),
         ...(metricsEnabled ? (["metrics"] as const) : []),
@@ -1360,8 +1365,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       }
 
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
-      if (protocol !== "http/protobuf") {
-        emitForSignals(enabledSignals, {
+      if (otlpSignals.length > 0 && protocol !== "http/protobuf") {
+        emitForSignals(otlpSignals, {
           exporter: "diagnostics-otel",
           status: "failure",
           reason: "unsupported_protocol",
