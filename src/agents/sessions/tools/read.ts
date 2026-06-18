@@ -41,29 +41,8 @@ const readSchema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-  encoding: Type.Optional(
-    Type.String({
-      description:
-        "File encoding (e.g. 'utf-8', 'gbk', 'gb2312', 'shift_jis'). Default: 'utf-8'.",
-    }),
-  ),
 });
 export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
-
-/**
- * Decode a buffer using the specified encoding.
- * Uses TextDecoder for non-UTF-8 encodings (e.g. gbk, gb2312, shift_jis).
- */
-function decodeBuffer(buffer: Buffer, encoding?: string): string {
-  if (!encoding || encoding === "utf-8" || encoding === "utf8") {
-    return buffer.toString("utf-8");
-  }
-  try {
-    return new TextDecoder(encoding).decode(buffer);
-  } catch {
-    return buffer.toString(encoding as BufferEncoding);
-  }
-}
 
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";
@@ -289,12 +268,7 @@ export function createReadToolDefinition(
     parameters: readSchema,
     async execute(
       toolCallId,
-      {
-        path,
-        offset,
-        limit,
-        encoding,
-      }: { path: string; offset?: number; limit?: number; encoding?: string },
+      { path, offset, limit }: { path: string; offset?: number; limit?: number },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -370,9 +344,8 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = encoding
-                ? decodeBuffer(buffer, encoding)
-                : (ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8"));
+              const textContent =
+                ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
