@@ -1,6 +1,10 @@
 // Retry hint tests cover user-facing guidance for failed cron retry timing.
 import { describe, expect, it } from "vitest";
 import { resolveCronExecutionRetryHint } from "./retry-hint.js";
+import {
+  preExecutionTimeoutErrorMessage,
+  setupTimeoutErrorMessage,
+} from "./service/execution-errors.js";
 
 describe("resolveCronExecutionRetryHint", () => {
   it("matches classified transient errors", () => {
@@ -38,10 +42,7 @@ describe("resolveCronExecutionRetryHint", () => {
   });
 
   it("classifies cron pre-execution watchdog failures as timeout retries", () => {
-    for (const message of [
-      "cron: isolated agent setup timed out before runner start",
-      "cron: isolated agent run stalled before execution start",
-    ]) {
+    for (const message of [setupTimeoutErrorMessage(), preExecutionTimeoutErrorMessage()]) {
       expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
         retryable: true,
         category: "timeout",
