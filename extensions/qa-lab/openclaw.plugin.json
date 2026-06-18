@@ -1,5 +1,7 @@
 {
   "id": "qa-lab",
+  "name": "QA Lab",
+  "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner.",
   "activation": {
     "onStartup": false
   },
