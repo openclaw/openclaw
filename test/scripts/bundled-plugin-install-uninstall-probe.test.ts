@@ -266,6 +266,14 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
   });
 
+  it("rejects unsafe bundled plugin runtime limit env values", async () => {
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: 9007199254740992");
+  });
+
   it("rejects bundled plugin runtime ports outside the TCP range", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const env = {

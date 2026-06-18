@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-media-path-e2e" OPENCLAW_CODEX_MEDIA_PATH_E2E_IMAGE)"
-PORT="${OPENCLAW_CODEX_MEDIA_PATH_PORT:-18790}"
+PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_CODEX_MEDIA_PATH_PORT 18790)"
 TOKEN="codex-media-path-e2e-$$"
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_MEDIA_PATH_PLUGIN_SPEC:-npm:@openclaw/codex}"
 

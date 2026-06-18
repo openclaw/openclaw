@@ -22,6 +22,11 @@ import {
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "./paths.js";
+import {
+  cleanupPluginHostSessionStore as cleanupFilePluginHostSessionStore,
+  clearPluginOwnedSessionState,
+  type PluginHostSessionCleanupStoreParams,
+} from "./plugin-host-cleanup.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import {
@@ -379,6 +384,8 @@ export type DeleteSessionEntryLifecycleParams = {
   target: SessionLifecycleStoreTarget;
 };
 
+export { clearPluginOwnedSessionState };
+
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   if (scope.clone === false) {
@@ -700,6 +707,17 @@ export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
 ): Promise<SessionEntryLifecycleMutationResult> {
   return await purgeFileDeletedAgentSessionEntries(params);
+}
+
+/**
+ * Clears plugin host-owned state inside one resolved session store.
+ * This is an internal transaction-sized boundary for the storage backend, not
+ * a Plugin SDK API.
+ */
+export async function cleanupPluginHostSessionStore(
+  params: PluginHostSessionCleanupStoreParams,
+): Promise<number> {
+  return await cleanupFilePluginHostSessionStore(params);
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */

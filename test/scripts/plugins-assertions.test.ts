@@ -390,6 +390,73 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+  it("rejects invalid fixture stop attempts before cleanup polling", () => {
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "openclaw_plugins_signal_fixture_process() { echo signal; }",
+          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+          "set +e",
+          "openclaw_plugins_stop_fixture_process 12345",
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x",
+        },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: 2x");
+    expect(result.stdout).not.toContain("signal");
+    expect(result.stdout).not.toContain("probe");
+  });
+
+  it("rejects invalid fixture stop intervals before cleanup polling", () => {
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "openclaw_plugins_signal_fixture_process() { echo signal; }",
+          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+          "set +e",
+          "openclaw_plugins_stop_fixture_process 12345",
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+          OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
+        },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: soon");
+    expect(result.stdout).not.toContain("signal");
+    expect(result.stdout).not.toContain("probe");
+  });
+
   it("bounds npm fixture registry logs when readiness fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-"));
     try {

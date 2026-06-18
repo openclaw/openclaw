@@ -717,6 +717,48 @@ test -d "$SCRATCH_ROOT"
     }
   });
 
+  it("rejects invalid ClawHub fixture wait attempts before starting the server", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-attempts-"));
+    const fakeBin = path.join(parent, "bin");
+    const scratchRoot = path.join(parent, "scratch");
+    const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
+    const nodeShim = path.join(fakeBin, "node");
+    try {
+      mkdirSync(fakeBin, { recursive: true });
+      mkdirSync(fixtureDir, { recursive: true });
+      writeFileSync(nodeShim, "#!/usr/bin/env bash\necho node should not run >&2\nexit 1\n");
+      chmodSync(nodeShim, 0o755);
+
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export PATH="$FAKE_BIN:$PATH"
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=2x
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+set +e
+start_kitchen_sink_clawhub_fixture_server "$FIXTURE_DIR"
+status="$?"
+set -e
+cleanup_kitchen_sink_sweep
+exit "$status"
+`,
+        {
+          FAKE_BIN: fakeBin,
+          FIXTURE_DIR: fixtureDir,
+          SCRATCH_ROOT: scratchRoot,
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS: 2x");
+      expect(result.stderr).not.toContain("node should not run");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
   it("bounds ClawHub fixture server logs on startup timeout", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-log-"));
     const fakeBin = path.join(parent, "bin");

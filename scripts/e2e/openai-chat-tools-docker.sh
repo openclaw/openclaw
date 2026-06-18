@@ -6,7 +6,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openai-chat-tools-e2e" OPENCLAW_OPENAI_CHAT_TOOLS_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_OPENAI_CHAT_TOOLS_E2E_SKIP_BUILD:-0}"
-PORT="${OPENCLAW_OPENAI_CHAT_TOOLS_PORT:-18789}"
+PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENAI_CHAT_TOOLS_PORT 18789)"
 TOKEN="openai-chat-tools-e2e-$$"
 PROFILE_FILE="${OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
 if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then

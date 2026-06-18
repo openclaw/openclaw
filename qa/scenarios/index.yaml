@@ -19,6 +19,9 @@ title: OpenClaw QA Scenario Pack
 # - add `coverage.secondary` only when a scenario intentionally protects another behavior
 # - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
 # - use the exact values listed under feature `coverageIds` in `taxonomy.yaml`
+# - taxonomy feature coverage IDs are exact proof targets, not aliases
+# - scenario primary can list multiple IDs only when this scenario is primary
+#   proof for each
 # - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 # - avoid copying the scenario title into coverage IDs
 # - use `pnpm openclaw qa coverage` to render the current inventory

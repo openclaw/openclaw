@@ -109,7 +109,8 @@ start_kitchen_sink_clawhub_fixture_server() {
   KITCHEN_SINK_CLAWHUB_FIXTURE_DIR="$fixture_dir"
   KITCHEN_SINK_CLAWHUB_PID_FILE="$server_pid_file"
 
-  local wait_attempts="${OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS:-600}"
+  local wait_attempts
+  wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS 600)" || return $?
   for _ in $(seq 1 "$wait_attempts"); do
     if [[ -s "$server_port_file" ]]; then
       export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"

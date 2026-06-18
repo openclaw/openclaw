@@ -68,7 +68,7 @@ function readPositiveInt(raw, fallback, name) {
     throw new Error(`invalid ${name}: ${text}`);
   }
   const parsed = Number(text);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`invalid ${name}: ${text}`);
   }
   return parsed;

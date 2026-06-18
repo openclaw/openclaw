@@ -7,10 +7,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-mcp-code-mode-gateway-e2e" OPENCLAW_IMAGE)"
-PORT="${OPENCLAW_MCP_CODE_MODE_GATEWAY_PORT:-18789}"
-MOCK_PORT="${OPENCLAW_MCP_CODE_MODE_MOCK_PORT:-44082}"
+PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_MCP_CODE_MODE_GATEWAY_PORT 18789)"
+MOCK_PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_MCP_CODE_MODE_MOCK_PORT 44082)"
 TOKEN="mcp-code-mode-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-mcp-code-mode-e2e-$$"
+
 CLIENT_LOG="$(mktemp -t openclaw-mcp-code-mode-client-log.XXXXXX)"
 
 cleanup() {

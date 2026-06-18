@@ -1880,10 +1880,68 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  it("streams HTTP probe responses with non-decimal content-length values", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({
+        "content-length": "1e3",
+      }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return { done: false, value: new Uint8Array(1025) };
+            },
+            async cancel() {
+              canceled = true;
+            },
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("reads bounded response streams", async () => {
     await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
       '{"status":"live"}',
     );
+  });
+
+  it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
+    let canceled = false;
+    const timeoutError = Object.assign(new Error("fetch probe timed out"), {
+      code: "ETIMEDOUT",
+    });
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { headers: new Headers() },
+    );
+
+    await expect(
+      readBoundedResponseText(response, 1024, Promise.reject(timeoutError)),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "fetch probe timed out",
+    });
+    expect(canceled).toBe(true);
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

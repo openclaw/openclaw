@@ -2,6 +2,34 @@ OPENCLAW_PLUGINS_FIXTURE_PID_FILES=()
 OPENCLAW_PLUGINS_FIXTURE_EXIT_TRAP_INSTALLED=0
 OPENCLAW_PLUGINS_FIXTURE_PREVIOUS_EXIT_ACTION=""
 
+openclaw_plugins_read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$((10#$value))"
+}
+
+openclaw_plugins_read_nonnegative_decimal_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$value"
+}
+
 openclaw_plugins_cleanup_fixture_servers() {
   local pid_file
   local pid
@@ -33,8 +61,9 @@ openclaw_plugins_fixture_process_alive() {
 openclaw_plugins_stop_fixture_process() {
   local pid="$1"
   local _
-  local attempts="${OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS:-40}"
-  local interval="${OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS:-0.25}"
+  local attempts interval
+  attempts="$(openclaw_plugins_read_positive_int_env OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS 40)" || return $?
+  interval="$(openclaw_plugins_read_nonnegative_decimal_env OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS 0.25)" || return $?
   if declare -F openclaw_e2e_stop_process >/dev/null 2>&1; then
     openclaw_e2e_stop_process "$pid"
     return
