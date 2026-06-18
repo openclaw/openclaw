@@ -524,6 +524,7 @@ describe("chrome.ts internal", () => {
         color: "#FF4500",
         cdpPort,
         cdpUrl: `http://127.0.0.1:${cdpPort}`,
+        cdpHost: "127.0.0.1",
         cdpIsLoopback: true,
       }) as unknown as ResolvedBrowserProfile;
 
@@ -559,7 +560,32 @@ describe("chrome.ts internal", () => {
       await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(
         /No supported browser found/,
       );
+      expect(ensurePortAvailableMock).toHaveBeenCalledWith(51111, "127.0.0.1");
     });
+
+    it.each([
+      { cdpUrl: "http://[::1]:51111", configuredProbeHost: "::1" },
+      { cdpUrl: "http://localhost:51111", configuredProbeHost: "localhost" },
+    ])(
+      "checks Chrome's IPv4 bind and the configured $configuredProbeHost endpoint",
+      async ({ cdpUrl, configuredProbeHost }) => {
+        vi.spyOn(fs, "existsSync").mockReturnValue(false);
+        const portBusy = new Error("Port is already in use.");
+        portBusy.name = "PortInUseError";
+        ensurePortAvailableMock.mockImplementation(async (_port, host) => {
+          if (host === configuredProbeHost) {
+            throw portBusy;
+          }
+        });
+        const profile = { ...makeProfile(51111), cdpUrl };
+
+        await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(portBusy);
+        expect(ensurePortAvailableMock.mock.calls).toEqual([
+          [51111, "127.0.0.1"],
+          [51111, configuredProbeHost],
+        ]);
+      },
+    );
 
     it("completes successfully when Chrome reports /json/version and CDP is reachable", async () => {
       // Mock executable discovery to a truthy path.
