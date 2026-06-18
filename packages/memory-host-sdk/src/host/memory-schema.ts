@@ -367,6 +367,16 @@ export function ensureMemoryIndexSchema(params: {
           `  end_line UNINDEXED\n` +
           `${tokenizeClause});`,
       );
+      // The shipped generic-table migration and a later FTS enablement both
+      // create an empty derived table beside already-canonical chunk rows.
+      params.db.exec(`
+        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (
+          text, id, path, source, model, start_line, end_line
+        )
+        SELECT text, id, path, source, model, start_line, end_line
+        FROM ${MEMORY_INDEX_CHUNKS_TABLE}
+        WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_FTS_TABLE} LIMIT 1);
+      `);
       ftsAvailable = true;
     } catch (err) {
       const message = formatErrorMessage(err);

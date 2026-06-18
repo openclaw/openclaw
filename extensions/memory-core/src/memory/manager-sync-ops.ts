@@ -650,7 +650,10 @@ export abstract class MemoryManagerSyncOps {
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
       if (this.dropLegacyVectorTable()) {
+        // A broad dirty sync can skip unchanged files whose source hashes were
+        // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
+        this.memoryFullRetryDirty = true;
       }
       return true;
     } catch (err) {
