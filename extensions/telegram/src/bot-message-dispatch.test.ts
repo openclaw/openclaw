@@ -568,6 +568,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  function createReasoningForumTopicContext(): TelegramMessageContext {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    return createContext({
+      ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      msg: {
+        chat: { id: -100123, type: "supergroup", is_forum: true },
+        message_id: 456,
+        message_thread_id: 88,
+      } as unknown as TelegramMessageContext["msg"],
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { id: 88, scope: "forum" },
+    });
+  }
+
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
@@ -3518,6 +3535,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("preserves forum topic message_thread_id across streamed reasoning and final answer", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>Thinking</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningForumTopicContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Answer",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "-100123",
+      messageId: 2001,
+      text: "Answer",
+      messageThreadId: 88,
+    });
   });
 
   it("replaces reasoning snapshots on the reasoning lane", async () => {
