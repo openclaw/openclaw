@@ -128,7 +128,7 @@ function looksLikeEnvelopeSludge(text: string): boolean {
   }
   return (
     /^Untrusted context \(metadata/m.test(text) ||
-    /\(untrusted metadata\):/.test(text) ||
+    text.includes("(untrusted metadata):") ||
     /\[media attached/i.test(text) ||
     /<active_memory_plugin>/i.test(text) ||
     /<relevant-memories>/i.test(text) ||

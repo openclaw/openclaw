@@ -9,6 +9,10 @@ function mockResponse(body: unknown, status = 200): Response {
   });
 }
 
+function requestUrl(callIndex: number, calls: unknown[][]): string {
+  return String(calls[callIndex]?.[0]);
+}
+
 describe("xmemo_todo_list tool", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   const tools = new Map<string, { execute: (toolCallId: string, params: unknown) => unknown }>();
@@ -73,7 +77,7 @@ describe("xmemo_todo_list tool", () => {
       details: { count: 2 },
     });
 
-    const url = new URL(fetchMock.mock.calls[0]![0] as string);
+    const url = new URL(requestUrl(0, fetchMock.mock.calls));
     expect(url.searchParams.get("item_status")).toBe("open");
   });
 });

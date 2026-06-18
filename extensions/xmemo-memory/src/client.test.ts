@@ -8,6 +8,14 @@ function mockResponse(body: unknown, status = 200, headers?: Record<string, stri
   });
 }
 
+function requestUrl(callIndex: number, calls: unknown[][]): string {
+  return String(calls[callIndex]?.[0]);
+}
+
+function requestInit(callIndex: number, calls: unknown[][]): RequestInit {
+  return (calls[callIndex]?.[1] ?? {}) as RequestInit;
+}
+
 describe("XMemoClient", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -32,10 +40,10 @@ describe("XMemoClient", () => {
     await client.searchMemory({ query: "hello", bucket: "openclaw" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const init = fetchMock.mock.calls[0]![1] as RequestInit;
-    const headers = init.headers as Record<string, string>;
-    expect(headers["X-API-Key"]).toBe("secret-key");
-    expect(headers["Authorization"]).toBeUndefined();
+    const init = requestInit(0, fetchMock.mock.calls);
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("secret-key");
+    expect(headers.get("Authorization")).toBeNull();
   });
 
   it("sends Bearer token when authMode is bearer", async () => {
@@ -49,10 +57,10 @@ describe("XMemoClient", () => {
     );
     await client.searchMemory({ query: "hello", bucket: "openclaw" });
 
-    const init = fetchMock.mock.calls[0]![1] as RequestInit;
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer secret-key");
-    expect(headers["X-API-Key"]).toBeUndefined();
+    const init = requestInit(0, fetchMock.mock.calls);
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bearer secret-key");
+    expect(headers.get("X-API-Key")).toBeNull();
   });
 
   it("sends both headers when authMode is both", async () => {
@@ -66,10 +74,10 @@ describe("XMemoClient", () => {
     );
     await client.searchMemory({ query: "hello", bucket: "openclaw" });
 
-    const init = fetchMock.mock.calls[0]![1] as RequestInit;
-    const headers = init.headers as Record<string, string>;
-    expect(headers["X-API-Key"]).toBe("secret-key");
-    expect(headers["Authorization"]).toBe("Bearer secret-key");
+    const init = requestInit(0, fetchMock.mock.calls);
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("secret-key");
+    expect(headers.get("Authorization")).toBe("Bearer secret-key");
   });
 
   it("uses GET for searchMemory with query params", async () => {
@@ -77,10 +85,10 @@ describe("XMemoClient", () => {
     const client = new XMemoClient("https://xmemo.dev", "key", "openclaw", "instance");
     await client.searchMemory({ query: "hello", bucket: "openclaw", scope: "team", max_items: 5 });
 
-    expect(fetchMock.mock.calls[0]![0]).toBe(
+    expect(requestUrl(0, fetchMock.mock.calls)).toBe(
       "https://xmemo.dev/v1/memories/search?query=hello&bucket=openclaw&scope=team&limit=5",
     );
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("GET");
+    expect(requestInit(0, fetchMock.mock.calls).method).toBe("GET");
   });
 
   it("redacts the api key when it appears in the response body", async () => {
@@ -170,8 +178,8 @@ describe("XMemoClient", () => {
     const result = await client.remember({ content: "hello", bucket: "openclaw" });
 
     expect(result.id).toBe("mem-1");
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://xmemo.dev/v1/remember");
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("POST");
+    expect(requestUrl(0, fetchMock.mock.calls)).toBe("https://xmemo.dev/v1/remember");
+    expect(requestInit(0, fetchMock.mock.calls).method).toBe("POST");
   });
 
   it("validates tokens via GET /v1/auth/token/validate", async () => {
@@ -182,8 +190,8 @@ describe("XMemoClient", () => {
     const result = await client.validateToken();
 
     expect(result.status).toBe("valid");
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://xmemo.dev/v1/auth/token/validate");
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("GET");
+    expect(requestUrl(0, fetchMock.mock.calls)).toBe("https://xmemo.dev/v1/auth/token/validate");
+    expect(requestInit(0, fetchMock.mock.calls).method).toBe("GET");
   });
 
   it("lists reminders using item_status and unwraps { reminders }", async () => {
@@ -199,9 +207,9 @@ describe("XMemoClient", () => {
 
     expect(result.reminders).toHaveLength(1);
     expect(result.reminders[0]).toMatchObject({ id: "r-1", content: "buy milk" });
-    expect(fetchMock.mock.calls[0]![0]).toBe(
+    expect(requestUrl(0, fetchMock.mock.calls)).toBe(
       "https://xmemo.dev/v1/reminders?bucket=openclaw&item_status=open",
     );
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("GET");
+    expect(requestInit(0, fetchMock.mock.calls).method).toBe("GET");
   });
 });

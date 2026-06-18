@@ -221,7 +221,7 @@ export class XMemoClient {
       ...options,
       headers: {
         ...this.headers(),
-        ...((options.headers as Record<string, string>) ?? {}),
+        ...(options.headers as Record<string, string> | undefined),
       },
     });
 

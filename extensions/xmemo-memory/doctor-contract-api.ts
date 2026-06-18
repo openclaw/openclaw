@@ -55,13 +55,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
 
   const nextEntries: Record<string, unknown> = { ...entries };
   nextEntries["xmemo-memory"] = {
-    ...(existingEntry ?? {}),
+    ...existingEntry,
     enabled: (existingEntry?.enabled as boolean | undefined) ?? true,
     config: migrated,
   };
 
   const nextPlugins: Record<string, unknown> = { ...plugins };
-  const nextLegacyConfig: Record<string, unknown> = { ...(asRecord(nextPlugins.config) ?? {}) };
+  const nextLegacyConfig: Record<string, unknown> = { ...asRecord(nextPlugins.config) };
   delete nextLegacyConfig["xmemo-memory"];
   if (Object.keys(nextLegacyConfig).length === 0) {
     delete nextPlugins.config;

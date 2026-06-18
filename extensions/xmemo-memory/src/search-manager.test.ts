@@ -9,6 +9,14 @@ function mockResponse(body: unknown, status = 200, headers?: Record<string, stri
   });
 }
 
+function requestUrl(callIndex: number, calls: unknown[][]): string {
+  return String(calls[callIndex]?.[0]);
+}
+
+function requestInit(callIndex: number, calls: unknown[][]): RequestInit {
+  return (calls[callIndex]?.[1] ?? {}) as RequestInit;
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -71,9 +79,10 @@ describe("XMemoSearchManager", () => {
     const results = await manager.search("hello");
 
     expect(results).toHaveLength(2);
-    expect(results[0]!.path).toBe("openclaw/mem-1");
-    expect(results[0]!.snippet).toBe("first memory");
-    expect(results[1]!.path).toBe("openclaw/mem-2");
+    const [first, second] = results;
+    expect(first?.path).toBe("openclaw/mem-1");
+    expect(first?.snippet).toBe("first memory");
+    expect(second?.path).toBe("openclaw/mem-2");
   });
 
   it("reads a memory by id path", async () => {
@@ -123,8 +132,8 @@ describe("XMemoSearchManager", () => {
 
     const ok = await manager.probeConnectivity();
     expect(ok).toBe(true);
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://xmemo.dev/v1/auth/token/validate");
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("GET");
+    expect(requestUrl(0, fetchMock.mock.calls)).toBe("https://xmemo.dev/v1/auth/token/validate");
+    expect(requestInit(0, fetchMock.mock.calls).method).toBe("GET");
     expect((manager.status().custom as Record<string, unknown>).connected).toBe(true);
   });
 

@@ -38,9 +38,9 @@ export function registerXMemoCli(api: OpenClawPluginApi): void {
               clearTimeout(timeout);
             }
             const status = manager.status();
-            lastError = (status.custom as Record<string, unknown> | undefined)?.lastError as
-              | string
-              | undefined;
+            if (status.custom && typeof status.custom.lastError === "string") {
+              lastError = status.custom.lastError;
+            }
           }
 
           const status = {
@@ -65,11 +65,17 @@ export function registerXMemoCli(api: OpenClawPluginApi): void {
             console.log(`  Connected: ${connected ? "yes" : "no"}`);
             console.log(`  Base URL: ${status.baseUrl}`);
             console.log(`  Bucket: ${status.bucket}`);
-            if (status.scope) console.log(`  Scope: ${status.scope}`);
-            if (status.teamId) console.log(`  Team: ${status.teamId}`);
+            if (status.scope) {
+              console.log(`  Scope: ${status.scope}`);
+            }
+            if (status.teamId) {
+              console.log(`  Team: ${status.teamId}`);
+            }
             console.log(`  Agent: ${status.agentId}`);
             console.log(`  Auto capture: ${status.autoCapture}`);
-            if (lastError) console.log(`  Last error: ${lastError}`);
+            if (lastError) {
+              console.log(`  Last error: ${lastError}`);
+            }
           }
         });
     },

@@ -157,7 +157,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
 
         const cfg = resolveXMemoMemoryConfig(api.config);
         const raw = asToolParamsRecord(params);
-        const query = String(raw.query ?? "").trim();
+        const query = typeof raw.query === "string" ? raw.query.trim() : "";
         const maxResults = typeof raw.maxResults === "number" ? raw.maxResults : cfg.recallMaxItems;
 
         if (!query) {
@@ -222,7 +222,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
 
         const cfg = resolveXMemoMemoryConfig(api.config);
         const raw = asToolParamsRecord(params);
-        const relPath = String(raw.path ?? "").trim();
+        const relPath = typeof raw.path === "string" ? raw.path.trim() : "";
         if (!relPath) {
           return {
             content: [{ type: "text", text: "Path is required for memory_get." }],
@@ -301,7 +301,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
 
         const cfg = resolveXMemoMemoryConfig(api.config);
         const raw = asToolParamsRecord(params);
-        const content = String(raw.content ?? "").trim();
+        const content = typeof raw.content === "string" ? raw.content.trim() : "";
         if (!content) {
           return {
             content: [{ type: "text", text: "Content is required for memory_store." }],
@@ -313,11 +313,13 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
           const response = await client.remember(
             {
               content,
-              path: raw.path ? String(raw.path) : cfg.bucket,
+              path: typeof raw.path === "string" ? raw.path : cfg.bucket,
               bucket: cfg.bucket,
               scope: cfg.scope ?? null,
               team_id: cfg.teamId ?? null,
-              memory_type: (raw.memory_type as XMemoRememberRequest["memory_type"]) ?? "semantic",
+              memory_type: (typeof raw.memory_type === "string"
+                ? raw.memory_type
+                : "semantic") as XMemoRememberRequest["memory_type"],
               importance: typeof raw.importance === "number" ? raw.importance : 0.7,
               source: "openclaw",
             },
@@ -367,7 +369,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
         }
 
         const raw = asToolParamsRecord(params);
-        const relPath = String(raw.path ?? "").trim();
+        const relPath = typeof raw.path === "string" ? raw.path.trim() : "";
         const parsed = parseForgetMemoryId(relPath);
         if (!parsed.ok) {
           return {
@@ -380,7 +382,10 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
           await client.forgetMemory(
             parsed.id,
             {
-              mode: (raw.mode as "soft_delete" | "hard_delete" | "redact") ?? "soft_delete",
+              mode: (typeof raw.mode === "string" ? raw.mode : "soft_delete") as
+                | "soft_delete"
+                | "hard_delete"
+                | "redact",
               reason: "deleted via openclaw memory_forget tool",
             },
             signal,
@@ -421,7 +426,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
 
         const cfg = resolveXMemoMemoryConfig(api.config);
         const raw = asToolParamsRecord(params);
-        const content = String(raw.content ?? "").trim();
+        const content = typeof raw.content === "string" ? raw.content.trim() : "";
         if (!content) {
           return {
             content: [{ type: "text", text: "Content is required for xmemo_todo_create." }],
@@ -435,7 +440,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
             bucket: cfg.bucket,
             scope: cfg.scope ?? null,
             team_id: cfg.teamId ?? null,
-            due_at: raw.due_at ? String(raw.due_at) : null,
+            due_at: typeof raw.due_at === "string" ? raw.due_at : null,
           };
           const reminder = await client.createReminder(request, signal);
           return {
@@ -476,7 +481,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
             {
               bucket: cfg.bucket,
               scope: cfg.scope ?? null,
-              item_status: raw.status ? String(raw.status) : "open",
+              item_status: typeof raw.status === "string" ? raw.status : "open",
             },
             signal,
           );
@@ -523,7 +528,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
         }
 
         const raw = asToolParamsRecord(params);
-        const id = String(raw.id ?? "").trim();
+        const id = typeof raw.id === "string" ? raw.id.trim() : "";
         if (!id) {
           return {
             content: [{ type: "text", text: "Id is required for xmemo_todo_complete." }],
@@ -573,7 +578,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
 
         const cfg = resolveXMemoMemoryConfig(api.config);
         const raw = asToolParamsRecord(params);
-        const content = String(raw.content ?? "").trim();
+        const content = typeof raw.content === "string" ? raw.content.trim() : "";
         if (!content) {
           return {
             content: [{ type: "text", text: "Content is required for xmemo_record_event." }],
@@ -584,7 +589,7 @@ export function registerXMemoTools(api: OpenClawPluginApi): void {
         try {
           const request: XMemoTimelineEventRequest = {
             content,
-            event_type: raw.event_type ? String(raw.event_type) : "note",
+            event_type: typeof raw.event_type === "string" ? raw.event_type : "note",
             bucket: cfg.bucket,
             scope: cfg.scope ?? null,
             team_id: cfg.teamId ?? null,

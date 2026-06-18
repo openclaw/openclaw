@@ -9,6 +9,10 @@ function mockResponse(body: unknown, status = 200): Response {
   });
 }
 
+function requestInit(callIndex: number, calls: unknown[][]): RequestInit {
+  return (calls[callIndex]?.[1] ?? {}) as RequestInit;
+}
+
 describe("xmemo auto-capture", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let handlers: Record<string, (event: unknown, ctx: unknown) => Promise<void>>;
@@ -64,7 +68,7 @@ describe("xmemo auto-capture", () => {
     await capture([{ role: "user", content: "I prefer dark mode" }]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    const body = JSON.parse(String(requestInit(0, fetchMock.mock.calls).body));
     expect(body.content).toBe("I prefer dark mode");
     expect(body.metadata.category).toBe("preference");
   });
@@ -123,7 +127,7 @@ describe("xmemo auto-capture", () => {
       },
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    const body = JSON.parse(String(requestInit(0, fetchMock.mock.calls).body));
     expect(body.content).toBe("storethis decision");
   });
 
@@ -131,7 +135,7 @@ describe("xmemo auto-capture", () => {
     fetchMock.mockResolvedValue(mockResponse({ id: "mem-1" }));
     await capture([{ role: "user", content: "I prefer dark mode" }]);
 
-    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const init = requestInit(0, fetchMock.mock.calls);
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 });
