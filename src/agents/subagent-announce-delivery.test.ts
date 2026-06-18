@@ -4686,10 +4686,19 @@ describe("active wake failure fallback", () => {
           reason: "no_active_run",
         }) as EmbeddedAgentQueueMessageOutcome,
     );
+    const callGateway = createGatewayMock({
+      status: "error",
+      error: "session_file_locked",
+    });
 
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-wake-fail",
+        isActive: true,
+      }),
     });
 
     const internalEvents: AgentInternalEvent[] = [
@@ -4778,6 +4787,11 @@ describe("active wake failure fallback", () => {
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-locked",
+        isActive: true,
+      }),
     });
 
     const internalEvents: AgentInternalEvent[] = [
@@ -4851,10 +4865,19 @@ describe("active wake failure fallback", () => {
           reason: "no_active_run",
         }) as EmbeddedAgentQueueMessageOutcome,
     );
+    const callGateway = createGatewayMock({
+      status: "error",
+      error: "session_file_locked",
+    });
 
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-long",
+        isActive: true,
+      }),
     });
 
     const longOutput = "x".repeat(6000);
