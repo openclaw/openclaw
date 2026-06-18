@@ -906,8 +906,9 @@ describe("cron view", () => {
       callback(0);
       return 1;
     });
+    const container = document.createElement("div");
+    document.body.append(container);
     try {
-      const container = document.createElement("div");
       const onLoadRuns = vi.fn();
       render(
         renderCron(
@@ -933,6 +934,7 @@ describe("cron view", () => {
       expect(onLoadRuns).toHaveBeenCalledWith("job-1");
       expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
     } finally {
+      container.remove();
       vi.unstubAllGlobals();
     }
   });
