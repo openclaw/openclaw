@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Failover now recognizes provider content-policy / new_sensitive errors (MiniMax `new_sensitive (1027)`, Anthropic `content_filter` / `safety_block`, OpenAI `content_policy_violation`) as `rate_limit` so long-running agent sessions fall back to a secondary model instead of failing. Triggered by Hub running a 03_区域政策 LLM-化 batch where session d5689acd hit MiniMax moderation and stopped cold. (#TBD, thanks @xiongxiaoyang-cell.)
+
 ## 2026.6.8
 
 ### Highlights
