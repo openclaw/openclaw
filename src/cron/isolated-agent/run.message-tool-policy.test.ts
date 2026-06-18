@@ -252,13 +252,17 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   async function expectCronFallbackSkippedForMessageToolDelivery(options: {
     sentTargets: Array<Record<string, unknown>>;
     job?: Parameters<typeof makeAnnounceMessageToolJob>[0];
+    cfg?: Record<string, unknown>;
   }) {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
     runEmbeddedAgentMock.mockResolvedValue(makeMessageToolRunResult(options.sentTargets));
+    const params = makeParams();
+    const cfg = options.cfg ?? params.cfg;
 
     const result = await runCronIsolatedAgentTurn({
-      ...makeParams(),
+      ...params,
+      cfg,
       job: makeAnnounceMessageToolJob(options.job),
     });
 
@@ -285,6 +289,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       fallbackUsed: false,
       delivered: true,
     });
+    return { cfg, result };
   }
 
   beforeEach(() => {
@@ -1177,11 +1182,14 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
-    await expectCronFallbackSkippedForMessageToolDelivery({
+    const { cfg } = await expectCronFallbackSkippedForMessageToolDelivery({
+      cfg: { session: { dmScope: "agent" } },
       sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
     });
     expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledTimes(1);
-    expect(queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0]).toMatchObject({
+    const awarenessParams = queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0];
+    expect(awarenessParams?.cfg).not.toBe(cfg);
+    expect(awarenessParams).toMatchObject({
       job: { id: "message-tool-policy" },
       resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
       sourceDeliveryOutcome: {

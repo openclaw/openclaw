@@ -1226,7 +1226,7 @@ async function finalizeCronRun(params: {
   if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
     await queueCronMessageToolDeliveryAwareness({
-      cfg: prepared.input.cfg,
+      cfg: prepared.cfgWithAgentDefaults,
       job: prepared.input.job,
       agentId: prepared.agentId,
       agentSessionKey: prepared.agentSessionKey,
