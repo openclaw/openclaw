@@ -9,6 +9,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import {
   FeishuStreamingSession,
+  mergeFinalStreamingText,
   mergeStreamingText,
   resolveStreamingCardSendMode,
 } from "./streaming-card.js";
@@ -517,6 +518,37 @@ describe("mergeStreamingText", () => {
       "revision_id: 552，一点变化都没有",
     );
     expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
+  });
+});
+
+describe("mergeFinalStreamingText", () => {
+  it("appends incremental final delta chunks (#91562)", () => {
+    expect(["你", "好", "啊"].reduce((acc, chunk) => mergeFinalStreamingText(acc, chunk), "")).toBe(
+      "你好啊",
+    );
+    expect(mergeFinalStreamingText("你好", "啊")).toBe("你好啊");
+  });
+
+  it("keeps the accumulated buffer when a trailing final restates a fragment", () => {
+    expect(mergeFinalStreamingText("你好啊", "啊")).toBe("你好啊");
+    expect(mergeFinalStreamingText("hello world", "world")).toBe("hello world");
+  });
+
+  it("prefers a cumulative final that extends the buffer", () => {
+    expect(mergeFinalStreamingText("你好", "你好啊")).toBe("你好啊");
+    expect(mergeFinalStreamingText("hello", "hello world")).toBe("hello world");
+  });
+
+  it("replaces the buffer with a complete re-rendered final", () => {
+    expect(
+      mergeFinalStreamingText("```md\n完整回复第一段\n```", "```md\n完整回复第一段 + 第二段\n```"),
+    ).toBe("```md\n完整回复第一段 + 第二段\n```");
+  });
+
+  it("treats empty inputs as no-ops", () => {
+    expect(mergeFinalStreamingText("你好", "")).toBe("你好");
+    expect(mergeFinalStreamingText("", "你好")).toBe("你好");
+    expect(mergeFinalStreamingText(undefined, undefined)).toBe("");
   });
 });
 
