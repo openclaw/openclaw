@@ -1,7 +1,6 @@
 import type { RouteId } from "../app-routes.ts";
-import { cancelActiveRouteTransition } from "../app/active-route.ts";
-import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
-import { appRouter } from "../router/index.ts";
+import { cancelActiveRouteTransition, enterInitialActiveRoute } from "../app/active-route.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {
@@ -124,12 +123,7 @@ export function handleConnected(host: LifecycleHost) {
   if (host.routeId === "nodes") {
     startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   }
-  void Promise.resolve(
-    appRouter.getRoute(host.routeId)?.onEnter?.({
-      host: host as unknown as SettingsHost,
-      app: host as unknown as SettingsAppHost,
-    }),
-  ).catch(() => undefined);
+  enterInitialActiveRoute(host as unknown as SettingsHost);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
     host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],
   );

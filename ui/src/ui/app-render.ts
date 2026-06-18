@@ -4,6 +4,7 @@ import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { isSettingsNavigationRoute, SIDEBAR_SECTIONS } from "../app-navigation.ts";
 import {
+  appRouter,
   normalizeBasePath,
   pathForRoute,
   subtitleForRoute,
@@ -14,7 +15,6 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-
 import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { appRouter } from "../router/index.ts";
 import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,

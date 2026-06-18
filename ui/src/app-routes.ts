@@ -1,9 +1,22 @@
+import type { SettingsAppHost, SettingsHost } from "./app/app-host.ts";
 // Control UI app routes define URL identity and route-owned page modules.
 import { t } from "./i18n/index.ts";
+import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router/router.ts";
 import type { PageModule, RouteRecord } from "./router/types.ts";
-import { normalizeLowercaseStringOrEmpty } from "./ui/string-coerce.ts";
+import type { AppViewState } from "./ui/app-view-state.ts";
 
-type AppPageModule = PageModule<never, never>;
+export type RouteLoadContext = {
+  host: SettingsHost;
+  app: SettingsAppHost;
+  signal: AbortSignal;
+};
+
+export type RouteRenderContext = {
+  state: AppViewState;
+  invalidate: () => void;
+};
+
+type AppPageModule = PageModule<RouteLoadContext, RouteRenderContext>;
 
 type AppRouteDefinition = {
   path: string;
@@ -72,14 +85,24 @@ type AppRouteEntry = [RouteId, (typeof APP_ROUTES)[RouteId]];
 
 const ROUTE_ENTRIES = Object.entries(APP_ROUTES) as AppRouteEntry[];
 
-export const APP_ROUTE_RECORDS: readonly RouteRecord<RouteId, never, never>[] = ROUTE_ENTRIES.map(
-  ([id, route]) => ({
-    id,
-    path: route.path,
-    parent: route.parent,
-    page: route.page,
-  }),
-);
+export const APP_ROUTE_RECORDS: readonly RouteRecord<
+  RouteId,
+  RouteLoadContext,
+  RouteRenderContext
+>[] = ROUTE_ENTRIES.map(([id, route]) => ({
+  id,
+  path: route.path,
+  aliases: route.aliases,
+  parent: route.parent,
+  page: route.page,
+}));
+
+export const appRouter = createRouter({
+  routes: APP_ROUTE_RECORDS,
+  defaultRouteId: "chat",
+});
+
+export type AppRoute = NonNullable<ReturnType<typeof appRouter.getRoute>>;
 
 export function getRouteRecord(routeId: RouteId): (typeof APP_ROUTES)[RouteId] {
   return APP_ROUTES[routeId];
@@ -93,90 +116,24 @@ export function childRoutesOf(parent: RouteId): RouteId[] {
   return ROUTE_ENTRIES.filter(([, route]) => route.parent === parent).map(([routeId]) => routeId);
 }
 
-const PATH_TO_ROUTE = new Map<string, RouteId>(
-  ROUTE_ENTRIES.flatMap(([routeId, route]) => [
-    [route.path, routeId] as const,
-    ...(route.aliases ?? []).map((path) => [path, routeId] as const),
-  ]),
-);
-
 export function normalizeBasePath(basePath: string): string {
-  if (!basePath) {
-    return "";
-  }
-  let base = basePath.trim();
-  if (!base.startsWith("/")) {
-    base = `/${base}`;
-  }
-  if (base === "/") {
-    return "";
-  }
-  if (base.endsWith("/")) {
-    base = base.slice(0, -1);
-  }
-  return base;
+  return normalizeRouteBasePath(basePath);
 }
 
 export function normalizePath(path: string): string {
-  if (!path) {
-    return "/";
-  }
-  let normalized = path.trim();
-  if (!normalized.startsWith("/")) {
-    normalized = `/${normalized}`;
-  }
-  if (normalized.length > 1 && normalized.endsWith("/")) {
-    normalized = normalized.slice(0, -1);
-  }
-  return normalized;
+  return normalizeRoutePath(path);
 }
 
 export function pathForRoute(routeId: RouteId, basePath = ""): string {
-  const base = normalizeBasePath(basePath);
-  const path = APP_ROUTES[routeId].path;
-  return base ? `${base}${path}` : path;
+  return appRouter.pathForRoute(routeId, basePath);
 }
 
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
-  const base = normalizeBasePath(basePath);
-  let path = pathname || "/";
-  if (base) {
-    if (path === base) {
-      path = "/";
-    } else if (path.startsWith(`${base}/`)) {
-      path = path.slice(base.length);
-    }
-  }
-  let normalized = normalizeLowercaseStringOrEmpty(normalizePath(path));
-  if (normalized.endsWith("/index.html")) {
-    normalized = "/";
-  }
-  if (normalized === "/") {
-    return "chat";
-  }
-  return PATH_TO_ROUTE.get(normalized) ?? null;
+  return appRouter.routeIdFromPath(pathname, basePath);
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
-  let normalized = normalizePath(pathname);
-  if (normalized.endsWith("/index.html")) {
-    normalized = normalizePath(normalized.slice(0, -"/index.html".length));
-  }
-  if (normalized === "/") {
-    return "";
-  }
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return "";
-  }
-  for (let i = 0; i < segments.length; i++) {
-    const candidate = normalizeLowercaseStringOrEmpty(`/${segments.slice(i).join("/")}`);
-    if (PATH_TO_ROUTE.has(candidate)) {
-      const prefix = segments.slice(0, i);
-      return prefix.length ? `/${prefix.join("/")}` : "";
-    }
-  }
-  return `/${segments.join("/")}`;
+  return appRouter.inferBasePathFromPathname(pathname);
 }
 
 export function titleForRoute(routeId: RouteId) {

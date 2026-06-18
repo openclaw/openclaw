@@ -1,5 +1,5 @@
 import { createLazyView, renderLazyView, type LazyView } from "../ui/lazy-view.ts";
-import type { PageModule } from "./types.ts";
+import type { PageModule, RouteHookOptions } from "./types.ts";
 
 type InvalidateContext = {
   invalidate: () => void;
@@ -43,9 +43,18 @@ export function lazyPageModule<TLoadContext, TRenderContext extends InvalidateCo
     return promise;
   };
   return {
-    onEnter: async (context: TLoadContext) => (await load()).page.onEnter?.(context),
-    load: async (context: TLoadContext) => (await load()).page.load?.(context),
-    onLeave: async (context: TLoadContext) => (await load()).page.onLeave?.(context),
+    onEnter: async (context: TLoadContext, options: RouteHookOptions) => {
+      const module = await load();
+      return options.shouldRun() ? module.page.onEnter?.(context, options) : undefined;
+    },
+    load: async (context: TLoadContext, options: RouteHookOptions) => {
+      const module = await load();
+      return options.shouldRun() ? module.page.load?.(context, options) : undefined;
+    },
+    onLeave: async (context: TLoadContext, options: RouteHookOptions) => {
+      const module = await load();
+      return options.shouldRun() ? module.page.onLeave?.(context, options) : undefined;
+    },
     render: lazyPage<PageModule<TLoadContext, TRenderContext>, TRenderContext>(
       load,
       (module, context) => module.page.render(context),

@@ -6,13 +6,13 @@ const {
   applySettingsFromUrlMock,
   connectGatewayMock,
   loadBootstrapMock,
-  routeEnterMock,
+  enterInitialActiveRouteMock,
   restoreComposerMock,
 } = vi.hoisted(() => ({
   applySettingsFromUrlMock: vi.fn(),
   connectGatewayMock: vi.fn(),
   loadBootstrapMock: vi.fn(),
-  routeEnterMock: vi.fn(),
+  enterInitialActiveRouteMock: vi.fn(),
   restoreComposerMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
 }));
 
@@ -20,12 +20,9 @@ vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
 }));
 
-vi.mock("../router/index.ts", () => ({
-  appRouter: {
-    getRoute: vi.fn((routeId: string) =>
-      routeId === "logs" || routeId === "debug" ? { onEnter: routeEnterMock } : null,
-    ),
-  },
+vi.mock("../app/active-route.ts", () => ({
+  cancelActiveRouteTransition: vi.fn(),
+  enterInitialActiveRoute: enterInitialActiveRouteMock,
 }));
 
 vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
@@ -118,7 +115,7 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
-    routeEnterMock.mockReset();
+    enterInitialActiveRouteMock.mockReset();
     restoreComposerMock.mockReset();
     restoreComposerMock.mockReturnValue(false);
     startNodesPollingMock.mockReset();
@@ -219,20 +216,18 @@ describe("handleConnected", () => {
 
     handleConnected(chatHost as never);
     expect(startNodesPollingMock).not.toHaveBeenCalled();
-    expect(routeEnterMock).not.toHaveBeenCalled();
+    expect(enterInitialActiveRouteMock).toHaveBeenCalledWith(chatHost);
 
     const nodesHost = createHost();
     nodesHost.routeId = "nodes";
     handleConnected(nodesHost as never);
     expect(startNodesPollingMock).toHaveBeenCalledWith(nodesHost);
+    expect(enterInitialActiveRouteMock).toHaveBeenCalledWith(nodesHost);
 
     const logsHost = createHost();
     logsHost.routeId = "logs";
     handleConnected(logsHost as never);
-    expect(routeEnterMock).toHaveBeenCalledWith({
-      host: logsHost,
-      app: logsHost,
-    });
+    expect(enterInitialActiveRouteMock).toHaveBeenCalledWith(logsHost);
   });
 
   it("keeps realtime Talk turns pinned in the chat flow", () => {
