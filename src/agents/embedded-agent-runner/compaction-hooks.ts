@@ -131,6 +131,9 @@ type CompactionHookRunner = {
       tokenCount?: number;
       compactedCount: number;
       sessionFile: string;
+      /** True when the compaction decided there was nothing to compact.
+       *  Observers can distinguish "did nothing" from a real compaction. */
+      compactWasNoOp?: boolean;
     },
     context: {
       sessionId: string;

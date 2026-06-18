@@ -522,7 +522,6 @@ export async function compactEmbeddedAgentSession(
         }
         if (
           result.ok &&
-          result.compacted &&
           hookRunner?.hasHooks?.("after_compaction") &&
           hookRunner.runAfterCompaction
         ) {
@@ -533,10 +532,11 @@ export async function compactEmbeddedAgentSession(
             };
             await hookRunner.runAfterCompaction(
               {
-                messageCount: -1,
-                compactedCount: -1,
+                messageCount: result.compacted ? -1 : (result.result?.messageCount ?? -1),
+                compactedCount: result.compacted ? -1 : 0,
                 tokenCount: result.result?.tokensAfter,
                 sessionFile: postCompactionSessionFile,
+                compactWasNoOp: !result.compacted,
               },
               afterHookCtx,
             );
