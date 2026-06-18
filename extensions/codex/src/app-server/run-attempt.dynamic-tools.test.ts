@@ -71,12 +71,10 @@ setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
   it("preserves model order across queued native and dynamic tools", async () => {
-    let rejectSlowTool!: (error: Error) => void;
-    const slowToolResult = new Promise<never>((_resolve, reject) => {
-      rejectSlowTool = reject;
-    });
     const slowTool = createRuntimeDynamicTool("slow_failure");
-    slowTool.execute = vi.fn(() => slowToolResult);
+    slowTool.execute = vi.fn(async () => {
+      throw new Error("slow failure");
+    });
     const laterTool = createTerminalPresentationContractTool({
       name: "fast_summary",
       result: textToolResult("fast result"),
@@ -177,18 +175,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       },
     });
     await rawWebSearch;
-    const slowCall = harness.handleServerRequest({
-      id: "request-slow",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-slow",
-        namespace: null,
-        tool: "slow_failure",
-        arguments: {},
-      },
-    });
     const nativeItem = {
       type: "commandExecution",
       id: "command-before-dynamic",
@@ -228,8 +214,18 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       method: "item/completed",
       params: { threadId: "thread-1", turnId: "turn-1", item: webSearchItem },
     });
-    rejectSlowTool(new Error("slow failure"));
-    await slowCall;
+    await harness.handleServerRequest({
+      id: "request-slow",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-slow",
+        namespace: null,
+        tool: "slow_failure",
+        arguments: {},
+      },
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
