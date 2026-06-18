@@ -1489,6 +1489,41 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("passes configured streaming footer options to streaming cards", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        footer: {
+          elapsed: true,
+          status: true,
+        },
+      },
+    });
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expectStreamingStartOptions(0, {
+      footer: {
+        elapsed: true,
+        status: true,
+      },
+      note: "Agent: agent",
+    });
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```ts\nconst x = 1\n```", {
+      footerStatus: "completed",
+      note: "Agent: agent",
+    });
+  });
+
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),

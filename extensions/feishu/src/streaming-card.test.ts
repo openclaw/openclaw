@@ -20,6 +20,12 @@ type StreamingSessionState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  hasFooter?: boolean;
+  footer?: {
+    elapsed?: boolean;
+    status?: boolean;
+  };
+  startedAtMs?: number;
 };
 
 function setStreamingSessionInternals(
@@ -151,6 +157,99 @@ describe("FeishuStreamingSession", () => {
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client };
   }
+
+  it("renders configured status and elapsed footers on streaming cards", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-16T12:00:00.000Z"));
+    const createBodies: string[] = [];
+    const footerBodies: string[] = [];
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url, init }: { url: string; init?: { body?: string } }) => {
+        if (url.includes("/auth/")) {
+          return {
+            response: {
+              ok: true,
+              json: async () => ({
+                code: 0,
+                msg: "ok",
+                tenant_access_token: "token",
+                expire: 7200,
+              }),
+            },
+            release,
+          };
+        }
+        if (url.endsWith("/cardkit/v1/cards")) {
+          createBodies.push(init?.body ?? "");
+          return {
+            response: {
+              ok: true,
+              json: async () => ({ code: 0, msg: "ok", data: { card_id: "card_footer" } }),
+            },
+            release,
+          };
+        }
+        if (url.includes("/elements/footer/content")) {
+          footerBodies.push(init?.body ?? "");
+        }
+        return {
+          response: {
+            ok: true,
+            json: async () => ({ code: 0, msg: "ok" }),
+          },
+          release,
+        };
+      },
+    );
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_footer" } })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+
+    const session = new FeishuStreamingSession(client, {
+      appId: "app_footer",
+      appSecret: "secret",
+    });
+
+    await session.start("chat_id", "chat_id", {
+      footer: {
+        elapsed: true,
+        status: true,
+      },
+      note: "Agent: agent",
+    });
+    vi.setSystemTime(new Date("2026-06-16T12:00:01.250Z"));
+    await session.close("final answer", { footerStatus: "completed" });
+
+    const createPayload = JSON.parse(createBodies[0] ?? "{}") as { data?: string };
+    const cardJson = JSON.parse(createPayload.data ?? "{}") as {
+      body?: { elements?: unknown[] };
+    };
+    expect(cardJson.body?.elements).toEqual([
+      { tag: "markdown", content: "", element_id: "content" },
+      { tag: "hr" },
+      {
+        tag: "markdown",
+        content: "<font color='grey'>Agent: agent</font>",
+        element_id: "note",
+      },
+      {
+        tag: "markdown",
+        content: "<font color='grey'>生成中</font>",
+        element_id: "footer",
+      },
+    ]);
+    expect(footerBodies).toHaveLength(1);
+    expect(JSON.parse(footerBodies[0] ?? "{}")).toEqual({
+      content: "<font color='grey'>已完成 | 耗时 1.3s</font>",
+      sequence: 3,
+      uuid: "f_card_footer_3",
+    });
+  });
 
   it("flushes throttled pending text after the throttle window", async () => {
     vi.useFakeTimers();

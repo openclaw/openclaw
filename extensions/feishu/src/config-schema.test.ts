@@ -221,6 +221,32 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.accounts?.main?.blockStreaming).toBe(false);
   });
 
+  it("accepts top-level and account-level streaming footer options", () => {
+    const result = FeishuConfigSchema.parse({
+      footer: {
+        elapsed: true,
+        status: true,
+      },
+      accounts: {
+        main: {
+          footer: {
+            elapsed: false,
+            status: true,
+          },
+        },
+      },
+    });
+
+    expect(result.footer).toEqual({
+      elapsed: true,
+      status: true,
+    });
+    expect(result.accounts?.main?.footer).toEqual({
+      elapsed: false,
+      status: true,
+    });
+  });
+
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {

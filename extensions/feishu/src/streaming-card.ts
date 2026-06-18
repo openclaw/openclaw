@@ -22,7 +22,17 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  hasFooter: boolean;
+  footer?: StreamingFooterConfig;
+  startedAtMs: number;
 };
+
+export type StreamingFooterConfig = {
+  elapsed?: boolean;
+  status?: boolean;
+};
+
+export type StreamingFooterStatus = "running" | "completed" | "error" | "stopped";
 
 /** Options for customising the initial streaming card appearance. */
 type StreamingCardOptions = {
@@ -30,6 +40,8 @@ type StreamingCardOptions = {
   header?: CardHeaderConfig;
   /** Optional grey note footer text. */
   note?: string;
+  /** Optional grey status/elapsed footer. */
+  footer?: StreamingFooterConfig;
 };
 
 /** Optional header for streaming cards (title bar with color template) */
@@ -49,6 +61,12 @@ type StreamingStartOptions = {
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
+const STREAMING_FOOTER_STATUS_LABELS: Record<StreamingFooterStatus, string> = {
+  running: "生成中",
+  completed: "已完成",
+  error: "出错",
+  stopped: "已停止",
+};
 
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -141,6 +159,37 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+function hasStreamingFooter(
+  footer: StreamingFooterConfig | undefined,
+): footer is StreamingFooterConfig {
+  return footer?.elapsed === true || footer?.status === true;
+}
+
+function formatStreamingElapsedMs(startedAtMs: number, nowMs: number): string {
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  return `${(elapsedMs / 1000).toFixed(1)}s`;
+}
+
+function formatStreamingFooterText(
+  footer: StreamingFooterConfig,
+  status: StreamingFooterStatus,
+  startedAtMs: number,
+  nowMs = Date.now(),
+): string {
+  const parts: string[] = [];
+  if (footer.status) {
+    parts.push(STREAMING_FOOTER_STATUS_LABELS[status]);
+  }
+  if (footer.elapsed && status !== "running") {
+    parts.push(`耗时 ${formatStreamingElapsedMs(startedAtMs, nowMs)}`);
+  }
+  return parts.join(" | ");
+}
+
+function formatGreyFooter(text: string): string {
+  return `<font color='grey'>${text}</font>`;
+}
+
 function hasNaturalStreamingBoundary(text: string): boolean {
   return /[\n。！？!?；;：:]$/.test(text);
 }
@@ -230,15 +279,26 @@ export class FeishuStreamingSession {
     }
 
     const apiBase = resolveApiBase(this.creds.domain);
+    const startedAtMs = Date.now();
+    const footer = hasStreamingFooter(options?.footer) ? options.footer : undefined;
     const elements: Record<string, unknown>[] = [
       { tag: "markdown", content: "", element_id: "content" },
     ];
-    if (options?.note) {
+    if (options?.note || footer) {
       elements.push({ tag: "hr" });
+    }
+    if (options?.note) {
       elements.push({
         tag: "markdown",
-        content: `<font color='grey'>${options.note}</font>`,
+        content: formatGreyFooter(options.note),
         element_id: "note",
+      });
+    }
+    if (footer) {
+      elements.push({
+        tag: "markdown",
+        content: formatGreyFooter(formatStreamingFooterText(footer, "running", startedAtMs)),
+        element_id: "footer",
       });
     }
     const cardJson: Record<string, unknown> = {
@@ -346,6 +406,9 @@ export class FeishuStreamingSession {
       currentText: "",
       sentText: "",
       hasNote: Boolean(options?.note),
+      hasFooter: Boolean(footer),
+      ...(footer ? { footer } : {}),
+      startedAtMs,
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
@@ -511,7 +574,7 @@ export class FeishuStreamingSession {
           "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
-          content: `<font color='grey'>${note}</font>`,
+          content: formatGreyFooter(note),
           sequence: this.state.sequence,
           uuid: `n_${this.state.cardId}_${this.state.sequence}`,
         }),
@@ -525,7 +588,41 @@ export class FeishuStreamingSession {
       .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
+  private async updateFooterContent(status: StreamingFooterStatus): Promise<void> {
+    if (!this.state || !this.state.hasFooter || !this.state.footer) {
+      return;
+    }
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    const footerText = formatStreamingFooterText(this.state.footer, status, this.state.startedAtMs);
+    await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/footer/content`,
+      init: {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+          "User-Agent": getFeishuUserAgent(),
+        },
+        body: JSON.stringify({
+          content: formatGreyFooter(footerText),
+          sequence: this.state.sequence,
+          uuid: `f_${this.state.cardId}_${this.state.sequence}`,
+        }),
+      },
+      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+      auditContext: "feishu.streaming-card.footer-update",
+    })
+      .then(async ({ release }) => {
+        await release();
+      })
+      .catch((e: unknown) => this.log?.(`Footer update failed: ${String(e)}`));
+  }
+
+  async close(
+    finalText?: string,
+    options?: { note?: string; footerStatus?: Exclude<StreamingFooterStatus, "running"> },
+  ): Promise<boolean> {
     if (!this.state || this.closed) {
       return false;
     }
@@ -556,6 +653,9 @@ export class FeishuStreamingSession {
     // Update note with final model/provider info
     if (options?.note) {
       await this.updateNoteContent(options.note);
+    }
+    if (this.state.hasFooter) {
+      await this.updateFooterContent(options?.footerStatus ?? "completed");
     }
 
     // Close streaming mode

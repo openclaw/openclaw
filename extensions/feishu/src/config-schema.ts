@@ -71,6 +71,14 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 const StreamingModeSchema = z.boolean().optional();
 const BlockStreamingSchema = z.boolean().optional();
 
+const FooterSchema = z
+  .object({
+    elapsed: z.boolean().optional(),
+    status: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const BlockStreamingCoalesceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -199,6 +207,7 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
+  footer: FooterSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,

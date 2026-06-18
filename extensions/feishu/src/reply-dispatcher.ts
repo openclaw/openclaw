@@ -25,7 +25,12 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
-import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+import {
+  FeishuStreamingSession,
+  mergeStreamingText,
+  type StreamingFooterConfig,
+  type StreamingFooterStatus,
+} from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -112,6 +117,16 @@ function resolveCardNote(
     parts.push(`Provider: ${prefixCtx.provider}`);
   }
   return parts.join(" | ");
+}
+
+function resolveStreamingFooterConfig(config: {
+  footer?: StreamingFooterConfig;
+}): StreamingFooterConfig | undefined {
+  const footer = config.footer;
+  if (footer?.elapsed !== true && footer?.status !== true) {
+    return undefined;
+  }
+  return footer;
 }
 
 type CreateFeishuReplyDispatcherParams = {
@@ -241,6 +256,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
   const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
+  const streamingFooter = resolveStreamingFooterConfig(account.config);
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -378,6 +394,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           rootId,
           header: cardHeader,
           note: cardNote,
+          ...(streamingFooter ? { footer: streamingFooter } : {}),
         });
         streamingStartBackoffUntilByAccount.delete(account.accountId);
       } catch (error) {
@@ -405,7 +422,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     lastSnapshotTextLength = 0;
   };
 
-  const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
+  const closeStreaming = async (options?: {
+    markClosedForReply?: boolean;
+    footerStatus?: Exclude<StreamingFooterStatus, "running">;
+  }) => {
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -415,7 +435,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(text, { note: finalNote });
+        const contentVisible = await streaming.close(text, {
+          note: finalNote,
+          ...(streamingFooter ? { footerStatus: options?.footerStatus ?? "completed" } : {}),
+        });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
@@ -582,7 +605,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return true;
   };
 
-  const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
+  const queueIdleSideEffects = (options?: {
+    markClosedForReply?: boolean;
+    footerStatus?: Exclude<StreamingFooterStatus, "running">;
+  }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
       await closeStreaming(options);
       typingCallbacks?.onIdle?.();
@@ -777,7 +803,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await queueIdleSideEffects({ markClosedForReply: false });
+        await queueIdleSideEffects({ markClosedForReply: false, footerStatus: "error" });
       },
       onIdle: () => queueIdleSideEffects(),
       onCleanup: () => {

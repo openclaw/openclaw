@@ -171,6 +171,14 @@
           },
           "streaming": { "type": "boolean" },
           "blockStreaming": { "type": "boolean" },
+          "footer": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "elapsed": { "type": "boolean" },
+              "status": { "type": "boolean" }
+            }
+          },
           "replyInThread": {
             "type": "string",
             "enum": ["disabled", "enabled"]
@@ -208,6 +216,14 @@
       },
       "streaming": { "type": "boolean" },
       "blockStreaming": { "type": "boolean" },
+      "footer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "elapsed": { "type": "boolean" },
+          "status": { "type": "boolean" }
+        }
+      },
       "replyInThread": {
         "type": "string",
         "enum": ["disabled", "enabled"]
