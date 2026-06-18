@@ -24,6 +24,10 @@ function validateSchema(manifest: AgentPackageManifest): string[] {
 
   // Validate policy fields
   if (manifest.policy) {
+    const validScopes = ["package", "global"];
+    if (manifest.policy.scope && !validScopes.includes(manifest.policy.scope)) {
+      errors.push(`policy.scope must be one of: ${validScopes.join(", ")}`);
+    }
     const validUpgrades = ["preserve-custom", "reset", "prompt"];
     if (manifest.policy.onUpgrade && !validUpgrades.includes(manifest.policy.onUpgrade)) {
       errors.push(`policy.onUpgrade must be one of: ${validUpgrades.join(", ")}`);

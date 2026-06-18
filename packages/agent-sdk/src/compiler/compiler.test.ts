@@ -26,7 +26,7 @@ describe("compileManifest", () => {
           policy: { maxTokensPerTurn: 50000 },
         }),
       );
-      expect(diff.changes["agents.defaults.maxTokensPerTurn"]).toBe(50000);
+      expect(diff.changes["agentPackages.packages.test-agent.policy.maxTokensPerTurn"]).toBe(50000);
     });
 
     it("maps allowedModels", () => {
@@ -35,10 +35,20 @@ describe("compileManifest", () => {
           policy: { allowedModels: ["openai/gpt-5.5", "google/gemini-3.1-pro-preview"] },
         }),
       );
-      expect(diff.changes["agents.defaults.allowedModels"]).toEqual([
+      expect(diff.changes["agentPackages.packages.test-agent.policy.allowedModels"]).toEqual([
         "openai/gpt-5.5",
         "google/gemini-3.1-pro-preview",
       ]);
+    });
+
+    it("maps explicit global policy to agent defaults", () => {
+      const diff = compileManifest(
+        baseManifest({
+          policy: { scope: "global", maxTokensPerTurn: 50000 },
+        }),
+      );
+      expect(diff.changes["agents.defaults.maxTokensPerTurn"]).toBe(50000);
+      expect(diff.changes["agentPackages.packages.test-agent.policy.maxTokensPerTurn"]).toBeUndefined();
     });
 
     it("maps denyMutableInstructionFiles", () => {
@@ -47,7 +57,7 @@ describe("compileManifest", () => {
           policy: { denyMutableInstructionFiles: true },
         }),
       );
-      expect(diff.changes["agentPackages.policy.denyMutableInstructionFiles"]).toBe(true);
+      expect(diff.changes["agentPackages.packages.test-agent.policy.denyMutableInstructionFiles"]).toBe(true);
     });
 
     it("rejects onUpgrade in strict mode", () => {
@@ -79,7 +89,17 @@ describe("compileManifest", () => {
           tools: { allow: ["exec", "read", "write"] },
         }),
       );
-      expect(diff.changes["agents.defaults.tools.allow"]).toEqual(["exec", "read", "write"]);
+      expect(diff.changes["agentPackages.packages.test-agent.tools.allow"]).toEqual(["exec", "read", "write"]);
+    });
+
+    it("maps explicit global tools to agent defaults", () => {
+      const diff = compileManifest(
+        baseManifest({
+          policy: { scope: "global" },
+          tools: { allow: ["exec"] },
+        }),
+      );
+      expect(diff.changes["agents.defaults.tools.allow"]).toEqual(["exec"]);
     });
 
     it("maps deny list", () => {
@@ -88,7 +108,7 @@ describe("compileManifest", () => {
           tools: { deny: ["browser"] },
         }),
       );
-      expect(diff.changes["agents.defaults.tools.deny"]).toEqual(["browser"]);
+      expect(diff.changes["agentPackages.packages.test-agent.tools.deny"]).toEqual(["browser"]);
     });
 
     it("rejects sandbox.mode in strict mode", () => {
@@ -109,7 +129,7 @@ describe("compileManifest", () => {
           tools: { sandbox: { network: { egress: "restricted" } } },
         }),
       );
-      expect(diff.changes["agents.defaults.sandbox.network.egress"]).toBe("restricted");
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.network.egress"]).toBe("restricted");
     });
 
     it("maps allowedDomains", () => {
@@ -118,7 +138,7 @@ describe("compileManifest", () => {
           tools: { sandbox: { network: { allowedDomains: ["api.example.com"] } } },
         }),
       );
-      expect(diff.changes["agents.defaults.sandbox.network.allowedDomains"]).toEqual([
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.network.allowedDomains"]).toEqual([
         "api.example.com",
       ]);
     });
@@ -129,7 +149,7 @@ describe("compileManifest", () => {
           tools: { sandbox: { network: { deniedDomains: ["*.evil.com"] } } },
         }),
       );
-      expect(diff.changes["agents.defaults.sandbox.network.deniedDomains"]).toEqual(["*.evil.com"]);
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.network.deniedDomains"]).toEqual(["*.evil.com"]);
     });
 
     it("maps dnsRebindingCheck", () => {
@@ -138,7 +158,7 @@ describe("compileManifest", () => {
           tools: { sandbox: { network: { dnsRebindingCheck: true } } },
         }),
       );
-      expect(diff.changes["agents.defaults.sandbox.network.dnsRebindingCheck"]).toBe(true);
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.network.dnsRebindingCheck"]).toBe(true);
     });
 
     it("maps denyPrivateRanges", () => {
@@ -147,7 +167,7 @@ describe("compileManifest", () => {
           tools: { sandbox: { network: { denyPrivateRanges: false } } },
         }),
       );
-      expect(diff.changes["agents.defaults.sandbox.network.denyPrivateRanges"]).toBe(false);
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.network.denyPrivateRanges"]).toBe(false);
     });
 
     it("maps all network fields together", () => {
@@ -168,11 +188,11 @@ describe("compileManifest", () => {
       );
       expect(diff.changes).toEqual(
         expect.objectContaining({
-          "agents.defaults.sandbox.network.egress": "restricted",
-          "agents.defaults.sandbox.network.allowedDomains": ["api.example.com"],
-          "agents.defaults.sandbox.network.deniedDomains": ["*.evil.com"],
-          "agents.defaults.sandbox.network.dnsRebindingCheck": true,
-          "agents.defaults.sandbox.network.denyPrivateRanges": true,
+          "agentPackages.packages.test-agent.sandbox.network.egress": "restricted",
+          "agentPackages.packages.test-agent.sandbox.network.allowedDomains": ["api.example.com"],
+          "agentPackages.packages.test-agent.sandbox.network.deniedDomains": ["*.evil.com"],
+          "agentPackages.packages.test-agent.sandbox.network.dnsRebindingCheck": true,
+          "agentPackages.packages.test-agent.sandbox.network.denyPrivateRanges": true,
         }),
       );
     });
@@ -193,11 +213,11 @@ describe("compileManifest", () => {
           },
         }),
       );
-      expect(diff.changes["agents.defaults.sandbox.filesystem.readPaths"]).toEqual(["workspace"]);
-      expect(diff.changes["agents.defaults.sandbox.filesystem.writePaths"]).toEqual([
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.filesystem.readPaths"]).toEqual(["workspace"]);
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.filesystem.writePaths"]).toEqual([
         "workspace/tmp",
       ]);
-      expect(diff.changes["agents.defaults.sandbox.filesystem.denyPaths"]).toEqual(["/etc"]);
+      expect(diff.changes["agentPackages.packages.test-agent.sandbox.filesystem.denyPaths"]).toEqual(["/etc"]);
     });
   });
 
@@ -263,6 +283,19 @@ describe("compileManifest", () => {
       );
       expect(diff.changes["secrets.audit.logAccess"]).toBe(true);
       expect(diff.changes["secrets.audit.redactInTranscripts"]).toBe(true);
+    });
+
+    it("skips gateway sources because they are not canonical SecretRefs", () => {
+      const diff = compileManifest(
+        baseManifest({
+          secrets: {
+            consumer: [{ name: "API_KEY", required: true }],
+            mapping: { API_KEY: { source: "gateway", ref: "secrets.apiKey" } },
+          },
+        }),
+      );
+      expect(diff.changes["secrets.mapping"]).toEqual({});
+      expect(diff.warnings.some((warning) => warning.includes("gateway secret source"))).toBe(true);
     });
   });
 
@@ -427,11 +460,11 @@ describe("compileManifest", () => {
       expect(diff.unsupported).toHaveLength(0);
       expect(diff.changes).toEqual(
         expect.objectContaining({
-          "agents.defaults.maxTokensPerTurn": 50000,
-          "agents.defaults.tools.allow": ["exec", "read", "write"],
-          "agents.defaults.tools.deny": ["browser"],
-          "agents.defaults.sandbox.network.egress": "restricted",
-          "agentPackages.policy.denyMutableInstructionFiles": true,
+          "agentPackages.packages.full-agent.policy.maxTokensPerTurn": 50000,
+          "agentPackages.packages.full-agent.tools.allow": ["exec", "read", "write"],
+          "agentPackages.packages.full-agent.tools.deny": ["browser"],
+          "agentPackages.packages.full-agent.sandbox.network.egress": "restricted",
+          "agentPackages.packages.full-agent.policy.denyMutableInstructionFiles": true,
         }),
       );
     });

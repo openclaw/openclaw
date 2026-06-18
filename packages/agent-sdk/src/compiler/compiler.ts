@@ -60,6 +60,7 @@ const KNOWN_PATHS = new Set([
   "agentPackages.enabled",
   "agentPackages.policy.denyMutableInstructionFiles",
   "agentPackages.policy.allowMutableUserInstructionFiles",
+  "agentPackages.packages",
   "agentPackages.registry",
   "agentPackages.upgradedAt",
   "agentPackages.previousVersion",
@@ -78,22 +79,36 @@ export function compileManifest(
   const removals: string[] = [];
   const unsupported: string[] = [];
   const warnings: string[] = [];
+  const packageBase = `agentPackages.packages.${manifest.name}`;
+  const policyScope = manifest.policy?.scope ?? "package";
+  const scopedPolicyPath = (field: string) =>
+    policyScope === "global" ? `agents.defaults.${field}` : `${packageBase}.policy.${field}`;
+  const scopedMutablePolicyPath = (field: string) =>
+    policyScope === "global" ? `agentPackages.policy.${field}` : `${packageBase}.policy.${field}`;
+  const scopedToolsBase = policyScope === "global" ? "agents.defaults.tools" : `${packageBase}.tools`;
+  const scopedSandboxBase =
+    policyScope === "global" ? "agents.defaults.sandbox" : `${packageBase}.sandbox`;
 
   // ── Policy ─────────────────────────────────────────────────────────
   if (manifest.policy) {
     const p = manifest.policy;
     if (p.maxTokensPerTurn !== undefined) {
-      changes["agents.defaults.maxTokensPerTurn"] = p.maxTokensPerTurn;
+      changes[scopedPolicyPath("maxTokensPerTurn")] = p.maxTokensPerTurn;
     }
     if (p.allowedModels !== undefined) {
-      changes["agents.defaults.allowedModels"] = p.allowedModels;
+      changes[scopedPolicyPath("allowedModels")] = p.allowedModels;
     }
     if (p.denyMutableInstructionFiles !== undefined) {
-      changes["agentPackages.policy.denyMutableInstructionFiles"] = p.denyMutableInstructionFiles;
+      changes[scopedMutablePolicyPath("denyMutableInstructionFiles")] =
+        p.denyMutableInstructionFiles;
     }
     if (p.allowMutableUserInstructionFiles !== undefined) {
-      changes["agentPackages.policy.allowMutableUserInstructionFiles"] =
+      changes[scopedMutablePolicyPath("allowMutableUserInstructionFiles")] =
         p.allowMutableUserInstructionFiles;
+    }
+    if (p.scope !== undefined && p.scope !== "package" && p.scope !== "global") {
+      if (strict) unsupported.push("policy.scope");
+      else warnings.push("policy.scope: must be package or global");
     }
     if (p.onUpgrade !== undefined) {
       if (strict) {
@@ -106,7 +121,7 @@ export function compileManifest(
 
   // ── Tools ──────────────────────────────────────────────────────────
   if (manifest.tools) {
-    compileTools(manifest.tools, changes, unsupported, warnings, strict);
+    compileTools(manifest.tools, scopedToolsBase, scopedSandboxBase, changes, unsupported, warnings, strict);
   }
 
   // ── Secrets ────────────────────────────────────────────────────────
@@ -138,16 +153,18 @@ export function compileManifest(
 
 function compileTools(
   tools: ToolsDeclaration,
+  toolsBase: string,
+  sandboxBase: string,
   changes: Record<string, unknown>,
   unsupported: string[],
   warnings: string[],
   strict: boolean,
 ): void {
   if (tools.allow !== undefined) {
-    changes["agents.defaults.tools.allow"] = tools.allow;
+    changes[`${toolsBase}.allow`] = tools.allow;
   }
   if (tools.deny !== undefined) {
-    changes["agents.defaults.tools.deny"] = tools.deny;
+    changes[`${toolsBase}.deny`] = tools.deny;
   }
   if (tools.sandbox) {
     const s = tools.sandbox;
@@ -160,41 +177,39 @@ function compileTools(
       else warnings.push("tools.sandbox.elevated: not yet supported");
     }
     if (s.network) {
-      compileNetworkPolicy(s.network, changes, unsupported, warnings, strict);
+      compileNetworkPolicy(s.network, `${sandboxBase}.network`, changes);
     }
     if (s.filesystem) {
       const fs = s.filesystem;
       if (fs.readPaths !== undefined)
-        changes["agents.defaults.sandbox.filesystem.readPaths"] = fs.readPaths;
+        changes[`${sandboxBase}.filesystem.readPaths`] = fs.readPaths;
       if (fs.writePaths !== undefined)
-        changes["agents.defaults.sandbox.filesystem.writePaths"] = fs.writePaths;
+        changes[`${sandboxBase}.filesystem.writePaths`] = fs.writePaths;
       if (fs.denyPaths !== undefined)
-        changes["agents.defaults.sandbox.filesystem.denyPaths"] = fs.denyPaths;
+        changes[`${sandboxBase}.filesystem.denyPaths`] = fs.denyPaths;
     }
   }
 }
 
 function compileNetworkPolicy(
   network: NetworkPolicy,
+  networkBase: string,
   changes: Record<string, unknown>,
-  unsupported: string[],
-  warnings: string[],
-  strict: boolean,
 ): void {
   if (network.egress !== undefined) {
-    changes["agents.defaults.sandbox.network.egress"] = network.egress;
+    changes[`${networkBase}.egress`] = network.egress;
   }
   if (network.allowedDomains !== undefined) {
-    changes["agents.defaults.sandbox.network.allowedDomains"] = network.allowedDomains;
+    changes[`${networkBase}.allowedDomains`] = network.allowedDomains;
   }
   if (network.deniedDomains !== undefined) {
-    changes["agents.defaults.sandbox.network.deniedDomains"] = network.deniedDomains;
+    changes[`${networkBase}.deniedDomains`] = network.deniedDomains;
   }
   if (network.dnsRebindingCheck !== undefined) {
-    changes["agents.defaults.sandbox.network.dnsRebindingCheck"] = network.dnsRebindingCheck;
+    changes[`${networkBase}.dnsRebindingCheck`] = network.dnsRebindingCheck;
   }
   if (network.denyPrivateRanges !== undefined) {
-    changes["agents.defaults.sandbox.network.denyPrivateRanges"] = network.denyPrivateRanges;
+    changes[`${networkBase}.denyPrivateRanges`] = network.denyPrivateRanges;
   }
 }
 
@@ -224,11 +239,9 @@ function compileSecrets(
         id: source.path,
       };
     } else if (source.source === "gateway") {
-      mapping[consumer.name] = {
-        source: "gateway",
-        provider: "default",
-        id: source.ref,
-      };
+      warnings.push(
+        `secrets.mapping.${consumer.name}: gateway secret source cannot be compiled to canonical SecretRef; skipped`,
+      );
     }
   }
   changes["secrets.mapping"] = mapping;

@@ -31,7 +31,7 @@ describe("computeUpgrade", () => {
     const next = manifest();
 
     const result = computeUpgrade(old, next);
-    expect(result.removed).toContain("agents.defaults.maxTokensPerTurn");
+    expect(result.removed).toContain("agentPackages.packages.test-agent.policy.maxTokensPerTurn");
   });
 
   it("detects changed fields", () => {
@@ -39,7 +39,7 @@ describe("computeUpgrade", () => {
     const next = manifest({ policy: { maxTokensPerTurn: 50000 } });
 
     const result = computeUpgrade(old, next, { onUpgrade: "reset" });
-    expect(result.reset).toContain("agents.defaults.maxTokensPerTurn");
+    expect(result.reset).toContain("agentPackages.packages.test-agent.policy.maxTokensPerTurn");
   });
 
   it("preserve-custom keeps old values", () => {
@@ -47,9 +47,9 @@ describe("computeUpgrade", () => {
     const next = manifest({ policy: { maxTokensPerTurn: 50000 } });
 
     const result = computeUpgrade(old, next, { onUpgrade: "preserve-custom" });
-    expect(result.preserved).toContain("agents.defaults.maxTokensPerTurn");
+    expect(result.preserved).toContain("agentPackages.packages.test-agent.policy.maxTokensPerTurn");
     // Old value should be in the diff (not the new value)
-    expect(result.diff.changes["agents.defaults.maxTokensPerTurn"]).toBeUndefined();
+    expect(result.diff.changes["agentPackages.packages.test-agent.policy.maxTokensPerTurn"]).toBeUndefined();
   });
 
   it("reset applies new values", () => {
@@ -57,8 +57,8 @@ describe("computeUpgrade", () => {
     const next = manifest({ policy: { maxTokensPerTurn: 50000 } });
 
     const result = computeUpgrade(old, next, { onUpgrade: "reset" });
-    expect(result.reset).toContain("agents.defaults.maxTokensPerTurn");
-    expect(result.diff.changes["agents.defaults.maxTokensPerTurn"]).toBe(50000);
+    expect(result.reset).toContain("agentPackages.packages.test-agent.policy.maxTokensPerTurn");
+    expect(result.diff.changes["agentPackages.packages.test-agent.policy.maxTokensPerTurn"]).toBe(50000);
   });
 
   it("includes upgrade metadata", () => {

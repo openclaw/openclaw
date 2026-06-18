@@ -135,6 +135,7 @@ export type SchedulePayload =
   | { kind: "systemEvent"; text: string };
 
 export interface PolicyDeclaration {
+  scope?: "package" | "global";
   denyMutableInstructionFiles?: boolean;
   allowMutableUserInstructionFiles?: boolean;
   onUpgrade?: "preserve-custom" | "reset" | "prompt";

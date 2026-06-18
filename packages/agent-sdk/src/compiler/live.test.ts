@@ -39,7 +39,7 @@ describe("applyConfigDiff", () => {
     const result = applyConfigDiff(diff, TMP);
     expect(result.success).toBe(true);
     const config = readConfig();
-    expect(config.agents.defaults.maxTokensPerTurn).toBe(50000);
+    expect(config.agentPackages.packages["test-agent"].policy.maxTokensPerTurn).toBe(50000);
   });
 
   it("merges with existing config", () => {
@@ -59,7 +59,7 @@ describe("applyConfigDiff", () => {
     applyConfigDiff(diff, TMP);
     const config = readConfig();
     expect(config.agents.defaults.model).toBe("openai/gpt-5.5");
-    expect(config.agents.defaults.maxTokensPerTurn).toBe(50000);
+    expect(config.agentPackages.packages["test-agent"].policy.maxTokensPerTurn).toBe(50000);
   });
 
   it("deep merges nested objects", () => {
@@ -67,8 +67,10 @@ describe("applyConfigDiff", () => {
       resolve(TMP, "agent-sdk-config.json"),
       JSON.stringify(
         {
-          agents: {
-            defaults: { sandbox: { network: { egress: "full", allowedDomains: ["example.com"] } } },
+          agentPackages: {
+            packages: {
+              "test-agent": { sandbox: { network: { egress: "full", allowedDomains: ["example.com"] } } },
+            },
           },
         },
         null,
@@ -84,8 +86,10 @@ describe("applyConfigDiff", () => {
     );
     applyConfigDiff(diff, TMP);
     const config = readConfig();
-    expect(config.agents.defaults.sandbox.network.egress).toBe("restricted");
-    expect(config.agents.defaults.sandbox.network.allowedDomains).toEqual(["example.com"]);
+    expect(config.agentPackages.packages["test-agent"].sandbox.network.egress).toBe("restricted");
+    expect(config.agentPackages.packages["test-agent"].sandbox.network.allowedDomains).toEqual([
+      "example.com",
+    ]);
   });
 
   it("tracks applied keys", () => {
@@ -95,8 +99,8 @@ describe("applyConfigDiff", () => {
       }),
     );
     const result = applyConfigDiff(diff, TMP);
-    expect(result.applied).toContain("agents.defaults.maxTokensPerTurn");
-    expect(result.applied).toContain("agents.defaults.allowedModels");
+    expect(result.applied).toContain("agentPackages.packages.test-agent.policy.maxTokensPerTurn");
+    expect(result.applied).toContain("agentPackages.packages.test-agent.policy.allowedModels");
   });
 });
 
@@ -142,8 +146,8 @@ describe("enableWithLiveConfig", () => {
     const result = enableWithLiveConfig(manifest, TMP);
     expect(result.success).toBe(true);
     const config = readConfig();
-    expect(config.agents.defaults.maxTokensPerTurn).toBe(50000);
-    expect(config.agents.defaults.tools.allow).toEqual(["exec", "read"]);
+    expect(config.agentPackages.packages["test-agent"].policy.maxTokensPerTurn).toBe(50000);
+    expect(config.agentPackages.packages["test-agent"].tools.allow).toEqual(["exec", "read"]);
   });
 
   it("merges with existing package config", () => {
@@ -157,7 +161,8 @@ describe("enableWithLiveConfig", () => {
     );
     expect(result.success).toBe(true);
     const config = readConfig();
-    expect(config.agents.defaults.maxTokensPerTurn).toBe(50000);
+    expect(config.agentPackages.packages["agent-a"].policy.maxTokensPerTurn).toBe(30000);
+    expect(config.agentPackages.packages["agent-b"].policy.maxTokensPerTurn).toBe(50000);
   });
 
   it("accumulates agentPackages.enabled across enables", () => {
@@ -198,11 +203,11 @@ describe("enableWithLiveConfig", () => {
     const result = enableWithLiveConfig(manifest, TMP);
     expect(result.success).toBe(true);
     const config = readConfig();
-    expect(config.agents.defaults.maxTokensPerTurn).toBe(50000);
-    expect(config.agents.defaults.tools.allow).toEqual(["exec", "read"]);
-    expect(config.agents.defaults.tools.deny).toEqual(["browser"]);
-    expect(config.agents.defaults.sandbox.network.egress).toBe("restricted");
+    expect(config.agentPackages.packages["full-agent"].policy.maxTokensPerTurn).toBe(50000);
+    expect(config.agentPackages.packages["full-agent"].tools.allow).toEqual(["exec", "read"]);
+    expect(config.agentPackages.packages["full-agent"].tools.deny).toEqual(["browser"]);
+    expect(config.agentPackages.packages["full-agent"].sandbox.network.egress).toBe("restricted");
     expect(config.secrets.mapping).toBeDefined();
-    expect(config.agentPackages.policy.denyMutableInstructionFiles).toBe(true);
+    expect(config.agentPackages.packages["full-agent"].policy.denyMutableInstructionFiles).toBe(true);
   });
 });

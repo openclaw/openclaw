@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "algorithm": "sha256",
+  "package": {
+    "name": "test-agent",
+    "version": "1.0.0"
+  },
+  "files": {
+    "AGENTS.md": "sha256:770414715b3a0c2986852829970ed3f84bbc78f2ad3febbc91d69408a472657b",
+    "SOUL.md": "sha256:7572b8c6a536fde45f8e6f93236324cff64012387b62336d092f5ae7c0f9b75a",
+    "USER.md": "sha256:fb88279b7cefda7eb9ec1e8d9649633f7e52e613dd5cc287e9a4c115de09e970",
+    "HEARTBEAT.md": "sha256:c8d087a4bb27af0915a29db7ebb73ec5bc9371d9c4155abd1df88a3e779a4ba4"
+  },
+  "skills": {
+    "skills/my-skill/SKILL.md": "sha256:cfcf01a88f5d14857f43a6f5c69b4948658228ab3fc259bf20427769be753586"
+  },
+  "generatedAt": "2026-06-18T00:26:55.010Z"
+}
