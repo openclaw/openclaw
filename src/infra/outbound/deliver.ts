@@ -1631,6 +1631,33 @@ async function deliverOutboundPayloadsCore(
       let deliveryPayload = replyHookResult.payload;
       payloadSummary = buildPayloadSummary(deliveryPayload);
 
+      // Fire message:sending internal hook (fire-and-forget notification for
+      // user-defined hooks). The plugin hook (below) runs separately and can
+      // modify or cancel the message; this internal hook mirrors the
+      // message:sent pattern so user-defined hooks from hooks/ are notified.
+      if (sessionKeyForInternalHooks) {
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent(
+              "message",
+              "sending",
+              sessionKeyForInternalHooks,
+              {
+                to,
+                content: payloadSummary.hookContent ?? payloadSummary.text,
+                channelId: channel,
+                accountId: accountId ?? undefined,
+                conversationId: to,
+              },
+            ),
+          ),
+          "deliverOutboundPayloads: message:sending internal hook failed",
+          (message) => {
+            log.warn(message);
+          },
+        );
+      }
+
       // Run message_sending plugin hook (may modify content or cancel)
       const hookResult = await applyMessageSendingHook({
         hookRunner,

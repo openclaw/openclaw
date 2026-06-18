@@ -2660,39 +2660,31 @@ describe("deliverOutboundPayloads", () => {
     });
     expect(sendMatrix).toHaveBeenCalledTimes(2);
 
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const createHookCall = requireMockCall(
-      internalHookMocks.createInternalHookEvent,
-      "create internal hook event",
-    ) as
-      | [
-          unknown,
-          unknown,
-          unknown,
-          {
-            channelId?: unknown;
-            content?: unknown;
-            conversationId?: unknown;
-            groupId?: unknown;
-            isGroup?: unknown;
-            messageId?: unknown;
-            success?: unknown;
-            to?: unknown;
-          },
-        ]
-      | undefined;
-    expect(createHookCall?.[0]).toBe("message");
-    expect(createHookCall?.[1]).toBe("sent");
-    expect(createHookCall?.[2]).toBe("agent:main:main");
-    expect(createHookCall?.[3]?.to).toBe("!room:example");
-    expect(createHookCall?.[3]?.success).toBe(true);
-    expect(createHookCall?.[3]?.channelId).toBe("matrix");
-    expect(createHookCall?.[3]?.conversationId).toBe("!room:example");
-    expect(createHookCall?.[3]?.content).toBe("abcd");
-    expect(createHookCall?.[3]?.messageId).toBe("m2");
-    expect(createHookCall?.[3]?.isGroup).toBe(true);
-    expect(createHookCall?.[3]?.groupId).toBe("matrix:room:123");
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
+    const createHookCalls = internalHookMocks.createInternalHookEvent.mock.calls as Array<
+      [unknown, unknown, unknown, { channelId?: unknown; content?: unknown; conversationId?: unknown; groupId?: unknown; isGroup?: unknown; messageId?: unknown; success?: unknown; to?: unknown }]
+    >;
+    const sendingCall = createHookCalls[0];
+    expect(sendingCall?.[0]).toBe("message");
+    expect(sendingCall?.[1]).toBe("sending");
+    expect(sendingCall?.[2]).toBe("agent:main:main");
+    expect(sendingCall?.[3]?.to).toBe("!room:example");
+    expect(sendingCall?.[3]?.channelId).toBe("matrix");
+    expect(sendingCall?.[3]?.content).toBe("abcd");
+    // message:sent call
+    const sentCall = createHookCalls[1];
+    expect(sentCall?.[0]).toBe("message");
+    expect(sentCall?.[1]).toBe("sent");
+    expect(sentCall?.[2]).toBe("agent:main:main");
+    expect(sentCall?.[3]?.to).toBe("!room:example");
+    expect(sentCall?.[3]?.success).toBe(true);
+    expect(sentCall?.[3]?.channelId).toBe("matrix");
+    expect(sentCall?.[3]?.conversationId).toBe("!room:example");
+    expect(sentCall?.[3]?.content).toBe("abcd");
+    expect(sentCall?.[3]?.messageId).toBe("m2");
+    expect(sentCall?.[3]?.isGroup).toBe(true);
+    expect(sentCall?.[3]?.groupId).toBe("matrix:room:123");
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(2);
   });
 
   it("does not emit internal message:sent hook when neither mirror nor sessionKey is provided", async () => {
@@ -2705,35 +2697,29 @@ describe("deliverOutboundPayloads", () => {
   it("emits internal message:sent hook when sessionKey is provided without mirror", async () => {
     await deliverSingleMatrixForHookTest({ sessionKey: "agent:main:main" });
 
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const createHookCall = requireMockCall(
-      internalHookMocks.createInternalHookEvent,
-      "create internal hook event",
-    ) as
-      | [
-          unknown,
-          unknown,
-          unknown,
-          {
-            channelId?: unknown;
-            content?: unknown;
-            conversationId?: unknown;
-            messageId?: unknown;
-            success?: unknown;
-            to?: unknown;
-          },
-        ]
-      | undefined;
-    expect(createHookCall?.[0]).toBe("message");
-    expect(createHookCall?.[1]).toBe("sent");
-    expect(createHookCall?.[2]).toBe("agent:main:main");
-    expect(createHookCall?.[3]?.to).toBe("!room:example");
-    expect(createHookCall?.[3]?.success).toBe(true);
-    expect(createHookCall?.[3]?.channelId).toBe("matrix");
-    expect(createHookCall?.[3]?.conversationId).toBe("!room:example");
-    expect(createHookCall?.[3]?.content).toBe("hello");
-    expect(createHookCall?.[3]?.messageId).toBe("m1");
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
+    const createHookCalls = internalHookMocks.createInternalHookEvent.mock.calls as Array<
+      [unknown, unknown, unknown, { channelId?: unknown; content?: unknown; conversationId?: unknown; messageId?: unknown; success?: unknown; to?: unknown }]
+    >;
+    const sendingCall = createHookCalls[0];
+    expect(sendingCall?.[0]).toBe("message");
+    expect(sendingCall?.[1]).toBe("sending");
+    expect(sendingCall?.[2]).toBe("agent:main:main");
+    expect(sendingCall?.[3]?.to).toBe("!room:example");
+    expect(sendingCall?.[3]?.channelId).toBe("matrix");
+    expect(sendingCall?.[3]?.content).toBe("hello");
+    // message:sent call
+    const sentCall = createHookCalls[1];
+    expect(sentCall?.[0]).toBe("message");
+    expect(sentCall?.[1]).toBe("sent");
+    expect(sentCall?.[2]).toBe("agent:main:main");
+    expect(sentCall?.[3]?.to).toBe("!room:example");
+    expect(sentCall?.[3]?.success).toBe(true);
+    expect(sentCall?.[3]?.channelId).toBe("matrix");
+    expect(sentCall?.[3]?.conversationId).toBe("!room:example");
+    expect(sentCall?.[3]?.content).toBe("hello");
+    expect(sentCall?.[3]?.messageId).toBe("m1");
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(2);
   });
 
   it("warns when session.agentId is set without a session key", async () => {
