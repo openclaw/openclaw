@@ -400,7 +400,7 @@ describe("recoverAllStaleChannelIngressClaims", () => {
     });
   });
 
-  it("preserves live sibling compound claim owners (Telegram spool `pid:uuid`)", async () => {
+  it("preserves recent sibling compound claim owners (Telegram spool `pid:uuid`)", async () => {
     await withTempState(async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
@@ -412,8 +412,8 @@ describe("recoverAllStaleChannelIngressClaims", () => {
       });
 
       await queue.enqueue("spooled", { text: "active" });
-      // Telegram spool owners are `${pid}:${uuid}`. A live sibling PID must be
-      // preserved, while current-PID leftovers are recovered as PID reuse.
+      // Fresh claims are protected by the staleMs age window, even when the
+      // owner uses Telegram spool's compound `${pid}:${uuid}` shape.
       const claimed = await queue.claim("spooled", { ownerId: `${process.ppid}:abc-123` });
       expect(claimed).toBeTruthy();
 
@@ -423,7 +423,31 @@ describe("recoverAllStaleChannelIngressClaims", () => {
     });
   });
 
-  it("does not release a stale event that was re-claimed by a live worker", async () => {
+  it("recovers stale claims whose PID belongs to an unrelated live process", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "reused-other-pid",
+        stateDir,
+        now: () => 100,
+      });
+
+      await queue.enqueue("reused-other-pid-event", { text: "stuck" });
+      await queue.claim("reused-other-pid-event", { ownerId: `${process.ppid}:old-instance` });
+
+      const recovered = await recoverAllStaleChannelIngressClaims({
+        env,
+        now: () => 200,
+        staleMs: 0,
+      });
+      expect(recovered).toBe(1);
+      expect((await queue.listPending()).map((r) => r.id)).toEqual(["reused-other-pid-event"]);
+    });
+  });
+
+  it("does not release a freshly re-claimed event", async () => {
     await withTempState(async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       let clock = 100;
@@ -440,12 +464,11 @@ describe("recoverAllStaleChannelIngressClaims", () => {
       if (!stale) {
         throw new Error("Expected the initial stale claim");
       }
-      // A live worker re-claims the same event (new claim_token + live owner)
-      // before the sweep writes. Even though the re-claim is old enough to pass
-      // the staleMs age window, the sibling owner and the claim_token guard keep
-      // the sweep from releasing this fresh claim into duplicate processing.
+      // A worker re-claims the same event before the sweep writes. The fresh
+      // age window keeps the sweep from releasing this claim into duplicate
+      // processing.
       await queue.release(stale);
-      clock = 9999;
+      clock = 50_000;
       expect(await queue.claim("evt", { ownerId: `${process.ppid}` })).toBeTruthy();
 
       const recovered = await recoverAllStaleChannelIngressClaims({

@@ -847,17 +847,11 @@ export function createChannelIngressQueue<
 /**
  * Sweep all stale claims across every channel ingress queue.
  *
- * Called at gateway startup to release claimed rows left behind by a previous
- * crash. A claim is stale when it is old enough and its `claim_owner` is empty,
- * malformed, owned by this new startup process, or owned by a PID that is no
- * longer alive. Current-PID claims are treated as stale because process IDs can
- * be reused across container restarts (for example PID 1).
- *
- * Timing: this runs during `prepareGatewayPluginBootstrap`, which completes
- * before `startChannels()`. At sweep time this gateway has no channel workers
- * running, so current-PID rows must be leftovers from an earlier process. The
- * PID liveness check only protects live sibling gateway processes on the same
- * host.
+ * Called at gateway startup to release old claimed rows left behind by a
+ * previous crash. The `staleMs` age window is the owner boundary: fresh claims
+ * can belong to a concurrently-starting sibling gateway, while old claims are
+ * recoverable even if the recorded PID has been reused by this or another
+ * unrelated process.
  *
  * Best-effort: errors are surfaced to the caller, who should log and continue.
  *
@@ -884,7 +878,7 @@ export async function recoverAllStaleChannelIngressClaims(options?: {
     database.db,
     kysely
       .selectFrom("channel_ingress_events")
-      .select(["queue_name", "event_id", "claim_token", "claim_owner", "claimed_at"])
+      .select(["queue_name", "event_id", "claim_token", "claimed_at"])
       .where("status", "=", "claimed")
       .orderBy("claimed_at", "asc"),
   ).rows;
@@ -893,12 +887,10 @@ export async function recoverAllStaleChannelIngressClaims(options?: {
     return 0;
   }
 
-  // Filter to old claims not owned by a live sibling process. The age filter
-  // prevents releasing claims that were just taken by a concurrently-starting
-  // sibling gateway on the same host.
-  const staleRows = claimedRows.filter(
-    (row) => (row.claimed_at ?? 0) <= cutoff && !isIngressClaimProcessAlive(row.claim_owner),
-  );
+  // The age filter protects fresh claims from concurrently-starting sibling
+  // gateways. Once a claim ages past staleMs it is recoverable regardless of
+  // PID liveness, because unrelated processes can reuse recorded PIDs.
+  const staleRows = claimedRows.filter((row) => (row.claimed_at ?? 0) <= cutoff);
 
   if (staleRows.length === 0) {
     return 0;
@@ -925,7 +917,7 @@ export async function recoverAllStaleChannelIngressClaims(options?: {
               claimed_at: null,
               attempts: eb("attempts", "+", 1),
               last_attempt_at: nowMs,
-              last_error: "recovered at startup: owner process gone",
+              last_error: "recovered at startup: stale claim",
               updated_at: nowMs,
             }))
             .where("queue_name", "=", row.queue_name)
@@ -949,26 +941,4 @@ export async function recoverAllStaleChannelIngressClaims(options?: {
   );
 
   return released;
-}
-
-/** Check whether a claim is owned by another still-running process. */
-function isIngressClaimProcessAlive(claimOwner: string | null | undefined): boolean {
-  // Owners are either a bare PID (queue default) or a compound `${pid}:${uuid}`
-  // (Telegram spool). Reject partial prefixes before liveness checks so
-  // malformed persisted owners do not pin stale rows forever.
-  const owner = claimOwner ?? "";
-  if (!/^\d+(?::.+)?$/.test(owner)) {
-    return false;
-  }
-  const pid = Number(owner.split(":", 1)[0]);
-  if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    return code !== "ESRCH" && code !== "EINVAL";
-  }
 }
