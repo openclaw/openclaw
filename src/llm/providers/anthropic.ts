@@ -1188,9 +1188,8 @@ function convertMessages(
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const activeToolTurnAssistantIndex =
+    findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
@@ -1248,7 +1247,14 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+          // Strip thinking blocks from completed prior assistant turns.
+          // When replayThinkingEnabled is true, only keep thinking for the
+          // active tool-use cycle (signatures are needed for tool-result
+          // continuity). When false, strip all thinking. Completed turns
+          // without pending tool calls do not need preserved signatures and
+          // re-emitting stale signatures can cause 400 "Invalid signature
+          // in thinking block" on long multi-turn sessions.
+          if (!replayThinkingEnabled || i !== activeToolTurnAssistantIndex) {
             omittedThinking = true;
             continue;
           }

@@ -227,17 +227,10 @@ describe("Anthropic provider", () => {
     const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
     expect(JSON.stringify(assistantMessage?.content)).not.toContain("reasoning_content");
+    // Thinking blocks from completed turns (no active tool-use cycle) are
+    // stripped to prevent stale signatures from bricking long threads.
     expect(assistantMessage?.content).toEqual([
-      {
-        type: "thinking",
-        thinking: signedThinking,
-        signature: "sig_1",
-      },
-      {
-        type: "thinking",
-        thinking: "",
-        signature: "sig_omitted",
-      },
+      { type: "text", text: "[assistant reasoning omitted]" },
     ]);
     expect(result.responseModel).toBe("claude-fable-5");
   });
