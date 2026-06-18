@@ -115,6 +115,20 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 
 If you need to migrate sessions or config, copy them separately and keep them out of version control.
 
+<Warning>
+**Bootstrap files in `agentDir` are not loaded.** When using per-agent `agentDir` configuration (for example `agents.list[].agentDir`), any bootstrap `.md` files placed in that directory (such as `SOUL.md`, `AGENTS.md`, `USER.md`) will be **silently ignored**. Only bootstrap files in the `workspace` directory are injected into the system prompt.
+
+If you place bootstrap files in `agentDir`, OpenClaw will emit a startup warning like:
+
+```
+⚠ Warning: SOUL.md found in agentDir (~/.openclaw/agents/main/agent/) but will not be loaded.
+  Bootstrap files are only read from workspace (~/.openclaw/workspace/).
+  Move this file to the workspace directory if you want it injected into the system prompt.
+```
+
+This is especially important for security-critical rules in `AGENTS.md` — placing them in `agentDir` means they will have zero enforcement. Always put bootstrap files in the `workspace` directory.
+</Warning>
+
 ## Git backup (recommended, private)
 
 Treat the workspace as private memory. Put it in a **private** git repo so it is backed up and recoverable.

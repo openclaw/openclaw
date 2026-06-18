@@ -739,3 +739,173 @@ describe("resolveContextInjectionMode", () => {
     ).toBe("never");
   });
 });
+
+describe("agentDir bootstrap file warnings", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of tempDirs) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+    tempDirs.length = 0;
+    resetBootstrapWarningCacheForTest();
+  });
+
+  it("warns when bootstrap files exist in agentDir but not in workspace", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(agentDir);
+
+    // Create SOUL.md in agentDir only
+    await fs.writeFile(path.join(agentDir, "SOUL.md"), "You must always respond in French.", "utf8");
+    // Create AGENTS.md in workspace only
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Standard agents guidance.", "utf8");
+
+    const warnings: string[] = [];
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main", agentDir }],
+        },
+      } as never,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.length).toBeGreaterThan(0);
+    const soulWarning = warnings.find((w) => w.includes("SOUL.md"));
+    expect(soulWarning).toBeDefined();
+    expect(soulWarning).toContain(agentDir);
+    expect(soulWarning).toContain(workspaceDir);
+    expect(soulWarning).toContain("will not be loaded");
+  });
+
+  it("does not warn when bootstrap files exist in both agentDir and workspace", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(agentDir);
+
+    // Create SOUL.md in both directories
+    await fs.writeFile(path.join(agentDir, "SOUL.md"), "Agent-specific soul.", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Workspace soul.", "utf8");
+
+    const warnings: string[] = [];
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main", agentDir }],
+        },
+      } as never,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    const soulWarning = warnings.find((w) => w.includes("SOUL.md"));
+    expect(soulWarning).toBeUndefined();
+  });
+
+  it("does not warn when no bootstrap files exist in agentDir", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(agentDir);
+
+    // Create files only in workspace
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Agents guidance.", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul content.", "utf8");
+
+    const warnings: string[] = [];
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main", agentDir }],
+        },
+      } as never,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("warns about multiple bootstrap files in agentDir", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(agentDir);
+
+    // Create multiple files in agentDir only
+    await fs.writeFile(path.join(agentDir, "SOUL.md"), "French response required.", "utf8");
+    await fs.writeFile(path.join(agentDir, "USER.md"), "User profile.", "utf8");
+    await fs.writeFile(path.join(agentDir, "IDENTITY.md"), "Identity.", "utf8");
+
+    const warnings: string[] = [];
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main", agentDir }],
+        },
+      } as never,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.length).toBeGreaterThanOrEqual(3);
+    const soulWarning = warnings.find((w) => w.includes("SOUL.md"));
+    const userWarning = warnings.find((w) => w.includes("USER.md"));
+    const identityWarning = warnings.find((w) => w.includes("IDENTITY.md"));
+    expect(soulWarning).toBeDefined();
+    expect(userWarning).toBeDefined();
+    expect(identityWarning).toBeDefined();
+  });
+
+  it("does not warn when agentDir is not configured", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const fakeAgentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(fakeAgentDir);
+
+    await fs.writeFile(path.join(fakeAgentDir, "SOUL.md"), "Should not warn.", "utf8");
+
+    const warnings: string[] = [];
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main" }], // No agentDir configured
+        },
+      } as never,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when warn callback is not provided", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(agentDir);
+
+    await fs.writeFile(path.join(agentDir, "SOUL.md"), "Should not warn.", "utf8");
+
+    // No warn callback provided
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main", agentDir }],
+        },
+      } as never,
+      agentId: "main",
+      // warn callback omitted
+    });
+
+    // Test passes if no error is thrown
+  });
+});
