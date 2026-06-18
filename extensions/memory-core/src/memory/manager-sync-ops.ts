@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -23,6 +22,10 @@ import {
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type {
+  MemoryDb,
+  MemoryStatement,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   buildFileEntry,
   ensureMemoryIndexSchema,
@@ -301,11 +304,11 @@ export abstract class MemoryManagerSyncOps {
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<string, MemorySessionDeltaState>();
   protected vectorDegradedWriteWarningShown = false;
-  protected embeddingCacheMirrorDb: DatabaseSync | null = null;
+  protected embeddingCacheMirrorDb: MemoryDb | null = null;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
-  protected abstract db: DatabaseSync;
+  protected abstract db: MemoryDb;
   protected abstract computeProviderKey(): string;
   protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
   protected abstract sync(params?: {
@@ -683,12 +686,12 @@ export abstract class MemoryManagerSyncOps {
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
-  protected openDatabase(): DatabaseSync {
+  protected openDatabase(): MemoryDb {
     const dbPath = resolveUserPath(this.settings.store.path);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+    return openMemoryDatabaseAtPath(dbPath);
   }
 
-  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
+  private async seedEmbeddingCache(sourceDb: MemoryDb): Promise<void> {
     if (!this.cache.enabled) {
       return;
     }
@@ -710,7 +713,7 @@ export abstract class MemoryManagerSyncOps {
       // Keep gateway health probes responsive while rebuilding large caches.
       const SEED_EMBEDDING_YIELD_EVERY = 1000;
       let rowCount = 0;
-      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
+      let insert: ReturnType<MemoryDb["prepare"]> | null = null;
       for (const row of rows) {
         if (!insert) {
           insert = this.db.prepare(
@@ -2430,7 +2433,7 @@ export abstract class MemoryManagerSyncOps {
 
     const originalDb = this.db;
     let reindexLock: MemoryReindexLockHandle | undefined;
-    let tempDb: DatabaseSync | undefined;
+    let tempDb: MemoryDb | undefined;
     let tempDbClosed = false;
     let originalDbClosed = false;
     let originalDbSwapLockReleased = false;
@@ -2452,7 +2455,7 @@ export abstract class MemoryManagerSyncOps {
 
     const restoreOriginalState = () => {
       if (originalDbClosed) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
+        this.db = openMemoryDatabaseAtPath(dbPath, false);
       } else {
         if (originalDbSwapLockReleased) {
           restoreMemoryDatabaseSwapLock(originalDb, dbPath);
@@ -2474,7 +2477,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
-      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath);
       const openedTempDb = tempDb;
       this.db = openedTempDb;
       this.embeddingCacheMirrorDb = originalDb;
@@ -2570,7 +2573,7 @@ export abstract class MemoryManagerSyncOps {
       });
 
       this.embeddingCacheMirrorDb = null;
-      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
+      this.db = openMemoryDatabaseAtPath(dbPath, false);
       this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
@@ -2583,7 +2586,7 @@ export abstract class MemoryManagerSyncOps {
         }
       } catch {}
       if (publishedIndex) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
+        this.db = openMemoryDatabaseAtPath(dbPath, false);
         this.resetVectorState();
         this.ensureSchema();
         this.vector.dims = this.readMeta()?.vectorDims;

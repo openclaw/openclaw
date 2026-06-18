@@ -12,7 +12,33 @@ import {
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
-const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();
+export interface MemoryStatement {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): unknown;
+  iterate(...params: unknown[]): Iterable<unknown>;
+}
+
+export interface MemoryDb {
+  exec(sql: string): unknown;
+  prepare(sql: string): MemoryStatement;
+  close(): void;
+  loadExtension(path: string): void;
+}
+
+type BetterSqlite3Constructor = new (path: string, options?: { readonly?: boolean }) => MemoryDb;
+
+export function requireBetterSqlite3(): BetterSqlite3Constructor {
+  try {
+    return require("better-sqlite3") as BetterSqlite3Constructor;
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    throw new Error(`SQLite support unavailable (missing better-sqlite3). ${message}`, {
+      cause: err,
+    });
+  }
+}
+const sqliteWalMaintenanceByDb = new WeakMap<MemoryDb, SqliteWalMaintenance>();
 
 export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
@@ -30,7 +56,7 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
 }
 
 export function configureMemorySqliteWalMaintenance(
-  db: DatabaseSync,
+  db: MemoryDb,
   options?: SqliteWalMaintenanceOptions & Pick<SqliteConnectionPragmaOptions, "busyTimeoutMs">,
 ): SqliteWalMaintenance {
   const existing = sqliteWalMaintenanceByDb.get(db);
@@ -53,3 +79,7 @@ export function closeMemorySqliteWalMaintenance(db: DatabaseSync): boolean {
   sqliteWalMaintenanceByDb.delete(db);
   return maintenance.close();
 }
+
+// Kept for backward-compat: test files use requireNodeSqlite() to create
+// in-memory DatabaseSync instances, which satisfy the MemoryDb interface.
+export type { DatabaseSync };

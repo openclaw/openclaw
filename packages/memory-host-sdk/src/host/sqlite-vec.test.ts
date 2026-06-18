@@ -42,7 +42,6 @@ function createDbMock(params?: { readonly healthError?: Error }) {
   });
   return {
     db: {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
       prepare,
     },
@@ -85,7 +84,6 @@ describe("loadSqliteVecExtension", () => {
         extensionPath: "/opt/openclaw/sqlite-vec.so",
       }),
     ).resolves.toEqual({ ok: true, extensionPath: "/opt/openclaw/sqlite-vec.so" });
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith("/opt/openclaw/sqlite-vec.so");
     expect(prepare).toHaveBeenCalledWith("SELECT vec_version() AS version");
   });
@@ -123,7 +121,6 @@ describe("loadSqliteVecExtension", () => {
       ),
     });
     expect(result.error).not.toContain("memory.store.vector.extensionPath");
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).not.toHaveBeenCalled();
   });
 
@@ -142,7 +139,6 @@ describe("loadSqliteVecExtension", () => {
       ok: true,
       extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     });
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith(
       "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     );

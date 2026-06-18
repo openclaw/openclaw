@@ -1,15 +1,14 @@
 // Memory Core plugin module implements manager db behavior.
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   ensureDir,
-  requireNodeSqlite,
+  requireBetterSqlite3,
+  type MemoryDb,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  acquireMemoryReindexSwapReadLock,
   acquireMemoryReindexLock,
   tryAcquireMemoryReindexLock,
   type MemoryReindexLockHandle,
@@ -20,9 +19,8 @@ import {
 // own a young temp DB without losing its in-flight rebuild.
 const reindexTempFileWithoutLockMinAgeMs = 24 * 60 * 60_000;
 const reindexTempUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const memoryIndexFileSuffixes = ["", "-wal", "-shm", "-journal"] as const;
-const reindexTempEntrySuffixes = ["-wal", "-shm", "-journal", ""] as const;
-const liveDatabaseSwapLocks = new WeakMap<DatabaseSync, MemoryReindexLockHandle>();
+const memoryIndexFileSuffixes = ["", "-wal", "-shm"] as const;
+const reindexTempEntrySuffixes = ["-wal", "-shm", ""] as const;
 
 function resolveReindexTempBaseName(dbBaseName: string, entryName: string): string | undefined {
   for (const suffix of reindexTempEntrySuffixes) {
@@ -126,25 +124,18 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
   }
 }
 
-function openConfiguredMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath, { allowExtension });
-  try {
-    configureMemorySqliteWalMaintenance(db, {
-      busyTimeoutMs: 5000,
-      databasePath: dbPath,
-    });
-    return db;
-  } catch (err) {
-    try {
-      db.close();
-    } catch {}
-    throw err;
-  }
+function openConfiguredMemoryDatabaseAtPath(dbPath: string): MemoryDb {
+  const BetterSqlite3 = requireBetterSqlite3();
+  const db = new BetterSqlite3(dbPath);
+  configureMemorySqliteWalMaintenance(db, {
+    busyTimeoutMs: 5000,
+    databasePath: dbPath,
+  });
+  return db;
 }
 
 type ExistingMemoryDatabaseOpenResult =
-  | { status: "opened"; db: DatabaseSync }
+  | { status: "opened"; db: MemoryDb }
   | { status: "missing"; cause: unknown };
 
 function isMemoryDatabaseMissingError(err: unknown): boolean {
@@ -152,14 +143,11 @@ function isMemoryDatabaseMissingError(err: unknown): boolean {
   return message.includes("unable to open database file") || message.includes("SQLITE_CANTOPEN");
 }
 
-function tryOpenExistingMemoryDatabaseAtPath(
-  dbPath: string,
-  allowExtension: boolean,
-): ExistingMemoryDatabaseOpenResult {
-  const { DatabaseSync } = requireNodeSqlite();
-  let probe: DatabaseSync;
+function tryOpenExistingMemoryDatabaseAtPath(dbPath: string): ExistingMemoryDatabaseOpenResult {
+  const BetterSqlite3 = requireBetterSqlite3();
+  let probe: MemoryDb;
   try {
-    probe = new DatabaseSync(dbPath, { readOnly: true });
+    probe = new BetterSqlite3(dbPath, { readonly: true });
   } catch (err) {
     if (isMemoryDatabaseMissingError(err)) {
       return { status: "missing", cause: err };
@@ -169,9 +157,9 @@ function tryOpenExistingMemoryDatabaseAtPath(
 
   // Keep the read-only handle open until the read-write handle exists. On
   // Windows this prevents a safe reindex from creating an absent-path window.
-  let db: DatabaseSync;
+  let db: MemoryDb;
   try {
-    db = openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
+    db = openConfiguredMemoryDatabaseAtPath(dbPath);
   } catch (err) {
     try {
       probe.close();
@@ -187,84 +175,52 @@ function tryOpenExistingMemoryDatabaseAtPath(
   return { status: "opened", db };
 }
 
-export function openMemoryDatabaseAtPath(
-  dbPath: string,
-  allowExtension: boolean,
-  allowCreate = true,
-): DatabaseSync {
+export function openMemoryDatabaseAtPath(dbPath: string, allowCreate = true): MemoryDb {
   const dir = path.dirname(dbPath);
   ensureDir(dir);
   cleanupAgedMemoryReindexTempFiles(dbPath);
-  const swapReadLock = acquireMemoryReindexSwapReadLock(dbPath);
-  try {
-    const existing = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
-    if (existing.status === "opened") {
-      liveDatabaseSwapLocks.set(existing.db, swapReadLock);
-      return existing.db;
-    }
-    if (!allowCreate) {
-      throw new Error(
-        `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
-        { cause: existing.cause },
-      );
-    }
+  const existing = tryOpenExistingMemoryDatabaseAtPath(dbPath);
+  if (existing.status === "opened") {
+    return existing.db;
+  }
+  if (!allowCreate) {
+    throw new Error(
+      `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
+      { cause: existing.cause },
+    );
+  }
 
-    // A missing canonical path can be an initial create or the Windows swap
-    // window. Only the safe-reindex owner may create or publish during that gap.
-    const openLock = acquireMemoryReindexLock(dbPath);
-    let db: DatabaseSync;
-    try {
-      const lockedExisting = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
-      db =
-        lockedExisting.status === "opened"
-          ? lockedExisting.db
-          : openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
-    } catch (err) {
-      try {
-        openLock.release();
-      } catch {}
-      throw err;
-    }
-    try {
-      openLock.release();
-    } catch (err) {
-      closeMemoryDatabase(db);
-      throw err;
-    }
-    liveDatabaseSwapLocks.set(db, swapReadLock);
-    return db;
+  // A missing canonical path can be an initial create or the Windows swap
+  // window. Only the safe-reindex owner may create or publish during that gap.
+  const openLock = acquireMemoryReindexLock(dbPath);
+  let db: MemoryDb;
+  try {
+    const lockedExisting = tryOpenExistingMemoryDatabaseAtPath(dbPath);
+    db =
+      lockedExisting.status === "opened"
+        ? lockedExisting.db
+        : openConfiguredMemoryDatabaseAtPath(dbPath);
   } catch (err) {
     try {
-      swapReadLock.release();
+      openLock.release();
     } catch {}
     throw err;
   }
+  try {
+    openLock.release();
+  } catch (err) {
+    closeMemoryDatabase(db);
+    throw err;
+  }
+  return db;
 }
 
-export function openMemoryReindexTempDatabaseAtPath(
-  dbPath: string,
-  allowExtension: boolean,
-): DatabaseSync {
+export function openMemoryReindexTempDatabaseAtPath(dbPath: string): MemoryDb {
   ensureDir(path.dirname(dbPath));
-  return openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
+  return openConfiguredMemoryDatabaseAtPath(dbPath);
 }
 
-export function closeMemoryDatabase(db: DatabaseSync): void {
+export function closeMemoryDatabase(db: MemoryDb): void {
   closeMemorySqliteWalMaintenance(db);
   db.close();
-  releaseMemoryDatabaseSwapLock(db);
-}
-
-export function releaseMemoryDatabaseSwapLock(db: DatabaseSync): void {
-  const swapLock = liveDatabaseSwapLocks.get(db);
-  if (swapLock) {
-    liveDatabaseSwapLocks.delete(db);
-    swapLock.release();
-  }
-}
-
-export function restoreMemoryDatabaseSwapLock(db: DatabaseSync, dbPath: string): void {
-  if (!liveDatabaseSwapLocks.has(db)) {
-    liveDatabaseSwapLocks.set(db, acquireMemoryReindexSwapReadLock(dbPath));
-  }
 }

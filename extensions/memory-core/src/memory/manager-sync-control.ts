@@ -1,14 +1,14 @@
-// Memory Core plugin module implements manager sync control behavior.
-import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+// Memory Core plugin module implements manager sync control behavior.
+import type { MemoryDb } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
 
 export type MemoryReadonlyRecoveryState = {
   closed: boolean;
-  db: DatabaseSync;
+  db: MemoryDb;
   vector: {
     dims?: number;
   };
@@ -22,8 +22,8 @@ export type MemoryReadonlyRecoveryState = {
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
-  openDatabase: () => DatabaseSync;
-  closeDatabase: (db: DatabaseSync) => void;
+  openDatabase: () => MemoryDb;
+  closeDatabase: (db: MemoryDb) => void;
   resetVectorState: () => void;
   ensureSchema: () => void;
   readMeta: () => { vectorDims?: number } | undefined;

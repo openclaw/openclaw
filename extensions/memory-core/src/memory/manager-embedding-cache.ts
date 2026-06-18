@@ -1,11 +1,11 @@
 // Memory Core plugin module implements manager embedding cache behavior.
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { MemoryDb } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   parseEmbedding,
   type MemoryChunk,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
-type EmbeddingCacheDb = Pick<DatabaseSync, "prepare">;
+type EmbeddingCacheDb = Pick<MemoryDb, "prepare">;
 
 type EmbeddingProviderIdentity = {
   provider: string;
@@ -40,7 +40,7 @@ export function loadMemoryEmbeddingCache(params: {
   const out = new Map<string, number[]>();
   const batchSize = 400;
   for (const identity of params.providerIdentities) {
-    const baseParams: SQLInputValue[] = [identity.provider, identity.model, identity.providerKey];
+    const baseParams: unknown[] = [identity.provider, identity.model, identity.providerKey];
     for (let start = 0; start < unique.length; start += batchSize) {
       const batch = unique.slice(start, start + batchSize);
       const placeholders = batch.map(() => "?").join(", ");

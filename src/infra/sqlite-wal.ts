@@ -2,8 +2,9 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+
+type ExecDb = { exec(sql: string): unknown };
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
@@ -261,7 +262,7 @@ function readJournalModeResult(row: unknown): string | null {
   return typeof value === "string" ? value.toLowerCase() : null;
 }
 
-function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
+function requireRollbackJournalMode(db: ExecDb, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
   if (journalMode !== "delete") {
@@ -284,7 +285,7 @@ function refuseUnsupportedFilesystem(options: SqliteWalMaintenanceOptions): neve
 
 /** Configure safe journaling pragmas and return a handle for checkpoint/close maintenance. */
 export function configureSqliteWalMaintenance(
-  db: DatabaseSync,
+  db: ExecDb,
   options: SqliteWalMaintenanceOptions = {},
 ): SqliteWalMaintenance {
   const autoCheckpointPages = normalizeNonNegativeInteger(
@@ -349,7 +350,7 @@ export function configureSqliteWalMaintenance(
 
 /** Configure per-connection SQLite pragmas in the safe lock-retry/WAL order. */
 export function configureSqliteConnectionPragmas(
-  db: DatabaseSync,
+  db: ExecDb,
   options: SqliteConnectionPragmaOptions = {},
 ): SqliteWalMaintenance {
   const { busyTimeoutMs, foreignKeys, synchronous, ...walOptions } = options;

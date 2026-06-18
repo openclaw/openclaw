@@ -17,5 +17,8 @@
     "./query": "./src/query.ts",
     "./secret": "./src/secret.ts",
     "./status": "./src/status.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
   }
 }
