@@ -1,6 +1,6 @@
 // Tool image tests cover image payload sanitization before tool outputs are
 // returned to model-visible content blocks.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
@@ -8,6 +8,7 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { getImageMetadata } from "../media/image-ops.js";
 import {
+  __testing,
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
   sanitizeToolResultImages,
@@ -27,6 +28,10 @@ describe("tool image sanitizing", () => {
   const createWidePng = async () => {
     return createSolidPngBuffer(420, 120, { r: 0x7f, g: 0x7f, b: 0x7f });
   };
+
+  beforeEach(() => {
+    __testing.resetResizeCache();
+  });
 
   it("shrinks oversized images to the configured byte limit", async () => {
     const maxBytes = 64 * 1024;
@@ -216,5 +221,139 @@ describe("tool image sanitizing", () => {
         text: "[test] omitted image payload: invalid base64",
       },
     ]);
+  });
+
+  describe("resize cache (#64418)", () => {
+    it("reuses the resize result for the same image across repeated calls", async () => {
+      // Simulates session history being re-sanitized on every turn.
+      const png = await createWidePng();
+      const block = {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      };
+
+      const firstCall = await sanitizeContentBlocksImages([block], "turn-1");
+      const statsAfterFirst = __testing.getResizeCacheStats();
+      expect(statsAfterFirst.misses).toBe(1);
+      expect(statsAfterFirst.hits).toBe(0);
+      expect(statsAfterFirst.entryCount).toBe(1);
+
+      const secondCall = await sanitizeContentBlocksImages([block], "turn-2");
+      const statsAfterSecond = __testing.getResizeCacheStats();
+      expect(statsAfterSecond.misses).toBe(1);
+      expect(statsAfterSecond.hits).toBe(1);
+
+      const first = getImageBlock(firstCall);
+      const second = getImageBlock(secondCall);
+      expect(second.data).toBe(first.data);
+      expect(second.mimeType).toBe(first.mimeType);
+    }, 20_000);
+
+    it("keys on the full base64 payload so long shared prefixes do not collide (#64514 P1)", () => {
+      const sharedPrefix = "A".repeat(1024);
+      const base64A = `${sharedPrefix}aaaaBBBBcccc`;
+      const base64B = `${sharedPrefix}aaaaDDDDcccc`;
+      expect(base64A.slice(0, 1024)).toBe(base64B.slice(0, 1024));
+      expect(base64A).not.toBe(base64B);
+
+      const maxDimensionPx = 1200;
+      const maxBytes = 5 * 1024 * 1024;
+      const keyA = __testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes);
+      const keyB = __testing.computeResizeCacheKey(base64B, maxDimensionPx, maxBytes);
+      expect(keyA).not.toBe(keyB);
+
+      // Sanity: the same payload hashes to the same key and limits are part
+      // of the key space.
+      expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes)).toBe(keyA);
+      expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx + 1, maxBytes)).not.toBe(keyA);
+      expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes + 1)).not.toBe(keyA);
+    });
+
+    it("preserves the caller's mimeType on a no-op cache hit (#68677 review feedback)", async () => {
+      // WebP falls outside inferMimeTypeFromBase64's JPEG/PNG/GIF
+      // canonicalization list, so the helper receives and must preserve the
+      // caller's declared MIME on no-op cache hits.
+      // 1x1 valid WebP. Keep inline so this unit-fast test does not depend on
+      // optional image backends just to build a fixture.
+      const base64 = "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA";
+      const limits = { maxDimensionPx: 1200, maxBytes: 5 * 1024 * 1024 };
+
+      const firstResult = await __testing.resizeImageBase64IfNeeded({
+        base64,
+        mimeType: "image/webp",
+        ...limits,
+      });
+      expect(firstResult.resized).toBe(false);
+      expect(firstResult.mimeType).toBe("image/webp");
+      expect(__testing.getResizeCacheStats()).toMatchObject({ misses: 1, hits: 0 });
+
+      const secondResult = await __testing.resizeImageBase64IfNeeded({
+        base64,
+        mimeType: "image/heic",
+        ...limits,
+      });
+      expect(__testing.getResizeCacheStats()).toMatchObject({ misses: 1, hits: 1 });
+      expect(secondResult.resized).toBe(false);
+      expect(secondResult.mimeType).toBe("image/heic");
+      expect(secondResult.base64).toBe(base64);
+    }, 20_000);
+
+    it("records separate cache entries for two distinct valid images (#64418 end-to-end)", async () => {
+      const width = 400;
+      const height = 400;
+      const jpegA = createSolidPngBuffer(width, height, { r: 0xff, g: 0x00, b: 0x00 });
+      const jpegB = createSolidPngBuffer(width, height, { r: 0x00, g: 0x00, b: 0xff });
+      expect(jpegA.equals(jpegB)).toBe(false);
+
+      await sanitizeContentBlocksImages(
+        [{ type: "image" as const, data: jpegA.toString("base64"), mimeType: "image/png" }],
+        "A",
+      );
+      await sanitizeContentBlocksImages(
+        [{ type: "image" as const, data: jpegB.toString("base64"), mimeType: "image/png" }],
+        "B",
+      );
+
+      const stats = __testing.getResizeCacheStats();
+      expect(stats.misses).toBe(2);
+      expect(stats.hits).toBe(0);
+      expect(stats.entryCount).toBe(2);
+    }, 20_000);
+
+    it("keys the cache by maxBytes so different limits do not share results", async () => {
+      const png = await createWidePng();
+      const block = {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      };
+
+      await sanitizeContentBlocksImages([block], "small-limit", { maxBytes: 64 * 1024 });
+      await sanitizeContentBlocksImages([block], "large-limit", { maxBytes: 256 * 1024 });
+      const stats = __testing.getResizeCacheStats();
+      expect(stats.misses).toBe(2);
+      expect(stats.hits).toBe(0);
+      expect(stats.entryCount).toBe(2);
+    }, 20_000);
+
+    it("bounds cache memory by evicting past the byte cap", async () => {
+      __testing.setResizeCacheMaxBytesForTests(1);
+      const png = await createWidePng();
+      const base64 = png.toString("base64");
+
+      for (const limit of [64 * 1024, 96 * 1024, 128 * 1024]) {
+        await sanitizeContentBlocksImages(
+          [{ type: "image" as const, data: base64, mimeType: "image/png" }],
+          `limit-${limit}`,
+          { maxBytes: limit },
+        );
+      }
+
+      const stats = __testing.getResizeCacheStats();
+      expect(stats.totalBytes).toBeLessThanOrEqual(stats.maxBytes);
+      expect(stats.misses).toBe(3);
+      expect(stats.entryCount).toBe(0);
+    }, 30_000);
   });
 });
