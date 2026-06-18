@@ -5,7 +5,7 @@ import OpenClawKit
 import WebKit
 
 @MainActor
-final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NSWindowDelegate {
+final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let sessionKey: String
     private let root: URL
     private let sessionDir: URL
@@ -121,6 +121,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.webView = WKWebView(frame: .zero, configuration: config)
         // Canvas scaffold is a fully self-contained HTML page; avoid relying on transparency underlays.
         self.webView.setValue(true, forKey: "drawsBackground")
+        self.webView.uiDelegate = self
 
         let sessionDir = self.sessionDir
         let webView = self.webView
@@ -257,6 +258,23 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.debugStatusTitle = title
         self.debugStatusSubtitle = subtitle
         self.applyDebugStatusIfNeeded()
+    }
+
+    // MARK: - WKUIDelegate
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+
+        panel.begin { result in
+            completionHandler(result == .OK ? panel.urls : nil)
+        }
     }
 
     func applyDebugStatusIfNeeded() {
