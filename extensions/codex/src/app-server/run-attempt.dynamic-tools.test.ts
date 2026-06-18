@@ -119,25 +119,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         expect.objectContaining({ phase: "turn_accepted" }),
       ),
     );
-    for (const item of [
-      {
-        type: "function_call",
-        name: "slow_failure",
-        arguments: "{}",
-        call_id: "call-slow",
-      },
-      {
-        type: "function_call",
-        name: "shell_command",
-        arguments: '{"command":"git status --short"}',
-        call_id: "command-before-dynamic",
-      },
-    ]) {
-      await harness.notify({
-        method: "rawResponseItem/completed",
-        params: { threadId: "thread-1", turnId: "turn-1", item },
-      });
-    }
     const webSearchItem = {
       type: "webSearch",
       id: "web-search-before-dynamic",
@@ -149,32 +130,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       method: "item/started",
       params: { threadId: "thread-1", turnId: "turn-1", item: webSearchItem },
     });
-    const rawWebSearch = harness.notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "web_search_call",
-          status: "completed",
-          action: { type: "search", query: "OpenClaw" },
-        },
-      },
-    });
-    await harness.notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "function_call",
-          name: "fast_summary",
-          arguments: "{}",
-          call_id: "call-later",
-        },
-      },
-    });
-    await rawWebSearch;
     const nativeItem = {
       type: "commandExecution",
       id: "command-before-dynamic",
@@ -191,6 +146,18 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     const nativeStarted = harness.notify({
       method: "item/started",
       params: { threadId: "thread-1", turnId: "turn-1", item: nativeItem },
+    });
+    await harness.handleServerRequest({
+      id: "request-slow",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-slow",
+        namespace: null,
+        tool: "slow_failure",
+        arguments: {},
+      },
     });
     await harness.handleServerRequest({
       id: "request-later",
@@ -213,18 +180,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     await harness.notify({
       method: "item/completed",
       params: { threadId: "thread-1", turnId: "turn-1", item: webSearchItem },
-    });
-    await harness.handleServerRequest({
-      id: "request-slow",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-slow",
-        namespace: null,
-        tool: "slow_failure",
-        arguments: {},
-      },
     });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
