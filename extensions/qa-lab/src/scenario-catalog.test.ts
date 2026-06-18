@@ -77,12 +77,15 @@ describe("qa scenario catalog", () => {
         .map((scenario) => scenario.id),
     ).toStrictEqual([]);
     expect(
-      pack.scenarios
-        .flatMap((scenario) => [
-          ...(scenario.coverage?.primary ?? []),
-          ...(scenario.coverage?.secondary ?? []),
-        ])
-        .every((coverageId) => dottedCoverageIdPattern.test(coverageId)),
+      pack.scenarios.every(
+        (scenario) =>
+          (scenario.coverage?.primary ?? []).every((coverageId) =>
+            dottedCoverageIdPattern.test(coverageId),
+          ) &&
+          (scenario.coverage?.secondary ?? []).every((coverageId) =>
+            dottedCoverageIdPattern.test(coverageId),
+          ),
+      ),
     ).toBe(true);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
