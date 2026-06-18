@@ -118,6 +118,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(skillsWorkspaceDir, { recursive: true });
     skillsEligibility = await syncSandboxSkillsToWorkspace({
       sourceWorkspaceDir: agentWorkspaceDir,
       targetWorkspaceDir: skillsWorkspaceDir,
