@@ -7,6 +7,7 @@ import {
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
   normalizeStrictOpenAIJsonSchema,
+  resolveOpenAIProjectedToolsStrictToolFlag,
   resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
 
@@ -125,6 +126,32 @@ describe("OpenAI strict tool schema normalization", () => {
       },
     ]);
     expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(false);
+  });
+
+  it("keeps strict mode for emitted tools when unreadable tools are dropped", () => {
+    const projection = projectOpenAITools([
+      {
+        name: "broken",
+        parameters: {
+          type: "object",
+          get properties(): never {
+            throw new Error("properties exploded");
+          },
+        },
+      },
+      {
+        name: "lookup",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+
+    expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(false);
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
   });
 
   it("reuses projected schemas for strict checks and normalization", () => {
