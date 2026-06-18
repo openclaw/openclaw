@@ -13,7 +13,10 @@ import {
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
-import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
+import {
+  disableUnavailableSkillsInConfig,
+  formatMissingSkillSummary,
+} from "../commands/doctor-skills-core.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -993,23 +996,3 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
-
-function formatMissingSkillSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`any bins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ") || "unknown requirement";
-}
