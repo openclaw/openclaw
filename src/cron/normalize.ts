@@ -30,6 +30,11 @@ type NormalizeOptions = {
   applyDefaults?: boolean;
   /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
+  /**
+   * Default agent ID applied when `applyDefaults` is true and no explicit agentId is present.
+   * Used during job creation and SQLite normalization to ensure persisted jobs always carry an agentId.
+   */
+  defaultAgentId?: string;
 };
 
 const DEFAULT_OPTIONS: NormalizeOptions = {
@@ -570,6 +575,9 @@ export function normalizeCronJobInput(
   if (options.applyDefaults) {
     // Defaults apply only on create; patch normalization must preserve omitted
     // fields so partial updates do not rewrite unrelated cron settings.
+    if (next.agentId == null && options.defaultAgentId) {
+      next.agentId = sanitizeAgentId(options.defaultAgentId);
+    }
     if (!next.wakeMode) {
       next.wakeMode = "now";
     }

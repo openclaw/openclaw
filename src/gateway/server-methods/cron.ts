@@ -13,6 +13,7 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
@@ -419,11 +420,13 @@ export const cronHandlers: GatewayRequestHandlers = {
         ? (params as { sessionKey: string }).sessionKey
         : undefined;
     let normalized: unknown;
+    const cfg = context.getRuntimeConfig();
     try {
       assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
           sessionContext: { sessionKey },
+          defaultAgentId: resolveDefaultAgentId(cfg),
         }) ?? params;
     } catch (err) {
       respond(
@@ -448,7 +451,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
-    const cfg = context.getRuntimeConfig();
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
