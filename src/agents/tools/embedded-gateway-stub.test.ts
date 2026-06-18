@@ -43,7 +43,10 @@ const runtime = vi.hoisted(() => ({
     ({ localMessages }: { localMessages?: unknown[] }) => localMessages ?? [],
   ),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
-  projectRecentChatDisplayMessages: vi.fn((messages: unknown[]): unknown[] => messages),
+  projectRecentChatDisplayMessages: vi.fn(
+    (messages: unknown[], _opts?: { maxChars?: number; maxMessages?: number }): unknown[] =>
+      messages,
+  ),
   augmentChatHistoryWithCanvasBlocks: vi.fn((messages: unknown[]) => messages),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 100_000),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
@@ -233,14 +236,24 @@ describe("embedded gateway stub", () => {
       1,
       {
         agentId: "main",
-        sessionFile: currentActive,
-        sessionId: "current-session",
+        sessionFile: ancestorArchive,
+        sessionId: "ancestor-session",
         storePath,
       },
       expect.any(Object),
     );
     expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
       2,
+      {
+        agentId: "main",
+        sessionFile: ancestorActive,
+        sessionId: "ancestor-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      3,
       {
         agentId: "main",
         sessionFile: currentArchive,
@@ -250,21 +263,11 @@ describe("embedded gateway stub", () => {
       expect.any(Object),
     );
     expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
-      3,
-      {
-        agentId: "main",
-        sessionFile: ancestorArchive,
-        sessionId: "ancestor-session",
-        storePath,
-      },
-      expect.any(Object),
-    );
-    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
       4,
       {
         agentId: "main",
-        sessionFile: ancestorActive,
-        sessionId: "ancestor-session",
+        sessionFile: currentActive,
+        sessionId: "current-session",
         storePath,
       },
       expect.any(Object),
@@ -303,11 +306,14 @@ describe("embedded gateway stub", () => {
         { role: "user", content: `${scope.sessionId}:${path.basename(scope.sessionFile ?? "")}` },
       ],
     );
+    runtime.projectRecentChatDisplayMessages.mockImplementationOnce((messages, opts) =>
+      messages.slice(-(opts?.maxMessages ?? messages.length)),
+    );
 
     const callGateway = createEmbeddedCallGateway();
     const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
       method: "chat.history",
-      params: { sessionKey: "agent:main:main", includeFamily: true },
+      params: { sessionKey: "agent:main:main", includeFamily: true, limit: 2 },
     });
 
     const calls = runtime.readSessionMessagesAsync.mock.calls.map(
@@ -319,7 +325,7 @@ describe("embedded gateway stub", () => {
     );
     expect(result.includeFamily).toBe(true);
     expect(calls).toHaveLength(32);
-    expect(calls[0]).toMatchObject({
+    expect(calls.at(-1)).toMatchObject({
       sessionFile: currentActive,
       sessionId: currentSessionId,
     });
@@ -327,6 +333,7 @@ describe("embedded gateway stub", () => {
     expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-31")).toBe(false);
     expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(false);
     expect(JSON.stringify(result.messages)).toContain("current-cap-session");
+    expect(JSON.stringify(result.messages)).toContain("ancestor-cap-session");
   });
 
   it("scopes embedded global chat history to the requested agent", async () => {
