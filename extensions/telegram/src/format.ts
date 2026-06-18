@@ -32,8 +32,12 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+// Telegram accepts these inline-link schemes in rich HTML; local/relative paths
+// are rejected by sendRichMessage with RICH_MESSAGE_URL_INVALID, which drops the
+// whole reply. mailto/tel and in-document #anchors are part of the supported
+// set, so keep them clickable instead of flattening the label to plain text.
 function isTelegramRichLinkHref(href: string): boolean {
-  return /^(?:https?:\/\/|tg:\/\/)/i.test(href);
+  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
 
 /**
@@ -55,8 +59,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   if (link.start === link.end) {
     return null;
   }
-  // Telegram rich links reject local/relative hrefs; keep the label visible
-  // instead of letting one unsupported anchor drop the whole sendRichMessage.
+  // Drop the anchor for unsupported hrefs; the label still renders as text.
   if (!isTelegramRichLinkHref(href)) {
     return null;
   }
