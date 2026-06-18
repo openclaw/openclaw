@@ -160,7 +160,11 @@ function shouldReadRuntimeSessionEntry(params: {
   if (!explicitAgentId) {
     return true;
   }
-  return parseAgentIdFromSessionKey(params.sessionKey) === explicitAgentId;
+  const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
+  if (!sessionAgentId) {
+    return explicitAgentId === DEFAULT_AGENT_ID;
+  }
+  return sessionAgentId === explicitAgentId;
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
