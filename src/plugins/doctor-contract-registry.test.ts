@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -564,7 +565,7 @@ describe("doctor-contract-registry module loader", () => {
           },
         },
       },
-    };
+    } as OpenClawConfig;
 
     const pluginIds = collectRelevantDoctorPluginIds(config);
     expect(pluginIds).toEqual(["xmemo-memory"]);
@@ -576,7 +577,7 @@ describe("doctor-contract-registry module loader", () => {
     });
 
     expect(result.changes).toEqual(["migrated xmemo-memory from plugins.config"]);
-    expect(result.config.plugins.entries["xmemo-memory"]).toEqual({
+    expect(result.config.plugins?.entries?.["xmemo-memory"]).toEqual({
       enabled: true,
       config: { apiKey: "legacy-key" },
     });
