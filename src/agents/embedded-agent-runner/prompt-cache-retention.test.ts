@@ -121,6 +121,29 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("normalizes standard cacheRetention to short for Anthropic family providers", () => {
+    // Anthropic direct API accepts "standard" as a cache retention mode.
+    // normalize it to "short" so it survives the family gate.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "anthropic",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+    // For non-Anthropic-direct families (e.g. Bedrock), "standard" also maps
+    // to "short" instead of falling through to undefined.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "amazon-bedrock",
+        "bedrock-converse-stream",
+        "us.anthropic.claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({

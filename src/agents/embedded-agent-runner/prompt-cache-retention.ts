@@ -50,6 +50,13 @@ export function resolveCacheRetention(
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
   }
+  // Anthropic direct API accepts "standard" as a cache retention mode; normalize
+  // it to "short" so the value survives the family gate instead of falling
+  // through to undefined. Fixes Bedrock Claude models where the family is not
+  // "anthropic-direct" and the explicit setting was silently discarded.
+  if (newVal === "standard") {
+    return "short";
+  }
 
   const legacy = extraParams?.cacheControlTtl;
   if (legacy === "5m" && (family || googleEligible)) {
