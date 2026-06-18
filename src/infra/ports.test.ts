@@ -110,6 +110,15 @@ describe("ports helpers", () => {
     }
   });
 
+  it("regression: #94415 — ensurePortAvailable fails fast when availability cannot be verified", async () => {
+    // An out-of-range port makes every bind probe reject with a non-EADDRINUSE
+    // error (ERR_SOCKET_BAD_PORT), so checkPortInUse reports "unknown". The
+    // preflight must rethrow rather than silently treat an unverifiable port as
+    // free (the pre-refactor bare-listen path rethrew non-EADDRINUSE errors).
+    await expect(ensurePortAvailable(99999)).rejects.toThrow();
+    await expect(ensurePortAvailable(99999)).rejects.not.toBeInstanceOf(PortInUseError);
+  });
+
   it("handlePortError exits nicely on EADDRINUSE", async () => {
     const runtime = {
       error: vi.fn(),

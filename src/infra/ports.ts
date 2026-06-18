@@ -39,8 +39,16 @@ export async function ensurePortAvailable(port: number): Promise<void> {
   // Probe every address family: a bare listen binds the IPv6 wildcard on
   // dual-stack hosts and misses an IPv4-only occupant, letting Chrome later
   // collide on 127.0.0.1 and surface a misleading CDP 401.
-  if ((await checkPortInUse(port)) === "busy") {
+  const status = await checkPortInUse(port);
+  if (status === "busy") {
     throw new PortInUseError(port);
+  }
+  if (status === "unknown") {
+    // A bind probe failed with something other than EADDRINUSE (e.g. EACCES on
+    // a privileged port, EINVAL on an out-of-range port). The original
+    // bare-listen path rethrew here; preserve that fail-fast instead of
+    // silently treating an unverifiable port as available.
+    throw new Error(`Port ${port} availability could not be verified.`);
   }
 }
 
