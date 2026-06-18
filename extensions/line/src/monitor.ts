@@ -40,6 +40,7 @@ import {
   pushTextMessageWithQuickReplies,
   replyMessageLine,
   showLoadingAnimation,
+  logLineChannelQuota,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
@@ -474,6 +475,9 @@ export async function monitorLineProvider(
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+
+  // One-time quota check on startup (non-blocking)
+  logLineChannelQuota({ cfg: config, accountId: resolvedAccountId }).catch(() => {});
 
   let stopped = false;
   const stopHandler = () => {

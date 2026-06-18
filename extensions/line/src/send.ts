@@ -209,6 +209,23 @@ function resolveLineReceiptKind(messages: readonly Message[]) {
   return "unknown";
 }
 
+// ── Local push counter (per-channel, per-process) ──
+let totalPushSent = 0;
+let monthlyPushSent = 0;
+
+export function incrementPushCount(n: number): void {
+  totalPushSent += n;
+  monthlyPushSent += n;
+}
+
+export function getPushCounts(): { total: number; monthly: number } {
+  return { total: totalPushSent, monthly: monthlyPushSent };
+}
+
+export function resetMonthlyPushCount(): void {
+  monthlyPushSent = 0;
+}
+
 async function pushLineMessages(
   to: string,
   messages: Message[],
@@ -235,6 +252,7 @@ async function pushLineMessages(
   }
 
   recordLineOutboundActivity(account.accountId);
+  incrementPushCount(messages.length);
 
   if (opts.verbose) {
     const logMessage =
@@ -349,7 +367,12 @@ export async function pushMessageLine(
   text: string,
   opts: LineSendOpts,
 ): Promise<LineSendResult> {
-  return sendMessageLine(to, text, { ...opts, replyToken: undefined });
+  const chatId = normalizeTarget(to);
+  const messages = [createTextMessage(text.trim())];
+  return pushLineMessages(chatId, messages, opts, {
+    errorContext: "push message",
+    verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
+  });
 }
 
 export async function replyMessageLine(
@@ -525,4 +548,28 @@ export async function getUserProfile(
 export async function getUserDisplayName(userId: string, opts: LineClientOpts): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;
+}
+
+export async function logLineChannelQuota(opts: LineClientOpts): Promise<void> {
+  try {
+    const { client } = createLineMessagingClient(opts);
+    const [quotaResponse, consumptionResponse] = await Promise.all([
+      client.getMessageQuota(),
+      client.getMessageQuotaConsumption(),
+    ]);
+
+    if (quotaResponse.type === "none") {
+      logVerbose("line: quota type=none (unlimited plan, no monthly cap)");
+    } else {
+      const used = consumptionResponse.totalUsage;
+      const limit = quotaResponse.value ?? 0;
+      const remaining = limit - used;
+      const pct = limit > 0 ? Math.round((used / limit) * 100) : 0;
+      logVerbose(
+        `line: quota type=limited, ${used}/${limit} used (${remaining} remaining, ${pct}%)`,
+      );
+    }
+  } catch (err) {
+    logVerbose(`line: failed to query quota info (non-fatal): ${String(err)}`);
+  }
 }
