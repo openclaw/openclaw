@@ -35,6 +35,8 @@ const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
 const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
 const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
 const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
+const MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH =
+  "scripts/e2e/mcp-code-mode-gateway-live-docker.sh";
 const CODEX_MEDIA_PATH_SCENARIO_PATH = "scripts/e2e/lib/codex-media-path/scenario.sh";
 const OPENAI_CHAT_TOOLS_SCENARIO_PATH = "scripts/e2e/lib/openai-chat-tools/scenario.sh";
 const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH = "scripts/e2e/codex-npm-plugin-live-docker.sh";
@@ -295,6 +297,16 @@ docker_build_transient_failure "$LOG_PATH"
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
+  });
+
+  it("keeps Testbox image-build fallback before isolating live MCP code-mode runtime flags", () => {
+    const script = readFileSync(MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH, "utf8");
+    const buildIndex = script.indexOf('docker_e2e_build_or_reuse "$IMAGE_NAME"');
+    const unsetIndex = script.indexOf("unset OPENCLAW_TESTBOX");
+
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(unsetIndex).toBeGreaterThan(buildIndex);
+    expect(script).toContain("host/testbox mode flags that can change packaged behavior");
   });
 
   it("wraps centralized Docker builds with the timeout helper", () => {

@@ -153,6 +153,15 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         contracts: { speechProviders: ["tts-local-cli", "cli"] },
       },
       {
+        id: "gradium",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: { speechProviders: ["gradium"] },
+      },
+      {
         id: "anthropic",
         channels: [],
         origin: "bundled",
@@ -808,6 +817,15 @@ describe("resolveGatewayStartupPluginIds", () => {
         messages: { tts: { provider: "edge" } },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes explicitly enabled external speech providers at startup",
+      {
+        channels: {},
+        messages: { tts: { provider: "gradium" } },
+        plugins: { entries: { gradium: { enabled: true } } },
+      } as OpenClawConfig,
+      ["browser", "gradium", "memory-core"],
     ],
     [
       "includes active persona speech providers at startup",
