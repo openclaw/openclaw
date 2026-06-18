@@ -477,10 +477,14 @@ export function normalizeDailyIngestionState(raw: unknown): DailyIngestionState 
       continue;
     }
     const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
+    const strippedHash = typeof file.strippedHash === "string" && file.strippedHash.length > 0
+      ? file.strippedHash
+      : undefined;
     files[key] = {
       mtimeMs: Math.floor(mtimeMs),
       size: Math.floor(size),
       ...(lastDreamingDayIngested ? { lastDreamingDayIngested } : {}),
+      ...(strippedHash ? { strippedHash } : {}),
     };
   }
   return {
