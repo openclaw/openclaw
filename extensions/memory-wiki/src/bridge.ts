@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { openFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { resolveMemoryWikiConfigForAgent, type ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   createWikiPageFilename,
@@ -62,15 +62,9 @@ function shouldImportArtifact(
   }
 }
 
-async function collectBridgeArtifacts(
-  bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
-  artifacts: MemoryPluginPublicArtifact[],
-): Promise<BridgeArtifact[]> {
+function collectBridgeArtifacts(artifacts: MemoryPluginPublicArtifact[]): BridgeArtifact[] {
   const collected: BridgeArtifact[] = [];
   for (const artifact of artifacts) {
-    if (!shouldImportArtifact(artifact, bridgeConfig)) {
-      continue;
-    }
     const absolutePath = path.resolve(artifact.workspaceDir, artifact.relativePath);
     const syncKey = absolutePath;
     collected.push({
@@ -87,6 +81,40 @@ async function collectBridgeArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return [...deduped.values()];
+}
+
+function resolveSharedVaultBridgeConfigs(params: {
+  config: ResolvedMemoryWikiConfig;
+  appConfig: OpenClawConfig;
+}): ResolvedMemoryWikiConfig[] {
+  const configs = [params.config];
+  const vaultPath = path.resolve(params.config.vault.path);
+  const knownAgentIds = new Set(params.config.agentId ? [params.config.agentId] : []);
+  for (const agent of params.appConfig.agents?.list ?? []) {
+    const config = resolveMemoryWikiConfigForAgent(params.appConfig, agent.id);
+    if (
+      knownAgentIds.has(config.agentId) ||
+      path.resolve(config.vault.path) !== vaultPath ||
+      config.vaultMode !== "bridge" ||
+      !config.bridge.enabled ||
+      !config.bridge.readMemoryArtifacts
+    ) {
+      continue;
+    }
+    knownAgentIds.add(config.agentId);
+    configs.push(config);
+  }
+  return configs;
+}
+
+function isBridgeArtifactActiveForConfig(
+  artifact: MemoryPluginPublicArtifact,
+  config: ResolvedMemoryWikiConfig,
+): boolean {
+  return (
+    shouldImportArtifact(artifact, config.bridge) &&
+    (!config.agentId || artifact.agentIds.includes(config.agentId))
+  );
 }
 
 function resolveBridgeTitle(artifact: BridgeArtifact, agentIds: string[]): string {
@@ -235,14 +263,28 @@ export async function syncMemoryWikiBridgeSources(params: {
   const scopedArtifacts = agentId
     ? publicArtifacts.filter((artifact) => artifact.agentIds.includes(agentId))
     : publicArtifacts;
+  const sharedVaultBridgeConfigs = resolveSharedVaultBridgeConfigs({
+    config: params.config,
+    appConfig: params.appConfig,
+  });
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
-  const activeKeys = new Set<string>();
-  const artifacts = await collectBridgeArtifacts(params.config.bridge, scopedArtifacts);
+  const artifacts = collectBridgeArtifacts(
+    scopedArtifacts.filter((artifact) => shouldImportArtifact(artifact, params.config.bridge)),
+  );
+  const activeKeys = new Set(
+    collectBridgeArtifacts(
+      publicArtifacts.filter((artifact) =>
+        sharedVaultBridgeConfigs.some((config) =>
+          isBridgeArtifactActiveForConfig(artifact, config),
+        ),
+      ),
+    ).map((artifact) => artifact.syncKey),
+  );
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   assertMemoryWikiSourceSyncStateCapacity({
     state,
     group: "bridge",
-    incomingCount: artifacts.length,
+    incomingCount: activeKeys.size,
   });
   const artifactCount = artifacts.length;
   for (const artifact of artifacts) {
@@ -252,7 +294,6 @@ export async function syncMemoryWikiBridgeSources(params: {
     });
     try {
       const resolvedArtifact = { ...artifact, absolutePath: source.realPath };
-      activeKeys.add(artifact.syncKey);
       results.push(
         await writeBridgeSourcePage({
           config: params.config,

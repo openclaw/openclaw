@@ -206,6 +206,101 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(page).not.toContain("# Writer Memory");
   });
 
+  it("preserves another agent's bridge pages in a shared vault", async () => {
+    const researchWorkspace = await createBridgeWorkspace("shared-vault-research");
+    const writerWorkspace = await createBridgeWorkspace("shared-vault-writer");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("shared-agent-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const researchMemoryPath = path.join(researchWorkspace, "MEMORY.md");
+    const writerMemoryPath = path.join(writerWorkspace, "MEMORY.md");
+    await fs.writeFile(researchMemoryPath, "# Research Memory\n", "utf8");
+    await fs.writeFile(writerMemoryPath, "# Writer Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir: researchWorkspace,
+        relativePath: "MEMORY.md",
+        absolutePath: researchMemoryPath,
+        agentIds: ["research"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: writerWorkspace,
+        relativePath: "MEMORY.md",
+        absolutePath: writerMemoryPath,
+        agentIds: ["writer"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "research",
+            workspace: researchWorkspace,
+            memory: {
+              extensions: {
+                "memory-wiki": {
+                  vaultMode: "bridge",
+                  vault: { path: vaultDir },
+                  bridge: {
+                    enabled: true,
+                    readMemoryArtifacts: true,
+                    indexMemoryRoot: true,
+                  },
+                },
+              },
+            },
+          },
+          {
+            id: "writer",
+            workspace: writerWorkspace,
+            memory: {
+              extensions: {
+                "memory-wiki": {
+                  vaultMode: "bridge",
+                  vault: { path: vaultDir },
+                  bridge: {
+                    enabled: true,
+                    readMemoryArtifacts: true,
+                    indexMemoryRoot: true,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const research = await syncMemoryWikiBridgeSources({
+      config: { ...config, agentId: "research" },
+      appConfig,
+    });
+    const researchPagePath = research.pagePaths[0] ?? "";
+    const writer = await syncMemoryWikiBridgeSources({
+      config: { ...config, agentId: "writer" },
+      appConfig,
+    });
+
+    expect(research.importedCount).toBe(1);
+    expect(writer.importedCount).toBe(1);
+    expect(writer.removedCount).toBe(0);
+    await expect(fs.readFile(path.join(vaultDir, researchPagePath), "utf8")).resolves.toContain(
+      "# Research Memory",
+    );
+  });
+
   it("imports bridge artifacts from legacy providers without agent ids", async () => {
     const workspaceDir = await createBridgeWorkspace("legacy-agentids-workspace");
     const { rootDir: vaultDir, config } = await createVault({
