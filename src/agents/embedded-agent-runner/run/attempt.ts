@@ -355,6 +355,7 @@ import {
   isPrimaryBootstrapRun,
   remapInjectedContextFilesToWorkspace,
 } from "./attempt.bootstrap-context.js";
+import { resolveCompactionRetryAggregateTimeoutMs } from "./compaction-retry-aggregate-timeout.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import {
@@ -4919,7 +4920,15 @@ export async function runEmbeddedAttempt(
         // Only trust snapshot if compaction wasn't running before or after capture
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
-        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
+        // Derive the outer aggregate-wait budget from the inner compaction
+        // model-call safety timeout (agents.defaults.compaction.timeoutSeconds,
+        // already resolved as `compactionTimeoutMs` above). A hardcoded 60s
+        // outer wait used to fire before slow compaction calls (~150–190s on
+        // ~200K-token sessions) finished, abandoning valid results the
+        // provider had already returned and triggering a retry storm. See
+        // https://github.com/openclaw/openclaw/issues/94391.
+        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS =
+          resolveCompactionRetryAggregateTimeoutMs(compactionTimeoutMs);
 
         try {
           // Flush buffered block replies before waiting for compaction so the
