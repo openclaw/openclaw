@@ -7,6 +7,18 @@
 
 ## Last Session
 
+- **Date**: 2026-06-18 (load_skill app-session tool shipped to prod: v2026.06.18.1; US disk cleanup)
+- **What changed**:
+  - **Gateway PR #74** (`feat/load-skill-app-sessions`): read-only, name-scoped `load_skill` tool so Havaya app-user sessions (jailed by `tools.fs.workspaceOnly`) can load + apply the live dashboard skills they could previously see but not read. Allowlist = the prompt-limited filtered `resolvedSkills` (no side channel, no drift with the prompt); confined to each matched entry's own `baseDir`; gated on a resolved app user (turn-1-safe via the #71 fallback); 24 KB cap. The app skills prompt is path-free (`load_skill(name)`, no `<location>` leak) and mirrored into compaction. Folded two codex rounds (4519976882 tool-filter/compaction/limits + 4520156223 doc nit). Merged clean (no `--admin`).
+  - **Gateway image `v2026.06.18.1`** (sourceSha `09a99e476`): built from `main`, pinned to **`life` only** on 2ndClaw (single-agent recreate). Ships the FULL per-user stack to prod (writer #65/#66 + injection #68 + first-turn #71 + load_skill #74). Rollback ref `v2026.06.17.2` (`docker.env.bak.pre-v2026.06.18.1`).
+  - **US-host disk cleanup**: the v2026.06.18.1 pre-pull hit "no space left" (2ndClaw at 97% from gateway-image drift). Freed 22 GB (97% to 67%) by `docker rmi` of 8 unused registry gateway tags — verified unreferenced by any container, all re-pullable from Artifact Registry; in-use tags kept. Recurring: each roll adds ~8.5 GB, so prune unused tags when rolling.
+- **Validation**:
+  - `pnpm check` green on #74 (tsgo + lint); vitest load-skill 11 + system-prompt.skills 8 + overflow-compaction; oxfmt.
+  - Prod smoke: `life` recreated on `v2026.06.18.1`, boots healthy (gateway `:18789`, graphiti mcp ready, telegram up); public-chat smoke returned a coherent in-persona reply.
+- **Follow-ups**: optional `AGENTS.md` prose (reinforcing; the system prompt already instructs `load_skill`); register release `v2026.06.18.1` (owner/dashboard); retire the Havaya Drive "embedded" summary method -> load the live `tal-meeting-summary` skill; periodic US-host image prune.
+
+## Last Session (prev)
+
 - **Date**: 2026-06-17 (Per-user profile Phase 3 shipped to prod: app_profile injection + CI gate; **first-turn fix #71** rolled the same day)
 - **What changed**:
   - **Gateway PR #68** (`feat/app-profile-context`): inject each app-user's `app_profile` section into the agent context every turn as a synthetic `APP_PROFILE.md` bootstrap file, so `life` always knows the user without being reminded. New `src/agents/app-profile-context.ts` (fail-closed marker extractor, UTF-8 byte-safe 2 KB clamp, app-session-only via `isAppUserSession` + `resolveAppUserId`); 3-line wire in `src/agents/bootstrap-files.ts` (after hook overrides, before the context-file budget clamp; compaction-safe). 14/14 vitest; resolved per-run so no cross-user leak.
@@ -22,7 +34,7 @@
   - **#71 fix prod-verified**: reproduced the bug (fresh-session first "Hi" → "what's your name?"), then after rolling `v2026.06.17.2` a fresh-session first "Hi" greeted "היי לירן" (by name) without asking; `life` re-verified healthy on `v2026.06.17.2`.
 - **Follow-ups**: register releases `v2026.06.17.1` (`50f6c2d6f`) and `v2026.06.17.2` (`d4ae21509`) via the dashboard `/api/platform/releases` (bookkeeping; optional dashboard step, prior rolls skipped it without harm).
 
-## Last Session (prev)
+## Last Session (prev 2)
 
 - **Date**: 2026-06-01 / 2026-06-02 (Havaya per-user integration — writer + reader + parity)
 - **What changed**:

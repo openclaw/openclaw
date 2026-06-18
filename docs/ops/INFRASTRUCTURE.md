@@ -223,7 +223,7 @@ host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with s
 
 `braveisrael, cashtronics, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper + kycbot deleted; a `main` agent dir exists with no running container)
 
-### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10); `life` pinned ahead on `gateway:v2026.06.17.2` (per-user `app_profile` injection + first-turn fix #71, 2026-06-17; rollback `v2026.06.17.1`)
+### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10); `life` pinned ahead on `gateway:v2026.06.18.1` (full per-user stack: `app_profile` injection #68 + first-turn #71 + `load_skill` #74, 2026-06-18; rollback `v2026.06.17.2`)
 
 `agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, projectmanager, raingame, social-bob, thebook, vcode1bot` (productguy deleted 2026-06-10 — invalid bot token)
 
@@ -437,7 +437,7 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
    (terminal-error circuit release). Superseded text: `designer`, `agentav`, `gems` run a **stale local image
    `openclaw:v2026.05.05.1`** (not from the registry); `raingame` `v2026.05.24.2`; `life`
    `v2026.06.01.1`; the rest `v2026.05.24.1`. EU is uniform on `v2026.05.24.1`. The fleet is
-   not on a single version.
+   not on a single version. **Disk (2026-06-18):** the host hit 97% (12 stacked gateway tags) mid-roll; freed 22 GB via `docker rmi` of 8 unused registry tags (verified no container ref; all re-pullable from Artifact Registry). Each roll adds ~8.5 GB - prune unused tags when rolling.
 3. **`thebook` runs on BOTH EU and US** — same agent name on two hosts (telegram token not set
    in either config). Confirm which is canonical; a duplicate could double-answer or go stale.
 4. **Coolify server `178.104.184.3`** hosts all AgentGlob web/apps + Havaya — a fourth host
