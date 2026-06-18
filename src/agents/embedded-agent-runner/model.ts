@@ -817,6 +817,7 @@ function applyConfiguredProviderOverrides(params: {
     attachModelProviderRequestTransport(
       {
         ...discoveredModel,
+        provider: params.provider,
         api: requestConfig.api ?? "openai-responses",
         baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
         reasoning: resolvedReasoning,
