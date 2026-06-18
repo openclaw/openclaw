@@ -218,6 +218,61 @@ function createSlackReplacementSchemaRegistry(order: "replacement-first" | "bund
   };
 }
 
+function createCompetingSlackReplacementSchemaRegistry() {
+  const replacementSlack = createPluginManifestRecord({
+    id: "@openclaw/slack-thread-guard",
+    origin: "bundled",
+    channels: ["slack"],
+    channelConfigs: {
+      slack: {
+        preferOver: ["slack"],
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            threadGuard: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        uiHints: {},
+      },
+    },
+  });
+  const laterSlackReplacement = createPluginManifestRecord({
+    id: "@openclaw/slack-rooms",
+    origin: "bundled",
+    channels: ["slack"],
+    channelConfigs: {
+      slack: {
+        preferOver: ["slack"],
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            roomIds: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+          additionalProperties: false,
+        },
+        uiHints: {},
+      },
+    },
+  });
+
+  return {
+    diagnostics: [],
+    plugins: [replacementSlack, laterSlackReplacement],
+  };
+}
+
 function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -792,6 +847,23 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       expect(result.ok).toBe(true);
     });
   }
+
+  it("does not let a later same-origin Slack replacement steal schema ownership by naming only the channel", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createCompetingSlackReplacementSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        slack: {
+          mode: "socket",
+          threadGuard: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
 
   it("keeps raw channel validation diagnostics plugin-agnostic", () => {
     const result = validateConfigObjectRawWithPlugins({

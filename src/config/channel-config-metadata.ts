@@ -38,8 +38,7 @@ function comparablePluginId(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function channelConfigPrefersCurrentOwner(params: {
-  channelId: string;
+function channelConfigReplacesCurrentOwner(params: {
   channelConfigPreferOver?: readonly string[];
   current: ChannelMetadataRecord;
 }): boolean {
@@ -49,10 +48,7 @@ function channelConfigPrefersCurrentOwner(params: {
   if (preferred.size === 0) {
     return false;
   }
-  return (
-    preferred.has(comparablePluginId(params.current.schemaPluginId)) ||
-    preferred.has(comparablePluginId(params.channelId))
-  );
+  return preferred.has(comparablePluginId(params.current.schemaPluginId));
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
@@ -130,8 +126,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         current &&
         current.originRank === originRank &&
         (current.configSchema !== undefined || current.configUiHints !== undefined) &&
-        !channelConfigPrefersCurrentOwner({
-          channelId,
+        !channelConfigReplacesCurrentOwner({
           channelConfigPreferOver: channelConfig.preferOver,
           current,
         })
