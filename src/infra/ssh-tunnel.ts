@@ -119,7 +119,10 @@ export async function startSshPortForward(opts: {
 
   let localPort = opts.localPortPreferred;
   try {
-    await ensurePortAvailable(localPort);
+    // The forward binds 127.0.0.1 (see `-L` below), so probe the IPv4 loopback
+    // explicitly instead of the wildcard `::`. A host-less probe on a dual-stack
+    // host can miss an IPv4-only occupant and report a busy port as free.
+    await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       localPort = await pickEphemeralPort();
