@@ -210,7 +210,17 @@ function hasOnlyReadableTitle(params: { text: string; title?: string }): boolean
   return title.length > 0 && normalizeComparableWebFetchText(params.text) === title;
 }
 
-const BODY_TAG_RAW_TEXT_CONTAINERS = new Set(["script", "style", "noscript", "textarea", "title"]);
+const BODY_TAG_RAW_TEXT_CONTAINERS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+]);
 
 type HtmlTagRead = {
   tagName: string;
@@ -261,7 +271,7 @@ function readHtmlTag(html: string, start: number): HtmlTagRead | null {
 }
 
 function findRawTextElementEnd(html: string, tagName: string, from: number): number {
-  const closeMatch = new RegExp(`</\\s*${tagName}\\s*>`, "i").exec(html.slice(from));
+  const closeMatch = new RegExp(`</\\s*${tagName}\\b[^>]*>`, "i").exec(html.slice(from));
   return closeMatch ? from + closeMatch.index + closeMatch[0].length : html.length;
 }
 

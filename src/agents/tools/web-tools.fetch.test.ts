@@ -871,6 +871,40 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.title).toContain("Sample Page");
   });
 
+  it("ignores fake body tags in legacy raw-text containers with malformed end tags", async () => {
+    for (const tagName of ["iframe", "xmp", "noembed", "noframes"] as const) {
+      extractReadableContentMock.mockResolvedValue({
+        text: "Sample Page",
+        title: "Sample Page",
+        extractor: "readability",
+      });
+      installMockFetch(
+        (input: RequestInfo | URL) =>
+          Promise.resolve(
+            htmlResponse(
+              [
+                "<!doctype html><html><head><title>Sample Page</title>",
+                `<${tagName}><body>Fake ${tagName} body</body></${tagName} data-malformed="true">`,
+                `</head><body><main><p>Real ${tagName} body marker 82685 content.</p></main></body></html>`,
+              ].join(""),
+              resolveRequestUrl(input),
+            ),
+          ) as Promise<Response>,
+      );
+
+      const tool = createFetchTool({
+        firecrawl: { enabled: false },
+      });
+      const result = await executeFetch(tool, { url: `https://example.com/body-${tagName}` });
+      const details = result?.details as { extractor?: string; text?: string; title?: string };
+
+      expect(details.extractor).toBe("raw-html");
+      expect(details.text).toContain(`Real ${tagName} body marker 82685 content.`);
+      expect(details.text).not.toContain(`Fake ${tagName} body`);
+      expect(details.title).toContain("Sample Page");
+    }
+  });
+
   it("tries provider fallback before body HTML when readability returns only the page title", async () => {
     extractReadableContentMock.mockResolvedValue({
       text: "Sample Page",
