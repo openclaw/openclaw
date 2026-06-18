@@ -83,6 +83,9 @@ export function normalizePrCheckRollup(raw: readonly RawCheckSnapshot[]): CheckS
 
 export function classifyCheckSnapshots(snapshots: readonly CheckSnapshot[]): CheckClassification {
   const relevant = snapshots.filter(isRelevantCheck);
+  if (relevant.length === 0) {
+    return { failed: [], kind: "pending", pending: [] };
+  }
   const failed = relevant.filter((snapshot) => {
     if (snapshot.status !== "COMPLETED") {
       return false;

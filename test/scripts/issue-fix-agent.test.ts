@@ -405,4 +405,26 @@ describe("issue-fix-agent checks", () => {
 
     expect(classifyCheckSnapshots(snapshots).kind).toBe("land_ready");
   });
+
+  it("does not mark empty relevant checks as land ready", () => {
+    expect(classifyCheckSnapshots([])).toStrictEqual({
+      failed: [],
+      kind: "pending",
+      pending: [],
+    });
+    const routineOnly = normalizePrCheckRollup([
+      {
+        conclusion: "SUCCESS",
+        detailsUrl: "https://example.test/labeler",
+        name: "Labeler",
+        status: "COMPLETED",
+      },
+    ]);
+
+    expect(classifyCheckSnapshots(routineOnly)).toStrictEqual({
+      failed: [],
+      kind: "pending",
+      pending: [],
+    });
+  });
 });
