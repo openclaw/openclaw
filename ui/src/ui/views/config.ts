@@ -1841,7 +1841,7 @@ export function renderConfig(props: ConfigProps) {
                       [],
                       props.uiHints,
                     );
-                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+                    const blurred = false; // Always show raw config (fix #94202)
                     return html`
                       ${formUnsafe
                         ? html`
