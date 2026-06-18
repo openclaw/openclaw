@@ -3209,6 +3209,10 @@ export async function runAgentTurnWithFallback(params: {
           !isReplyOperationRestartAbort(params.replyOperation) &&
           !isReplyOperationUserAbort(params.replyOperation)
         ) {
+          // Emit the lifecycle terminal like every sibling terminal-failure
+          // exit below; without it status/lifecycle consumers miss the failure
+          // even though the user gets resend guidance.
+          takePendingLifecycleTerminal()?.emit("error", err);
           params.replyOperation?.fail("run_failed", err);
           const text = params.isHeartbeat
             ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
