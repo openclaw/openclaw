@@ -2,8 +2,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const { spawnMock } = vi.hoisted(() => ({
+const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
+  spawnSyncMock: vi.fn(),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -12,6 +13,7 @@ vi.mock("node:child_process", async () => {
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
       spawn: (...args: unknown[]) => spawnMock(...args),
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
     },
   );
 });
@@ -40,6 +42,12 @@ describe("killProcessTree", () => {
 
   beforeEach(() => {
     spawnMock.mockClear();
+    spawnSyncMock.mockClear();
+    // Default: return pgid === pid (process is its own group leader)
+    spawnSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      const pidIdx = args.indexOf("-p") + 1;
+      return { stdout: `${args[pidIdx]}\n`, status: 0, stderr: "", output: [] };
+    });
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();
   });
@@ -200,6 +208,93 @@ describe("killProcessTree", () => {
       await vi.advanceTimersByTimeAsync(10);
 
       expect(killSpy).toHaveBeenCalledWith(-6666, "SIGTERM");
+    });
+  });
+
+  it("on Unix skips group kill when PID is not a process group leader (#76259)", async () => {
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === 7777 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withMockedPlatform("linux", async () => {
+      spawnSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        const pidIdx = args.indexOf("-p") + 1;
+        const pgid = Number.parseInt(args[pidIdx], 10) + 100;
+        return { stdout: `${pgid}\n`, status: 0, stderr: "", output: [] };
+      });
+
+      killProcessTree(7777, { graceMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(7777, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-7777, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-7777, "SIGKILL");
+    });
+  });
+
+  it("on Unix signalProcessTree skips group kill for non-leader PID (#76259)", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      spawnSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        const pidIdx = args.indexOf("-p") + 1;
+        const pgid = Number.parseInt(args[pidIdx], 10) + 100;
+        return { stdout: `${pgid}\n`, status: 0, stderr: "", output: [] };
+      });
+
+      signalProcessTree(8888, "SIGTERM");
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(8888, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGTERM");
+    });
+  });
+
+  it("on Unix uses group kill when detached:true even if PID is not the group leader (#94697)", async () => {
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -9999 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      if (pid === 9999 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withMockedPlatform("linux", async () => {
+      // Simulate leader-exit: ps returns pgid != pid, so isProcessGroupLeader fails
+      spawnSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        const pidIdx = args.indexOf("-p") + 1;
+        const pgid = Number.parseInt(args[pidIdx], 10) + 100;
+        return { stdout: `${pgid}\n`, status: 0, stderr: "", output: [] };
+      });
+
+      killProcessTree(9999, { graceMs: 10, detached: true });
+      await vi.advanceTimersByTimeAsync(10);
+
+      // detached:true forces group kill even though isProcessGroupLeader returns false
+      expect(killSpy).toHaveBeenCalledWith(-9999, "SIGTERM");
+    });
+  });
+
+  it("on Unix signalProcessTree uses group kill when detached:true even if PID is not group leader (#94697)", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      spawnSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        const pidIdx = args.indexOf("-p") + 1;
+        const pgid = Number.parseInt(args[pidIdx], 10) + 100;
+        return { stdout: `${pgid}\n`, status: 0, stderr: "", output: [] };
+      });
+
+      signalProcessTree(9998, "SIGTERM", { detached: true });
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(-9998, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(9998, "SIGTERM");
     });
   });
 
