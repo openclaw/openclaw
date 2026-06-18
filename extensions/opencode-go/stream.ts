@@ -8,6 +8,7 @@ import { isOpencodeGoKimiNoReasoningModelId } from "./provider-catalog.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
 import {
   createOpencodeGoStalledStreamWrapper,
+  OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
   OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
 } from "./stream-termination.js";
 
@@ -62,5 +63,6 @@ export function createOpencodeGoWrapper(
   return createOpencodeGoStalledStreamWrapper(deepSeekWrapped, {
     provider: "opencode-go",
     idleTimeoutMs: OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
+    firstEventTimeoutMs: OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
   });
 }

@@ -161,6 +161,99 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
+  it("uses a longer first-event timeout than the inter-event idle timeout", async () => {
+    const { stream: baseStream } = createFakeBaseStream();
+    let abortCalled = false;
+
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) {
+        options.signal.addEventListener("abort", () => {
+          abortCalled = true;
+        });
+      }
+      return baseStream;
+    });
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+      firstEventTimeoutMs: 10_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const consumer = (async () => {
+      for await (const _event of downstream) {
+        // drain
+      }
+    })();
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(abortCalled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(abortCalled).toBe(true);
+    await consumer;
+  });
+
+  it("honors explicit opencode-go provider request timeout above the wrapper idle default", async () => {
+    const { stream: baseStream, controller } = createFakeBaseStream();
+    let abortCalled = false;
+
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) {
+        options.signal.addEventListener("abort", () => {
+          abortCalled = true;
+        });
+      }
+      return baseStream;
+    });
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+      firstEventTimeoutMs: 5_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash", requestTimeoutMs: 10_000 } as any,
+        {} as any,
+        {} as any,
+      ),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const consumer = (async () => {
+      for await (const _event of downstream) {
+        // drain
+      }
+    })();
+
+    const partial = {
+      role: "assistant",
+      content: [{ type: "text", text: "slow" }],
+      stopReason: undefined,
+    };
+    controller.emit({ type: "start", partial } as any);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(abortCalled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(abortCalled).toBe(true);
+    await consumer;
+  });
+
   it("aborts and releases the underlying stream when no first event arrives", async () => {
     const { stream: baseStream, getReturnCalls } = createFakeBaseStream();
     let abortCalled = false;

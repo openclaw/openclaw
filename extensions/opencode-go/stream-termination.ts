@@ -18,6 +18,10 @@ export interface OpencodeGoStalledStreamWrapperOptions {
    * the underlying SSE as stalled and aborts it. Must be > 0.
    */
   idleTimeoutMs: number;
+  /**
+   * Maximum window for stream creation and first event delivery. Must be > 0.
+   */
+  firstEventTimeoutMs?: number;
 }
 
 /**
@@ -31,10 +35,23 @@ export interface OpencodeGoStalledStreamWrapperOptions {
  */
 export const OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT = 120_000;
 
+export const OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT = 300_000;
+
 function isOpencodeGoModel(model: unknown, providerId: string): boolean {
   return Boolean(model) && typeof model === "object"
     ? (model as { provider?: unknown }).provider === providerId
     : false;
+}
+
+function validTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function resolveTimeoutMs(model: unknown, fallbackMs: number): number {
+  return Math.max(
+    validTimeoutMs((model as { requestTimeoutMs?: unknown })?.requestTimeoutMs) ?? 0,
+    fallbackMs,
+  );
 }
 
 function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
@@ -198,8 +215,12 @@ export function createOpencodeGoStalledStreamWrapper(
   if (!options || options.idleTimeoutMs <= 0) {
     throw new Error("createOpencodeGoStalledStreamWrapper requires idleTimeoutMs > 0");
   }
+  if (options.firstEventTimeoutMs !== undefined && options.firstEventTimeoutMs <= 0) {
+    throw new Error("createOpencodeGoStalledStreamWrapper requires firstEventTimeoutMs > 0");
+  }
   const providerId = options.provider;
-  const idleTimeoutMs = options.idleTimeoutMs;
+  const idleTimeoutMsDefault = options.idleTimeoutMs;
+  const firstEventTimeoutMsDefault = options.firstEventTimeoutMs ?? options.idleTimeoutMs;
 
   return (model, context, callOptions) => {
     if (!isOpencodeGoModel(model, providerId)) {
@@ -207,6 +228,8 @@ export function createOpencodeGoStalledStreamWrapper(
     }
 
     const output = createAssistantMessageEventStream();
+    const idleTimeoutMs = resolveTimeoutMs(model, idleTimeoutMsDefault);
+    const firstEventTimeoutMs = resolveTimeoutMs(model, firstEventTimeoutMsDefault);
     const controller = new AbortController();
     const combinedSignal = combineAbortSignals([
       (callOptions as { signal?: AbortSignal } | undefined)?.signal,
@@ -264,11 +287,15 @@ export function createOpencodeGoStalledStreamWrapper(
       output.end();
     };
 
-    const armIdleTimer = () => {
+    const armTimer = (timeoutMs: number) => {
       clearIdleTimer();
-      idleTimer = setTimeout(abortStalledStream, idleTimeoutMs);
+      idleTimer = setTimeout(abortStalledStream, timeoutMs);
       idleTimer.unref?.();
     };
+
+    const armFirstEventTimer = () => armTimer(firstEventTimeoutMs);
+
+    const armIdleTimer = () => armTimer(idleTimeoutMs);
 
     const trackPartial = (event: AssistantMessageEvent) => {
       const partial =
@@ -286,7 +313,7 @@ export function createOpencodeGoStalledStreamWrapper(
       }
     };
 
-    armIdleTimer();
+    armFirstEventTimer();
     let baseStreamResult: ReturnType<ProviderStreamFn>;
     try {
       baseStreamResult = underlying(model, context, wrappedOptions);
