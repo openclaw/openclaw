@@ -567,102 +567,104 @@ export function createSessionMcpRuntime(params: {
       const usedServerNames = new Set<string>();
 
       try {
-        for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
-          failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer);
-          if (!resolved) {
-            continue;
-          }
-          const safeServerName = sanitizeServerName(serverName, usedServerNames);
-          if (safeServerName !== serverName) {
-            logWarn(
-              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
-            );
-          }
+        const serverEntries = Object.entries(loaded.mcpServers);
+        await Promise.all(
+          serverEntries.map(async ([serverName, rawServer]) => {
+            failIfDisposed();
+            const resolved = resolveMcpTransport(serverName, rawServer);
+            if (!resolved) {
+              return;
+            }
+            const safeServerName = sanitizeServerName(serverName, usedServerNames);
+            if (safeServerName !== serverName) {
+              logWarn(
+                `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
+              );
+            }
 
-          let session = sessions.get(serverName);
-          const reusedSession = Boolean(session);
-          let connected = Boolean(session);
-          if (!session) {
-            const client = new Client(
-              {
-                name: "openclaw-bundle-mcp",
-                version: "0.0.0",
-              },
-              {
-                jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
-                listChanged: {
-                  tools: {
-                    autoRefresh: false,
-                    debounceMs: 0,
-                    onChanged: (error) => {
-                      if (error) {
-                        logWarn(
-                          `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
-                        );
-                      }
-                      catalogInvalidationGeneration += 1;
-                      catalog = null;
-                      catalogInFlight = undefined;
+            let session = sessions.get(serverName);
+            const reusedSession = Boolean(session);
+            let connected = Boolean(session);
+            if (!session) {
+              const client = new Client(
+                {
+                  name: "openclaw-bundle-mcp",
+                  version: "0.0.0",
+                },
+                {
+                  jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+                  listChanged: {
+                    tools: {
+                      autoRefresh: false,
+                      debounceMs: 0,
+                      onChanged: (error) => {
+                        if (error) {
+                          logWarn(
+                            `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                          );
+                        }
+                        catalogInvalidationGeneration += 1;
+                        catalog = null;
+                        catalogInFlight = undefined;
+                      },
                     },
                   },
                 },
-              },
-            );
-            session = {
-              serverName,
-              client,
-              transport: resolved.transport,
-              transportType: resolved.transportType,
-              requestTimeoutMs: resolved.requestTimeoutMs,
-              supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-              detachStderr: resolved.detachStderr,
-            };
-            sessions.set(serverName, session);
-          }
-
-          try {
-            failIfDisposed();
-            if (!connected) {
-              await connectWithTimeout(
-                session.client,
-                session.transport,
-                resolved.connectionTimeoutMs,
               );
-              connected = true;
+              session = {
+                serverName,
+                client,
+                transport: resolved.transport,
+                transportType: resolved.transportType,
+                requestTimeoutMs: resolved.requestTimeoutMs,
+                supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+                detachStderr: resolved.detachStderr,
+              };
+              sessions.set(serverName, session);
             }
-            failIfDisposed();
-            const capabilities = summarizeServerCapabilities(
-              session.client.getServerCapabilities(),
-            );
-            const listedTools = await listAllToolsBestEffort({
-              client: session.client,
-              timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
-              suppressUnsupported: Boolean(
-                !capabilities.tools && (capabilities.resources || capabilities.prompts),
-              ),
-            });
-            failIfDisposed();
-            const selection = getMcpToolSelection(rawServer);
-            const exposedTools = listedTools.filter((tool) =>
-              shouldExposeMcpTool(selection, tool.name.trim()),
-            );
-            servers[serverName] = {
-              serverName,
-              safeServerName,
-              launchSummary: resolved.description,
-              toolCount: exposedTools.length,
-              requestTimeoutMs: resolved.requestTimeoutMs,
-              supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-              ...(capabilities.resources ? { resources: capabilities.resources } : {}),
-              ...(capabilities.prompts ? { prompts: capabilities.prompts } : {}),
-              ...(capabilities.tools
-                ? {
-                    tools: {
-                      ...capabilities.tools,
-                      ...(exposedTools.length !== listedTools.length
-                        ? { filteredCount: listedTools.length - exposedTools.length }
-                        : {}),
+
+            try {
+              failIfDisposed();
+              if (!connected) {
+                await connectWithTimeout(
+                  session.client,
+                  session.transport,
+                  resolved.connectionTimeoutMs,
+                );
+                connected = true;
+              }
+              failIfDisposed();
+              const capabilities = summarizeServerCapabilities(
+                session.client.getServerCapabilities(),
+              );
+              const listedTools = await listAllToolsBestEffort({
+                client: session.client,
+                timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+                suppressUnsupported: Boolean(
+                  !capabilities.tools && (capabilities.resources || capabilities.prompts),
+                ),
+              });
+              failIfDisposed();
+              const selection = getMcpToolSelection(rawServer);
+              const exposedTools = listedTools.filter((tool) =>
+                shouldExposeMcpTool(selection, tool.name.trim()),
+              );
+              servers[serverName] = {
+                serverName,
+                safeServerName,
+                launchSummary: resolved.description,
+                toolCount: exposedTools.length,
+                requestTimeoutMs: resolved.requestTimeoutMs,
+                supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+                ...(capabilities.resources ? { resources: capabilities.resources } : {}),
+                ...(capabilities.prompts ? { prompts: capabilities.prompts } : {}),
+                ...(capabilities.tools
+                  ? {
+                      tools: {
+                        ...capabilities.tools,
+                        ...(exposedTools.length !== listedTools.length
+                          ? { filteredCount: listedTools.length - exposedTools.length }
+                          : {}),
                     },
                   }
                 : {}),
@@ -710,7 +712,7 @@ export function createSessionMcpRuntime(params: {
             }
             failIfDisposed();
           }
-        }
+        });
 
         failIfDisposed();
         return {
