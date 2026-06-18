@@ -2634,7 +2634,7 @@ function resolveHistoryFamilySessionIds(
   const withoutCurrent = (entry?.usageFamilySessionIds ?? []).filter(
     (sessionId) => sessionId !== currentSessionId,
   );
-  return uniqueStrings([...withoutCurrent, currentSessionId]);
+  return uniqueStrings([currentSessionId, ...withoutCurrent]);
 }
 
 function resolveFirstExistingTranscriptCandidate(params: {
@@ -2707,6 +2707,17 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
               allowResetArchiveFallback: true,
             },
           );
+    if (activeFile && familySessionId === params.sessionId) {
+      if (
+        !pushTarget({
+          sessionId: familySessionId,
+          sessionFile: activeFile,
+          applySessionStartedAtFilter: true,
+        })
+      ) {
+        return targets;
+      }
+    }
     for (const file of archivedFiles) {
       if (
         !pushTarget({
@@ -2718,12 +2729,12 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
         return targets;
       }
     }
-    if (activeFile) {
+    if (activeFile && familySessionId !== params.sessionId) {
       if (
         !pushTarget({
           sessionId: familySessionId,
           sessionFile: activeFile,
-          applySessionStartedAtFilter: familySessionId === params.sessionId,
+          applySessionStartedAtFilter: false,
         })
       ) {
         return targets;
