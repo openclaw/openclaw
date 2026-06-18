@@ -15,7 +15,7 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 
-const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
+const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   if (opts.method === "node.list") {
     return {
       nodes: [

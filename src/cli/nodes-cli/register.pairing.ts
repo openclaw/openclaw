@@ -85,7 +85,7 @@ async function buildUnknownNodePairRequestIdMessage(
   opts: NodesRpcOpts,
   requestId: string,
 ): Promise<string> {
-  let pendingIds: string[] = [];
+  let pendingIds: string[];
   try {
     const result = await callNodePairApprovalGatewayCli(
       "node.pair.list",
