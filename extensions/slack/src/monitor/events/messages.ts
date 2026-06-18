@@ -217,6 +217,15 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
+      ctx.logger.info(
+        {
+          channel: mention.channel,
+          user: mention.user,
+          textLength: mention.text?.length ?? 0,
+        },
+        "slack app_mention received",
+      );
+
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
         wasMentioned: true,
