@@ -2,8 +2,8 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { pathForRoute } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
-import { pathForRoute } from "../../routes/route-registry.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,

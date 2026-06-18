@@ -1,6 +1,3 @@
-// Control UI module implements app settings behavior.
-import { applyActiveRouteTransition, refreshActiveRoute } from "../app/active-route.ts";
-import type { SettingsHost } from "../app/app-host.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -8,7 +5,10 @@ import {
   pathForRoute,
   routeIdFromPath,
   type RouteId,
-} from "../routes/route-registry.ts";
+} from "../app-routes.ts";
+// Control UI module implements app settings behavior.
+import { applyActiveRouteTransition, refreshActiveRoute } from "../app/active-route.ts";
+import type { SettingsHost } from "../app/app-host.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import {
   normalizeTextScale,

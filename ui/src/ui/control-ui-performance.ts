@@ -1,4 +1,4 @@
-import type { RouteId } from "../routes/route-registry.ts";
+import type { RouteId } from "../app-routes.ts";
 // Control UI module implements control ui performance behavior.
 import type { EventLogEntry } from "./app-events.ts";
 import type { GatewayConnectTiming, GatewayRequestTiming } from "./gateway.ts";

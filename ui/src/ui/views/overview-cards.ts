@@ -2,8 +2,8 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
-import type { RouteId } from "../../routes/route-registry.ts";
 import { isCronJobActiveFailure } from "../cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";

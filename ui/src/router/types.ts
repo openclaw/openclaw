@@ -1,6 +1,17 @@
 export type MaybePromise<T> = T | Promise<T>;
 
-export type Route<
+export type Page<TLoadContext = unknown, TRenderContext = unknown> = {
+  onEnter?: (context: TLoadContext) => MaybePromise<void>;
+  load?: (context: TLoadContext) => MaybePromise<void>;
+  onLeave?: (context: TLoadContext) => MaybePromise<void>;
+  render: (context: TRenderContext) => unknown;
+};
+
+export type PageModule<TLoadContext = unknown, TRenderContext = unknown> = {
+  page: Page<TLoadContext, TRenderContext>;
+};
+
+export type RouteRecord<
   TRouteId extends string = string,
   TLoadContext = unknown,
   TRenderContext = unknown,
@@ -8,18 +19,18 @@ export type Route<
   id: TRouteId;
   path: string;
   parent?: string;
-  onEnter?: (context: TLoadContext) => MaybePromise<void>;
-  load?: (context: TLoadContext) => MaybePromise<void>;
-  onLeave?: (context: TLoadContext) => MaybePromise<void>;
-  render: (context: TRenderContext) => unknown;
+  page?: () => Promise<PageModule<TLoadContext, TRenderContext>>;
 };
 
-export function defineRoute<
-  const TRouteId extends string,
+export type Route<
+  TRouteId extends string = string,
   TLoadContext = unknown,
   TRenderContext = unknown,
->(
-  route: Route<TRouteId, TLoadContext, TRenderContext>,
-): Route<TRouteId, TLoadContext, TRenderContext> {
-  return route;
+> = RouteRecord<TRouteId, TLoadContext, TRenderContext> &
+  Partial<Page<TLoadContext, TRenderContext>>;
+
+export function definePage<TLoadContext = unknown, TRenderContext = unknown>(
+  page: Page<TLoadContext, TRenderContext>,
+): Page<TLoadContext, TRenderContext> {
+  return page;
 }

@@ -1,5 +1,5 @@
 // Shared Control UI host shapes used by app-level route and settings modules.
-import type { RouteId } from "../routes/route-registry.ts";
+import type { RouteId } from "../app-routes.ts";
 import type { AgentFilesState } from "../ui/controllers/agent-files.ts";
 import type { AgentIdentityState } from "../ui/controllers/agent-identity.ts";
 import type { AgentSkillsState } from "../ui/controllers/agent-skills.ts";

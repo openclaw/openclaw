@@ -1,22 +1,24 @@
 // Control UI tests cover navigation groups behavior.
 import { describe, expect, it } from "vitest";
 import {
-  SETTINGS_ROUTES,
-  ROUTE_GROUPS,
-  isSettingsRoute,
-  isRouteInGroup,
-  routeIdFromPath,
-} from "../routes/route-registry.ts";
+  SETTINGS_NAVIGATION_ROUTES,
+  SIDEBAR_SECTIONS,
+  isSettingsNavigationRoute,
+  isRouteInSidebarSection,
+} from "../app-navigation.ts";
+import { routeIdFromPath } from "../app-routes.ts";
 
-describe("ROUTE_GROUPS", () => {
+describe("SIDEBAR_SECTIONS", () => {
   it("collapses detailed settings slices into one sidebar entry", () => {
-    const settings = ROUTE_GROUPS.find((group) => group.label === "settings");
+    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
     expect(settings?.routes).toEqual(["config"]);
-    expect(SETTINGS_ROUTES.every((routeId) => isSettingsRoute(routeId))).toBe(true);
+    expect(SETTINGS_NAVIGATION_ROUTES.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(
+      true,
+    );
   });
 
   it("keeps channel management out of the primary control sidebar", () => {
-    const control = ROUTE_GROUPS.find((group) => group.label === "control");
+    const control = SIDEBAR_SECTIONS.find((group) => group.label === "control");
     expect(control?.routes).toEqual([
       "overview",
       "activity",
@@ -26,19 +28,19 @@ describe("ROUTE_GROUPS", () => {
       "usage",
       "cron",
     ]);
-    expect(SETTINGS_ROUTES).toContain("channels");
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("channels");
   });
 
   it("keeps the settings group active for nested settings routes", () => {
-    const settings = ROUTE_GROUPS.find((group) => group.label === "settings");
+    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
     if (!settings) {
       throw new Error("Expected settings group");
     }
 
-    expect(isRouteInGroup(settings, "appearance")).toBe(true);
-    expect(isRouteInGroup(settings, "channels")).toBe(true);
-    expect(isRouteInGroup(settings, "debug")).toBe(true);
-    expect(isRouteInGroup(settings, "chat")).toBe(false);
+    expect(isRouteInSidebarSection(settings, "appearance")).toBe(true);
+    expect(isRouteInSidebarSection(settings, "channels")).toBe(true);
+    expect(isRouteInSidebarSection(settings, "debug")).toBe(true);
+    expect(isRouteInSidebarSection(settings, "chat")).toBe(false);
   });
 
   it("routes every published settings slice", () => {

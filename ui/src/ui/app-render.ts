@@ -2,20 +2,19 @@
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { isSettingsNavigationRoute, SIDEBAR_SECTIONS } from "../app-navigation.ts";
+import {
+  normalizeBasePath,
+  pathForRoute,
+  subtitleForRoute,
+  titleForRoute,
+  type RouteId,
+} from "../app-routes.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { appRouter } from "../router/index.ts";
-import {
-  isSettingsRoute,
-  normalizeBasePath,
-  pathForRoute,
-  ROUTE_GROUPS,
-  subtitleForRoute,
-  titleForRoute,
-  type RouteId,
-} from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
@@ -41,7 +40,6 @@ import {
   openCurrentSessionCheckpoints,
   patchSessionFromSessionsView,
   switchChatSession,
-  switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -1288,7 +1286,7 @@ export function renderApp(state: AppViewState) {
   const isChat = state.routeId === "chat";
   const activeRoute = appRouter.getRoute(state.routeId);
   const routedPage =
-    activeRoute?.render({
+    activeRoute?.render?.({
       state,
       invalidate: notifyLazyViewChanged,
     }) ?? null;
@@ -2495,7 +2493,7 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               ${renderSidebarSessions(state, navCollapsed)}
               <nav class="sidebar-nav">
-                ${ROUTE_GROUPS.filter(
+                ${SIDEBAR_SECTIONS.filter(
                   // The expanded sidebar owns chat entry points via the sessions
                   // section; the collapsed rail keeps the chat tab icon reachable.
                   (group) => navCollapsed || group.label !== "chat",
@@ -3760,7 +3758,7 @@ export function renderApp(state: AppViewState) {
                 }),
             )
           : nothing}
-        ${isSettingsRoute(state.routeId) && !routedPage
+        ${isSettingsNavigationRoute(state.routeId) && !routedPage
           ? renderSettingsWorkspace(state, renderConfigTabForActiveTab())
           : renderConfigTabForActiveTab()}
         ${state.routeId === "dreams"

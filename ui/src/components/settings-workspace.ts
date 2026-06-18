@@ -1,22 +1,21 @@
 import { html, nothing } from "lit";
-import { t } from "../i18n/index.ts";
 import {
-  iconForRoute,
-  isSettingsRoute,
-  pathForRoute,
-  SETTINGS_ROUTES,
-  titleForRoute,
-} from "../routes/route-registry.ts";
+  isSettingsNavigationRoute,
+  navigationIconForRoute,
+  SETTINGS_NAVIGATION_ROUTES,
+} from "../app-navigation.ts";
+import { pathForRoute, titleForRoute } from "../app-routes.ts";
+import { t } from "../i18n/index.ts";
 import type { AppViewState } from "../ui/app-view-state.ts";
 import { icons } from "../ui/icons.ts";
 
 function renderSettingsSectionNav(state: AppViewState) {
-  if (!isSettingsRoute(state.routeId)) {
+  if (!isSettingsNavigationRoute(state.routeId)) {
     return nothing;
   }
   return html`
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
-      ${SETTINGS_ROUTES.map((routeId) => {
+      ${SETTINGS_NAVIGATION_ROUTES.map((routeId) => {
         const active = state.routeId === routeId;
         const href = pathForRoute(routeId, state.basePath);
         return html`
@@ -40,7 +39,7 @@ function renderSettingsSectionNav(state: AppViewState) {
             title=${titleForRoute(routeId)}
           >
             <span class="settings-section-nav__icon" aria-hidden="true"
-              >${icons[iconForRoute(routeId)]}</span
+              >${icons[navigationIconForRoute(routeId)]}</span
             >
             <span class="settings-section-nav__label">${titleForRoute(routeId)}</span>
           </a>

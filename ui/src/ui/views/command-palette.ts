@@ -1,8 +1,8 @@
 // Control UI view renders command palette screen content.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
-import type { RouteId } from "../../routes/route-registry.ts";
 import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
 import { icons, type IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";

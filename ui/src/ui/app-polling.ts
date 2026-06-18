@@ -1,5 +1,5 @@
 // Control UI module implements app polling behavior.
-import type { RouteId } from "../routes/route-registry.ts";
+import type { RouteId } from "../app-routes.ts";
 import type { DebugState } from "./controllers/debug.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import type { LogsState } from "./controllers/logs.ts";

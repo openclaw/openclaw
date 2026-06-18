@@ -1,7 +1,16 @@
-import type { MaybePromise, Route } from "./types.ts";
+import { lazyPageModule } from "./lazy-page.ts";
+import type { MaybePromise, Route, RouteRecord } from "./types.ts";
 
-type RouterOptions<TRouteId extends string, TLoadContext, TRenderContext> = {
-  routes: readonly Route<TRouteId, TLoadContext, TRenderContext>[];
+type InvalidateContext = {
+  invalidate: () => void;
+};
+
+type RouterOptions<
+  TRouteId extends string,
+  TLoadContext,
+  TRenderContext extends InvalidateContext,
+> = {
+  routes: readonly RouteRecord<TRouteId, TLoadContext, TRenderContext>[];
 };
 
 type TransitionOptions = {
@@ -15,12 +24,16 @@ function isPromiseLike(value: MaybePromise<void>): value is Promise<void> {
 export function createRouter<
   TRouteId extends string,
   TLoadContext = unknown,
-  TRenderContext = unknown,
+  TRenderContext extends InvalidateContext = InvalidateContext,
 >(options: RouterOptions<TRouteId, TLoadContext, TRenderContext>) {
   const byId = new Map<TRouteId, Route<TRouteId, TLoadContext, TRenderContext>>();
   const byPath = new Map<string, Route<TRouteId, TLoadContext, TRenderContext>>();
+  const routes = options.routes.map((route) => ({
+    ...route,
+    ...(route.page ? lazyPageModule(route.page) : {}),
+  }));
 
-  for (const route of options.routes) {
+  for (const route of routes) {
     if (byId.has(route.id)) {
       throw new Error(`Duplicate route id "${route.id}".`);
     }
@@ -32,7 +45,7 @@ export function createRouter<
   }
 
   return {
-    routes: options.routes,
+    routes,
     getRoute: (id: TRouteId) => byId.get(id) ?? null,
     matchPath: (path: string) => byPath.get(path) ?? null,
     transition(
