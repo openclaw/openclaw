@@ -1,6 +1,9 @@
 name: QA Lab Smoke Profile
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/qa-lab-smoke-profile.yml
   workflow_dispatch:
     inputs:
       ref:
@@ -42,12 +45,12 @@ on:
         type: boolean
 
 concurrency:
-  group: qa-lab-smoke-profile-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-  cancel-in-progress: false
+  group: qa-lab-smoke-profile-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NODE_VERSION: 24.x
-  TARGET_REF: ${{ inputs.ref || github.sha }}
+  TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   OPENAI_API_KEY: ""
   ANTHROPIC_API_KEY: ""
   OPENCLAW_LIVE_OPENAI_KEY: ""
@@ -87,13 +90,13 @@ jobs:
       - name: Run QA evidence lane
         id: run_qa
         env:
-          INPUT_QA_PROFILE: ${{ inputs.qa_profile }}
-          INPUT_SURFACE: ${{ inputs.surface }}
-          INPUT_CATEGORY: ${{ inputs.category }}
-          INPUT_SCENARIO_ID: ${{ inputs.scenario_id }}
-          INPUT_CONCURRENCY: ${{ inputs.concurrency }}
-          INPUT_EVIDENCE_MODE: ${{ inputs.evidence_mode }}
-          INPUT_FAST: ${{ inputs.fast }}
+          INPUT_QA_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.qa_profile || 'smoke-ci' }}
+          INPUT_SURFACE: ${{ github.event_name == 'workflow_dispatch' && inputs.surface || '' }}
+          INPUT_CATEGORY: ${{ github.event_name == 'workflow_dispatch' && inputs.category || '' }}
+          INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || 'gateway-smoke' }}
+          INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '1' }}
+          INPUT_EVIDENCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_mode || 'slim' }}
+          INPUT_FAST: ${{ github.event_name != 'workflow_dispatch' || inputs.fast }}
         run: |
           set -euo pipefail
 
