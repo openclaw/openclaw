@@ -3,6 +3,7 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 
@@ -175,6 +176,59 @@ function redactedCardResult(card: WorkboardCard) {
 
 function redactedRawCardResult(card: WorkboardCard) {
   return jsonResult(redactClaimToken(card));
+}
+
+function cardBoardId(card: WorkboardCard): string {
+  return card.metadata?.automation?.boardId ?? "default";
+}
+
+function createdCardIdsFrom(card: WorkboardCard): string[] {
+  return card.metadata?.automation?.createdCardIds ?? [];
+}
+
+function redactDispatchResult<
+  T extends {
+    promoted: WorkboardCard[];
+    reclaimed: WorkboardCard[];
+    blocked: WorkboardCard[];
+    orchestrated: WorkboardCard[];
+  },
+>(result: T): T {
+  return {
+    ...result,
+    promoted: result.promoted.map(redactClaimToken),
+    reclaimed: result.reclaimed.map(redactClaimToken),
+    blocked: result.blocked.map(redactClaimToken),
+    orchestrated: result.orchestrated.map(redactClaimToken),
+  };
+}
+
+async function dispatchAndRedact(params: {
+  api: OpenClawPluginApi;
+  store: WorkboardStore;
+  boardId?: string;
+  cardIds?: string[];
+}) {
+  const subagent = params.api.runtime.subagent;
+  if (!subagent) {
+    return redactDispatchResult(
+      await params.store.dispatch({
+        boardId: params.boardId,
+        cardIds: params.cardIds,
+      }),
+    );
+  }
+  return redactDispatchResult(
+    await dispatchAndStartWorkboardCards({
+      store: params.store,
+      subagent,
+      options: {
+        boardId: params.boardId,
+        cardIds: params.cardIds,
+        maxStarts: params.cardIds?.length,
+      },
+    }),
+  );
 }
 
 const CardIdSchema = Type.Object(
@@ -530,9 +584,19 @@ export function createWorkboardTools(params: {
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        return runClaimedCardMutation(rawParams, (id, record, scope) =>
-          store.complete(id, record, scope),
-        );
+        const { record, id, scope } = await readClaimedCardToolParams(rawParams);
+        const card = await store.complete(id, record, scope);
+        const createdCardIds = createdCardIdsFrom(card);
+        if (createdCardIds.length === 0) {
+          return redactedCardResult(card);
+        }
+        const dispatch = await dispatchAndRedact({
+          api: params.api,
+          store,
+          boardId: cardBoardId(card),
+          cardIds: createdCardIds,
+        });
+        return jsonResult({ card: redactClaimToken(card), dispatch });
       },
     },
     {
@@ -982,6 +1046,11 @@ export function createWorkboardTools(params: {
       parameters: Type.Object(
         {
           boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
+          cardIds: Type.Optional(
+            Type.Array(Type.String(), {
+              description: "Optional card ids to promote and start during this dispatch pass.",
+            }),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -990,13 +1059,16 @@ export function createWorkboardTools(params: {
           rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
             ? (rawParams as Record<string, unknown>)
             : {};
-        const result = await store.dispatch({ boardId: record.boardId });
+        const cardIds = Array.isArray(record.cardIds)
+          ? record.cardIds.filter((id): id is string => typeof id === "string")
+          : undefined;
         return jsonResult({
-          ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
+          ...(await dispatchAndRedact({
+            api: params.api,
+            store,
+            boardId: typeof record.boardId === "string" ? record.boardId : undefined,
+            cardIds,
+          })),
         });
       },
     },

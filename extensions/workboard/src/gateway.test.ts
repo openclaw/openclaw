@@ -1,3 +1,4 @@
+import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 // Workboard tests cover gateway plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
@@ -259,6 +260,82 @@ describe("workboard gateway methods", () => {
         sessionKey: `subagent:workboard-default-${card.id}`,
       }),
     );
+  });
+
+  it("blocks targeted gateway dispatch when subagent runtime is unavailable", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const run = vi.fn().mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+        subagent: { run },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Parent",
+      status: "ready",
+      priority: "normal",
+      boardId: "mission",
+    });
+    const child = await store.create({
+      title: "Child",
+      parents: [parent.id],
+      priority: "normal",
+      boardId: "mission",
+      agentId: "child-agent",
+    });
+    const claimedParent = await store.claim(parent.id, { ownerId: "parent-agent" });
+    await store.complete(
+      parent.id,
+      { summary: "Parent done." },
+      { ownerId: "parent-agent", token: claimedParent.token },
+    );
+
+    registerWorkboardGatewayMethods({ api, store });
+
+    const respond = vi.fn();
+    await methods.get("workboard.cards.dispatch")?.handler({
+      params: { boardId: "mission", cardIds: [child.id] },
+      respond,
+    } as never);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      promoted: [expect.objectContaining({ id: child.id, status: "ready" })],
+      started: [],
+      startFailures: [
+        expect.objectContaining({
+          cardId: child.id,
+          error: expect.stringContaining("subagent methods are only available"),
+        }),
+      ],
+    });
+    expect(run).toHaveBeenCalledOnce();
+    const childAfter = await store.get(child.id);
+    expect(childAfter).toMatchObject({
+      status: "blocked",
+      metadata: {
+        comments: [
+          expect.objectContaining({
+            body: expect.stringContaining("Dispatcher could not start worker"),
+          }),
+        ],
+      },
+    });
+    expect(childAfter?.runId).toBeUndefined();
+    expect(childAfter?.execution).toBeUndefined();
   });
 
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {

@@ -1,3 +1,4 @@
+import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 // Workboard tests cover dispatcher plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
@@ -110,6 +111,206 @@ describe("dispatchAndStartWorkboardCards", () => {
       }),
     ]);
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("starts only targeted ready cards when cardIds are supplied", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const target = await store.create({
+      title: "Target child",
+      status: "ready",
+      priority: "normal",
+      agentId: "child-agent",
+    });
+    const unrelated = await store.create({
+      title: "Unrelated ready",
+      status: "ready",
+      priority: "urgent",
+      agentId: "other-agent",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-target" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, cardIds: [target.id] },
+    });
+
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: target.id, runId: "run-target" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(target.id)).resolves.toMatchObject({
+      status: "running",
+      runId: "run-target",
+    });
+    const unrelatedAfter = await store.get(unrelated.id);
+    expect(unrelatedAfter).toMatchObject({ status: "ready" });
+    expect(unrelatedAfter?.runId).toBeUndefined();
+  });
+
+  it("does not let off-board or archived stale claims consume the target owner slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({
+      title: "Off-board active worker",
+      status: "running",
+      boardId: "other-board",
+      agentId: "marshal",
+    });
+    await store.create({
+      title: "Off-board blocked stale claim",
+      status: "blocked",
+      boardId: "other-board",
+      agentId: "marshal",
+      metadata: {
+        claim: {
+          ownerId: "marshal",
+          token: "stale-off-board",
+          claimedAt: 1,
+          lastHeartbeatAt: 1,
+          expiresAt: 2,
+        },
+      },
+    });
+    await store.create({
+      title: "Archived stale claim",
+      status: "blocked",
+      boardId: "mission",
+      agentId: "marshal",
+      metadata: {
+        archivedAt: 5,
+        claim: {
+          ownerId: "marshal",
+          token: "stale-archived",
+          claimedAt: 1,
+          lastHeartbeatAt: 1,
+          expiresAt: 2,
+        },
+      },
+    });
+    const target = await store.create({
+      title: "Wave target",
+      status: "ready",
+      boardId: "mission",
+      agentId: "marshal",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-target" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, boardId: "mission", cardIds: [target.id] },
+    });
+
+    expect(result.skipped).toEqual([]);
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: target.id, runId: "run-target" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(target.id)).resolves.toMatchObject({
+      status: "running",
+      runId: "run-target",
+    });
+  });
+
+  it("records a targeted skip when same-board active work owns the slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const active = await store.create({
+      title: "Active same-board worker",
+      status: "running",
+      boardId: "mission",
+      agentId: "marshal",
+    });
+    const target = await store.create({
+      title: "Blocked by active owner",
+      status: "ready",
+      boardId: "mission",
+      agentId: "marshal",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-target" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, boardId: "mission", cardIds: [target.id] },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(result.startFailures).toEqual([]);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        cardId: target.id,
+        reason: expect.stringContaining(active.id),
+      }),
+    ]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(target.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        workerLogs: [
+          expect.objectContaining({
+            level: "warning",
+            message: expect.stringContaining("Dispatcher skipped worker start"),
+          }),
+        ],
+      },
+    });
+  });
+
+  it("blocks targeted cards when subagent runtime is unavailable", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Parent",
+      status: "ready",
+      priority: "normal",
+    });
+    const target = await store.create({
+      title: "Target child",
+      parents: [parent.id],
+      priority: "normal",
+      agentId: "child-agent",
+    });
+    const unrelated = await store.create({
+      title: "Unrelated child",
+      parents: [parent.id],
+      priority: "urgent",
+      agentId: "other-agent",
+    });
+    const claimedParent = await store.claim(parent.id, { ownerId: "parent-agent" });
+    await store.complete(
+      parent.id,
+      { summary: "Parent done." },
+      { ownerId: "parent-agent", token: claimedParent.token },
+    );
+    const run = vi.fn().mockRejectedValue(new RequestScopedSubagentRuntimeError());
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, cardIds: [target.id] },
+    });
+
+    expect(result.promoted).toEqual([expect.objectContaining({ id: target.id, status: "ready" })]);
+    expect(result.started).toEqual([]);
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: target.id,
+        error: expect.stringContaining("subagent methods are only available"),
+      }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    const targetAfter = await store.get(target.id);
+    expect(targetAfter).toMatchObject({
+      status: "blocked",
+      metadata: {
+        comments: [
+          expect.objectContaining({
+            body: expect.stringContaining("Dispatcher could not start worker"),
+          }),
+        ],
+      },
+    });
+    expect(targetAfter?.metadata?.claim).toBeUndefined();
+    await expect(store.get(unrelated.id)).resolves.toMatchObject({ status: "todo" });
   });
 
   it("starts workers only for the selected board", async () => {

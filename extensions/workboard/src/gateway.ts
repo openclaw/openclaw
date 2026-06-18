@@ -56,6 +56,31 @@ function redactClaimToken(card: WorkboardCard): WorkboardCard {
   };
 }
 
+function cardBoardId(card: WorkboardCard): string {
+  return card.metadata?.automation?.boardId ?? "default";
+}
+
+function createdCardIdsFrom(card: WorkboardCard): string[] {
+  return card.metadata?.automation?.createdCardIds ?? [];
+}
+
+function redactDispatchResult<
+  T extends {
+    promoted: WorkboardCard[];
+    reclaimed: WorkboardCard[];
+    blocked: WorkboardCard[];
+    orchestrated: WorkboardCard[];
+  },
+>(result: T): T {
+  return {
+    ...result,
+    promoted: result.promoted.map(redactClaimToken),
+    reclaimed: result.reclaimed.map(redactClaimToken),
+    blocked: result.blocked.map(redactClaimToken),
+    orchestrated: result.orchestrated.map(redactClaimToken),
+  };
+}
+
 function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagnostics"]>>) {
   return {
     ...result,
@@ -306,8 +331,25 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.complete",
     async ({ params: requestParams, respond }) => {
       try {
+        const card = await store.complete(readId(requestParams), requestParams, null);
+        const createdCardIds = createdCardIdsFrom(card);
+        const dispatch =
+          createdCardIds.length > 0
+            ? redactDispatchResult(
+                await dispatchAndStartWorkboardCards({
+                  store,
+                  subagent: api.runtime.subagent,
+                  options: {
+                    boardId: cardBoardId(card),
+                    cardIds: createdCardIds,
+                    maxStarts: createdCardIds.length,
+                  },
+                }),
+              )
+            : undefined;
         respond(true, {
-          card: redactClaimToken(await store.complete(readId(requestParams), requestParams, null)),
+          card: redactClaimToken(card),
+          ...(dispatch ? { dispatch } : {}),
         });
       } catch (error) {
         respondError(respond, error);
@@ -389,20 +431,19 @@ export function registerWorkboardGatewayMethods(params: {
           requestParams && typeof requestParams === "object" && "boardId" in requestParams
             ? requestParams.boardId
             : undefined;
+        const cardIds =
+          requestParams && typeof requestParams === "object" && Array.isArray(requestParams.cardIds)
+            ? requestParams.cardIds.filter((id): id is string => typeof id === "string")
+            : undefined;
         const result = await dispatchAndStartWorkboardCards({
           store,
           subagent: api.runtime.subagent,
           options: {
             boardId: typeof boardId === "string" ? boardId : undefined,
+            cardIds,
           },
         });
-        respond(true, {
-          ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
-        });
+        respond(true, redactDispatchResult(result));
       } catch (error) {
         respondError(respond, error);
       }

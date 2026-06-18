@@ -9,7 +9,17 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
-import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  authorizeOperatorScopesForMethod,
+} from "./method-scopes.js";
+import {
+  DYNAMIC_GATEWAY_METHOD_SCOPE,
+  NODE_GATEWAY_METHOD_SCOPE,
+  type GatewayMethodScope,
+} from "./methods/descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -222,6 +232,7 @@ function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
   params: unknown,
+  methodRegistry: GatewayMethodRegistry,
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
@@ -237,7 +248,14 @@ function authorizeGatewayMethod(
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`);
   }
   const scopes = client.connect.scopes ?? [];
-  if (!isRoleAuthorizedForMethod(role, method)) {
+  const registryScope = methodRegistry.getScope(method);
+  const roleAuthorized =
+    registryScope === NODE_GATEWAY_METHOD_SCOPE
+      ? role === "node"
+      : registryScope
+        ? role === "operator"
+        : isRoleAuthorizedForMethod(role, method);
+  if (!roleAuthorized) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
@@ -246,11 +264,35 @@ function authorizeGatewayMethod(
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
-  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes, params);
+  const scopeAuth = authorizeGatewayMethodScope(method, scopes, params, registryScope);
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
   return null;
+}
+
+function authorizeGatewayMethodScope(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+  registryScope: GatewayMethodScope | undefined,
+) {
+  if (!registryScope || registryScope === DYNAMIC_GATEWAY_METHOD_SCOPE) {
+    return authorizeOperatorScopesForMethod(method, scopes, params);
+  }
+  if (registryScope === NODE_GATEWAY_METHOD_SCOPE) {
+    return { allowed: true } as const;
+  }
+  if (registryScope === READ_SCOPE) {
+    if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true } as const;
+    }
+    return { allowed: false, missingScope: READ_SCOPE } as const;
+  }
+  if (scopes.includes(registryScope)) {
+    return { allowed: true } as const;
+  }
+  return { allowed: false, missingScope: registryScope } as const;
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {
@@ -624,7 +666,7 @@ export async function handleGatewayRequest(
   const { req, respond, client, isWebchatConnect, context } = opts;
   const methodRegistry =
     opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authError = authorizeGatewayMethod(req.method, client, req.params);
+  const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
     return;

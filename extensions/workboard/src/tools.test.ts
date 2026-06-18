@@ -1,3 +1,4 @@
+import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 // Workboard tests cover tools plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
@@ -27,6 +28,33 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("exposes targeted dispatch on dispatch, not stats", async () => {
+    const keyed = createMemoryStore();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => keyed),
+        },
+      },
+    } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store: new WorkboardStore(keyed),
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    const statsParameters = tools.get("workboard_stats")?.parameters as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const dispatchParameters = tools.get("workboard_dispatch")?.parameters as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+
+    expect(statsParameters?.properties).not.toHaveProperty("cardIds");
+    expect(dispatchParameters?.properties).toHaveProperty("cardIds");
+  });
+
   it("lists, claims, heartbeats, and reads worker context", async () => {
     const keyed = createMemoryStore();
     const api = {
@@ -291,9 +319,155 @@ describe("workboard tools", () => {
       }),
     );
     expect(completed.card).toMatchObject({ status: "done" });
+    expect((completed.dispatch as { promoted?: unknown[] }).promoted).toEqual([
+      expect.objectContaining({ id: child.id, status: "ready" }),
+    ]);
 
     const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-5", {}));
-    expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
+    expect(dispatch.promoted).toEqual([]);
+  });
+
+  it("auto-starts created child cards when completing a parent with subagent dispatch", async () => {
+    const keyed = createMemoryStore();
+    const run = vi.fn().mockResolvedValue({ runId: "run-child" });
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => keyed),
+        },
+        subagent: { run },
+      },
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(keyed);
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main", sessionKey: "session-1" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    const parent = readPayload(
+      await tools.get("workboard_create")?.execute("create-parent", {
+        title: "Parent",
+        status: "ready",
+        boardId: "mission",
+      }),
+    ).card as { id: string };
+    const child = readPayload(
+      await tools.get("workboard_create")?.execute("create-child", {
+        title: "Child",
+        parents: [parent.id],
+        boardId: "mission",
+        agentId: "child-agent",
+      }),
+    ).card as { id: string; status: string };
+    expect(child.status).toBe("todo");
+
+    const claimed = readPayload(
+      await tools.get("workboard_claim")?.execute("claim-parent", { id: parent.id }),
+    );
+    const completed = readPayload(
+      await tools.get("workboard_complete")?.execute("complete-parent", {
+        id: parent.id,
+        token: claimed.token,
+        summary: "Parent done.",
+        createdCardIds: [child.id],
+      }),
+    );
+
+    expect(completed.card).toMatchObject({ id: parent.id, status: "done" });
+    expect(completed.dispatch).toMatchObject({
+      promoted: [expect.objectContaining({ id: child.id, status: "ready" })],
+      started: [
+        expect.objectContaining({
+          cardId: child.id,
+          sessionKey: `agent:child-agent:subagent:workboard-mission-${child.id}`,
+          runId: "run-child",
+        }),
+      ],
+    });
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "running",
+      runId: "run-child",
+      execution: { status: "running", runId: "run-child" },
+    });
+  });
+
+  it("blocks auto-advance when completing a parent without subagent runtime", async () => {
+    const keyed = createMemoryStore();
+    const run = vi.fn().mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => keyed),
+        },
+        subagent: { run },
+      },
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(keyed);
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main", sessionKey: "session-1" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    const parent = readPayload(
+      await tools.get("workboard_create")?.execute("create-parent", {
+        title: "Parent",
+        status: "ready",
+        boardId: "mission",
+      }),
+    ).card as { id: string };
+    const child = readPayload(
+      await tools.get("workboard_create")?.execute("create-child", {
+        title: "Child",
+        parents: [parent.id],
+        boardId: "mission",
+        agentId: "child-agent",
+      }),
+    ).card as { id: string; status: string };
+
+    const claimed = readPayload(
+      await tools.get("workboard_claim")?.execute("claim-parent", { id: parent.id }),
+    );
+    const completed = readPayload(
+      await tools.get("workboard_complete")?.execute("complete-parent", {
+        id: parent.id,
+        token: claimed.token,
+        summary: "Parent done.",
+        createdCardIds: [child.id],
+      }),
+    );
+
+    expect(completed.card).toMatchObject({ id: parent.id, status: "done" });
+    expect(completed.dispatch).toMatchObject({
+      promoted: [expect.objectContaining({ id: child.id, status: "ready" })],
+      started: [],
+      startFailures: [
+        expect.objectContaining({
+          cardId: child.id,
+          error: expect.stringContaining("subagent methods are only available"),
+        }),
+      ],
+    });
+    expect(run).toHaveBeenCalledOnce();
+    const childAfter = await store.get(child.id);
+    expect(childAfter).toMatchObject({
+      status: "blocked",
+      metadata: {
+        comments: [
+          expect.objectContaining({
+            body: expect.stringContaining("Dispatcher could not start worker"),
+          }),
+        ],
+      },
+    });
+    expect(childAfter?.runId).toBeUndefined();
+    expect(childAfter?.execution).toBeUndefined();
   });
 
   it("redacts claim tokens from dispatch tool results", async () => {

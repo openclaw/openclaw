@@ -212,6 +212,7 @@ export type WorkboardListOptions = {
 };
 export type WorkboardDispatchOptions = WorkboardListOptions & {
   now?: unknown;
+  cardIds?: unknown;
 };
 export type WorkboardBoardSummary = {
   id: string;
@@ -4106,6 +4107,10 @@ export class WorkboardStore {
   ): Promise<WorkboardDispatchResult> {
     const now = typeof input === "number" ? input : normalizeTimestamp(input.now, Date.now());
     const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
+    const targetCardIds =
+      typeof input === "number"
+        ? new Set<string>()
+        : new Set(normalizeStringList(input.cardIds, "cardIds", 120));
     return await this.enqueueMutation(async () => {
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
@@ -4113,6 +4118,9 @@ export class WorkboardStore {
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
       for (const card of await this.list({ boardId })) {
+        if (targetCardIds.size > 0 && !targetCardIds.has(card.id)) {
+          continue;
+        }
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;

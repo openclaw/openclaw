@@ -11,6 +11,7 @@ const DEFAULT_DISPATCH_MODEL = "default";
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 
 export type WorkboardDispatchStartOptions = {
+  cardIds?: string[];
   maxStarts?: number;
   model?: string;
   provider?: string;
@@ -32,9 +33,16 @@ export type WorkboardStartFailure = {
   error: string;
 };
 
+export type WorkboardSkippedStart = {
+  cardId: string;
+  title: string;
+  reason: string;
+};
+
 export type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
   started: WorkboardStartedRun[];
   startFailures: WorkboardStartFailure[];
+  skipped: WorkboardSkippedStart[];
 };
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -58,6 +66,25 @@ function sanitizeSessionSegment(value: string | undefined, fallback: string): st
 
 function cardIsArchived(card: WorkboardCard): boolean {
   return Boolean(card.metadata?.archivedAt);
+}
+
+function ownerSlotOwner(card: WorkboardCard): string {
+  return card.agentId ?? card.metadata?.claim?.ownerId ?? DEFAULT_DISPATCH_OWNER;
+}
+
+function ownerSlotKey(card: WorkboardCard): string {
+  return `${cardBoardId(card)}\0${ownerSlotOwner(card)}`;
+}
+
+function cardConsumesOwnerSlot(card: WorkboardCard): boolean {
+  if (cardIsArchived(card)) {
+    return false;
+  }
+  return (
+    card.status === "running" ||
+    card.execution?.status === "running" ||
+    (card.status === "review" && Boolean(card.metadata?.claim))
+  );
 }
 
 function buildSessionKey(card: WorkboardCard): string {
@@ -128,37 +155,59 @@ function selectStartableCards(
   cards: WorkboardCard[],
   limit: number,
   candidates: WorkboardCard[] = cards,
-): WorkboardCard[] {
+  options: { includeSkipped?: boolean } = {},
+): { selected: WorkboardCard[]; skipped: WorkboardSkippedStart[] } {
+  const skipped: WorkboardSkippedStart[] = [];
+  const maybeSkip = (card: WorkboardCard, reason: string) => {
+    if (options.includeSkipped) {
+      skipped.push({ cardId: card.id, title: card.title, reason });
+    }
+  };
   if (limit <= 0) {
-    return [];
+    for (const card of candidates) {
+      maybeSkip(card, "Dispatch start limit is zero.");
+    }
+    return { selected: [], skipped };
   }
-  const runningByOwner = new Map<string, number>();
+  const runningByOwner = new Map<string, WorkboardCard>();
   for (const card of cards) {
-    const consumesOwnerSlot =
-      card.status === "running" ||
-      Boolean(card.metadata?.claim) ||
-      card.execution?.status === "running";
-    if (!consumesOwnerSlot || cardIsArchived(card)) {
+    if (!cardConsumesOwnerSlot(card)) {
       continue;
     }
-    const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
-    runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
+    const key = ownerSlotKey(card);
+    if (!runningByOwner.has(key)) {
+      runningByOwner.set(key, card);
+    }
   }
   const selected: WorkboardCard[] = [];
-  for (const card of candidates
-    .filter((entry) => entry.status === "ready" && !entry.metadata?.claim && !cardIsArchived(entry))
-    .toSorted(sortReadyCards)) {
-    const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
-    if ((runningByOwner.get(owner) ?? 0) > 0) {
+  for (const card of candidates.toSorted(sortReadyCards)) {
+    if (cardIsArchived(card)) {
+      maybeSkip(card, "Card is archived.");
+      continue;
+    }
+    if (card.status !== "ready") {
+      maybeSkip(card, `Card status is ${card.status}, not ready.`);
+      continue;
+    }
+    if (card.metadata?.claim) {
+      maybeSkip(card, `Card is already claimed by ${card.metadata.claim.ownerId}.`);
+      continue;
+    }
+    if (selected.length >= limit) {
+      maybeSkip(card, "Dispatch start limit reached.");
+      continue;
+    }
+    const owner = ownerSlotOwner(card);
+    const board = cardBoardId(card);
+    const blocker = runningByOwner.get(ownerSlotKey(card));
+    if (blocker) {
+      maybeSkip(card, `Owner ${owner} already has active work on board ${board}: ${blocker.id}.`);
       continue;
     }
     selected.push(card);
-    runningByOwner.set(owner, 1);
-    if (selected.length >= limit) {
-      break;
-    }
+    runningByOwner.set(ownerSlotKey(card), card);
   }
-  return selected;
+  return { selected, skipped };
 }
 
 export async function dispatchAndStartWorkboardCards(params: {
@@ -168,7 +217,14 @@ export async function dispatchAndStartWorkboardCards(params: {
 }): Promise<WorkboardDispatchAndStartResult> {
   const now = params.options?.now ?? Date.now();
   const boardId = params.options?.boardId;
-  const dispatch = await params.store.dispatch({ now, boardId });
+  const targetCardIds = new Set(
+    (params.options?.cardIds ?? []).map((id) => id.trim()).filter(Boolean),
+  );
+  const dispatch = await params.store.dispatch({
+    now,
+    boardId,
+    cardIds: targetCardIds.size > 0 ? [...targetCardIds] : undefined,
+  });
   const maxStarts = normalizePositiveInteger(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
@@ -177,9 +233,26 @@ export async function dispatchAndStartWorkboardCards(params: {
   const startFailures: WorkboardStartFailure[] = [];
   const model = params.options?.model?.trim() || DEFAULT_DISPATCH_MODEL;
   const cards = await params.store.list();
-  const candidates = await params.store.list({ boardId });
+  const candidates = (await params.store.list({ boardId })).filter(
+    (card) => targetCardIds.size === 0 || targetCardIds.has(card.id),
+  );
+  const selection = selectStartableCards(cards, maxStarts, candidates, {
+    includeSkipped: targetCardIds.size > 0,
+  });
+  const skipped = selection.skipped;
 
-  for (const card of selectStartableCards(cards, maxStarts, candidates)) {
+  for (const skip of skipped) {
+    try {
+      await params.store.addWorkerLog(skip.cardId, {
+        level: "warning",
+        message: `Dispatcher skipped worker start: ${skip.reason}`,
+      });
+    } catch {
+      // Skip reasons are still returned to the caller even if metadata logging fails.
+    }
+  }
+
+  for (const card of selection.selected) {
     const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
     const sessionKey = buildSessionKey(card);
     let token = "";
@@ -258,6 +331,7 @@ export async function dispatchAndStartWorkboardCards(params: {
     ...dispatch,
     started,
     startFailures,
-    count: dispatch.count + started.length + startFailures.length,
+    skipped,
+    count: dispatch.count + started.length + startFailures.length + skipped.length,
   };
 }

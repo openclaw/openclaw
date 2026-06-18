@@ -118,8 +118,15 @@ The dispatch loop:
 
 Selection is intentionally conservative. One dispatch starts at most three
 workers by default, skips archived or already-claimed cards, and starts only one
-card per owner or agent in a single pass. Cards already owned by active running
-or review work are left for a later dispatch.
+card per owner or agent on the same board in a single pass. Cards already owned
+by same-board active running work, running execution metadata, or claimed review
+work are left for a later dispatch. Blocked, done, archived, and off-board stale
+claims do not consume the board owner slot.
+
+Gateway-backed JSON output includes a `skipped` array when a targeted card
+cannot start because of selection rules such as same-board owner serialization.
+Plain text output includes the skipped count, and targeted skips are also
+recorded as warning worker logs on the skipped card.
 
 If worker start fails after a card is claimed, Workboard blocks that card,
 clears the claim, and records the failure in card execution and worker-log
@@ -136,7 +143,7 @@ explicit `--url` or `--token` target are reported directly.
 Text output reports worker starts:
 
 ```text
-dispatch complete: started=2 failures=0
+dispatch complete: started=2 failures=0 skipped=0
 ```
 
 Fallback output is explicit:

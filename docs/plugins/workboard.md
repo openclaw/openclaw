@@ -117,7 +117,10 @@ Workboard also exposes optional agent tools for board-aware workflows:
 - `workboard_complete` and `workboard_block` are structured lifecycle tools for
   final summaries, proof, artifacts, created-card manifests, and blocker
   reasons. Created-card manifests must reference cards linked back to the
-  completed card, which keeps phantom children out of summaries.
+  completed card, which keeps phantom children out of summaries. When a
+  completion includes created child cards, Workboard performs a bounded
+  same-board dispatch for those children so dependency-ready follow-up work can
+  promote and start without an operator nudge.
 - `workboard_attachment_add`, `workboard_attachment_read`, and
   `workboard_attachment_delete` store small card attachments in plugin SQLite
   state, index them on the card, and expose them in worker context.
@@ -179,14 +182,24 @@ cards use `agent:<id>:subagent:workboard-*` worker session keys; unassigned
 cards use unscoped `subagent:workboard-*` keys so the Gateway still resolves the
 configured default agent. Workers get bounded card context plus the claim token
 they need to heartbeat, complete, or block the card through the Workboard tools.
+Once dispatch claims a card for worker start, a runtime start failure must leave
+visible evidence by blocking that card; it must not silently return the card to
+`ready`.
 
 ### Dispatch worker selection
 
 Each dispatch pass starts at most three workers by default. Ready cards are
 ordered by priority, position, and creation time, then filtered to avoid
-duplicate active ownership. A dispatch starts only one card for a given owner or
-agent in the same pass, and it skips owners that already have running or review
-work on the board.
+duplicate active ownership on the same board. A dispatch starts only one card
+for a given owner or agent on a board in the same pass, and it skips owners that
+already have running work, running execution metadata, or claimed review work on
+that board. Blocked, done, archived, and off-board stale claims do not consume
+the board owner slot.
+
+When targeted dispatch skips a card because the board owner slot is already
+active, the result includes a `skipped` entry with the reason and the target card
+gets a warning worker log. This keeps serialization visible instead of returning
+an unexplained zero-start result.
 
 Archived cards, cards with active claims, and cards without `ready` status are
 not selected for worker starts. They can still be affected by the data side of
@@ -217,8 +230,9 @@ Ready-card worker starts can happen from:
 - the dashboard dispatch action
 - `openclaw workboard dispatch`
 - `/workboard dispatch` on a command-capable channel
+- a `workboard_complete` call that names dependency-linked `createdCardIds`
 
-All three entry points use the Gateway subagent runtime when the Gateway is
+Gateway-backed entry points use the Gateway subagent runtime when the Gateway is
 available. The CLI has one extra operator fallback: if the Gateway is offline or
 does not expose the Workboard dispatch method and no explicit `--url` or
 `--token` target was provided, it runs data-only dispatch against local SQLite
@@ -388,6 +402,10 @@ openclaw workboard list --status ready
 If the CLI reports data-only dispatch, start or restart the Gateway and retry.
 Data-only dispatch updates local board state but cannot start subagent worker
 runs.
+
+If a dispatch result contains `startFailures`, read the target card. Start
+failures are recorded as blocked-card comments because a claimed card that could
+not start a worker is a real dispatcher failure, not a normal ready backlog item.
 
 Cards can also be skipped when another card for the same owner or agent is
 already running or waiting for review. Complete, block, or release that active

@@ -217,7 +217,8 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         const record = isRecord(result) ? result : {};
         const started = Array.isArray(record.started) ? record.started.length : 0;
         const failures = Array.isArray(record.startFailures) ? record.startFailures.length : 0;
-        writeLine(`dispatch complete: started=${started} failures=${failures}`);
+        const skipped = Array.isArray(record.skipped) ? record.skipped.length : 0;
+        writeLine(`dispatch complete: started=${started} failures=${failures} skipped=${skipped}`);
       }
     } catch (error) {
       if (
