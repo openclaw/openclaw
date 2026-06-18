@@ -131,7 +131,7 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
 
 async function isPortBusy(port: number): Promise<boolean> {
   try {
-    await tryListenOnPort({ port, exclusive: true });
+    await tryListenOnPort({ port, exclusive: true, host: "127.0.0.1" });
     return false;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
