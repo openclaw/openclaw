@@ -223,7 +223,7 @@ async function main(env = process.env) {
     }
   }
 
-  const message = `${evaluation.reason} Add after-fix evidence from a real OpenClaw setup in the PR body. Screenshots, recordings, terminal screenshots, console output, redacted runtime logs, linked artifacts, or copied live output count. Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental only. A maintainer can apply proof: override when appropriate.`;
+  const message = `${evaluation.reason} Add a concise problem statement and the most useful validation evidence to the PR body. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. A maintainer can apply proof: override when appropriate.`;
   console.error(`::error title=Real behavior proof required::${escapeCommandValue(message)}`);
   process.exit(1);
 }

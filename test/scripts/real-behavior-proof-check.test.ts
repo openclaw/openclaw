@@ -1,4 +1,4 @@
-// Real Behavior Proof Check tests cover real behavior proof check script behavior.
+// PR Context And Evidence Check tests cover GitHub comment lookup behavior.
 import { describe, expect, it, vi } from "vitest";
 import { fetchProofComments } from "../../scripts/github/real-behavior-proof-check.mjs";
 

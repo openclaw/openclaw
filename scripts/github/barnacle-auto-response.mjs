@@ -1,17 +1,19 @@
 // Barnacle owns deterministic GitHub triage and auto-response behavior.
 
 import {
-  MOCK_ONLY_PROOF_LABEL,
   NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
   PROOF_OVERRIDE_LABEL,
   PROOF_SUFFICIENT_LABEL,
   PROOF_SUPPLIED_LABEL,
   evaluateRealBehaviorProof,
+  hasAuthoredPullRequestSection,
   hasClawSweeperExactHeadProof,
   labelsForRealBehaviorProof,
 } from "./real-behavior-proof-policy.mjs";
 
 const activePrLimit = 20;
+// Clear labels emitted by the retired field-level proof policy during transition.
+const legacyMockOnlyProofLabel = "triage: mock-only-proof";
 
 const thirdPartyExtensionMessage =
   "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/clawhub";
@@ -158,23 +160,19 @@ export const managedLabelSpecs = {
   },
   [NEEDS_REAL_BEHAVIOR_PROOF_LABEL]: {
     color: "C5DEF5",
-    description: "Candidate: external PR needs after-fix proof from a real setup.",
-  },
-  [MOCK_ONLY_PROOF_LABEL]: {
-    color: "C5DEF5",
-    description: "Candidate: PR proof only shows tests, mocks, snapshots, lint, typecheck, or CI.",
+    description: "Candidate: external PR body lacks required problem context or evidence.",
   },
   [PROOF_SUPPLIED_LABEL]: {
     color: "C2E0C6",
-    description: "External PR includes structured after-fix real behavior proof.",
+    description: "External PR includes problem context and evidence.",
   },
   [PROOF_SUFFICIENT_LABEL]: {
     color: "0E8A16",
-    description: "ClawSweeper judged the real behavior proof convincing.",
+    description: "ClawSweeper judged the PR evidence convincing.",
   },
   [PROOF_OVERRIDE_LABEL]: {
     color: "C2E0C6",
-    description: "Maintainer override for the external PR real behavior proof gate.",
+    description: "Maintainer override for the external PR context and evidence gate.",
   },
   "triage: dirty-candidate": {
     color: "C5DEF5",
@@ -197,7 +195,6 @@ export const candidateLabels = {
   testOnlyNoBug: "triage: test-only-no-bug",
   refactorOnly: "triage: refactor-only",
   needsRealBehaviorProof: NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
-  mockOnlyProof: MOCK_ONLY_PROOF_LABEL,
   dirtyCandidate: "triage: dirty-candidate",
   riskyInfra: "triage: risky-infra",
   externalPluginCandidate: "triage: external-plugin-candidate",
@@ -242,7 +239,7 @@ const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
 const structuralProofLabelValues = [
   NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
-  MOCK_ONLY_PROOF_LABEL,
+  legacyMockOnlyProofLabel,
   PROOF_SUPPLIED_LABEL,
 ];
 const noisyPrMessage =
@@ -253,13 +250,7 @@ const candidateActionRules = [
     label: candidateLabels.needsRealBehaviorProof,
     close: true,
     message:
-      "Closing this PR because it does not include real behavior proof. Please reopen or resubmit with after-fix evidence from a real OpenClaw setup; terminal screenshots, console output, redacted logs, recordings, linked artifacts, and copied live output count. Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental only.",
-  },
-  {
-    label: candidateLabels.mockOnlyProof,
-    close: true,
-    message:
-      "Closing this PR because the proof only shows tests, mocks, snapshots, lint, typechecks, or CI. Please reopen or resubmit with after-fix evidence from a real OpenClaw setup; terminal screenshots, console output, redacted logs, recordings, linked artifacts, and copied live output count.",
+      "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
   },
   {
     label: candidateLabels.dirtyCandidate,
@@ -356,7 +347,7 @@ function hasMostlyBlankTemplate(body) {
   if (!body) {
     return true;
   }
-  const emptyFields = [
+  const legacyEmptyFields = [
     "Problem",
     "Why it matters",
     "What changed",
@@ -368,13 +359,22 @@ function hasMostlyBlankTemplate(body) {
     const regex = new RegExp(`^\\s*-\\s*${escapedField}(?: \\([^)]*\\))?:\\s*$`, "im");
     return regex.test(body);
   }).length;
-  const hasTemplateIntro = body.includes("Describe the problem and fix in 2–5 bullets");
+  const hasLegacyTemplateIntro = body.includes("Describe the problem and fix in 2–5 bullets");
   const emptyClosingRef = /^\s*-\s*(?:Closes|Related)\s+#\s*$/im.test(body);
-  return hasTemplateIntro && emptyFields >= 3 && emptyClosingRef;
+  const hasNewTemplateIntro = body.includes(
+    "Describe the concrete user, product, or operational problem.",
+  );
+  return (
+    (hasLegacyTemplateIntro && legacyEmptyFields >= 3 && emptyClosingRef) ||
+    (hasNewTemplateIntro &&
+      !hasAuthoredPullRequestSection(body, "What Problem This Solves") &&
+      !hasAuthoredPullRequestSection(body, "Evidence"))
+  );
 }
 
 function stripPullRequestTemplateBoilerplate(text) {
   return text
+    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/^#{2,3}\s+.*$/gm, "")
     .replace(/^-\s*\[[ xX]\]\s+.*$/gm, "")
     .replace(/^-\s*(?:Closes|Related)\s+#\s*$/gim, "")
@@ -395,6 +395,9 @@ function stripPullRequestTemplateBoilerplate(text) {
 
 function hasConcreteBehaviorContext(body, text) {
   if (hasLinkedReference(text)) {
+    return true;
+  }
+  if (hasAuthoredPullRequestSection(body, "What Problem This Solves")) {
     return true;
   }
   if (
@@ -486,6 +489,7 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
   const filenames = files.map((file) => file.filename);
   const body = pullRequest.body ?? "";
   const text = `${pullRequest.title ?? ""}\n${body}`;
+  const contentText = stripPullRequestTemplateBoilerplate(text);
   const lowerText = text.toLowerCase();
   const linkedReference = hasLinkedReference(text);
   const blankTemplate = hasMostlyBlankTemplate(body);
@@ -544,7 +548,7 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
   if (
     !linkedReference &&
     !concreteBehaviorContext &&
-    /\b(refactor|cleanup|clean up|rename|formatting|style-only|style only)\b/i.test(text)
+    /\b(refactor|cleanup|clean up|rename|formatting|style-only|style only)\b/i.test(contentText)
   ) {
     labelsToAdd.push(candidateLabels.refactorOnly);
   }
@@ -833,7 +837,7 @@ function shouldRemoveProofSufficientLabel(
   return true;
 }
 
-const negativeProofLabels = new Set([NEEDS_REAL_BEHAVIOR_PROOF_LABEL, MOCK_ONLY_PROOF_LABEL]);
+const negativeProofLabels = new Set([NEEDS_REAL_BEHAVIOR_PROOF_LABEL, legacyMockOnlyProofLabel]);
 
 function shouldPreserveClawSweeperProofJudgment(context, labelSet) {
   return (
