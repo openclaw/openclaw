@@ -858,7 +858,11 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/install-sh-version.test.ts", "test/scripts/android-version.test.ts"],
+        includePatterns: [
+          "src/install-sh-version.test.ts",
+          "src/proxy-capture/store.sqlite.test.ts",
+          "test/scripts/android-version.test.ts",
+        ],
         watchMode: false,
       },
       {
@@ -884,6 +888,12 @@ describe("test-projects args", () => {
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/status.scan.shared.test.ts"],
         watchMode: false,
       },
       {
