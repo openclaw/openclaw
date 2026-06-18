@@ -74,6 +74,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_locale() {
+  local locale="$1"
+  if [[ "$locale" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    return
+  fi
+  echo "Invalid Android screenshot locale: ${locale}" >&2
+  echo "Use a locale tag like en-US or pt-BR; path separators and dot segments are not allowed." >&2
+  exit 1
+}
+
+validate_locale "$LOCALE"
+
 cleanup_started_emulator() {
   local stopped=0
 

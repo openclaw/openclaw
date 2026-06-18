@@ -74,7 +74,6 @@ function createStatusScanDepsRuntimeModuleMock(
 }
 
 type StatusGatewayProbeModuleMock = {
-  pickGatewaySelfPresence: Mock<() => null>;
   resolveGatewayProbeAuthResolution: StatusScanSharedMocks["resolveGatewayProbeAuthResolution"];
 };
 
@@ -82,7 +81,6 @@ function createStatusGatewayProbeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
 ): StatusGatewayProbeModuleMock {
   return {
-    pickGatewaySelfPresence: vi.fn(() => null),
     resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
   };
 }
