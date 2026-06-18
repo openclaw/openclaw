@@ -1665,6 +1665,55 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("does not claim no delivery when direct cron delivery partially fails", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const deliveryError = new Error("second payload failed");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(
+      async (deliveryParams: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+        deliveryParams.onPayloadDeliveryOutcome?.({
+          index: 1,
+          status: "failed",
+          error: deliveryError,
+          sentBeforeError: true,
+          stage: "platform_send",
+        });
+        return [{ channel: "telegram", messageId: "tg-first" }] as never;
+      },
+    );
+
+    const params = makeBaseParams({
+      synthesizedText: undefined,
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
+    params.outputText = "Second payload.";
+    params.summary = "Second payload.";
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error: String(deliveryError),
+      deliveryAttempted: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      [
+        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "Job: Test Job",
+        "Target: telegram:123456",
+        "Delivery error: second payload failed",
+        "One or more scheduled message payloads may already have been delivered.",
+      ].join("\n"),
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
+      },
+    );
+  });
+
   it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
     vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
 

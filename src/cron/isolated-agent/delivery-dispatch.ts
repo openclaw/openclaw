@@ -468,6 +468,7 @@ function formatTargetCronDeliveryFailureAwarenessText(params: {
   to: string;
   threadId?: string;
   error: unknown;
+  partialDelivered?: boolean;
 }): string {
   const targetParts = [`${params.channel}:${params.to}`];
   if (params.threadId) {
@@ -478,7 +479,9 @@ function formatTargetCronDeliveryFailureAwarenessText(params: {
     `Job: ${params.job.name || params.job.id}`,
     `Target: ${targetParts.join(" ")}`,
     `Delivery error: ${formatErrorMessage(params.error)}`,
-    "No scheduled message was delivered.",
+    params.partialDelivered
+      ? "One or more scheduled message payloads may already have been delivered."
+      : "No scheduled message was delivered.",
   ].join("\n");
 }
 
@@ -1072,6 +1075,7 @@ export async function dispatchCronDelivery(
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
+      let partialDeliverySucceededBeforeFailure = false;
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
@@ -1110,13 +1114,14 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
-        if (
-          send.status === "failed" ||
-          (!params.deliveryBestEffort && send.status === "partial_failed")
-        ) {
+        if (send.status === "failed") {
           throw send.error;
         }
         if (send.status === "partial_failed") {
+          partialDeliverySucceededBeforeFailure = send.results.length > 0;
+          if (!params.deliveryBestEffort) {
+            throw send.error;
+          }
           hadPartialFailure = true;
         }
         return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
@@ -1137,6 +1142,7 @@ export async function dispatchCronDelivery(
           to: delivery.to,
           threadId: stringifyRouteThreadId(delivery.threadId),
           error: err,
+          partialDelivered: partialDeliverySucceededBeforeFailure,
         });
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
