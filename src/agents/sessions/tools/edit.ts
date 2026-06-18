@@ -112,6 +112,30 @@ function prepareEditArguments(input: unknown): EditToolInput {
     } catch {}
   }
 
+  // Normalize: unwrap {item: {oldText, newText}} entries from XML-RPC array-of-structs
+  // transport (reported with DeepSeek/XML-RPC paths). The wire format wraps each
+  // array element in an extra object: [{item: {oldText, newText}}] instead of the
+  // canonical [{oldText, newText}].
+  if (Array.isArray(args.edits)) {
+    args.edits = args.edits.map((edit: unknown) => {
+      if (edit && typeof edit === "object" && !Array.isArray(edit)) {
+        const entry = edit as Record<string, unknown>;
+        if (
+          entry.item &&
+          typeof entry.item === "object" &&
+          !Array.isArray(entry.item) &&
+          Object.keys(entry).length === 1
+        ) {
+          const inner = entry.item as Record<string, unknown>;
+          if (typeof inner.oldText === "string" || typeof inner.newText === "string") {
+            return inner;
+          }
+        }
+      }
+      return edit;
+    });
+  }
+
   const legacy = args as LegacyEditToolInput;
   if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
     return args as unknown as EditToolInput;
@@ -379,6 +403,30 @@ export function createEditToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
+      // Normalize: unwrap {item: {oldText, newText}} entries from XML-RPC transport
+      // (duplicated here so direct execute() calls also benefit, not just agent-prepared calls)
+      if (Array.isArray(input.edits)) {
+        input = {
+          ...input,
+          edits: input.edits.map((edit: unknown) => {
+            if (edit && typeof edit === "object" && !Array.isArray(edit)) {
+              const entry = edit as Record<string, unknown>;
+              if (
+                entry.item &&
+                typeof entry.item === "object" &&
+                !Array.isArray(entry.item) &&
+                Object.keys(entry).length === 1
+              ) {
+                const inner = entry.item as Record<string, unknown>;
+                if (typeof inner.oldText === "string" || typeof inner.newText === "string") {
+                  return inner;
+                }
+              }
+            }
+            return edit;
+          }) as Edit[],
+        };
+      }
       const { path, edits } = validateEditInput(input);
       const absolutePath = resolveToCwd(path, cwd);
 

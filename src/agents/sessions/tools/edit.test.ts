@@ -137,6 +137,52 @@ describe("edit tool", () => {
     });
   });
 
+  it("unwraps {item: {oldText, newText}} entries from XML-RPC transport", async () => {
+    // XML-RPC array-of-structs wraps each array element as {item: {...}},
+    // reported with DeepSeek/XML-RPC paths. The edit tool should unwrap
+    // {item: {oldText, newText}} → {oldText, newText} before validation.
+    const filePath = await createTempFile("original content\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-unwrap",
+      {
+        path: filePath,
+        edits: [{ item: { oldText: "original content", newText: "replaced content" } }],
+      },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully replaced 1 block(s) in ${filePath}.`,
+    });
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("replaced content\n");
+  });
+
+  it("unwraps mixed {item: ...} and canonical edit entries", async () => {
+    const filePath = await createTempFile("line one\nline two\nline three\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-mixed",
+      {
+        path: filePath,
+        edits: [
+          { item: { oldText: "line one", newText: "LINE ONE" } },
+          { oldText: "line three", newText: "LINE THREE" },
+        ],
+      },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully replaced 2 block(s) in ${filePath}.`,
+    });
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("LINE ONE\nline two\nLINE THREE\n");
+  });
+
   it("renders previews through custom edit operations", async () => {
     // Preview rendering must use injected operations so remote/sandbox files are
     // shown without accidentally reading from the host filesystem.
