@@ -4687,9 +4687,15 @@ describe("active wake failure fallback", () => {
         }) as EmbeddedAgentQueueMessageOutcome,
     );
 
+    const callGateway = createGatewayMock({
+      status: "error",
+      error: "session_file_locked",
+    });
+
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
+      callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "requester-session-wake-fail",
         isActive: true, // Session is active but wake fails
@@ -4861,9 +4867,15 @@ describe("active wake failure fallback", () => {
         }) as EmbeddedAgentQueueMessageOutcome,
     );
 
+    const callGateway = createGatewayMock({
+      status: "error",
+      error: "session_file_locked",
+    });
+
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
+      callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "requester-session-long",
         isActive: true, // Session is active but wake fails
