@@ -24,12 +24,12 @@ wrong.
 
 Doctor has four postures:
 
-| Posture | Command                     | Behavior                                                                                  |
-| ------- | --------------------------- | ----------------------------------------------------------------------------------------- |
-| Inspect | `openclaw doctor`           | Human-oriented checks and guided prompts.                                                 |
-| Explain | `openclaw doctor --explain` | Plain-English findings; writes only after you explicitly confirm a focused repair prompt. |
-| Repair  | `openclaw doctor --fix`     | Applies supported repairs, using prompts unless non-interactive repair is safe.           |
-| Lint    | `openclaw doctor --lint`    | Read-only structured findings for CI, preflight, and review gates.                        |
+| Posture | Command                     | Behavior                                                                        |
+| ------- | --------------------------- | ------------------------------------------------------------------------------- |
+| Inspect | `openclaw doctor`           | Human-oriented checks and guided prompts.                                       |
+| Explain | `openclaw doctor --explain` | Read-only plain-English findings and next steps.                                |
+| Repair  | `openclaw doctor --fix`     | Applies supported repairs, using prompts unless non-interactive repair is safe. |
+| Lint    | `openclaw doctor --lint`    | Read-only structured findings for CI, preflight, and review gates.              |
 
 Prefer `--explain` when a human needs clear next steps. Prefer `--lint` when
 automation needs a stable result. Prefer `--fix` when a human operator
@@ -48,7 +48,6 @@ openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --allow-exec
 openclaw doctor --deep
 openclaw doctor --fix
-openclaw doctor --fix --only core/doctor/skills-readiness
 openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
 openclaw doctor --post-upgrade
@@ -76,19 +75,19 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--allow-exec`: allow doctor to execute configured exec SecretRefs while verifying secrets
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
-- `--explain`: render modernized health-check findings as plain-English diagnostics with next steps; in interactive runs, repairable checks may offer an explicit focused repair prompt
+- `--explain`: render modernized health-check findings as read-only plain-English diagnostics with next steps
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
 - `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint` or `--explain`, drop findings below `info`, `warning`, or `error`
 - `--skip <id>`: with `--lint` or `--explain`, skip a check id; repeat to skip more than one
-- `--only <id>`: with `--lint`, `--explain`, or `--fix`, run only a check id; repeat to run a small selected set
+- `--only <id>`: with `--lint` or `--explain`, run only a check id; repeat to run a small selected set
 
 ## Explain mode
 
 `openclaw doctor --explain` uses the same structured health-check path as lint
 mode, but renders findings for people instead of automation. Each finding group
-shows what happened, why it matters, a suggested next step, and whether that
-structured check exposes an automatic repair.
+shows what happened, why it matters, a suggested next step, and a reminder that
+explain mode is read-only.
 
 ```bash
 openclaw doctor --explain
@@ -106,21 +105,14 @@ Gateway config [warning]
   What happened: Gateway setup is incomplete.
   Why it matters: OpenClaw cannot reliably start or find the Gateway until this is configured.
   Try this: Run `openclaw configure` and set Gateway mode (local/remote), or `openclaw config set gateway.mode local`.
-  Automatic repair: Not available for this check; use the suggested manual fix.
+  Automatic repair: This report is read-only. Run openclaw doctor --fix to apply supported repairs.
   Details:
   - gateway.mode: gateway.mode is unset; gateway start will be blocked.
 ```
 
-Interactive explain runs may offer to run a focused repair when the selected
-structured check explicitly supports focused automatic repair. Explain mode
-does not write config or state unless you explicitly confirm that prompt. A
-confirmed focused repair can update `openclaw.json` and write the same backup as
-`doctor --fix --only <checkId>`.
-
-Headless or `--non-interactive` explain runs never prompt or repair; they only
-print the focused repair command when one is available. Use
-`openclaw doctor --fix --only <checkId>` when a script or operator wants the
-focused repair path directly.
+Explain mode never prompts and never writes config or state. Use
+`openclaw doctor --fix` when an operator wants doctor to apply supported
+repairs through the existing guided repair flow.
 
 ## Lint mode
 
@@ -185,12 +177,9 @@ repair?(ctx, findings) -> HealthRepairResult
 ```
 
 `detect()` powers `doctor --lint` and `doctor --explain`. `repair()` is optional
-and is used by the doctor repair flow when a check owns its own mutation.
-Focused `doctor --fix --only <checkId>` runs only for checks that explicitly
-opt into focused automatic repair; some structured checks expose repair effects
-for legacy doctor flows without offering a focused mutation path. Checks that
-have not migrated to this shape continue to use the legacy doctor contribution
-flow.
+and is used by the existing doctor repair flow when a check owns its own
+mutation. Checks that have not migrated to this shape continue to use the
+legacy doctor contribution flow.
 
 The split is intentional: `detect()` owns diagnosis, while `repair()` owns
 reporting what it changed or would change. Repair contexts can carry
@@ -234,22 +223,13 @@ Use `--only` and `--skip` when a workflow wants a focused gate:
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --lint --skip core/doctor/skills-readiness
 openclaw doctor --explain --only core/doctor/gateway-config
-openclaw doctor --fix --only core/doctor/skills-readiness
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated for lint and
-explain runs. Focused repair supports `--only` for structured checks that opt
-into focused automatic repair; it fails before writing config when the selected
-id is unknown or does not support focused repair. If an `--only` id is not
-registered in lint mode, no check runs for that id; use the command's
-`checksRun` and `checksSkipped` fields to verify a focused gate is selecting the
-checks you expect.
-
-Focused repair is intentionally narrow: `openclaw doctor --fix --only <id>`
-does not combine with regular doctor repair/setup flags such as
-`--post-upgrade`, `--deep`, `--force`, `--generate-gateway-token`, `--yes`, or
-`--non-interactive`. Use `openclaw doctor --fix` for the broader guided repair
-flow, and use `--lint` or `--explain` for filtered read-only output.
+explain runs. If an `--only` id is not registered in lint or explain mode, no
+check runs for that id; use the command's `checksRun` and `checksSkipped` fields
+to verify a focused gate is selecting the checks you expect. Use
+`openclaw doctor --fix` for the broader guided repair flow.
 
 ## Post-upgrade mode
 
@@ -269,7 +249,7 @@ Notes:
 - `--lint` is stricter than `--non-interactive`: it is always read-only, never prompts, and never applies safe migrations. Run `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - By default, doctor does not execute `exec` SecretRefs while checking secrets. Use `openclaw doctor --allow-exec`, `openclaw doctor --lint --allow-exec`, or `openclaw doctor --explain --allow-exec` only when you intentionally want doctor to run those configured secret resolvers.
 - `--fix` (alias for `--repair`) writes a backup to `~/.openclaw/openclaw.json.bak` and drops unknown config keys, listing each removal.
-- Modernized health checks can expose a `repair()` path for `doctor --fix` and focused `doctor --fix --only <checkId>` runs; checks that do not expose one continue through the existing doctor repair flow.
+- Modernized health checks can expose a `repair()` path for `doctor --fix`; checks that do not expose one continue through the existing doctor repair flow.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` when you intentionally want to replace the launcher.
 - State integrity checks now detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires an interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and rewrites them before importing canonical rows into SQLite.

@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
     exit: vi.fn(),
   },
   runDoctorLintCli: vi.fn(),
-  runDoctorSelectedRepairCli: vi.fn(),
 }));
 
 const {
@@ -24,7 +23,6 @@ const {
   uninstallCommand,
   runtime,
   runDoctorLintCli,
-  runDoctorSelectedRepairCli,
 } = mocks;
 
 vi.mock("../../commands/doctor.js", () => ({
@@ -45,7 +43,6 @@ vi.mock("../../commands/uninstall.js", () => ({
 
 vi.mock("../../commands/doctor-lint.js", () => ({
   runDoctorLintCli: mocks.runDoctorLintCli,
-  runDoctorSelectedRepairCli: mocks.runDoctorSelectedRepairCli,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -130,23 +127,8 @@ describe("registerMaintenanceCommands doctor action", () => {
       skipIds: ["a"],
       onlyIds: ["b"],
       allowExec: true,
-      nonInteractive: false,
-      confirmRepairCheck: undefined,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("runs focused doctor repair for --fix --only", async () => {
-    runDoctorSelectedRepairCli.mockResolvedValue(0);
-
-    await runMaintenanceCli(["doctor", "--fix", "--only", "core/doctor/skills-readiness"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorSelectedRepairCli).toHaveBeenCalledWith(runtime, {
-      onlyIds: ["core/doctor/skills-readiness"],
-      allowExec: false,
-    });
-    expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
   it("runs doctor explain mode through the structured health path", async () => {
@@ -170,8 +152,6 @@ describe("registerMaintenanceCommands doctor action", () => {
       skipIds: [],
       onlyIds: ["core/doctor/gateway-config"],
       allowExec: false,
-      nonInteractive: true,
-      confirmRepairCheck: expect.any(Function),
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -209,41 +189,18 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "doctor structured health options require --lint, --explain, or --fix --only.",
+      "doctor structured health options require --lint or --explain.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("rejects unsupported focused repair filters", async () => {
-    await runMaintenanceCli([
-      "doctor",
-      "--fix",
-      "--only",
-      "core/doctor/skills-readiness",
-      "--skip",
-      "core/doctor/gateway-config",
-    ]);
+  it("rejects --fix with structured selectors", async () => {
+    await runMaintenanceCli(["doctor", "--fix", "--only", "core/doctor/skills-readiness"]);
 
-    expect(runDoctorSelectedRepairCli).not.toHaveBeenCalled();
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "doctor --fix --only supports --allow-exec only; use --lint or --explain for filtering output.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it.each([
-    ["--post-upgrade"],
-    ["--deep"],
-    ["--force"],
-    ["--generate-gateway-token"],
-    ["--yes"],
-    ["--non-interactive"],
-  ])("rejects focused repair with unsupported doctor option %s", async (flag) => {
-    await runMaintenanceCli(["doctor", "--fix", "--only", "core/doctor/skills-readiness", flag]);
-
-    expect(runDoctorSelectedRepairCli).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor --fix --only supports --allow-exec only; use --lint or --explain for filtering output.",
+      "doctor structured health options require --lint or --explain.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });

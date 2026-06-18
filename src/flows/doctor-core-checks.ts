@@ -714,7 +714,6 @@ function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
     kind: "core",
     description: "Allowed skills are usable in the current runtime environment.",
     source: "doctor",
-    focusedRepair: true,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
         await deps.detectUnavailableSkills(ctx.cfg),
@@ -803,7 +802,6 @@ const browserClawdProfileResidueCheck: HealthCheck = {
   description:
     "Legacy clawd managed browser profile residue has been archived after the OpenClaw rename.",
   source: "doctor",
-  focusedRepair: true,
   async detect(ctx, scope) {
     const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
     if (!residue) {

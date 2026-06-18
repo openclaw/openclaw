@@ -3,22 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
-import { runDoctorLintCli, runDoctorSelectedRepairCli } from "./doctor-lint.js";
+import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  replaceConfigFile: vi.fn(),
-  logConfigUpdated: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-  replaceConfigFile: mocks.replaceConfigFile,
-}));
-
-vi.mock("../config/logging.js", () => ({
-  logConfigUpdated: mocks.logConfigUpdated,
 }));
 
 const runtime = {
@@ -96,7 +89,6 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         explain: true,
-        nonInteractive: true,
         onlyIds: ["core/doctor/gateway-config"],
       });
 
@@ -106,7 +98,7 @@ describe("runDoctorLintCli", () => {
       expect(output).toContain("What happened:");
       expect(output).toContain("Why it matters:");
       expect(output).toContain("Try this:");
-      expect(output).toContain("Automatic repair: Not available");
+      expect(output).toContain("Automatic repair: This report is read-only.");
       expect(output).toContain("core/doctor/gateway-config");
     } finally {
       stdout.mockRestore();
@@ -234,312 +226,45 @@ describe("runDoctorLintCli", () => {
     );
   });
 
-  it("prompts explain users for repairable checks and applies focused repair when confirmed", async () => {
+  it("does not run repair hooks while rendering explain output", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
       config: {},
       path: "/tmp/openclaw.json",
     });
+    const repair = vi.fn().mockResolvedValue({ changes: ["Ran repair."] });
     registerHealthCheck({
-      id: "test/repairable-explain",
+      id: "test/explain-read-only",
       kind: "core",
-      description: "repairable explain",
-      focusedRepair: true,
-      async detect(ctx) {
-        return ctx.cfg.gateway?.mode === "local"
-          ? []
-          : [
-              {
-                checkId: "test/repairable-explain",
-                severity: "warning",
-                message: "Gateway mode is missing.",
-                path: "gateway.mode",
-                fixHint: "Run `openclaw doctor --fix --only test/repairable-explain`.",
-              },
-            ];
+      description: "explain read only",
+      async detect() {
+        return [
+          {
+            checkId: "test/explain-read-only",
+            severity: "warning",
+            message: "Gateway mode is missing.",
+            path: "gateway.mode",
+            fixHint: "Run `openclaw doctor --fix`.",
+          },
+        ];
       },
-      async repair(ctx) {
-        return {
-          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
-          changes: ["Set gateway.mode to local."],
-        };
-      },
+      repair,
     });
-    const confirmRepairCheck = vi.fn().mockResolvedValue(true);
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         explain: true,
-        onlyIds: ["test/repairable-explain"],
-        confirmRepairCheck,
+        onlyIds: ["test/explain-read-only"],
       });
 
       expect(exitCode).toBe(1);
-      expect(confirmRepairCheck).toHaveBeenCalledWith({
-        checkId: "test/repairable-explain",
-        label: "Repairable Explain",
-        findings: [
-          expect.objectContaining({
-            checkId: "test/repairable-explain",
-            path: "gateway.mode",
-          }),
-        ],
-      });
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: expect.objectContaining({
-            gateway: expect.objectContaining({ mode: "local" }),
-          }),
-          afterWrite: { mode: "auto" },
-        }),
-      );
+      expect(repair).not.toHaveBeenCalled();
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
       const output = stdout.mock.calls.map((call) => String(call[0])).join("");
-      expect(output).toContain("Automatic repair: Run openclaw doctor --fix --only");
-      expect(output).toContain("doctor --fix --only: 1 change(s)");
-    } finally {
-      stdout.mockRestore();
-    }
-  });
-
-  it("does not apply focused repair when an explain user declines the prompt", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      path: "/tmp/openclaw.json",
-    });
-    registerHealthCheck({
-      id: "test/declined-explain-repair",
-      kind: "core",
-      description: "declined explain repair",
-      focusedRepair: true,
-      async detect() {
-        return [
-          {
-            checkId: "test/declined-explain-repair",
-            severity: "warning",
-            message: "Needs repair.",
-            path: "gateway.mode",
-          },
-        ];
-      },
-      async repair(ctx) {
-        return {
-          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
-          changes: ["Set gateway.mode to local."],
-        };
-      },
-    });
-    const confirmRepairCheck = vi.fn().mockResolvedValue(false);
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        explain: true,
-        onlyIds: ["test/declined-explain-repair"],
-        confirmRepairCheck,
-      });
-
-      expect(exitCode).toBe(1);
-      expect(confirmRepairCheck).toHaveBeenCalledWith({
-        checkId: "test/declined-explain-repair",
-        label: "Declined Explain Repair",
-        findings: [
-          expect.objectContaining({
-            checkId: "test/declined-explain-repair",
-            path: "gateway.mode",
-          }),
-        ],
-      });
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-      const output = stdout.mock.calls.map((call) => String(call[0])).join("");
-      expect(output).toContain("Automatic repair: Run openclaw doctor --fix --only");
-      expect(output).not.toContain("doctor --fix --only: 1 change(s)");
-    } finally {
-      stdout.mockRestore();
-    }
-  });
-
-  it("does not prompt for explain repairs in non-interactive mode", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      path: "/tmp/openclaw.json",
-    });
-    registerHealthCheck({
-      id: "test/non-interactive-repairable",
-      kind: "core",
-      description: "repairable explain",
-      focusedRepair: true,
-      async detect() {
-        return [
-          {
-            checkId: "test/non-interactive-repairable",
-            severity: "warning",
-            message: "Needs repair.",
-          },
-        ];
-      },
-      async repair() {
-        return { changes: ["Ran repair."] };
-      },
-    });
-    const confirmRepairCheck = vi.fn().mockResolvedValue(true);
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      await runDoctorLintCli(runtime, {
-        explain: true,
-        nonInteractive: true,
-        onlyIds: ["test/non-interactive-repairable"],
-        confirmRepairCheck,
-      });
-
-      expect(confirmRepairCheck).not.toHaveBeenCalled();
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    } finally {
-      stdout.mockRestore();
-    }
-  });
-
-  it("does not advertise repair hooks that are not focused repair capable", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      path: "/tmp/openclaw.json",
-    });
-    registerHealthCheck({
-      id: "test/legacy-repair-hook",
-      kind: "core",
-      description: "legacy repair hook",
-      async detect() {
-        return [
-          {
-            checkId: "test/legacy-repair-hook",
-            severity: "warning",
-            message: "Legacy repair owns this finding.",
-          },
-        ];
-      },
-      async repair(ctx) {
-        return {
-          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
-          changes: ["Set gateway.mode to local."],
-        };
-      },
-    });
-    const confirmRepairCheck = vi.fn().mockResolvedValue(true);
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const explainExitCode = await runDoctorLintCli(runtime, {
-        explain: true,
-        onlyIds: ["test/legacy-repair-hook"],
-        confirmRepairCheck,
-      });
-      const repairExitCode = await runDoctorSelectedRepairCli(runtime, {
-        onlyIds: ["test/legacy-repair-hook"],
-      });
-
-      expect(explainExitCode).toBe(1);
-      expect(repairExitCode).toBe(1);
-      expect(confirmRepairCheck).not.toHaveBeenCalled();
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(stdout.mock.calls.map((call) => String(call[0])).join("")).toContain(
-        "Automatic repair: Not available",
-      );
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Health check test/legacy-repair-hook does not support automatic repair.",
-      );
-    } finally {
-      stdout.mockRestore();
-    }
-  });
-
-  it("fails focused repair for unknown check ids before writing config", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      path: "/tmp/openclaw.json",
-    });
-
-    const exitCode = await runDoctorSelectedRepairCli(runtime, {
-      onlyIds: ["core/doctor/not-real"],
-    });
-
-    expect(exitCode).toBe(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Unknown health check id selected by --only: core/doctor/not-real.",
-    );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("fails focused repair for checks without structured repair", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      path: "/tmp/openclaw.json",
-    });
-
-    const exitCode = await runDoctorSelectedRepairCli(runtime, {
-      onlyIds: ["core/doctor/gateway-config"],
-    });
-
-    expect(exitCode).toBe(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Health check core/doctor/gateway-config does not support automatic repair.",
-    );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("fails focused repair when the selected check reports repair warnings", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: {},
-      path: "/tmp/openclaw.json",
-    });
-    registerHealthCheck({
-      id: "test/warning-repair",
-      kind: "core",
-      description: "repair warning",
-      focusedRepair: true,
-      async detect() {
-        return [
-          {
-            checkId: "test/warning-repair",
-            severity: "warning",
-            message: "Needs repair.",
-          },
-        ];
-      },
-      async repair() {
-        return {
-          changes: ["Attempted repair."],
-          warnings: ["Repair could not verify the result."],
-        };
-      },
-    });
-
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const exitCode = await runDoctorSelectedRepairCli(runtime, {
-        onlyIds: ["test/warning-repair"],
-      });
-
-      expect(exitCode).toBe(1);
-      expect(runtime.error).toHaveBeenCalledWith("warning: Repair could not verify the result.");
-      expect(runtime.error).toHaveBeenCalledWith(
-        "doctor --fix --only: selected check reported warning(s).",
-      );
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(output).toContain("Automatic repair: This report is read-only.");
+      expect(output).toContain("openclaw doctor --fix");
     } finally {
       stdout.mockRestore();
     }

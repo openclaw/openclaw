@@ -48,7 +48,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option(
       "--only <id>",
-      "With --lint, --explain, or --fix: run only the specified check id (repeatable)",
+      "With --lint or --explain: run only the specified check id (repeatable)",
       (v: string, prev: string[]) => [...prev, v],
       [],
     )
@@ -73,45 +73,12 @@ export function registerMaintenanceCommands(program: Command) {
           defaultRuntime,
           async () => {
             const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
-            const confirmRepairCheck =
-              opts.explain === true ? await createExplainRepairConfirmer(opts) : undefined;
             const exitCode = await runDoctorLintCli(defaultRuntime, {
               json: Boolean(opts.json),
               explain: Boolean(opts.explain),
               severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
               skipIds: Array.isArray(opts.skip) ? opts.skip : [],
               onlyIds: Array.isArray(opts.only) ? opts.only : [],
-              allowExec: Boolean(opts.allowExec),
-              nonInteractive: Boolean(opts.nonInteractive),
-              confirmRepairCheck,
-            });
-            defaultRuntime.exit(exitCode);
-          },
-          (err) => {
-            defaultRuntime.error(String(err));
-            defaultRuntime.exit(2);
-          },
-        );
-        return;
-      }
-      if (
-        (Boolean(opts.repair) || Boolean(opts.fix)) &&
-        Array.isArray(opts.only) &&
-        opts.only.length > 0
-      ) {
-        if (hasUnsupportedFocusedRepairOptions(opts)) {
-          defaultRuntime.error(
-            "doctor --fix --only supports --allow-exec only; use --lint or --explain for filtering output.",
-          );
-          defaultRuntime.exit(2);
-          return;
-        }
-        await runCommandWithRuntime(
-          defaultRuntime,
-          async () => {
-            const { runDoctorSelectedRepairCli } = await import("../../commands/doctor-lint.js");
-            const exitCode = await runDoctorSelectedRepairCli(defaultRuntime, {
-              onlyIds: opts.only,
               allowExec: Boolean(opts.allowExec),
             });
             defaultRuntime.exit(exitCode);
@@ -124,9 +91,7 @@ export function registerMaintenanceCommands(program: Command) {
         return;
       }
       if (hasStructuredOnlyDoctorOptions(opts)) {
-        defaultRuntime.error(
-          "doctor structured health options require --lint, --explain, or --fix --only.",
-        );
+        defaultRuntime.error("doctor structured health options require --lint or --explain.");
         defaultRuntime.exit(2);
         return;
       }
@@ -225,31 +190,6 @@ export function registerMaintenanceCommands(program: Command) {
     });
 }
 
-async function createExplainRepairConfirmer(opts: {
-  readonly yes?: boolean;
-  readonly repair?: boolean;
-  readonly fix?: boolean;
-  readonly force?: boolean;
-  readonly nonInteractive?: boolean;
-}) {
-  const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
-  const prompter = createDoctorPrompter({
-    runtime: defaultRuntime,
-    options: {
-      yes: Boolean(opts.yes),
-      repair: Boolean(opts.repair) || Boolean(opts.fix),
-      force: Boolean(opts.force),
-      nonInteractive: Boolean(opts.nonInteractive),
-    },
-  });
-  return async (params: { checkId: string; label: string }) =>
-    await prompter.confirmRuntimeRepair({
-      message: `Fix findings for ${params.label} (${params.checkId})?`,
-      initialValue: false,
-      requiresInteractiveConfirmation: true,
-    });
-}
-
 function hasStructuredOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
@@ -262,29 +202,5 @@ function hasStructuredOnlyDoctorOptions(opts: {
     typeof opts.severityMin === "string" ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)
-  );
-}
-
-function hasUnsupportedFocusedRepairOptions(opts: {
-  readonly yes?: boolean;
-  readonly force?: boolean;
-  readonly nonInteractive?: boolean;
-  readonly generateGatewayToken?: boolean;
-  readonly deep?: boolean;
-  readonly postUpgrade?: boolean;
-  readonly json?: boolean;
-  readonly severityMin?: unknown;
-  readonly skip?: unknown;
-}): boolean {
-  return (
-    opts.yes === true ||
-    opts.force === true ||
-    opts.nonInteractive === true ||
-    opts.generateGatewayToken === true ||
-    opts.deep === true ||
-    opts.postUpgrade === true ||
-    opts.json === true ||
-    typeof opts.severityMin === "string" ||
-    (Array.isArray(opts.skip) && opts.skip.length > 0)
   );
 }

@@ -106,11 +106,6 @@ export interface HealthCheck {
   readonly kind: "core" | "plugin";
   readonly description: string;
   readonly source?: string;
-  /**
-   * True when `repair()` can apply this check's fix directly from `doctor --fix --only`.
-   * Some checks expose repair metadata for legacy doctor flows but do not own focused mutation.
-   */
-  readonly focusedRepair?: boolean;
   detect(ctx: HealthCheckContext, scope?: HealthCheckScope): Promise<readonly HealthFinding[]>;
   repair?(
     ctx: HealthRepairContext,

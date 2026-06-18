@@ -9,7 +9,6 @@ import {
 export interface DoctorExplainRenderOptions {
   readonly checksRun: number;
   readonly findings: readonly HealthFinding[];
-  readonly repairableCheckIds?: ReadonlySet<string>;
 }
 
 interface CheckExplanation {
@@ -71,14 +70,13 @@ export function formatDoctorExplainOutput(opts: DoctorExplainRenderOptions): str
       what: group.findings[0]?.message ?? "OpenClaw found a setup issue.",
       why: "This can affect startup, connectivity, or the feature named in the finding.",
     };
-    const repairable = opts.repairableCheckIds?.has(group.checkId) === true;
     lines.push("");
     lines.push(`${explanation.label} [${group.severity}]`);
     lines.push(`  Check: ${group.checkId}`);
     lines.push(`  What happened: ${explanation.what}`);
     lines.push(`  Why it matters: ${explanation.why}`);
     lines.push(`  Try this: ${formatFixHint(group.findings)}`);
-    lines.push(`  Automatic repair: ${formatAutomaticRepair(group.checkId, repairable)}`);
+    lines.push(`  Automatic repair: ${formatAutomaticRepair()}`);
     lines.push("  Details:");
     for (const finding of group.findings) {
       lines.push(`  - ${formatFindingDetail(finding)}`);
@@ -86,10 +84,6 @@ export function formatDoctorExplainOutput(opts: DoctorExplainRenderOptions): str
   }
 
   return `${lines.join("\n")}\n`;
-}
-
-export function explainRepairPromptLabel(checkId: string): string {
-  return CHECK_EXPLANATIONS[checkId]?.label ?? labelFromCheckId(checkId);
 }
 
 function groupFindings(findings: readonly HealthFinding[]): readonly {
@@ -128,11 +122,10 @@ function formatFixHint(findings: readonly HealthFinding[]): string {
   return hint ?? "Review the details below, update the affected setup, then rerun doctor.";
 }
 
-function formatAutomaticRepair(checkId: string, repairable: boolean): string {
-  if (!repairable) {
-    return "Not available for this check; use the suggested manual fix.";
-  }
-  return `Run ${formatCliCommand(`openclaw doctor --fix --only ${checkId}`)}.`;
+function formatAutomaticRepair(): string {
+  return `This report is read-only. Run ${formatCliCommand(
+    "openclaw doctor --fix",
+  )} to apply supported repairs.`;
 }
 
 function formatFindingDetail(finding: HealthFinding): string {

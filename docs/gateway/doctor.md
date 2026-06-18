@@ -84,21 +84,17 @@ cat ~/.openclaw/openclaw.json
 findings but renders them as plain-English guidance for people. These modes all
 use doctor health checks, but their posture is different:
 
-| Mode                        | Prompts   | Writes config/state                    | Output                 | Use it for                      |
-| --------------------------- | --------- | -------------------------------------- | ---------------------- | ------------------------------- |
-| `openclaw doctor`           | yes       | no                                     | friendly health report | a human checking status         |
-| `openclaw doctor --fix`     | sometimes | yes, with repair policy                | friendly repair log    | applying approved repairs       |
-| `openclaw doctor --lint`    | no        | no                                     | structured findings    | CI, preflight, and review gates |
-| `openclaw doctor --explain` | optional  | no unless you confirm a focused repair | plain-English findings | human setup troubleshooting     |
+| Mode                        | Prompts   | Writes config/state     | Output                 | Use it for                      |
+| --------------------------- | --------- | ----------------------- | ---------------------- | ------------------------------- |
+| `openclaw doctor`           | yes       | no                      | friendly health report | a human checking status         |
+| `openclaw doctor --fix`     | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
+| `openclaw doctor --lint`    | no        | no                      | structured findings    | CI, preflight, and review gates |
+| `openclaw doctor --explain` | no        | no                      | plain-English findings | human setup troubleshooting     |
 
 Modernized health checks may provide optional repair metadata. `doctor --fix`
-applies focused repairs only for checks that explicitly support focused
-automatic repair, and continues to use the existing doctor repair flow for
-checks that have not migrated yet.
-Explain mode prints the same repair availability in plain English, but it does
-not write config or state unless an interactive operator explicitly confirms a
-focused repair prompt. Headless and `--non-interactive` explain runs only print
-the repair command.
+uses the existing doctor repair flow for checks that own mutations, while
+`doctor --explain` always stays read-only and prints plain-English guidance for
+operators.
 The structured repair contract also separates repair reporting from detection:
 `detect()` reports current findings, while `repair()` can report changes,
 config/file diffs, and non-file side effects. That keeps the migration path open
@@ -113,7 +109,6 @@ openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --explain --only core/doctor/gateway-config
-openclaw doctor --fix --only core/doctor/skills-readiness
 ```
 
 JSON output includes:
@@ -133,10 +128,8 @@ Exit codes:
 Use `--severity-min info|warning|error` to control both what is printed and what
 causes a non-zero lint or explain exit. Use `--only <id>` for narrow preflight
 gates and `--skip <id>` to temporarily exclude a noisy check while keeping the
-rest of the lint or explain run active. Focused repair supports
-`openclaw doctor --fix --only <id>` for structured checks that expose an
-automatic focused repair path. `--json` remains a lint and post-upgrade output
-mode.
+rest of the lint or explain run active. `--json` remains a lint and
+post-upgrade output mode.
 
 ## What it does (summary)
 
