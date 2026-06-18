@@ -157,13 +157,5 @@ export function hardenedEnvForChildOomWrap(
  * *tagged* for preferred OOM victim selection.
  */
 export function isLinuxChildOomScoreRaiseActive(options?: OomWrapOptions): boolean {
-  const platform = options?.platform ?? process.platform;
-  if (platform !== "linux") {
-    return false;
-  }
-  const env = options?.env ?? process.env;
-  if (isDisabled(env[CHILD_OOM_SCORE_ADJ_ENV_KEY])) {
-    return false;
-  }
-  return (options?.shellAvailable ?? defaultShellAvailable)();
+  return shouldWrapChildForOomScore(options);
 }
