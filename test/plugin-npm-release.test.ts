@@ -313,7 +313,7 @@ describe("collectPluginReleaseVersionFloorErrors", () => {
 
 describe("collectPublishablePluginPackages", () => {
   it("keeps publishable plugin dist trees out of the core npm package files list", () => {
-    const corePackageRuntimePluginIds = new Set(["discord"]);
+    const corePackageRuntimePluginIds = new Set(["discord", "xmemo-memory"]);
     const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
       files?: unknown;
     };
