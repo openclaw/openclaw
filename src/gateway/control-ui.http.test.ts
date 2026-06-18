@@ -1423,6 +1423,34 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves root public assets outside a configured basePath (SPA absolute references)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "manifest.webmanifest"), "{}");
+        await fs.writeFile(path.join(tmp, "favicon.svg"), "<svg/>");
+        await fs.writeFile(path.join(tmp, "sw.js"), "self.addEventListener('push', () => {});");
+
+        for (const [url, expectedType] of [
+          ["/manifest.webmanifest", "application/manifest+json; charset=utf-8"],
+          ["/favicon.svg", "image/svg+xml"],
+          ["/sw.js", "application/javascript; charset=utf-8"],
+        ] as const) {
+          const { res, end, handled } = await runControlUiRequest({
+            url,
+            method: "GET",
+            basePath: "/openclaw",
+            rootPath: tmp,
+          });
+
+          expect(handled, `expected ${url} to be handled`).toBe(true);
+          expect(res.statusCode, `expected ${url} to be served`).toBe(200);
+          expect(res["setHeader"]).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
+        }
+      },
+    });
+  });
+
   it("does not handle POST to root-mounted paths (plugin webhook passthrough)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

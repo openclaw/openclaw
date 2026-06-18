@@ -905,14 +905,24 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
-  const route = classifyControlUiRequest({
+  let route = classifyControlUiRequest({
     basePath,
     pathname,
     search: url.search,
     method: req.method,
   });
   if (route.kind === "not-control-ui") {
-    return false;
+    // Root-mounted public assets (favicon, manifest, service worker) are
+    // referenced by the SPA via absolute paths from the root, not the basePath
+    // (e.g. <link rel="manifest" href="/manifest.webmanifest" />).  Serve them
+    // even outside the configured basePath so the browser can fetch them when
+    // the SPA is mounted under a base path (e.g. behind oauth2-proxy).
+    const topName = pathname.replace(/^\//, "");
+    if (basePath && CONTROL_UI_ROOT_PUBLIC_ASSETS.has(topName)) {
+      route = { kind: "serve" };
+    } else {
+      return false;
+    }
   }
   if (route.kind === "not-found") {
     applyControlUiSecurityHeaders(res);
