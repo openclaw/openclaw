@@ -621,11 +621,16 @@ export async function runCliTurnCompactionLifecycle(params: {
       nativeFallbackToContextEngine = true;
       nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
     } else if (nativeOutcome.failureReason) {
-      throw new Error(
+      // Compaction runs after the model has already generated a reply.
+      // Treating a post-turn compaction failure as fatal would discard the
+      // assistant reply that was already written to the session transcript.
+      // Log a warning and continue so the reply is delivered (issue #94688).
+      log.warn(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
           nativeOutcome.failureReason ?? "compaction did not reduce context"
-        }`,
+        } (reply already generated; continuing without compaction)`,
       );
+      return params.sessionEntry;
     } else {
       useContextEngineCompaction = false;
     }
@@ -664,11 +669,16 @@ export async function runCliTurnCompactionLifecycle(params: {
     });
     compacted = contextOutcome.compacted;
     if (!compacted && contextOutcome.failureReason) {
-      throw new Error(
+      // Compaction runs after the model has already generated a reply.
+      // Treating a post-turn compaction failure as fatal would discard the
+      // assistant reply that was already written to the session transcript.
+      // Log a warning and continue so the reply is delivered (issue #94688).
+      log.warn(
         `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
           contextOutcome.failureReason ?? "compaction did not reduce context"
-        }`,
+        } (reply already generated; continuing without compaction)`,
       );
+      return params.sessionEntry;
     }
   }
 

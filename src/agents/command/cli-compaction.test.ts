@@ -578,24 +578,22 @@ describe("runCliTurnCompactionLifecycle", () => {
       recordCliCompactionInStore,
     });
 
-    await expect(
-      runCliTurnCompactionLifecycle({
-        cfg: {} as OpenClawConfig,
-        sessionId,
-        sessionKey,
-        sessionEntry,
-        sessionStore,
-        storePath,
-        sessionAgentId: "main",
-        workspaceDir: tmpDir,
-        agentDir: tmpDir,
-        provider: "codex",
-        model: "gpt-5.5",
-      }),
-    ).rejects.toThrow(
-      "CLI native harness compaction failed for codex/gpt-5.5: timed out waiting for codex app-server compaction",
-    );
+    const result1 = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
 
+    // Post-turn compaction failure no longer throws (issue #94688).
+    expect(result1).toBe(sessionEntry);
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
@@ -730,23 +728,22 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveLiveToolResultMaxChars: () => 20_000,
     });
 
-    await expect(
-      runCliTurnCompactionLifecycle({
-        cfg: {} as OpenClawConfig,
-        sessionId,
-        sessionKey,
-        sessionEntry,
-        sessionStore,
-        storePath,
-        sessionAgentId: "main",
-        workspaceDir: tmpDir,
-        agentDir: tmpDir,
-        provider: "codex",
-        model: "gpt-5.5",
-      }),
-    ).rejects.toThrow(
-      "CLI native harness compaction failed for codex/gpt-5.5: native harness compaction did not reduce context",
-    );
+    // Post-turn compaction failure no longer throws (issue #94688).
+    const result2 = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(result2).toBe(sessionEntry);
     expect(compactCalls).toHaveLength(0);
   });
 
@@ -1398,11 +1395,13 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "opus",
     });
 
-    const rejection = expect(pending).rejects.toThrow(
-      "CLI transcript compaction failed for claude-cli/opus: Compaction timed out",
-    );
+    // Post-turn compaction failure no longer throws — the assistant reply
+    // was already generated and written to the session transcript before
+    // compaction runs. The function returns the session entry so the turn
+    // can proceed with the existing reply (issue #94688).
     await vi.advanceTimersByTimeAsync(1_000);
-    await rejection;
+    const result = await pending;
+    expect(result).toBe(sessionEntry);
     vi.useRealTimers();
 
     expect(compactCalls).toHaveLength(1);
