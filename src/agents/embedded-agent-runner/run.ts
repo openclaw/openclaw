@@ -146,6 +146,7 @@ import {
   hasOutboundDeliveryEvidence,
 } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
+import { startLaneTaskProgressHeartbeat } from "./lane-heartbeat.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
@@ -1853,6 +1854,11 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          // Keep the lane-task sliding window alive while the embedded attempt
+          // is in flight (notably during long-running tool execution such as
+          // `exec` commands). Without this heartbeat the lane-task timeout
+          // expires even though the attempt is still making progress. See #94033.
+          const laneHeartbeat = startLaneTaskProgressHeartbeat(noteLaneTaskProgress);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2011,6 +2017,7 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              laneHeartbeat.stop();
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
