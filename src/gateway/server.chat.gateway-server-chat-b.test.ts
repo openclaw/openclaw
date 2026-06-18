@@ -581,6 +581,12 @@ describe("gateway server chat", () => {
       expect(familyHistory).toContain("ancestor cap context 0");
       expect(familyHistory).not.toContain("ancestor cap context 31");
       expect(familyHistory).not.toContain("ancestor cap context 39");
+
+      const limitedFamilyHistory = JSON.stringify(
+        await fetchHistoryMessages(ws, { includeFamily: true, limit: 2 }),
+      );
+      expect(limitedFamilyHistory).toContain("current survives family target cap");
+      expect(limitedFamilyHistory).toContain("ancestor cap context");
     });
   });
 

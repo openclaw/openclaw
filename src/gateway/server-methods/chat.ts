@@ -2623,6 +2623,7 @@ type SessionTranscriptReadTarget = {
   sessionId: string;
   sessionFile?: string;
   applySessionStartedAtFilter: boolean;
+  isCurrentActive?: boolean;
 };
 
 const MAX_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
@@ -2651,6 +2652,22 @@ function resolveFirstExistingTranscriptCandidate(params: {
   ).find((candidate) => fs.existsSync(candidate));
 }
 
+function orderFamilyReadTargetsForOutput(
+  targets: SessionTranscriptReadTarget[],
+  currentSessionId: string,
+): SessionTranscriptReadTarget[] {
+  return targets
+    .map((target, index) => ({ target, index }))
+    .toSorted((left, right) => {
+      const leftRank =
+        left.target.sessionId !== currentSessionId ? 0 : left.target.isCurrentActive ? 2 : 1;
+      const rightRank =
+        right.target.sessionId !== currentSessionId ? 0 : right.target.isCurrentActive ? 2 : 1;
+      return leftRank - rightRank || left.index - right.index;
+    })
+    .map(({ target }) => target);
+}
+
 async function resolveChatHistoryTranscriptReadTargets(params: {
   entry: { sessionId?: string; sessionFile?: string; usageFamilySessionIds?: string[] } | undefined;
   sessionId: string | undefined;
@@ -2661,9 +2678,10 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
   if (!params.sessionId) {
     return [];
   }
+  const currentSessionId = params.sessionId;
   const sessionIds = params.includeFamily
-    ? resolveHistoryFamilySessionIds(params.entry, params.sessionId)
-    : [params.sessionId];
+    ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
+    : [currentSessionId];
   const targets: SessionTranscriptReadTarget[] = [];
   const seenFiles = new Set<string>();
   const pushTarget = (target: SessionTranscriptReadTarget): boolean => {
@@ -2680,6 +2698,8 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
     targets.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
     return targets.length < MAX_CHAT_HISTORY_FAMILY_READ_TARGETS;
   };
+  const finalizeTargets = (): SessionTranscriptReadTarget[] =>
+    params.includeFamily ? orderFamilyReadTargetsForOutput(targets, currentSessionId) : targets;
   for (const familySessionId of sessionIds) {
     const archivedFiles = params.includeFamily
       ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
@@ -2713,9 +2733,10 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
           sessionId: familySessionId,
           sessionFile: activeFile,
           applySessionStartedAtFilter: true,
+          isCurrentActive: true,
         })
       ) {
-        return targets;
+        return finalizeTargets();
       }
     }
     for (const file of archivedFiles) {
@@ -2726,7 +2747,7 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
           applySessionStartedAtFilter: false,
         })
       ) {
-        return targets;
+        return finalizeTargets();
       }
     }
     if (activeFile && familySessionId !== params.sessionId) {
@@ -2737,11 +2758,11 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
           applySessionStartedAtFilter: false,
         })
       ) {
-        return targets;
+        return finalizeTargets();
       }
     }
   }
-  return targets;
+  return finalizeTargets();
 }
 
 async function handleChatHistoryRequest({
