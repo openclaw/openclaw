@@ -43,6 +43,7 @@ export type ResolvedSessionMaintenanceConfig = {
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  preserveKeys?: string[];
 };
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
@@ -141,6 +142,7 @@ export function resolveMaintenanceConfigFromInput(
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
+    preserveKeys: maintenance?.preserveKeys,
   };
 }
 
