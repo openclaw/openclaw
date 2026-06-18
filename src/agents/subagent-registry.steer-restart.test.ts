@@ -485,6 +485,7 @@ describe("subagent registry steer restarts", () => {
         previous.endedReason = "subagent-complete";
         previous.endedAt = Date.now();
         previous.outcome = { status: "ok" };
+        previous.completedFromYieldPause = true;
       }
 
       const run = replaceRunAfterSteer({
@@ -494,6 +495,7 @@ describe("subagent registry steer restarts", () => {
       });
       expect(run.endedHookEmittedAt).toBeUndefined();
       expect(run.endedReason).toBeUndefined();
+      expect(run.completedFromYieldPause).toBeUndefined();
 
       emitLifecycleEnd("run-terminal-state-new");
 

@@ -1026,10 +1026,16 @@ export function createSubagentRegistryLifecycleController(params: {
       if (!didAnnounce && latestDeliveryError) {
         ensureDeliveryState(entry).lastError = latestDeliveryError;
       }
+      // For yield completions the parent session owns delivery; skipAnnounce prevents
+      // delivery.status from being credited on B's run record without external proof.
+      const yieldCleanupOptions = entry.completedFromYieldPause
+        ? { skipAnnounce: true }
+        : undefined;
       void finalizeSubagentCleanup(
         runId,
         entry.cleanup,
         didAnnounce || shouldCreditPriorDelivery,
+        yieldCleanupOptions,
       ).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
@@ -1061,6 +1067,7 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        requesterPausedForYield: entry.completedFromYieldPause === true,
         onDeliveryResult: (delivery) => {
           recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {
@@ -1194,6 +1201,9 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
     if (entry.pauseReason !== undefined) {
+      if (entry.pauseReason === "sessions_yield") {
+        entry.completedFromYieldPause = true;
+      }
       entry.pauseReason = undefined;
       mutated = true;
     }

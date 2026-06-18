@@ -580,6 +580,7 @@ export function createSubagentRunManager(params: {
       endedAt: undefined,
       endedReason: undefined,
       pauseReason: undefined,
+      completedFromYieldPause: undefined,
       endedHookEmittedAt: undefined,
       browserCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,

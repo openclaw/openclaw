@@ -2760,6 +2760,65 @@ describe("subagent announce formatting", () => {
     });
   });
 
+  it("still wakes settled descendants for a yielded run before skipping its announce (#90944)", async () => {
+    sessionStore = {
+      "agent:main:subagent:parent": {
+        sessionId: "session-parent",
+      },
+    };
+
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-parent-phase-1") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-a",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "result from child a",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2"));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-phase-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      wakeOnDescendantSettle: true,
+      requesterPausedForYield: true,
+      roundOneReply: "waiting for children",
+    });
+
+    // requesterPausedForYield must not short-circuit the settled-descendant wake:
+    // the run still synthesizes child findings before the yield skip takes over.
+    expect(didAnnounce).toBe(true);
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
+      previousRunId: "run-parent-phase-1",
+      nextRunId: "run-parent-phase-2",
+      preserveFrozenResultFallback: true,
+    });
+  });
+
   it("does not re-wake an already woken run id", async () => {
     sessionStore = {
       "agent:main:subagent:parent": {
