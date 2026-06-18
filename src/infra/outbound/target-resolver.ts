@@ -400,10 +400,6 @@ export async function resolveMessagingTarget(params: {
   const plugin = params.plugin ?? getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
-  const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
-  if (reservedLiteral) {
-    return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
-  }
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
   const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
   const normalized = normalizedInput?.normalized ?? raw;
@@ -482,6 +478,13 @@ export async function resolveMessagingTarget(params: {
       error: ambiguousTargetError(providerLabel, raw, hint),
       candidates: match.entries,
     };
+  }
+  // Directory miss: reject reserved literals before falling back to plugin
+  // resolution, so a bare reserved word without a matching directory entry
+  // does not accidentally resolve to a public channel or incorrect target.
+  const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
+  if (reservedLiteral) {
+    return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
   const resolvedFallbackTarget = asResolvedMessagingTarget(
     await maybeResolvePluginMessagingTarget({

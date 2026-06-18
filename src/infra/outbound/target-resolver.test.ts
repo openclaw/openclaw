@@ -130,7 +130,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects plugin-reserved literal targets before directory lookup", async () => {
+  it("preserves configured directory entries before rejecting reserved literal targets", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
       directory: {
@@ -162,13 +162,47 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       input: "current",
     });
 
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.to).toBe("-1002458651455");
+      expect(result.target.source).toBe("directory");
+    }
+    expect(mocks.listGroups).toHaveBeenCalled();
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("rejects reserved literal targets after directory miss", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.message).toContain('Reserved target "current"');
       expect(result.error.message).toContain("Telegram");
     }
-    expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+    expect(mocks.listGroups).toHaveBeenCalled();
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
