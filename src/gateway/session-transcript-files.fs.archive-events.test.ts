@@ -13,6 +13,18 @@ import {
   archiveSessionTranscriptsDetailed,
 } from "./session-transcript-files.fs.js";
 
+function writeTrajectoryPointer(pointerFile: string, sessionId: string, runtimeFile: string): void {
+  fs.writeFileSync(
+    pointerFile,
+    `${JSON.stringify({
+      traceSchema: "openclaw-trajectory-pointer",
+      schemaVersion: 1,
+      sessionId,
+      runtimeFile,
+    })}\n`,
+  );
+}
+
 const subscriptions: Array<() => void> = [];
 
 afterEach(() => {
@@ -143,7 +155,7 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
       fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
       fs.writeFileSync(trajectoryFile, '{"traceSchema":"openclaw-trajectory"}\n');
-      fs.writeFileSync(pointerFile, `{"runtimeFile":${JSON.stringify(trajectoryFile)}}\n`);
+      writeTrajectoryPointer(pointerFile, sessionId, trajectoryFile);
 
       const archived = archiveSessionTranscriptsDetailed({
         sessionId,
@@ -175,7 +187,7 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
       fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
       fs.writeFileSync(trajectoryFile, '{"traceSchema":"openclaw-trajectory"}\n');
-      fs.writeFileSync(pointerFile, `{"runtimeFile":${JSON.stringify(trajectoryFile)}}\n`);
+      writeTrajectoryPointer(pointerFile, sessionId, trajectoryFile);
 
       const archived = archiveSessionTranscriptsDetailed({
         sessionId,
@@ -193,6 +205,44 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       const remaining = fs.readdirSync(tmpDir);
       expect(remaining.some((name) => name.includes(".trajectory.jsonl.reset."))).toBe(false);
     } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("archives pointer-resolved runtime files from OPENCLAW_TRAJECTORY_DIR on reset", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-trajectory-override-"));
+    const previousTrajectoryDir = process.env.OPENCLAW_TRAJECTORY_DIR;
+    try {
+      const sessionId = "66666666-6666-4666-8666-666666666666";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      const trajectoryDir = path.join(tmpDir, "traces");
+      const overrideRuntime = path.join(trajectoryDir, `${sessionId}.jsonl`);
+      const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
+      fs.mkdirSync(trajectoryDir, { recursive: true });
+      process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+      fs.writeFileSync(overrideRuntime, '{"traceSchema":"openclaw-trajectory"}\n');
+      writeTrajectoryPointer(pointerFile, sessionId, overrideRuntime);
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      expect(archived).toHaveLength(1);
+      expect(fs.existsSync(overrideRuntime)).toBe(false);
+      expect(fs.existsSync(pointerFile)).toBe(false);
+      const remaining = fs.readdirSync(trajectoryDir);
+      expect(remaining.some((name) => name.includes(".jsonl.reset."))).toBe(true);
+    } finally {
+      if (previousTrajectoryDir === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY_DIR;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDir;
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

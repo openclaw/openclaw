@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
@@ -385,22 +386,58 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
 // the retention sweep keys on, so these archives ride the existing
 // reset-archive cleanup instead of growing unbounded. Best-effort: a missing or
 // locked sibling must not fail the transcript reset that already succeeded.
+function readArchiveTrajectoryPointerRuntimeFile(
+  pointerPath: string,
+  sessionId: string,
+): string | null {
+  try {
+    const lst = fs.lstatSync(pointerPath);
+    if (!lst.isFile() || lst.isSymbolicLink()) {
+      return null;
+    }
+    const parsed: unknown = JSON.parse(fs.readFileSync(pointerPath, "utf8"));
+    if (!isRecord(parsed)) {
+      return null;
+    }
+    if (
+      parsed.traceSchema !== "openclaw-trajectory-pointer" ||
+      parsed.schemaVersion !== 1 ||
+      parsed.sessionId !== sessionId ||
+      typeof parsed.runtimeFile !== "string" ||
+      !parsed.runtimeFile.trim()
+    ) {
+      return null;
+    }
+    return path.resolve(parsed.runtimeFile);
+  } catch {
+    return null;
+  }
+}
+
 function archiveResetTrajectorySiblings(transcriptPath: string, sessionId: string): void {
   const ts = formatSessionArchiveTimestamp();
-  const siblings = [
-    resolveTrajectoryFilePath({ env: {}, sessionFile: transcriptPath, sessionId }),
-    resolveTrajectoryPointerFilePath(transcriptPath),
-  ];
-  for (const sibling of siblings) {
+  const pointerPath = resolveTrajectoryPointerFilePath(transcriptPath);
+  const runtimeTargets = new Set<string>([
+    resolveTrajectoryFilePath({ env: process.env, sessionFile: transcriptPath, sessionId }),
+  ]);
+  const pointerRuntime = readArchiveTrajectoryPointerRuntimeFile(pointerPath, sessionId);
+  if (pointerRuntime) {
+    runtimeTargets.add(pointerRuntime);
+  }
+  const renameArchive = (filePath: string) => {
     try {
-      if (fs.existsSync(sibling)) {
-        fs.renameSync(sibling, `${sibling}.reset.${ts}`);
+      if (fs.existsSync(filePath)) {
+        fs.renameSync(filePath, `${filePath}.reset.${ts}`);
       }
     } catch {
       // Ignore: the transcript reset is the source of truth; a trajectory
       // sibling that cannot be archived just falls back to prior behavior.
     }
+  };
+  for (const runtimePath of runtimeTargets) {
+    renameArchive(runtimePath);
   }
+  renameArchive(pointerPath);
 }
 
 export function archiveSessionTranscripts(opts: {

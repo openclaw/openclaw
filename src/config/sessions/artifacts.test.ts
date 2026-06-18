@@ -89,6 +89,16 @@ describe("session artifact helpers", () => {
       ),
     ).toBe(false);
     expect(isUsageCountedSessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.trajectory-path.json.reset.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBe(false);
   });
 
   it("parses usage-counted session ids from file names", () => {
@@ -108,6 +118,9 @@ describe("session artifact helpers", () => {
       ),
     ).toBeNull();
     expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
+    expect(
+      parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z"),
+    ).toBeNull();
   });
 
   it("parses exact compaction checkpoint transcript file names", () => {
