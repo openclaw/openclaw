@@ -1309,6 +1309,20 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+    expect(
+      createVitestRunSpecs(["src/gateway/server-startup-early.ts"], {
+        baseEnv: {},
+        cwd: process.cwd(),
+      }).map((spec) => ({
+        config: spec.config,
+        includePatterns: spec.includePatterns,
+      })),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.gateway-server.config.ts",
+        includePatterns: ["src/gateway/server-startup-early.test.ts"],
+      },
+    ]);
     expect(buildVitestRunPlans(["src/commands/onboarding-plugin-install.ts"])).toEqual([
       {
         config: "test/vitest/vitest.commands.config.ts",
@@ -1655,7 +1669,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["src/config", "test/vitest/vitest.runtime-config.config.ts"],
       ["src/cron", "test/vitest/vitest.cron.config.ts"],
       ["src/daemon", "test/vitest/vitest.daemon.config.ts"],
-      ["src/gateway", "test/vitest/vitest.gateway.config.ts"],
       ["src/hooks", "test/vitest/vitest.hooks.config.ts"],
       ["src/infra", "test/vitest/vitest.infra.config.ts"],
       ["src/logging", "test/vitest/vitest.logging.config.ts"],
@@ -1681,6 +1694,44 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       });
     }
+
+    expect(buildVitestRunPlans(["src/gateway"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.gateway-core.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.gateway-client.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.gateway-methods.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.gateway-server.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+    expect(
+      createVitestRunSpecs(["src/gateway"], { baseEnv: {}, cwd: process.cwd() }).map((spec) => ({
+        config: spec.config,
+        includePatterns: spec.includePatterns,
+      })),
+    ).toEqual([
+      { config: "test/vitest/vitest.gateway-core.config.ts", includePatterns: null },
+      { config: "test/vitest/vitest.gateway-client.config.ts", includePatterns: null },
+      { config: "test/vitest/vitest.gateway-methods.config.ts", includePatterns: null },
+      { config: "test/vitest/vitest.gateway-server.config.ts", includePatterns: null },
+    ]);
 
     expect(buildVitestRunPlans(["src/plugin-sdk"], process.cwd())).toEqual([
       expect.objectContaining({

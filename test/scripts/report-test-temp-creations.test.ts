@@ -196,6 +196,72 @@ describe("report-test-temp-creations", () => {
     );
   });
 
+  it("skips the warning-only report when the branch diff exceeds the configured buffer", () => {
+    const root = tempDirs.make("openclaw-temp-report-");
+    const env = {
+      ...createNestedGitEnv(),
+      OPENCLAW_TEST_TEMP_REPORT_DIFF_MAX_BUFFER_BYTES: "64",
+    };
+    execFileSync("git", ["init", "-q", "--initial-branch=main"], { cwd: root, env });
+    fs.mkdirSync(path.join(root, "test", "helpers"), { recursive: true });
+    fs.writeFileSync(path.join(root, "test", "helpers", "case.ts"), "const value = 1;\n", "utf8");
+    execFileSync("git", ["add", "test/helpers/case.ts"], { cwd: root, env });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "user.name=Test User",
+        "commit",
+        "-q",
+        "-m",
+        "initial",
+      ],
+      { cwd: root, env },
+    );
+    execFileSync("git", ["checkout", "-q", "-b", "feature"], { cwd: root, env });
+    fs.appendFileSync(
+      path.join(root, "test", "helpers", "case.ts"),
+      `const huge = "${"x".repeat(2048)}";\n`,
+      "utf8",
+    );
+    execFileSync("git", ["add", "test/helpers/case.ts"], { cwd: root, env });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "user.name=Test User",
+        "commit",
+        "-q",
+        "-m",
+        "huge diff",
+      ],
+      { cwd: root, env },
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"),
+        "--base",
+        "main",
+        "--head",
+        "HEAD",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("skipping warning-only temp creation report");
+  });
+
   it("exits non-zero for staged findings when requested", () => {
     const root = tempDirs.make("openclaw-temp-report-");
     const env = createNestedGitEnv();

@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 /**
  * Runs CPU-heavy compaction planning in a worker thread when histories are
  * large enough to risk starving the main event loop.
@@ -28,6 +29,7 @@ const COMPACTION_PLANNING_WORKER_TIMEOUT_MS = 60_000;
 // Worker startup is more expensive than local planning for tiny histories.
 // Keep small compactions synchronous; move only starvation-sized plans off-thread.
 const COMPACTION_PLANNING_WORKER_MIN_MESSAGES = 64;
+const requireFromHere = createRequire(import.meta.url);
 
 class CompactionPlanningWorkerError extends Error {
   constructor(
@@ -52,6 +54,29 @@ function resolveCompactionPlanningWorkerUrl(currentModuleUrl = import.meta.url):
   return new URL(`./compaction-planning.worker${extension}`, currentModuleUrl);
 }
 
+function createSourceWorkerBootstrapUrl(workerUrl: URL): URL {
+  const tsxApiUrl = pathToFileURL(requireFromHere.resolve("tsx/esm/api")).href;
+  const source = [
+    `import { tsImport } from ${JSON.stringify(tsxApiUrl)};`,
+    `await tsImport(${JSON.stringify(workerUrl.href)}, { parentURL: ${JSON.stringify(workerUrl.href)} });`,
+  ].join("\n");
+  return new URL(`data:text/javascript,${encodeURIComponent(source)}`);
+}
+
+function createCompactionPlanningWorkerLaunch(workerUrl: URL): {
+  execArgv?: string[];
+  url: URL;
+} {
+  if (workerUrl.pathname.endsWith(".ts")) {
+    // Worker threads do not install tsx's ESM resolver from execArgv in source
+    // checkout mode, so bootstrap the TypeScript worker through tsx's API.
+    return {
+      url: createSourceWorkerBootstrapUrl(workerUrl),
+    };
+  }
+  return { url: workerUrl };
+}
+
 function runCompactionPlanningWorker(params: {
   input: CompactionPlanningWorkerInput;
   signal?: AbortSignal;
@@ -68,12 +93,12 @@ function runCompactionPlanningWorker(params: {
   }
 
   const workerUrl = params.workerUrl ?? resolveCompactionPlanningWorkerUrl();
-  const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl, {
+    const launch = createCompactionPlanningWorkerLaunch(workerUrl);
+    worker = new Worker(launch.url, {
       workerData: params.input,
-      execArgv: sourceWorkerExecArgv,
+      execArgv: launch.execArgv,
     });
   } catch (error) {
     return Promise.reject(

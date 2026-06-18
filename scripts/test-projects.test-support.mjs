@@ -145,6 +145,12 @@ const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
 const GATEWAY_METHODS_VITEST_CONFIG = "test/vitest/vitest.gateway-methods.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
+const GATEWAY_PROJECT_VITEST_CONFIGS = [
+  GATEWAY_CORE_VITEST_CONFIG,
+  GATEWAY_CLIENT_VITEST_CONFIG,
+  GATEWAY_METHODS_VITEST_CONFIG,
+  GATEWAY_SERVER_VITEST_CONFIG,
+];
 const HOOKS_VITEST_CONFIG = "test/vitest/vitest.hooks.config.ts";
 const INFRA_VITEST_CONFIG = "test/vitest/vitest.infra.config.ts";
 const MEDIA_VITEST_CONFIG = "test/vitest/vitest.media.config.ts";
@@ -1436,6 +1442,63 @@ function isGatewayServerFullSuiteTarget(relative) {
       path.posix.basename(relative).includes("server") &&
       relative.endsWith(".test.ts"))
   );
+}
+
+function isGatewayMethodsTarget(relative) {
+  return relative.startsWith("src/gateway/server-methods/") && relative.endsWith(".test.ts");
+}
+
+function isGatewayClientTarget(relative) {
+  if (!relative.startsWith("src/gateway/") || !relative.endsWith(".test.ts")) {
+    return false;
+  }
+  const basename = path.posix.basename(relative);
+  return (
+    !basename.includes("server") &&
+    (basename.includes("client") ||
+      basename.includes("reconnect") ||
+      basename.includes("android-node") ||
+      basename.includes("gateway-cli-backend"))
+  );
+}
+
+function isGatewayCoreTarget(relative) {
+  return (
+    relative.startsWith("src/gateway/") &&
+    relative.endsWith(".test.ts") &&
+    !GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) &&
+    !isGatewayMethodsTarget(relative) &&
+    !isGatewayClientTarget(relative) &&
+    !isGatewayServerFullSuiteTarget(relative)
+  );
+}
+
+function partitionGatewayIncludePatterns(includePatterns) {
+  if (
+    !Array.isArray(includePatterns) ||
+    includePatterns.some((pattern) => isGlobTarget(pattern) || !pattern.startsWith("src/gateway/"))
+  ) {
+    return null;
+  }
+  const partitions = [
+    {
+      config: GATEWAY_CORE_VITEST_CONFIG,
+      includePatterns: includePatterns.filter(isGatewayCoreTarget),
+    },
+    {
+      config: GATEWAY_CLIENT_VITEST_CONFIG,
+      includePatterns: includePatterns.filter(isGatewayClientTarget),
+    },
+    {
+      config: GATEWAY_METHODS_VITEST_CONFIG,
+      includePatterns: includePatterns.filter(isGatewayMethodsTarget),
+    },
+    {
+      config: GATEWAY_SERVER_VITEST_CONFIG,
+      includePatterns: includePatterns.filter(isGatewayServerFullSuiteTarget),
+    },
+  ];
+  return partitions.filter((partition) => partition.includePatterns.length > 0);
 }
 
 function resolveGatewayServerFullSuiteTargets(cwd) {
@@ -2938,9 +3001,9 @@ export function buildVitestRunPlans(
       const configs = watchMode
         ? [FULL_EXTENSIONS_VITEST_CONFIG]
         : listFullExtensionVitestProjectConfigs();
-      for (const config of configs) {
+      for (const projectConfig of configs) {
         plans.push({
-          config,
+          config: projectConfig,
           forwardedArgs: nonTargetArgs,
           includePatterns: null,
           watchMode,
@@ -2956,6 +3019,22 @@ export function buildVitestRunPlans(
     const useWholeConfigTarget = grouped.some((targetArg) =>
       shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
+    const useBroadGatewayTarget =
+      kind === "gateway" &&
+      grouped.some(
+        (targetArg) => toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "") === "src/gateway",
+      );
+    if (kind === "gateway" && !watchMode && (useWholeConfigTarget || useBroadGatewayTarget)) {
+      for (const gatewayConfig of GATEWAY_PROJECT_VITEST_CONFIGS) {
+        plans.push({
+          config: gatewayConfig,
+          forwardedArgs: nonTargetArgs,
+          includePatterns: null,
+          watchMode,
+        });
+      }
+      continue;
+    }
     const includePatterns = useCliTargetArgs
       ? null
       : useWholeConfigTarget
@@ -3191,7 +3270,7 @@ export function createVitestRunSpecs(args, params = {}) {
   const plans = filterPlansForContractIncludeFile(
     buildVitestRunPlans(args, cwd, listChangedPathsFromGit, { env: baseEnv }),
     baseEnv,
-  );
+  ).flatMap(expandBroadGatewayVitestPlan);
   return plans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(
@@ -3213,6 +3292,35 @@ export function createVitestRunSpecs(args, params = {}) {
       watchMode: plan.watchMode,
     };
   });
+}
+
+function expandBroadGatewayVitestPlan(plan) {
+  if (plan.watchMode || plan.config !== GATEWAY_VITEST_CONFIG) {
+    return [plan];
+  }
+  const includePatterns = plan.includePatterns;
+  const broadGatewayInclude =
+    Array.isArray(includePatterns) &&
+    includePatterns.length === 1 &&
+    includePatterns[0] === "src/gateway/**/*.test.ts";
+  if (includePatterns !== null && !broadGatewayInclude) {
+    const partitions = partitionGatewayIncludePatterns(includePatterns);
+    if (!partitions) {
+      return [plan];
+    }
+    return partitions.map((partition) =>
+      Object.assign({}, plan, {
+        config: partition.config,
+        includePatterns: partition.includePatterns,
+      }),
+    );
+  }
+  return GATEWAY_PROJECT_VITEST_CONFIGS.map((config) =>
+    Object.assign({}, plan, {
+      config,
+      includePatterns: null,
+    }),
+  );
 }
 
 function loadIncludePatternsForSpecFilter(env) {

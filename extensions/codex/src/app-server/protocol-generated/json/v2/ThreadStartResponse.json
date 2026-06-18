@@ -1055,6 +1055,14 @@
           "description": "Usually the first user message in the thread, if available.",
           "type": "string"
         },
+        "recencyAt": {
+          "description": "Unix timestamp (in seconds) used for thread recency ordering.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "sessionId": {
           "description": "Session id shared by threads that belong to the same session tree.",
           "type": "string"

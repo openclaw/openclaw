@@ -2,6 +2,7 @@
  * Lazy-loaded dependency bundle for remote-profile tab operation tests.
  */
 import { afterEach, beforeEach, vi } from "vitest";
+import "../test-support/browser-security.mock.js";
 
 /** Modules and helpers shared by remote-profile tab operation tests. */
 export type RemoteProfileTestDeps = {

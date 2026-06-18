@@ -10,6 +10,7 @@ vi.mock("./banner.js", () => ({
 }));
 
 vi.mock("../logging/console.js", () => ({
+  getConsoleSettings: () => ({ level: "silent", style: "compact" }),
   routeLogsToStderr: routeLogsToStderrMock,
 }));
 

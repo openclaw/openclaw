@@ -233,6 +233,7 @@ vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
 });
 
 vi.mock("../../logging/console.js", () => ({
+  getConsoleSettings: () => ({ level: "silent", style: "compact" }),
   setConsoleSubsystemFilter: (filters: string[]) => setConsoleSubsystemFilter(filters),
   setConsoleTimestampPrefix: () => undefined,
 }));
