@@ -2547,6 +2547,143 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome).toBeUndefined();
   });
 
+  it("reconciles child output before lost-context sweep marks run as failed", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+    // Session entry exists with a valid sessionId (not orphaned) but no terminal status.
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 333,
+        status: "running",
+      },
+    });
+    // The child has produced output.
+    mocks.captureSubagentCompletionReply.mockImplementation(
+      async () => "child produced this output",
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-lost-with-output",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "complete with output",
+      cleanup: "keep",
+    });
+
+    // Advance time past STALE_ACTIVE_SUBAGENT_GRACE_MS to trigger the sweep.
+    vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
+    await mod.testing.sweepOnceForTests();
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-with-output");
+    // The run should be completed successfully using the reconciled output,
+    // not marked as "lost active execution context".
+    expect(run?.endedAt).toBeTypeOf("number");
+    expect(run?.outcome).toBeDefined();
+    expectRecordFields(run?.outcome, { status: "ok" }, "reconciled run outcome");
+    expect(run?.endedReason).toBe("subagent-complete");
+    // Restore default mock behavior for subsequent tests.
+    mocks.captureSubagentCompletionReply.mockImplementation(async () => "final completion reply");
+  });
+
+  it("falls back to lost-context error when child has no output to reconcile", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+    // Session entry exists with a valid sessionId (not orphaned) but no terminal status.
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 333,
+        status: "running",
+      },
+    });
+    // The child has no output.
+    mocks.captureSubagentCompletionReply.mockImplementation(async () => undefined);
+
+    mod.registerSubagentRun({
+      runId: "run-lost-no-output",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "complete without output",
+      cleanup: "keep",
+    });
+
+    // Advance time past STALE_ACTIVE_SUBAGENT_GRACE_MS to trigger the sweep.
+    vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
+    await mod.testing.sweepOnceForTests();
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-no-output");
+    // Should fall back to "lost active execution context" error.
+    expect(run?.endedAt).toBeTypeOf("number");
+    expectRecordFields(
+      run?.outcome,
+      { status: "error", error: "subagent run lost active execution context" },
+      "lost-context run outcome",
+    );
+    expect(run?.endedReason).toBe("subagent-error");
+    // Restore default mock behavior for subsequent tests.
+    mocks.captureSubagentCompletionReply.mockImplementation(async () => "final completion reply");
+  });
+
+  it("falls back to lost-context error when output capture throws", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 333,
+        status: "running",
+      },
+    });
+    // Simulate a read failure during output capture.
+    mocks.captureSubagentCompletionReply.mockImplementation(async () => {
+      throw new Error("read failed");
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-lost-capture-error",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "capture throws",
+      cleanup: "keep",
+    });
+
+    vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
+    await mod.testing.sweepOnceForTests();
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-capture-error");
+    // Should fall back to "lost active execution context" error.
+    expect(run?.endedAt).toBeTypeOf("number");
+    expectRecordFields(
+      run?.outcome,
+      { status: "error", error: "subagent run lost active execution context" },
+      "lost-context-capture-error run outcome",
+    );
+    // Restore default mock behavior for subsequent tests.
+    mocks.captureSubagentCompletionReply.mockImplementation(async () => "final completion reply");
+  });
+
   it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
     mod.registerSubagentRun({
       runId: "run-1",
