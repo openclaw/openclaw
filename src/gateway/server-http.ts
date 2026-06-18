@@ -41,6 +41,7 @@ import {
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { resolveSkillsMcpConfig } from "./skills-mcp.config.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -90,6 +91,7 @@ let httpAuthUtilsModulePromise: Promise<typeof import("./http-auth-utils.js")> |
 let pluginRouteRuntimeScopesModulePromise:
   | Promise<typeof import("./server/plugin-route-runtime-scopes.js")>
   | undefined;
+let skillsMcpHttpModulePromise: Promise<typeof import("./skills-mcp.handler.js")> | undefined;
 
 function getIdentityAvatarModule() {
   identityAvatarModulePromise ??= import("../agents/identity-avatar.js");
@@ -154,6 +156,13 @@ function getHttpAuthUtilsModule() {
 function getPluginRouteRuntimeScopesModule() {
   pluginRouteRuntimeScopesModulePromise ??= import("./server/plugin-route-runtime-scopes.js");
   return pluginRouteRuntimeScopesModulePromise;
+}
+
+// Lazy-load the skills MCP handler so the agent/skill runtime stack only loads
+// when the bridge is enabled and a matching `/mcp` request actually arrives.
+function getSkillsMcpHttpModule() {
+  skillsMcpHttpModulePromise ??= import("./skills-mcp.handler.js");
+  return skillsMcpHttpModulePromise;
 }
 
 const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
@@ -604,6 +613,17 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
+      const skillsMcpConfig = resolveSkillsMcpConfig();
+      if (skillsMcpConfig.enabled && scopedRequestPath === skillsMcpConfig.path) {
+        requestStages.push({
+          name: "skills-mcp",
+          run: async () =>
+            (await getSkillsMcpHttpModule()).handleSkillsMcpHttpRequest(req, res, {
+              cfg: configSnapshot,
+              runtimeCfg: skillsMcpConfig,
+            }),
+        });
+      }
       if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",
