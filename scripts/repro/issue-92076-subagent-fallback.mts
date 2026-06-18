@@ -20,7 +20,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   deliverSubagentAnnouncement,
   testing as announceTesting,
