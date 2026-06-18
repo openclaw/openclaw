@@ -19,18 +19,20 @@ describe("slack socket reconnect loop", () => {
     ["network error", () => new Error("ECONNRESET")],
     [
       "Slack Web API request error",
-      () => ({
-        code: "slack_webapi_request_error",
-        original: new Error("ECONNRESET"),
-      }),
+      () =>
+        Object.assign(new Error("Slack Web API request error"), {
+          code: "slack_webapi_request_error",
+          original: new Error("ECONNRESET"),
+        }),
     ],
     [
       "Slack Web API HTTP error",
-      () => ({
-        code: "slack_webapi_http_error",
-        statusCode: 503,
-        statusMessage: "Service Unavailable",
-      }),
+      () =>
+        Object.assign(new Error("Slack Web API HTTP error"), {
+          code: "slack_webapi_http_error",
+          statusCode: 503,
+          statusMessage: "Service Unavailable",
+        }),
     ],
   ])(
     "continues after thirteen consecutive recoverable %s failures",
