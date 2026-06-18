@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import {
   clearOpenAIToolSchemaCacheForTest,
-  findOpenAIStrictToolSchemaDiagnostics,
+  findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
   normalizeStrictOpenAIJsonSchema,
-  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIProjectedToolsStrictToolFlag,
   resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
 
@@ -34,7 +34,10 @@ describe("OpenAI strict tool schema normalization", () => {
       });
       expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
       expect(
-        resolveOpenAIStrictToolFlagForInventory([{ name: "empty", parameters: schema }], true),
+        resolveOpenAIStrictToolFlagForProjection(
+          projectOpenAITools([{ name: "empty", parameters: schema }]),
+          true,
+        ),
       ).toBe(true);
     }
   });
@@ -60,7 +63,10 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(normalized.properties?.metadata).not.toHaveProperty("additionalProperties");
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
     expect(
-      resolveOpenAIStrictToolFlagForInventory([{ name: "write", parameters: schema }], true),
+      resolveOpenAIStrictToolFlagForProjection(
+        projectOpenAITools([{ name: "write", parameters: schema }]),
+        true,
+      ),
     ).toBe(false);
   });
 
@@ -110,14 +116,42 @@ describe("OpenAI strict tool schema normalization", () => {
       },
     };
 
-    expect(findOpenAIStrictToolSchemaDiagnostics([unreadable])).toEqual([
+    const projection = projectOpenAITools([unreadable]);
+
+    expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
       {
         toolIndex: 0,
         toolName: "broken",
         violations: ["broken.parameters is not JSON-serializable"],
       },
     ]);
-    expect(resolveOpenAIStrictToolFlagForInventory([unreadable], true)).toBe(false);
+    expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(false);
+  });
+
+  it("keeps strict mode for emitted tools when unreadable tools are dropped", () => {
+    const projection = projectOpenAITools([
+      {
+        name: "broken",
+        parameters: {
+          type: "object",
+          get properties(): never {
+            throw new Error("properties exploded");
+          },
+        },
+      },
+      {
+        name: "lookup",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+
+    expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(false);
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
   });
 
   it("reuses projected schemas for strict checks and normalization", () => {

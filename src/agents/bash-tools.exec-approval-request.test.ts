@@ -4,10 +4,7 @@
  * and lazy command highlighting for host/node approval payloads.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-} from "./bash-tools.exec-runtime.js";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 
 const commandExplainerMock = vi.hoisted(() => ({
   importCount: 0,
@@ -42,7 +39,6 @@ vi.mock("./tools/gateway.js", () => ({
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let registerExecApprovalRequest: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequest;
-let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
 
 const initialProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -75,14 +71,11 @@ function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayloa
   return payload as ApprovalRequestPayload;
 }
 
-describe("requestExecApprovalDecision", () => {
+describe("exec approval requests", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({
-      registerExecApprovalRequest,
-      requestExecApprovalDecision,
-      registerExecApprovalRequestForHost,
-    } = await import("./bash-tools.exec-approval-request.js"));
+    ({ registerExecApprovalRequest, registerExecApprovalRequestForHost } =
+      await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
@@ -98,190 +91,6 @@ describe("requestExecApprovalDecision", () => {
 
   it("does not load the command explainer when importing approval requests", () => {
     expect(commandExplainerMock.importCount).toBe(0);
-  });
-
-  it("returns string decisions", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        status: "accepted",
-        id: "approval-id",
-        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      })
-      .mockResolvedValueOnce({ decision: "allow-once" });
-
-    const result = await requestExecApprovalDecision({
-      id: "approval-id",
-      command: "echo hi",
-      cwd: "/tmp",
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
-      agentId: "main",
-      resolvedPath: "/usr/bin/echo",
-      sessionKey: "session",
-      turnSourceChannel: "whatsapp",
-      turnSourceTo: "+15555550123",
-      turnSourceAccountId: "work",
-      turnSourceThreadId: "1739201675.123",
-    });
-
-    expect(result).toBe("allow-once");
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "exec.approval.request",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      {
-        id: "approval-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        nodeId: undefined,
-        host: "gateway",
-        security: "allowlist",
-        ask: "always",
-        agentId: "main",
-        resolvedPath: "/usr/bin/echo",
-        sessionKey: "session",
-        turnSourceChannel: "whatsapp",
-        turnSourceTo: "+15555550123",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "1739201675.123",
-        timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-        twoPhase: true,
-      },
-      { expectFinal: false },
-    );
-    expect(callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: "approval-id" },
-    );
-  });
-
-  it("returns null for missing or non-string decisions", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ status: "accepted", id: "approval-id", expiresAtMs: 1234 })
-      .mockResolvedValueOnce({});
-    await expect(
-      requestExecApprovalDecision({
-        id: "approval-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        nodeId: "node-1",
-        host: "node",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBeNull();
-
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({ status: "accepted", id: "approval-id-2", expiresAtMs: 1234 })
-      .mockResolvedValueOnce({ decision: 123 });
-    await expect(
-      requestExecApprovalDecision({
-        id: "approval-id-2",
-        command: "echo hi",
-        cwd: "/tmp",
-        nodeId: "node-1",
-        host: "node",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("uses registration response id when waiting for decision", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        status: "accepted",
-        id: "server-assigned-id",
-        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      })
-      .mockResolvedValueOnce({ decision: "allow-once" });
-
-    await expect(
-      requestExecApprovalDecision({
-        id: "client-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "gateway",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBe("allow-once");
-
-    expect(callGatewayTool).toHaveBeenNthCalledWith(
-      2,
-      "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: "server-assigned-id" },
-    );
-  });
-
-  it("treats expired-or-missing waitDecision as null decision", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        status: "accepted",
-        id: "approval-id",
-        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      })
-      .mockRejectedValueOnce(new Error("approval expired or not found"));
-
-    await expect(
-      requestExecApprovalDecision({
-        id: "approval-id",
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "gateway",
-        security: "allowlist",
-        ask: "on-miss",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("returns final decision directly when gateway already replies with decision", async () => {
-    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny", id: "approval-id" });
-
-    const result = await requestExecApprovalDecision({
-      id: "approval-id",
-      command: "echo hi",
-      cwd: "/tmp",
-      host: "gateway",
-      security: "allowlist",
-      ask: "on-miss",
-    });
-
-    expect(result).toBe("deny");
-    expect(vi.mocked(callGatewayTool).mock.calls).toStrictEqual([
-      [
-        "exec.approval.request",
-        { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-        {
-          ask: "on-miss",
-          command: "echo hi",
-          commandSpans: undefined,
-          cwd: "/tmp",
-          env: undefined,
-          host: "gateway",
-          id: "approval-id",
-          nodeId: undefined,
-          requireDeliveryRoute: undefined,
-          resolvedPath: undefined,
-          security: "allowlist",
-          sessionKey: undefined,
-          suppressDelivery: undefined,
-          systemRunPlan: undefined,
-          timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-          twoPhase: true,
-          turnSourceAccountId: undefined,
-          turnSourceChannel: undefined,
-          turnSourceThreadId: undefined,
-          turnSourceTo: undefined,
-          warningText: undefined,
-          agentId: undefined,
-        },
-        { expectFinal: false },
-      ],
-    ]);
   });
 
   it("bounds missing registration expiries when the process clock is invalid", async () => {

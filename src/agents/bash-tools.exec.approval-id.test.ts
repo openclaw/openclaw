@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMessage } from "../infra/outbound/message.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -389,10 +390,7 @@ function expectRecordFields(
 }
 
 describe("exec approvals", () => {
-  let previousHome: string | undefined;
-  let previousUserProfile: string | undefined;
-  let previousBundledPluginsDir: string | undefined;
-  let previousDisableBundledPlugins: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let tempRoot = "";
   let tempCaseIndex = 0;
 
@@ -401,43 +399,27 @@ describe("exec approvals", () => {
   });
 
   beforeEach(async () => {
-    previousHome = process.env.HOME;
-    previousUserProfile = process.env.USERPROFILE;
-    previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    envSnapshot = captureEnv([
+      "HOME",
+      "USERPROFILE",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    ]);
     const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
     await fs.mkdir(tempDir, { recursive: true });
-    process.env.HOME = tempDir;
+    setTestEnvValue("HOME", tempDir);
     // Windows uses USERPROFILE for os.homedir()
-    process.env.USERPROFILE = tempDir;
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    setTestEnvValue("USERPROFILE", tempDir);
+    deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(sendMessage).mockClear();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-    if (previousBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-    }
-    if (previousDisableBundledPlugins === undefined) {
-      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    } else {
-      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   afterAll(async () => {

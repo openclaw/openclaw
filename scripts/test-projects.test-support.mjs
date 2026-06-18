@@ -405,7 +405,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
 ]);
-const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
@@ -2330,9 +2329,6 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
   if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
     return [siblingTest];
-  }
-  if (BROAD_ONLY_TEST_HELPERS.has(changedPath)) {
-    return null;
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
     return changedPath.startsWith("ui/src/") ? [changedPath] : null;

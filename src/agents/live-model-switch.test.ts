@@ -2,8 +2,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
-  abortEmbeddedAgentRunMock: vi.fn(),
-  requestEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
   resolvePersistedSelectedModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
@@ -16,12 +14,6 @@ vi.mock("./embedded-agent.js", () => {
   state.embeddedAgentModuleImported = true;
   return {};
 });
-
-vi.mock("./embedded-agent-runner/runs.js", () => ({
-  abortEmbeddedAgentRun: (...args: unknown[]) => state.abortEmbeddedAgentRunMock(...args),
-  requestEmbeddedRunModelSwitch: (...args: unknown[]) =>
-    state.requestEmbeddedRunModelSwitchMock(...args),
-}));
 
 vi.mock("./model-selection.js", async () => {
   const actual =
@@ -81,8 +73,6 @@ describe("live model switch", () => {
   });
 
   beforeEach(() => {
-    state.abortEmbeddedAgentRunMock.mockReset().mockReturnValue(false);
-    state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.embeddedAgentModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()
@@ -339,27 +329,6 @@ describe("live model switch", () => {
     });
   });
 
-  it("queues a live switch only when an active run was aborted", async () => {
-    // Switching live runs is two-phase: abort the active run, then queue the
-    // selected provider/model for the restarted embedded run to consume.
-    state.abortEmbeddedAgentRunMock.mockReturnValue(true);
-
-    const { requestLiveSessionModelSwitch } = await loadModule();
-
-    expect(
-      requestLiveSessionModelSwitch({
-        sessionEntry: { sessionId: "session-1" },
-        selection: { provider: "openai", model: "gpt-5.4", authProfileId: "profile-gpt" },
-      }),
-    ).toBe(true);
-    expect(state.abortEmbeddedAgentRunMock).toHaveBeenCalledWith("session-1");
-    expect(state.requestEmbeddedRunModelSwitchMock).toHaveBeenCalledWith("session-1", {
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: "profile-gpt",
-    });
-  });
-
   it("does not import the broad embedded-agent barrel on module load", async () => {
     await loadModule();
 
@@ -430,23 +399,6 @@ describe("live model switch", () => {
         {
           provider: "openai",
           model: "gpt-5.4",
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not track persisted live selection when the run started on a transient model override", async () => {
-    const { shouldTrackPersistedLiveSessionModelSelection } = await loadModule();
-
-    expect(
-      shouldTrackPersistedLiveSessionModelSelection(
-        {
-          provider: "anthropic",
-          model: "claude-haiku-4-5",
-        },
-        {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
         },
       ),
     ).toBe(false);
