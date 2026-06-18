@@ -19,7 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
 import { LoginQRCallbackEventType } from "./zca-constants.js";
 
-function probeCanCreateFileSymlinks(): boolean {
+function probeCanCreateCredentialFileSymlinks(): boolean {
   let probeDir: string | undefined;
   try {
     probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-symlink-probe-"));
@@ -27,7 +27,7 @@ function probeCanCreateFileSymlinks(): boolean {
     const linkFile = path.join(probeDir, "link.txt");
     fs.writeFileSync(targetFile, "content");
     fs.symlinkSync(targetFile, linkFile);
-    return true;
+    return fs.lstatSync(linkFile).isSymbolicLink();
   } catch {
     return false;
   } finally {
@@ -41,7 +41,7 @@ function probeCanCreateFileSymlinks(): boolean {
   }
 }
 
-const canCreateFileSymlinks = probeCanCreateFileSymlinks();
+const canCreateCredentialFileSymlinks = probeCanCreateCredentialFileSymlinks();
 
 const createZaloMock = vi.hoisted(() => vi.fn());
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
@@ -463,7 +463,7 @@ describe("zalouser credential persistence", () => {
   );
 
   it.skipIf(process.platform !== "win32")(
-    "writes credentials as private store files on Windows",
+    "creates credential directory and regular credential file on Windows",
     async () => {
       const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
       const profile = "private-windows-file";
@@ -509,7 +509,7 @@ describe("zalouser credential persistence", () => {
     },
   );
 
-  it.skipIf(!canCreateFileSymlinks)(
+  it.skipIf(!canCreateCredentialFileSymlinks)(
     "refuses to write credentials through a symlinked file",
     async () => {
       const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
