@@ -196,7 +196,7 @@ describe("issue-fix-agent github reads", () => {
       "gitcrawl",
       "search",
       "issues",
-      "repo:openclaw/openclaw state:open",
+      "repo:openclaw/openclaw state:open is:issue",
       "-R",
       "openclaw/openclaw",
       "--state",

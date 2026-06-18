@@ -57,7 +57,7 @@ export async function fetchOpenIssueCandidates(params: {
   const result = await params.runCommand("gitcrawl", [
     "search",
     "issues",
-    "repo:openclaw/openclaw state:open",
+    "repo:openclaw/openclaw state:open is:issue",
     "-R",
     "openclaw/openclaw",
     "--state",
