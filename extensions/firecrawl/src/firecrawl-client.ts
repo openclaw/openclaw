@@ -525,6 +525,8 @@ export async function runFirecrawlScrape(
   assertFirecrawlScrapeTargetAllowed(params.url);
 
   const apiKey = resolveFirecrawlApiKey(params.cfg);
+  // Hosted v2/scrape accepts starter requests without a bearer token.
+  // Only the selected web_fetch provider opts into that access mode.
   if (!apiKey && params.access !== "keyless") {
     throw new Error(
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
