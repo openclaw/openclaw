@@ -159,14 +159,30 @@ describe("happy path prompt snapshots", () => {
     );
     expect(telegram).toContain("### User: Codex Config Instructions");
     expect(telegram).toContain("### User: Turn Input Text");
-    expect(telegram).toContain("OpenClaw runtime context for this turn:");
+    expect(telegram).toContain("### User: Codex Additional Context");
+    const additionalContext = renderedPromptSection(
+      telegram,
+      "### User: Codex Additional Context",
+      "### User: Turn Input Text",
+    );
+    const turnInputText = renderedPromptSection(
+      telegram,
+      "### User: Turn Input Text",
+      "### Tools: Dynamic Tool Catalog",
+    );
+    expect(turnInputText).not.toContain("OpenClaw runtime context for this turn:");
+    expect(additionalContext).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
     expect(telegram).toContain("<TOOLS.md contents will be here>");
     expect(telegram).toContain("<USER.md contents will be here>");
-    expect(telegram).toContain("<MEMORY.md contents will be here>");
-    expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
-    expect(telegram).toContain("Codex loads AGENTS.md natively");
+    expect(additionalContext).toContain("<MEMORY.md contents will be here>");
+    expect(additionalContext).not.toContain("<SOUL.md contents will be here>");
+    expect(additionalContext).not.toContain("<IDENTITY.md contents will be here>");
+    expect(additionalContext).not.toContain("<TOOLS.md contents will be here>");
+    expect(additionalContext).not.toContain("<USER.md contents will be here>");
+    expect(additionalContext).not.toContain("<HEARTBEAT.md contents will be here>");
+    expect(additionalContext).toContain("Codex loads AGENTS.md natively");
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 

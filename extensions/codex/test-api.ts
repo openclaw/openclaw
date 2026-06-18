@@ -13,7 +13,11 @@ import {
 import type { CodexPluginConfig } from "./src/app-server/config.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
+import type {
+  CodexDynamicToolSpec,
+  CodexTurnStartParams,
+  JsonObject,
+} from "./src/app-server/protocol.js";
 import {
   buildDeveloperInstructions,
   buildThreadResumeParams,
@@ -48,6 +52,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  additionalContext?: CodexTurnStartParams["additionalContext"];
   developerInstructionAdditions?: string;
   turnScopedDeveloperInstructions?: string;
   heartbeatCollaborationInstructions?: string;
@@ -78,6 +83,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
+      additionalContext: params.additionalContext,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),

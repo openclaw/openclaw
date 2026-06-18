@@ -549,6 +549,29 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
+  it("keeps Codex additional context separate from turn text input", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      promptText: "hello",
+      additionalContext: {
+        openclaw_runtime_context: {
+          kind: "untrusted",
+          value: "OpenClaw runtime context for this turn:\nreference",
+        },
+      },
+    });
+
+    expect(request.input).toEqual([{ type: "text", text: "hello", text_elements: [] }]);
+    expect(request.additionalContext).toEqual({
+      openclaw_runtime_context: {
+        kind: "untrusted",
+        value: "OpenClaw runtime context for this turn:\nreference",
+      },
+    });
+  });
+
   it("allows thread config to opt into Codex code-mode-only", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",

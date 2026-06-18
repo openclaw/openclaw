@@ -59,10 +59,10 @@ import {
 } from "./attempt-client-cleanup.js";
 import {
   buildCodexOpenClawPromptContext,
+  buildCodexOpenClawTurnPromptSubmission,
   buildCodexSystemPromptReport,
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
-  prependCodexOpenClawPromptContext,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
@@ -1015,12 +1015,14 @@ export async function runCodexAppServerAttempt(
       ctx: hookContext,
     });
   let promptBuild = await buildPromptFromCurrentInputs();
-  const decorateCodexTurnPromptText = (prompt: string) =>
-    prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
+  const buildCodexTurnPromptSubmission = (prompt: string) =>
+    buildCodexOpenClawTurnPromptSubmission(prompt, openClawPromptContext, {
       preservePromptWithoutContext:
         params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron",
     });
-  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  let codexTurnPromptSubmission = buildCodexTurnPromptSubmission(promptBuild.prompt);
+  let codexTurnPromptText = codexTurnPromptSubmission.promptText;
+  let codexTurnAdditionalContext = codexTurnPromptSubmission.additionalContext;
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -1036,7 +1038,9 @@ export async function runCodexAppServerAttempt(
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     promptBuild = await buildPromptFromCurrentInputs();
-    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+    codexTurnPromptSubmission = buildCodexTurnPromptSubmission(promptBuild.prompt);
+    codexTurnPromptText = codexTurnPromptSubmission.promptText;
+    codexTurnAdditionalContext = codexTurnPromptSubmission.additionalContext;
   };
   const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
@@ -1046,7 +1050,9 @@ export async function runCodexAppServerAttempt(
       ...promptBuild,
       prompt: nextPromptBuild.prompt,
     };
-    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild.prompt);
+    codexTurnPromptSubmission = buildCodexTurnPromptSubmission(nextPromptBuild.prompt);
+    codexTurnPromptText = codexTurnPromptSubmission.promptText;
+    codexTurnAdditionalContext = codexTurnPromptSubmission.additionalContext;
   };
   const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
     const bindingUpdatedAt = Date.parse(binding.updatedAt);
@@ -2202,6 +2208,7 @@ export async function runCodexAppServerAttempt(
       cwd: codexExecutionCwd,
       appServer: pluginAppServer,
       promptText: codexTurnPromptText,
+      additionalContext: codexTurnAdditionalContext,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
       model: thread.model,
