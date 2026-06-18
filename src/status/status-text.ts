@@ -535,7 +535,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       usageLine = null;
     }
   }
-  const { getFollowupQueueDepth, resolveQueueSettings } = await loadStatusQueueRuntime();
+  const queueRuntime = await loadStatusQueueRuntime().catch(() => undefined);
+  const { getFollowupQueueDepth, resolveQueueSettings } = queueRuntime ?? {
+    getFollowupQueueDepth: () => 0,
+    resolveQueueSettings: () => ({ mode: "steer", debounceMs: 0, cap: 0, dropPolicy: "old" }),
+  };
   const queueSettings = resolveQueueSettings({
     cfg,
     channel: statusChannel,
@@ -560,8 +564,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
+    const subagentsRuntime = await loadStatusSubagentsRuntime().catch(() => undefined);
     const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
-      await loadStatusSubagentsRuntime();
+      subagentsRuntime ?? {
+        buildSubagentsStatusLine: () => undefined,
+        countPendingDescendantRuns: () => 0,
+        listControlledSubagentRuns: () => [],
+      };
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
@@ -600,8 +609,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     statusAccountId: params.statusAccountId,
     sessionEntry,
   });
-  const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const statusMessageModule = await loadStatusMessageRuntime().catch(() => undefined);
   await waitForContextWindowCacheLoad();
+  const { buildStatusMessage } = statusMessageModule ?? {
+    buildStatusMessage: () => "⚠️ Status message unavailable",
+  };
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
@@ -663,7 +675,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionStorePath: storePath,
     groupActivation,
     resolvedThink:
-      resolvedThinkLevel ?? explicitThinkingDefault ?? (await resolveDefaultThinkingLevel()),
+      resolvedThinkLevel ??
+      explicitThinkingDefault ??
+      (await resolveDefaultThinkingLevel().catch(() => undefined)),
     resolvedFast: effectiveFastMode,
     resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,

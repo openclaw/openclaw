@@ -22,13 +22,19 @@ export async function buildStatusReply(
     return undefined;
   }
 
-  return {
-    text: await buildStatusText({
-      ...params,
-      statusChannel: command.channel,
-      statusAccountId: command.accountId,
-    }),
-  };
+  try {
+    return {
+      text: await buildStatusText({
+        ...params,
+        statusChannel: command.channel,
+        statusAccountId: command.accountId,
+      }),
+    };
+  } catch (error) {
+    return {
+      text: `⚠️ Status: error rendering response (${error instanceof Error ? error.message : String(error)})`,
+    };
+  }
 }
 
 export async function buildStatusPluginsReply(
