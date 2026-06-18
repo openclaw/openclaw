@@ -648,6 +648,76 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("aborts stale embedded runs when queued work refreshes session activity", () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 120_000;
+    const stuckSessionAbortMs = 360_000;
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    vi.advanceTimersByTime(507_000);
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+    vi.advanceTimersByTime(122_000);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+
+    vi.advanceTimersByTime(30_000);
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("does not abort embedded runs with recent progress just because session activity is old", () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    vi.advanceTimersByTime(120_000);
+    markDiagnosticRunProgressForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      reason: "embedded_run:progress",
+    });
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expectRecordFields(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }),
+      {
+        activeWorkKind: "embedded_run",
+        hasActiveEmbeddedRun: true,
+        lastProgressAgeMs: 30_000,
+        lastProgressReason: "embedded_run:progress",
+      },
+    );
+  });
+
   it("recovers stale native tool calls through the active-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
@@ -1819,14 +1889,14 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-
-      vi.advanceTimersByTime(stuckSessionAbortMs - 1);
       markDiagnosticRunProgressForTest({
         sessionId: "s1",
         sessionKey: "main",
         reason: terminalReason,
       });
-      vi.advanceTimersByTime(1);
+      vi.advanceTimersByTime(stuckSessionAbortMs - stuckSessionWarnMs - 1);
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      vi.advanceTimersByTime(stuckSessionWarnMs + 1);
     } finally {
       unsubscribe();
     }
@@ -1842,13 +1912,13 @@ describe("stuck session diagnostics threshold", () => {
       classification: "stalled_agent_run",
       reason: "queued_behind_terminal_active_work",
       activeWorkKind: "embedded_run",
-      queueDepth: 1,
+      queueDepth: 2,
       terminalProgressStale: true,
       lastProgressReason: terminalReason,
     });
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
+      { sessionId: "s1", sessionKey: "main", queueDepth: 2, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
   });
