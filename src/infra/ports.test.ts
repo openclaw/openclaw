@@ -65,14 +65,27 @@ afterEach(() => {
 });
 
 describe("ports helpers", () => {
-  it("ensurePortAvailable rejects when IPv4 loopback is busy", async () => {
+  it("ensurePortAvailable rejects when port busy", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0);
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+    await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  it("ensurePortAvailable rejects when an explicitly scoped IPv4 loopback is busy", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0, "127.0.0.1");
     if (!address) {
       return;
     }
     const port = address.port;
-    await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
+    await expect(ensurePortAvailable(port, "127.0.0.1")).rejects.toBeInstanceOf(PortInUseError);
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });

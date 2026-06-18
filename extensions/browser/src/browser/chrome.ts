@@ -634,7 +634,7 @@ async function ensureManagedChromePortAvailable(
   userDataDir: string,
 ): Promise<void> {
   try {
-    await ensurePortAvailable(profile.cdpPort);
+    await ensurePortAvailable(profile.cdpPort, "127.0.0.1");
     return;
   } catch (err) {
     const exe = resolveBrowserExecutable(resolved, profile);
@@ -645,7 +645,7 @@ async function ensureManagedChromePortAvailable(
       throw err;
     }
   }
-  await ensurePortAvailable(profile.cdpPort);
+  await ensurePortAvailable(profile.cdpPort, "127.0.0.1");
 }
 
 function chromeLaunchHints(params: {
