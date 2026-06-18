@@ -629,10 +629,15 @@ async function runCodeModeWorker(
   timeoutMs: number,
   workerUrl?: URL,
 ): Promise<CodeModeWorkerResult> {
+  const resolvedWorkerUrl = workerUrl ?? codeModeWorkerUrl();
+  const sourceWorkerExecArgv = resolvedWorkerUrl.pathname.endsWith(".ts")
+    ? ["--import", "tsx"]
+    : undefined;
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl ?? codeModeWorkerUrl(), {
+    worker = new Worker(resolvedWorkerUrl, {
       workerData,
+      execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
     return failedCodeModeWorkerResult(error, "runtime_unavailable");
