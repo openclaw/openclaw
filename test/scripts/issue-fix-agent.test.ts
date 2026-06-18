@@ -256,13 +256,18 @@ describe("issue-fix-agent workflow", () => {
 
   it("status reports when there is no active run", async () => {
     const output: string[] = [];
+    const statePath = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-status-")),
+      "state.sqlite",
+    );
     await runIssueFixAgentCommand({
       args: { command: "status", execute: false, pushPr: false, yes: false },
       out: (line) => output.push(line),
       runCommand: async () => ({ code: 0, stderr: "", stdout: "" }),
-      statePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-status-")), "state.sqlite"),
+      statePath,
     });
     expect(output.join("\n")).toContain("No active issue-fix-agent run.");
+    expect(fs.existsSync(statePath)).toBe(false);
   });
 
   it("execute mode stops before push and PR creation", async () => {

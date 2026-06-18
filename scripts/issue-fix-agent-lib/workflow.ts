@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { classifyIssueCandidate, formatScanResult, sortQualifiedCandidates } from "./candidates.js";
 import { classifyCheckSnapshots, normalizePrCheckRollup } from "./checks.js";
@@ -48,7 +49,12 @@ export async function runIssueFixAgentCommand(params: WorkflowParams): Promise<v
     return;
   }
   if (params.args.command === "status") {
-    const store = openIssueFixAgentState(params.statePath ?? defaultStatePath());
+    const statePath = params.statePath ?? defaultStatePath();
+    if (!fs.existsSync(statePath)) {
+      out("No active issue-fix-agent run.");
+      return;
+    }
+    const store = openIssueFixAgentState(statePath);
     try {
       const active = getLatestOpenIssueFixAgentRun(store);
       out(
