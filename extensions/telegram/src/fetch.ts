@@ -131,7 +131,7 @@ const FALLBACK_RETRY_ERROR_CODES = [
 // IP cannot fix these (the kernel cannot assign a source address/port for any
 // destination), so falling back through the pinned-IP dispatcher is dead code
 // that only produces misleading "Telegram is down" log noise during an incident.
-const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL"] as const;
+const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL", "EAFNOSUPPORT"] as const;
 
 // Errno tokens may appear only inside the error `message` when undici wraps a
 // connect failure as `fetch failed` without propagating `.code` onto the cause

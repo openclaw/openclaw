@@ -1365,6 +1365,17 @@ describe("shouldRetryTelegramTransportFallback", () => {
     expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
   });
 
+  it("does not trigger IP-rotation fallback for EAFNOSUPPORT embedded only in the message", () => {
+    // EAFNOSUPPORT is also a local address-family failure — the kernel cannot
+    // assign a source address for the requested family. Like EADDRNOTAVAIL,
+    // rotating to an alternative Telegram IP cannot fix it.
+    const err = new TypeError("fetch failed: connect EAFNOSUPPORT 149.154.167.220:443 - Local (:::0)");
+
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(false);
+    expectNoLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+  });
+
   it("still retries for remote-reachability errnos that IP rotation can fix", () => {
     const err = buildFetchFallbackError("EHOSTUNREACH");
     expect(shouldRetryTelegramTransportFallback(err)).toBe(true);
