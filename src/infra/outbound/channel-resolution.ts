@@ -27,10 +27,19 @@ export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
 ): DeliverableMessageChannel | undefined {
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !isDeliverableMessageChannel(normalized)) {
+  if (!normalized) {
     return undefined;
   }
-  return normalized;
+  if (isDeliverableMessageChannel(normalized)) {
+    return normalized;
+  }
+  // External channel plugins (e.g. npm-installed) pass the normalized format
+  // check but are not in the hardcoded deliverable list. Accept them when an
+  // activated outbound plugin registry entry exists (#94340).
+  if (resolveActivatedOutboundPluginFromRuntimeRegistries(normalized)) {
+    return normalized as DeliverableMessageChannel;
+  }
+  return undefined;
 }
 
 function maybeBootstrapChannelPlugin(params: {
