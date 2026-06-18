@@ -118,6 +118,11 @@ async function ensureSandboxWorkspaceLayout(params: {
     });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
+    // Pre-create the materialized skills workspace directory so that
+    // Docker bind mounts find an existing path owned by the gateway
+    // user. Without this, the Docker daemon auto-creates missing bind
+    // mount sources as root:root (#94370).
+    await fs.mkdir(skillsWorkspaceDir, { recursive: true });
     skillsEligibility = await syncSandboxSkillsToWorkspace({
       sourceWorkspaceDir: agentWorkspaceDir,
       targetWorkspaceDir: skillsWorkspaceDir,
