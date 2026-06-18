@@ -80,3 +80,40 @@ export const DevicePairResolvedEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const SetupCodeQrDataUrlSchema = Type.String({
+  maxLength: 16_384,
+  pattern: "^data:image/png;base64,",
+});
+
+/**
+ * Generates a device-pairing setup code (and optional QR) so a mobile/companion
+ * client can scan it and connect to this gateway. The embedded setup code mints
+ * a short-lived bootstrap token that hands off broad operator scopes
+ * (read/write/approvals/talk.secrets), so this method requires operator.admin
+ * (enforced by the core method descriptor's method-scope policy, not the handler)
+ * and is not advertised.
+ */
+export const DevicePairSetupCodeParamsSchema = Type.Object(
+  {
+    publicUrl: Type.Optional(NonEmptyString),
+    preferRemoteUrl: Type.Optional(Type.Boolean()),
+    includeQr: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * Setup code plus non-secret connection metadata. `auth` is a label only
+ * ("token" | "password"); the gateway credential itself is never returned.
+ */
+export const DevicePairSetupCodeResultSchema = Type.Object(
+  {
+    setupCode: NonEmptyString,
+    qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
+    gatewayUrl: NonEmptyString,
+    auth: Type.Union([Type.Literal("token"), Type.Literal("password")]),
+    urlSource: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
