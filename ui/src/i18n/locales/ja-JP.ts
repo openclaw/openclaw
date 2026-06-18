@@ -301,6 +301,7 @@ export const ja_JP: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -1695,6 +1696,7 @@ export const ja_JP: TranslationMap = {
       run: "実行",
       history: "履歴",
       remove: "削除",
+      id: "ID",
     },
     jobDetail: {
       system: "システム",
@@ -1706,6 +1708,8 @@ export const ja_JP: TranslationMap = {
     },
     jobState: {
       status: "ステータス",
+      running: "Running",
+      notRunning: "Not running",
       next: "次回",
       last: "前回",
     },

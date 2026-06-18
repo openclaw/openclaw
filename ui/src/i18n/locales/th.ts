@@ -296,6 +296,7 @@ export const th: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -1650,6 +1651,7 @@ export const th: TranslationMap = {
       run: "รัน",
       history: "ประวัติ",
       remove: "ลบ",
+      id: "ID",
     },
     jobDetail: {
       system: "ระบบ",
@@ -1661,6 +1663,8 @@ export const th: TranslationMap = {
     },
     jobState: {
       status: "สถานะ",
+      running: "Running",
+      notRunning: "Not running",
       next: "ถัดไป",
       last: "ล่าสุด",
     },
