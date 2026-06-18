@@ -27,6 +27,7 @@ import {
 
 /** Provider setup choice paired with install metadata for the owning plugin. */
 export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
+  providerAliases?: string[];
   label: string;
   origin: PluginOrigin;
   install: PluginPackageInstall;
@@ -332,6 +333,13 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
       if (!providerId || !label) {
         continue;
       }
+      const providerAliases = [
+        ...new Set(
+          (provider.aliases ?? [])
+            .map((alias) => alias.trim())
+            .filter((alias) => alias && alias !== providerId),
+        ),
+      ];
       for (const choice of provider.authChoices ?? []) {
         const methodId = choice.method?.trim();
         const choiceId = choice.choiceId?.trim();
@@ -342,6 +350,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
         entries.push({
           pluginId,
           providerId,
+          ...(providerAliases.length > 0 ? { providerAliases } : {}),
           methodId,
           choiceId,
           choiceLabel,

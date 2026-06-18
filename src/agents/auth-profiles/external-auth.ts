@@ -208,7 +208,4 @@ export function syncPersistedExternalCliAuthProfiles(
   return next ?? store;
 }
 
-// Compat aliases while file/function naming catches up.
-export const overlayExternalOAuthProfiles = overlayExternalAuthProfiles;
-export const shouldPersistExternalOAuthProfile = shouldPersistExternalAuthProfile;
 export { testing as __testing };

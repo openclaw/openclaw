@@ -48,6 +48,9 @@ export type CodexInitializeResponse = {
   };
   protocolVersion?: string;
   userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
 };
 
 export type CodexUserInput =

@@ -1,7 +1,25 @@
 // Covers baseline config security audit findings.
 import { describe, expect, it } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../infra/diagnostic-events.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
 import { collectElevatedFindings, runSecurityAudit } from "./audit.js";
+
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
 
 describe("security audit config basics", () => {
   it("flags agent profile overrides when global tools.profile is minimal", () => {
@@ -132,5 +150,53 @@ describe("security audit config basics", () => {
         }),
       ]),
     );
+  });
+
+  it("emits a redacted security audit summary event", async () => {
+    resetDiagnosticEventsForTest();
+    const captured = captureSecurityEvents();
+
+    let report: Awaited<ReturnType<typeof runSecurityAudit>>;
+    try {
+      report = await runSecurityAudit({
+        config: {
+          logging: {
+            redactSensitive: "off",
+          },
+        },
+        sourceConfig: {},
+        env: {},
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(report!.summary.warn).toBeGreaterThan(0);
+    const expectedSeverity = report!.summary.critical > 0 ? "critical" : "medium";
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      category: "audit",
+      action: "security.audit.completed",
+      outcome: "failure",
+      severity: expectedSeverity,
+      actor: { kind: "operator" },
+      target: { kind: "config", name: "security.audit" },
+      policy: { id: "security.audit", decision: "not_applicable" },
+      control: { id: "security.audit", family: "authorization" },
+      attributes: {
+        critical_count: report!.summary.critical,
+        warn_count: report!.summary.warn,
+        info_count: report!.summary.info,
+        suppressed_count: 0,
+        deep: false,
+        include_filesystem: false,
+        include_channel_security: false,
+      },
+    });
+    const serialized = JSON.stringify(captured.events);
+    expect(serialized).not.toContain("redactSensitive");
+    expect(serialized).not.toContain("logs and status output");
   });
 });

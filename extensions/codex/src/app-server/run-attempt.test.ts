@@ -55,7 +55,9 @@ import {
   createResumeHarness,
   createStartedThreadHarness,
   fastWait,
+  getMockRuntimeIdentity,
   mockCall,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -74,7 +76,11 @@ import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
-import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  buildTurnStartParams,
+  codexDynamicToolsFingerprint,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -116,6 +122,11 @@ function expectResumeRequest(
   }
 }
 
+const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+
 async function writeExistingBinding(
   sessionFile: string,
   workspaceDir: string,
@@ -126,6 +137,7 @@ async function writeExistingBinding(
     cwd: workspaceDir,
     model: "gpt-5.4-codex",
     modelProvider: "openai",
+    webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
     ...overrides,
   });
 }
@@ -146,6 +158,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -205,7 +219,7 @@ async function buildDynamicToolsForTest(
   options: Partial<
     Pick<
       Parameters<typeof testing.buildDynamicTools>[0],
-      "forceHeartbeatTool" | "ignoreRuntimePlan"
+      "forceHeartbeatTool" | "ignoreDisableMessageTool" | "ignoreRuntimePlan"
     >
   > = {},
 ) {
@@ -303,7 +317,7 @@ function createCodexToolBridgeForTest(
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.shouldForceMessageTool(params) ? ["message"] : [],
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params),
   });
 }
 
@@ -565,7 +579,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -716,7 +730,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -793,7 +807,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -852,7 +866,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -1034,7 +1048,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await startOrResumeThread({
       client: {
-        getServerVersion: () => "0.132.0",
+        ...mockClientRuntimeMethods(),
         request: async (method: string, requestParams?: unknown) => {
           requests.push({ method, params: requestParams });
           if (method === "thread/start") {
@@ -1672,6 +1686,55 @@ describe("runCodexAppServerAttempt", () => {
     expect(specNames(nextNormalBridge.specs)).toEqual(registeredToolNames);
   });
 
+  it("keeps message in the registered schema when disabled for an internal turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const availableTools: RuntimeDynamicToolForTest[] = [];
+    const registeredTools = [createRuntimeDynamicTool("message")];
+    const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
+    const normalParams = createParams(sessionFile, workspaceDir);
+    normalParams.disableTools = false;
+    normalParams.sourceReplyDeliveryMode = "message_tool_only";
+    normalParams.runtimePlan = createCodexRuntimePlanFixture();
+    const normalTools = [createRuntimeDynamicTool("message")];
+    const normalRegisteredTools = [createRuntimeDynamicTool("message")];
+    const normalBridge = createCodexToolBridgeForTest(
+      normalParams,
+      normalTools,
+      normalRegisteredTools,
+    );
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
+    expect(bridge.specs.map((tool) => tool.name)).toContain("message");
+    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
+    );
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw tool is not available for this turn: message",
+        },
+      ],
+    });
+  });
+
   it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
@@ -1840,6 +1903,7 @@ describe("runCodexAppServerAttempt", () => {
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -1901,6 +1965,7 @@ describe("runCodexAppServerAttempt", () => {
     let startedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -1942,6 +2007,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request: vi.fn(async (method: string) => {
             if (method === "thread/start") {
               return threadStartResult();
@@ -3864,6 +3930,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3965,6 +4032,7 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4067,6 +4135,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4169,6 +4238,7 @@ describe("runCodexAppServerAttempt", () => {
         agentDir,
         authProfileId,
         accountId: "account-work",
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4312,6 +4382,7 @@ describe("runCodexAppServerAttempt", () => {
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
         }),
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4503,6 +4574,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4548,6 +4620,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4850,6 +4923,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex === 0) {
@@ -4902,6 +4976,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex < 2) {
@@ -4949,6 +5024,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(
@@ -4982,6 +5058,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             return await new Promise<never>(() => {});
@@ -5015,6 +5092,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new Error("write EPIPE");
@@ -5045,6 +5123,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(

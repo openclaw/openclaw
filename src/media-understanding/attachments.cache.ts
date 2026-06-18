@@ -21,7 +21,7 @@ import {
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
-import { MediaUnderstandingSkipError } from "./errors.js";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {

@@ -35,9 +35,9 @@ import {
   type SkillIndexEntry,
 } from "./skill-index.js";
 
-export type SkillStatusConfigCheck = RequirementConfigCheck;
+type SkillStatusConfigCheck = RequirementConfigCheck;
 
-export type SkillInstallOption = {
+type SkillInstallOption = {
   id: string;
   kind: SkillInstallSpec["kind"];
   label: string;

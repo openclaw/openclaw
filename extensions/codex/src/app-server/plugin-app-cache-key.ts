@@ -9,6 +9,7 @@ import {
 } from "./app-inventory-cache.js";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerRuntimeIdentity } from "./client.js";
 
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
 export type CodexPluginAppCacheKeyParams = Omit<
@@ -17,17 +18,39 @@ export type CodexPluginAppCacheKeyParams = Omit<
 > & {
   appServer: Pick<CodexAppServerRuntimeOptions, "start">;
   agentDir?: string;
+  runtimeIdentity?: CodexAppServerRuntimeIdentity;
 };
 
 /** Builds the full app inventory cache key for Codex plugin/app discovery. */
 export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams): string {
   return buildCodexAppInventoryCacheKey({
-    codexHome: resolveCodexPluginAppCacheCodexHome(params.appServer, params.agentDir),
+    codexHome:
+      params.runtimeIdentity?.codexHome ??
+      resolveCodexPluginAppCacheCodexHome(params.appServer, params.agentDir),
     endpoint: resolveCodexPluginAppCacheEndpoint(params.appServer),
     authProfileId: params.authProfileId,
     accountId: params.accountId,
     envApiKeyFingerprint: params.envApiKeyFingerprint,
-    appServerVersion: params.appServerVersion,
+    appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion,
+    runtimeIdentity: params.runtimeIdentity,
+  });
+}
+
+/** Builds a durable thread-binding fingerprint for one initialized app-server runtime. */
+export function buildCodexAppServerRuntimeFingerprint(params: {
+  appServer: Pick<
+    CodexAppServerRuntimeOptions,
+    "start" | "connectionClass" | "remoteWorkspaceRoot"
+  >;
+  appServerVersion?: string;
+  runtimeIdentity?: CodexAppServerRuntimeIdentity;
+}): string {
+  return JSON.stringify({
+    endpoint: resolveCodexPluginAppCacheEndpoint(params.appServer),
+    connectionClass: params.appServer.connectionClass,
+    remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot ?? null,
+    appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion ?? null,
+    runtimeIdentity: params.runtimeIdentity ?? null,
   });
 }
 

@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaJsonBody } from "./bus-server.js";
 import {
   startQaLabServer,
@@ -12,7 +12,23 @@ import {
   type QaLabServerStartParams,
 } from "./lab-server.js";
 
-vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
+const qaChannelMock = vi.hoisted(() => ({
+  resolveAccount: vi.fn(),
+  setRuntime: vi.fn(),
+  startAccount: vi.fn(),
+}));
+
+vi.mock("./runtime-api.js", () => ({
+  qaChannelPlugin: {
+    config: {
+      resolveAccount: qaChannelMock.resolveAccount,
+    },
+    gateway: {
+      startAccount: qaChannelMock.startAccount,
+    },
+  },
+  setQaChannelRuntime: qaChannelMock.setRuntime,
+}));
 
 const captureMock = vi.hoisted(() => {
   const sessions: Array<Record<string, unknown>> = [];
@@ -149,6 +165,31 @@ async function startQaLabServerForTest(params?: QaLabServerStartParams) {
     ...params,
   });
 }
+
+beforeEach(() => {
+  qaChannelMock.resolveAccount.mockReset();
+  qaChannelMock.resolveAccount.mockImplementation((_cfg: unknown, accountId: string) => ({
+    accountId,
+    configured: true,
+    enabled: true,
+  }));
+  qaChannelMock.setRuntime.mockReset();
+  qaChannelMock.startAccount.mockReset();
+  qaChannelMock.startAccount.mockImplementation(
+    async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+      await new Promise<void>((resolve) => {
+        if (!abortSignal) {
+          resolve();
+          return;
+        }
+        if (abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  );
+});
 
 afterEach(async () => {
   captureMock.reset();
@@ -289,6 +330,51 @@ async function createQaLabRepoRootFixture(params?: {
 }
 
 describe("qa-lab server", () => {
+  it("cleans up capture state when embedded gateway setup fails", async () => {
+    qaChannelMock.resolveAccount.mockImplementationOnce(() => {
+      throw new Error("embedded setup failed");
+    });
+
+    await expect(
+      startQaLabServer({
+        host: "127.0.0.1",
+        port: 0,
+      }),
+    ).rejects.toThrow("embedded setup failed");
+
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the server and capture state when embedded gateway stop fails", async () => {
+    qaChannelMock.startAccount.mockImplementationOnce(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+        await new Promise<void>((_resolve, reject) => {
+          if (!abortSignal) {
+            return;
+          }
+          if (abortSignal.aborted) {
+            reject(new Error("gateway stop failed"));
+            return;
+          }
+          abortSignal.addEventListener(
+            "abort",
+            () => reject(new Error("gateway stop failed")),
+            { once: true },
+          );
+        }),
+    );
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    await expect(lab.stop()).rejects.toThrow("gateway stop failed");
+
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+  });
+
   it("serves bootstrap state and message state", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
     cleanups.push(async () => {
