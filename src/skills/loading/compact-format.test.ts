@@ -58,6 +58,7 @@ function makeSkillStatusEntry(entry: SkillEntry): SkillStatusEntry {
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: true,
+    platformIncompatible: false,
     modelVisible: true,
     userInvocable: true,
     commandVisible: true,
@@ -259,6 +260,32 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       expect(info.error).toBeUndefined();
       expect(info.skillKey).toBe(skillKey);
     }
+  });
+
+  it("keeps omitted skill lookup keys when the audit suffix does not fit", () => {
+    const maxSkillsPromptChars = 250;
+    const entries = Array.from({ length: 6 }, (_, i) => {
+      const name = `skill-${String(i).padStart(2, "0")}`;
+      const skillKey = i === 0 ? "skill<zero`raw" : name;
+      return makeEntry(makeSkill(name, "A".repeat(500)), { skillKey });
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 100,
+            maxSkillsPromptChars,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(maxSkillsPromptChars);
+    expect(prompt).toContain("⚠️ Skills truncated");
+    expect(prompt).not.toContain("openclaw skills check");
+    expect(parseAdvertisedOmittedSkillKeys(prompt)).toContain("skill<zero`raw");
   });
 
   it("compact preserves all skills where full format would drop some", () => {

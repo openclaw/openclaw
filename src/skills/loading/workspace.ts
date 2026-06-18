@@ -68,8 +68,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -116,15 +116,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -1465,13 +1465,22 @@ function buildTruncationNote(params: {
   const base = `${prefix}${suffix}`;
   const shortBase = `⚠️ Skills truncated: included ${params.included} of ${params.total}.`;
   const terse = "⚠️ Skills truncated.";
-  const baseNotice = formatNoticeWithinBudget([base, shortBase, terse, "⚠️"], params.maxChars);
-  if (!baseNotice || baseNotice !== base) {
-    return baseNotice;
+  const candidates = [
+    { prefix, suffix },
+    { prefix, suffix: "" },
+  ];
+  for (const candidate of candidates) {
+    const baseNotice = `${candidate.prefix}${candidate.suffix}`;
+    if (baseNotice.length > params.maxChars) {
+      continue;
+    }
+    const segmentBudget = params.maxChars - baseNotice.length;
+    const omittedSegment = formatOmittedSkillKeysSegment(params.omittedSkillKeys, segmentBudget);
+    if (omittedSegment) {
+      return `${candidate.prefix}${omittedSegment}${candidate.suffix}`;
+    }
   }
-  const segmentBudget = params.maxChars - base.length;
-  const omittedSegment = formatOmittedSkillKeysSegment(params.omittedSkillKeys, segmentBudget);
-  return `${prefix}${omittedSegment}${suffix}`;
+  return formatNoticeWithinBudget([base, shortBase, terse, "⚠️"], params.maxChars);
 }
 
 function buildCompactNote(maxChars: number): string {
