@@ -41,6 +41,7 @@ export function sortPluginProvidersForAutoDetect<T extends WebProviderSortEntry>
     const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) {
+      // Lower autoDetectOrder = higher priority for auto-detection
       return leftOrder - rightOrder;
     }
     return comparePluginProvidersAlphabetically(left, right);

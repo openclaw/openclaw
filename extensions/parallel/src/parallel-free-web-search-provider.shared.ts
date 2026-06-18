@@ -18,6 +18,9 @@ export function createParallelFreeWebSearchProviderBase() {
     signupUrl: "https://parallel.ai",
     docsUrl: "https://docs.openclaw.ai/tools/parallel-search",
     credentialPath: "",
+    // Set high autoDetectOrder to prevent this from being the default
+    // when no provider is configured. Users must explicitly choose this.
+    autoDetectOrder: Number.MAX_SAFE_INTEGER,
     ...createWebSearchProviderContractFields({
       credentialPath: "",
       searchCredential: { type: "scoped", scopeId: "parallel-free" },
