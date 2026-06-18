@@ -351,10 +351,12 @@ export async function createOpenAICompatibleEmbeddingClient(
   let ssrfPolicy: SsrFPolicy | undefined = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
 
   // Merge in memory embedding SSRF policy from config (for private network opt-in)
-  const configWithPolicy = options.config as OpenClawConfig & { _memoryEmbeddingSsrFPolicy?: { allowPrivateNetwork: boolean } };
-  const memorySsrFPolicy = configWithPolicy._memoryEmbeddingSsrFPolicy;
+  const configWithPolicy = options.config as OpenClawConfig & Record<string, unknown>;
+  const memorySsrFPolicy = configWithPolicy["_memoryEmbeddingSsrFPolicy"] as
+    | { allowPrivateNetwork: boolean }
+    | undefined;
   if (memorySsrFPolicy) {
-    ssrfPolicy = { ...(ssrfPolicy ?? {}), ...memorySsrFPolicy };
+    ssrfPolicy = { ...ssrfPolicy, ...memorySsrFPolicy };
   }
 
   return {
