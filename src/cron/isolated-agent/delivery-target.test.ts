@@ -1288,6 +1288,40 @@ describe("resolveDeliveryTarget", () => {
     });
   });
 
+  it("skips stored deliveryContext when delivery.mode=none so none-mode sessions are never used as fallback delivery vehicles (#94164)", async () => {
+    // Stored delivery context is set to channel "alpha" — it should be IGNORED
+    // because delivery.mode=none jobs must never auto-announce.
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "alpha",
+        to: "stored-room",
+        accountId: "primary",
+        threadId: "thread-stored",
+      },
+      threadId: "thread-stored",
+    });
+    setMainSessionEntry({
+      sessionId: "main",
+      updatedAt: 2000,
+      lastChannel: "alpha",
+      lastTo: "session-room",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:test:thread:42",
+      to: undefined,
+      deliveryMode: "none",
+    });
+
+    // When delivery.mode=none the stored delivery context MUST be skipped,
+    // so extractDeliveryInfo should never have been called for the session key.
+    // The result should fall back to the main session entry ("session-room")
+    // instead of using the stored context ("stored-room").
+    expect(extractDeliveryInfoMock).not.toHaveBeenCalled();
+    expect(result.to).toBe("session-room");
+  });
+
   it("scopes unqualified stored delivery lookups to the job agent", async () => {
     extractDeliveryInfoMock.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:agent-b:main"

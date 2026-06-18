@@ -142,10 +142,17 @@ export async function resolveDeliveryTarget(
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
     accountId?: string;
     sessionKey?: string;
+    /**
+     * When `delivery.mode=none` the job explicitly opts out of auto-announce.
+     * Stored delivery context from such sessions MUST NOT be used as a
+     * fallback delivery vehicle (see #94164).
+     */
+    deliveryMode?: string;
   },
   options?: { dryRun?: boolean },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const deliveryModeNone = jobPayload.deliveryMode === "none";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await loadDeliveryTargetRuntime();
@@ -165,10 +172,13 @@ export async function resolveDeliveryTarget(
         cfg,
       })
     : undefined;
-  const storedDeliveryContext = resolveCronStoredDeliveryContext({
-    cfg,
-    sessionKey: threadSessionKey,
-  });
+  const storedDeliveryContext =
+    deliveryModeNone
+      ? undefined
+      : resolveCronStoredDeliveryContext({
+          cfg,
+          sessionKey: threadSessionKey,
+        });
   const storedDeliveryEntry = storedDeliveryContext
     ? ({
         sessionId: threadSessionKey ?? mainSessionKey,

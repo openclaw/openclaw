@@ -418,6 +418,7 @@ async function resolveCronDeliveryContext(params: {
     threadId: deliveryPlan.threadId,
     accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
+    deliveryMode: deliveryPlan.mode,
   });
   return {
     deliveryPlan,

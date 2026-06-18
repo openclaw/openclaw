@@ -47,6 +47,7 @@ async function resolveCronAnnounceDelivery(params: {
   agentId: string;
   jobId: string;
   target: CronAnnounceTarget;
+  deliveryMode?: string;
 }): Promise<
   | {
       ok: true;
@@ -63,6 +64,7 @@ async function resolveCronAnnounceDelivery(params: {
     to: params.target.to,
     accountId: params.target.accountId,
     sessionKey: params.target.sessionKey,
+    deliveryMode: params.deliveryMode,
   });
 
   if (!resolvedTarget.ok) {
