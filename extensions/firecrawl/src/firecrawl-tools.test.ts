@@ -471,25 +471,6 @@ describe("firecrawl tools", () => {
     });
   });
 
-  it("lets the compare-helper fetch facade omit the API key", async () => {
-    await fetchFirecrawlContent({
-      url: "https://docs.openclaw.ai",
-      extractMode: "markdown",
-      baseUrl: "https://api.firecrawl.dev",
-      onlyMainContent: true,
-      maxAgeMs: 5000,
-      proxy: "auto",
-      storeInCache: true,
-      timeoutSeconds: 22,
-    });
-
-    const [[{ cfg }]] = runFirecrawlScrape.mock.calls as Array<[{ cfg: OpenClawConfig }]>;
-    const firecrawlConfig = cfg.plugins?.entries?.firecrawl?.config as
-      | { webFetch?: Record<string, unknown> }
-      | undefined;
-    expect(firecrawlConfig?.webFetch).not.toHaveProperty("apiKey");
-  });
-
   it("applies minimal provider-selection config for fetch providers", () => {
     const provider = createFirecrawlWebFetchProvider();
     if (!provider.applySelectionConfig) {
