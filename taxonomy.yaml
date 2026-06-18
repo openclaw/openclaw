@@ -175,11 +175,11 @@ surfaces:
           - name: Usage and memory APIs
             coverageIds: [usage-and-memory-apis]
             description: Usage summaries and memory readiness RPCs.
-          - name: Session APIs - Subagents
+          - name: Subagents
             coverageIds: [agents.subagents]
-          - name: Session APIs - Gateway session list
+          - name: Gateway session list
             coverageIds: [gateway.sessions-list]
-          - name: Session APIs - Session status tool
+          - name: Session status tool
             coverageIds: [tools.session-status]
           - name: Chat APIs
             coverageIds: [chat-apis]
@@ -450,11 +450,11 @@ surfaces:
           - name: Service installation
             coverageIds: [service-installation]
             description: Supervised lifecycle installation on macOS, Linux user/systemd, and native Windows task scheduling.
-          - name: Restart and stop - Restart config apply
+          - name: Restart config apply
             coverageIds: [config.restart-apply]
-          - name: Restart and stop - Plugin capabilities
+          - name: Plugin capabilities
             coverageIds: [plugins.capabilities]
-          - name: Restart and stop - Gateway restart
+          - name: Gateway restart
             coverageIds: [runtime.gateway-restart]
           - name: Service status
             coverageIds: [service-status]
@@ -462,13 +462,13 @@ surfaces:
           - name: Bind and port settings
             coverageIds: [bind-and-port-settings]
             description: Bind and port precedence across CLI flags, env vars, config, and persisted supervisor metadata.
-          - name: Config reload - Hot config apply
+          - name: Hot config apply
             coverageIds: [config.hot-apply]
-          - name: Config reload - Hot plugin reload
+          - name: Hot plugin reload
             coverageIds: [plugins.hot-reload]
-          - name: Config reload - Plugin lifecycle
+          - name: Plugin lifecycle
             coverageIds: [plugins.lifecycle]
-          - name: Config reload - Plugin skills
+          - name: Plugin skills
             coverageIds: [plugins.skills]
           - name: Multi-gateway isolation
             coverageIds: [multi-gateway-isolation]
@@ -656,11 +656,11 @@ surfaces:
           - name: Service install and control
             coverageIds: [service-install-and-control]
             description: The CLI documents install, status, start, stop, restart, and run flows for managed gateway services.
-          - name: Service auth wiring - Agent creation
+          - name: Agent creation
             coverageIds: [agents.create]
-          - name: Service auth wiring - Discord channel config
+          - name: Discord channel config
             coverageIds: [channels.discord-config]
-          - name: Service auth wiring - Crestodian setup config
+          - name: Crestodian setup config
             coverageIds: [config.crestodian-setup]
           - name: Drift and reinstall recovery
             coverageIds: [drift-and-reinstall-recovery]
@@ -926,52 +926,44 @@ surfaces:
           - name: Plugin setup
             coverageIds: [plugin-setup]
             description: Operators can run plugin setup flows without fully activating runtime behavior.
-          - name: Runtime activation - Hot config apply
+          - name: Hot config apply
             coverageIds: [config.hot-apply]
-          - name: Runtime activation - Gateway performance
+          - name: Gateway performance
             coverageIds: [gateway.performance]
-          - name: Runtime activation - Live OpenAI models
+          - name: Live OpenAI models
             coverageIds: [models.live-openai]
-          - name: Runtime activation - Before prompt build hook
+          - name: Before prompt build hook
             coverageIds: [plugins.before-prompt-build]
-          - name: Runtime activation - Before tool call hook
+          - name: Before tool call hook
             coverageIds: [plugins.before-tool-call]
-          - name: Runtime activation - Hot plugin reload
+          - name: Hot plugin reload
             coverageIds: [plugins.hot-reload]
-          - name: Runtime activation - Kitchen sink plugin
+          - name: Kitchen sink plugin
             coverageIds: [plugins.kitchen-sink]
-          - name: Runtime activation - Plugin lifecycle
+          - name: Plugin lifecycle
             coverageIds: [plugins.lifecycle]
-          - name: Runtime activation - Plugin tools
+          - name: Plugin tools
             coverageIds: [plugins.plugin-tools]
-          - name: Runtime activation - Plugin runtime
+          - name: Plugin runtime
             coverageIds: [plugins.runtime]
-          - name: Runtime activation - Plugin skills
+          - name: Plugin skills
             coverageIds: [plugins.skills]
-          - name: Runtime activation - Gateway log sentinel plugin hooks
+          - name: Gateway log sentinel plugin hooks
             coverageIds: [runtime.gateway-log-sentinel.plugin-hooks]
-          - name: Enable and disable - Hot config apply
-            coverageIds: [config.hot-apply]
-          - name: Enable and disable - Hot plugin reload
-            coverageIds: [plugins.hot-reload]
-          - name: Enable and disable - Plugin lifecycle
-            coverageIds: [plugins.lifecycle]
-          - name: Safe load failures - Plugin tool contracts
+          - name: Plugin tool contracts
             coverageIds: [plugins.contracts.tools]
-          - name: Safe load failures - Gateway log sentinel plugin contracts
+          - name: Gateway log sentinel plugin contracts
             coverageIds: [runtime.gateway-log-sentinel.plugin-contracts]
           - name: Dependency repair
             coverageIds: [dependency-repair]
             description: Runtime can detect and repair missing or stale plugin dependencies.
-          - name: Install update and uninstall - Hot plugin install
+          - name: Hot plugin install
             coverageIds: [plugins.hot-install]
-          - name: Install update and uninstall - Plugin skills
-            coverageIds: [plugins.skills]
-          - name: Install update and uninstall - Gateway restart
+          - name: Gateway restart
             coverageIds: [runtime.gateway-restart]
-          - name: Install update and uninstall - Package update runtime
+          - name: Package update runtime
             coverageIds: [runtime.package-update]
-          - name: Install update and uninstall - Update run runtime
+          - name: Update run runtime
             coverageIds: [runtime.update-run]
         docs:
           - docs/plugins/architecture.md
@@ -1019,25 +1011,25 @@ surfaces:
           - name: Provider plugins
             coverageIds: [provider-plugins]
             description: Provider plugins register models and capabilities with the runtime.
-          - name: Tool plugins - Gateway performance
+          - name: Gateway performance
             coverageIds: [gateway.performance]
-          - name: Tool plugins - Live OpenAI models
+          - name: Live OpenAI models
             coverageIds: [models.live-openai]
-          - name: Tool plugins - Before prompt build hook
+          - name: Before prompt build hook
             coverageIds: [plugins.before-prompt-build]
-          - name: Tool plugins - Before tool call hook
+          - name: Before tool call hook
             coverageIds: [plugins.before-tool-call]
-          - name: Tool plugins - Kitchen sink plugin
+          - name: Kitchen sink plugin
             coverageIds: [plugins.kitchen-sink]
-          - name: Tool plugins - Plugin lifecycle
+          - name: Plugin lifecycle
             coverageIds: [plugins.lifecycle]
-          - name: Tool plugins - MCP plugin tools
+          - name: MCP plugin tools
             coverageIds: [plugins.mcp-tools]
-          - name: Tool plugins - Plugin tools
+          - name: Plugin tools
             coverageIds: [plugins.plugin-tools]
-          - name: Tool plugins - Gateway log sentinel plugin hooks
+          - name: Gateway log sentinel plugin hooks
             coverageIds: [runtime.gateway-log-sentinel.plugin-hooks]
-          - name: Tool plugins - Tool invocation
+          - name: Tool invocation
             coverageIds: [tools.invocation]
           - name: Model catalogs
             coverageIds: [model-catalogs]
@@ -1048,21 +1040,19 @@ surfaces:
           - name: Web search and fetch
             coverageIds: [web-search-and-fetch]
             description: Provider or tool plugins can expose web search and fetch capabilities.
-          - name: Mixed plugins - Hot config apply
+          - name: Hot config apply
             coverageIds: [config.hot-apply]
-          - name: Mixed plugins - Restart config apply
+          - name: Restart config apply
             coverageIds: [config.restart-apply]
-          - name: Mixed plugins - Plugin capabilities
+          - name: Plugin capabilities
             coverageIds: [plugins.capabilities]
-          - name: Mixed plugins - Hot plugin install
+          - name: Hot plugin install
             coverageIds: [plugins.hot-install]
-          - name: Mixed plugins - Plugin runtime
+          - name: Plugin runtime
             coverageIds: [plugins.runtime]
-          - name: Mixed plugins - Plugin skills
+          - name: Plugin skills
             coverageIds: [plugins.skills]
-          - name: Mixed plugins - Tool invocation
-            coverageIds: [tools.invocation]
-          - name: Mixed plugins - Skill invocation tool
+          - name: Skill invocation tool
             coverageIds: [tools.skill-invocation]
         docs:
           - docs/plugins/sdk-provider-plugins.md
@@ -1147,9 +1137,9 @@ surfaces:
           - name: Local test environment
             coverageIds: [local-test-environment]
             description: Plugin authors can set up the local test environment and scoped helper configuration for plugin testing.
-          - name: Plugin runtime harness - Plugin tool contracts
+          - name: Plugin tool contracts
             coverageIds: [plugins.contracts.tools]
-          - name: Plugin runtime harness - Gateway log sentinel plugin contracts
+          - name: Gateway log sentinel plugin contracts
             coverageIds: [runtime.gateway-log-sentinel.plugin-contracts]
           - name: Unit and integration scaffolds
             coverageIds: [unit-and-integration-scaffolds]
@@ -1157,15 +1147,15 @@ surfaces:
           - name: Docker lifecycle suites
             coverageIds: [docker-lifecycle-suites]
             description: Docker-based end-to-end scripts validate packaged plugin lifecycle flows.
-          - name: Smoke tests - Gateway performance
+          - name: Gateway performance
             coverageIds: [gateway.performance]
-          - name: Smoke tests - Live OpenAI models
+          - name: Live OpenAI models
             coverageIds: [models.live-openai]
-          - name: Smoke tests - Kitchen sink plugin
+          - name: Kitchen sink plugin
             coverageIds: [plugins.kitchen-sink]
-          - name: Smoke tests - Plugin lifecycle
+          - name: Plugin lifecycle
             coverageIds: [plugins.lifecycle]
-          - name: Smoke tests - Plugin tools
+          - name: Plugin tools
             coverageIds: [plugins.plugin-tools]
         docs:
           - docs/plugins/sdk-testing.md
@@ -1195,61 +1185,53 @@ surfaces:
       - name: Agent Turn Execution
         id: agent-turn-execution
         features:
-          - name: Turn startup and runtime choice - Agent creation
+          - name: Agent creation
             coverageIds: [agents.create]
-          - name: Turn startup and runtime choice - Agent instructions
+          - name: Agent instructions
             coverageIds: [agents.instructions]
-          - name: Turn startup and runtime choice - Discord channel config
+          - name: Discord channel config
             coverageIds: [channels.discord-config]
-          - name: Turn startup and runtime choice - Crestodian setup config
+          - name: Crestodian setup config
             coverageIds: [config.crestodian-setup]
-          - name: Turn startup and runtime choice - First action runtime
+          - name: First action runtime
             coverageIds: [runtime.first-action]
-          - name: Turn startup and runtime choice - First-hour 20-turn runtime
+          - name: First-hour 20-turn runtime
             coverageIds: [runtime.first-hour-20]
-          - name: Turn startup and runtime choice - Long context runtime
+          - name: Long context runtime
             coverageIds: [runtime.long-context]
-          - name: Session and run coordination - Subagents
+          - name: Subagents
             coverageIds: [agents.subagents]
-          - name: Session and run coordination - Channel deduplication
+          - name: Channel deduplication
             coverageIds: [channels.dedup]
-          - name: Session and run coordination - DM channel
+          - name: DM channel
             coverageIds: [channels.dm]
-          - name: Session and run coordination - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Session and run coordination - Channel reconnect
+          - name: Channel reconnect
             coverageIds: [channels.reconnect]
-          - name: Session and run coordination - Channel streaming
+          - name: Channel streaming
             coverageIds: [channels.streaming]
-          - name: Session and run coordination - Channel threads
+          - name: Channel threads
             coverageIds: [channels.threads]
-          - name: Session and run coordination - No-target heartbeat commitments
+          - name: No-target heartbeat commitments
             coverageIds: [commitments.heartbeat-target-none]
-          - name: Session and run coordination - Commitment scope
+          - name: Commitment scope
             coverageIds: [commitments.scope]
-          - name: Session and run coordination - Personal channel replies
+          - name: Personal channel replies
             coverageIds: [personal.channel-replies]
-          - name: Session and run coordination - Codex plugin lifecycle
+          - name: Codex plugin lifecycle
             coverageIds: [runtime.codex-plugin.lifecycle]
-          - name: Session and run coordination - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
-          - name: Session and run coordination - Fallback delivery
+          - name: Fallback delivery
             coverageIds: [runtime.fallback-delivery]
-          - name: Session and run coordination - Gateway restart
+          - name: Gateway restart
             coverageIds: [runtime.gateway-restart]
-          - name: Session and run coordination - Runtime restart recovery
+          - name: Runtime restart recovery
             coverageIds: [runtime.restart-recovery]
-          - name: Session and run coordination - Turn ordering
+          - name: Turn ordering
             coverageIds: [runtime.turn-ordering]
-          - name: Abort and terminal outcomes - Channel streaming
-            coverageIds: [channels.streaming]
-          - name: Abort and terminal outcomes - Runtime delivery
-            coverageIds: [runtime.delivery]
-          - name: Abort and terminal outcomes - Fallback delivery
-            coverageIds: [runtime.fallback-delivery]
-          - name: Abort and terminal outcomes - Long context runtime
-            coverageIds: [runtime.long-context]
-          - name: Abort and terminal outcomes - 100-turn soak
+          - name: 100-turn soak
             coverageIds: [runtime.soak-100]
         docs:
           - docs/concepts/agent-loop.md
@@ -1264,24 +1246,24 @@ surfaces:
       - name: External Runtimes and Subagents
         id: external-runtimes-and-subagents
         features:
-          - name: External harness selection - OpenClaw harness agent
+          - name: OpenClaw harness agent
             coverageIds: [agents.openclaw-harness]
-          - name: External harness selection - Workspace planning
+          - name: Workspace planning
             coverageIds: [workspace.planning]
           - name: CLI runtime aliases
             coverageIds: [cli-runtime-aliases]
             description: Runtime aliases and CLI-based execution paths such as Claude CLI and Gemini CLI.
-          - name: Subagent turns - Subagents
+          - name: Subagents
             coverageIds: [agents.subagents]
-          - name: Subagent turns - Agent synthesis
+          - name: Agent synthesis
             coverageIds: [agents.synthesis]
-          - name: Subagent turns - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Subagent turns - Gateway session list
+          - name: Gateway session list
             coverageIds: [gateway.sessions-list]
-          - name: Subagent turns - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
-          - name: Subagent turns - Session spawn tool
+          - name: Session spawn tool
             coverageIds: [tools.sessions-spawn]
           - name: Runtime recovery
             coverageIds: [runtime-recovery]
@@ -1357,26 +1339,20 @@ surfaces:
       - name: Model and Runtime Selection
         id: model-and-runtime-selection
         features:
-          - name: Model reference selection - Claude CLI model
+          - name: Claude CLI model
             coverageIds: [models.claude-cli]
-          - name: Model reference selection - Provider model capabilities
+          - name: Provider model capabilities
             coverageIds: [models.provider-capabilities]
-          - name: Provider and runtime overrides - Model switching
+          - name: Model switching
             coverageIds: [models.switching]
-          - name: Provider and runtime overrides - Model thinking
+          - name: Model thinking
             coverageIds: [models.thinking]
-          - name: Provider and runtime overrides - Session continuity
+          - name: Session continuity
             coverageIds: [runtime.session-continuity]
-          - name: Provider and runtime overrides - Tool continuity
+          - name: Tool continuity
             coverageIds: [runtime.tool-continuity]
-          - name: Thinking and context settings - Model switching
-            coverageIds: [models.switching]
-          - name: Thinking and context settings - Model thinking
-            coverageIds: [models.thinking]
-          - name: Thinking and context settings - Reasoning visibility
+          - name: Reasoning visibility
             coverageIds: [runtime.reasoning-visibility]
-          - name: Thinking and context settings - Session continuity
-            coverageIds: [runtime.session-continuity]
           - name: Invalid route recovery
             coverageIds: [invalid-route-recovery]
             description: Preserving or clearing invalid route state when selections drift or fail.
@@ -1394,30 +1370,30 @@ surfaces:
       - name: Provider Auth
         id: provider-auth
         features:
-          - name: Login and API-key setup - Anthropic model
+          - name: Anthropic model
             coverageIds: [models.anthropic]
-          - name: Login and API-key setup - Provider model auth
+          - name: Provider model auth
             coverageIds: [models.provider-auth]
-          - name: Auth profile selection - Auth profiles provider selection
+          - name: Auth profiles provider selection
             coverageIds: [auth-profiles.provider-selection]
-          - name: Auth profile selection - Codex plugin auth
+          - name: Codex plugin auth
             coverageIds: [runtime.codex-plugin.auth]
-          - name: Credential health checks - Gateway performance
+          - name: Gateway performance
             coverageIds: [gateway.performance]
-          - name: Credential health checks - Live OpenAI models
+          - name: Live OpenAI models
             coverageIds: [models.live-openai]
-          - name: Credential health checks - Kitchen sink plugin
+          - name: Kitchen sink plugin
             coverageIds: [plugins.kitchen-sink]
-          - name: Credential health checks - Plugin lifecycle
+          - name: Plugin lifecycle
             coverageIds: [plugins.lifecycle]
-          - name: Credential health checks - Plugin tools
+          - name: Plugin tools
             coverageIds: [plugins.plugin-tools]
           - name: Auth failover
             coverageIds: [auth-failover]
             description: Same-provider and cross-profile auth fallback behavior.
-          - name: Provider fallback recovery - Memory failure handling
+          - name: Memory failure handling
             coverageIds: [memory.failure-handling]
-          - name: Provider fallback recovery - Runtime fallbacks
+          - name: Runtime fallbacks
             coverageIds: [runtime.fallbacks]
           - name: Rate-limit and capacity recovery
             coverageIds: [rate-limit-and-capacity-recovery]
@@ -1451,23 +1427,23 @@ surfaces:
       - name: Streaming and Progress
         id: streaming-and-progress
         features:
-          - name: Streaming replies - Channel streaming
+          - name: Channel streaming
             coverageIds: [channels.streaming]
-          - name: Streaming replies - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
-          - name: Streaming replies - Fallback delivery
+          - name: Fallback delivery
             coverageIds: [runtime.fallback-delivery]
-          - name: Progress visibility - Model thinking
+          - name: Model thinking
             coverageIds: [models.thinking]
-          - name: Progress visibility - Personal failure recovery
+          - name: Personal failure recovery
             coverageIds: [personal.failure-recovery]
-          - name: Progress visibility - Personal no fake progress
+          - name: Personal no fake progress
             coverageIds: [personal.no-fake-progress]
-          - name: Progress visibility - Personal task followthrough
+          - name: Personal task followthrough
             coverageIds: [personal.task-followthrough]
-          - name: Progress visibility - Reasoning visibility
+          - name: Reasoning visibility
             coverageIds: [runtime.reasoning-visibility]
-          - name: Progress visibility - Evidence tools
+          - name: Evidence tools
             coverageIds: [tools.evidence]
         docs:
           - docs/concepts/streaming.md
@@ -1481,56 +1457,52 @@ surfaces:
       - name: Tool Calls and Response Handling
         id: tool-calls-and-response-handling
         features:
-          - name: Tool-call handling - Model switching
+          - name: Model switching
             coverageIds: [models.switching]
-          - name: Tool-call handling - Personal no fake progress
+          - name: Personal no fake progress
             coverageIds: [personal.no-fake-progress]
-          - name: Tool-call handling - Personal task followthrough
+          - name: Personal task followthrough
             coverageIds: [personal.task-followthrough]
-          - name: Tool-call handling - Personal tool safety
+          - name: Personal tool safety
             coverageIds: [personal.tool-safety]
-          - name: Tool-call handling - Runtime approvals
+          - name: Runtime approvals
             coverageIds: [runtime.approvals]
-          - name: Tool-call handling - Codex native workspace read
+          - name: Codex native workspace read
             coverageIds: [runtime.codex-native-workspace.read]
-          - name: Tool-call handling - Runtime prompt compatibility
+          - name: Runtime prompt compatibility
             coverageIds: [runtime.prompt-compatibility]
-          - name: Tool-call handling - Tool continuity
+          - name: Tool continuity
             coverageIds: [runtime.tool-continuity]
-          - name: Tool-call handling - Apply patch tool
+          - name: Apply patch tool
             coverageIds: [tools.apply-patch]
-          - name: Tool-call handling - Edit tool
+          - name: Edit tool
             coverageIds: [tools.edit]
-          - name: Tool-call handling - Evidence tools
+          - name: Evidence tools
             coverageIds: [tools.evidence]
-          - name: Tool-call handling - Tool followthrough
+          - name: Tool followthrough
             coverageIds: [tools.followthrough]
-          - name: Tool-call handling - File list tool
+          - name: File list tool
             coverageIds: [tools.fs.list]
-          - name: Tool-call handling - File read tool
+          - name: File read tool
             coverageIds: [tools.fs.read]
-          - name: Tool-call handling - File write tool
+          - name: File write tool
             coverageIds: [tools.fs.write]
-          - name: Tool-call handling - Grep tool
+          - name: Grep tool
             coverageIds: [tools.grep]
-          - name: Tool-call handling - Workspace artifacts
+          - name: Workspace artifacts
             coverageIds: [workspace.artifacts]
-          - name: Usage and response reporting - Subagents
+          - name: Subagents
             coverageIds: [agents.subagents]
-          - name: Usage and response reporting - Agent synthesis
+          - name: Agent synthesis
             coverageIds: [agents.synthesis]
-          - name: Failure recovery - Personal failure recovery
+          - name: Personal failure recovery
             coverageIds: [personal.failure-recovery]
-          - name: Failure recovery - Personal no fake progress
-            coverageIds: [personal.no-fake-progress]
-          - name: Failure recovery - Runtime empty response recovery
+          - name: Runtime empty response recovery
             coverageIds: [runtime.empty-response-recovery]
-          - name: Failure recovery - Runtime reasoning only recovery
+          - name: Runtime reasoning only recovery
             coverageIds: [runtime.reasoning-only-recovery]
-          - name: Failure recovery - Retry policy
+          - name: Retry policy
             coverageIds: [runtime.retry-policy]
-          - name: Failure recovery - Evidence tools
-            coverageIds: [tools.evidence]
         docs:
           - docs/concepts/agent-loop.md
           - docs/providers/ollama.md
@@ -1543,40 +1515,30 @@ surfaces:
       - name: Tool Execution Controls
         id: tool-execution-controls
         features:
-          - name: Tool availability rules - QA artifact safety
+          - name: QA artifact safety
             coverageIds: [qa.artifact-safety]
-          - name: Tool availability rules - Runtime inventory
+          - name: Runtime inventory
             coverageIds: [runtime.inventory]
-          - name: Tool availability rules - Runtime tool policy
+          - name: Runtime tool policy
             coverageIds: [runtime.tool-policy]
-          - name: Tool availability rules - Security redaction
+          - name: Security redaction
             coverageIds: [security.redaction]
           - name: Sandboxed exec behavior
             coverageIds: [sandboxed-exec-behavior]
             description: Exec behavior, sandbox roots, and workspace constraints visible to operators.
-          - name: Approval flow - Personal approval denial
+          - name: Personal approval denial
             coverageIds: [personal.approval-denial]
-          - name: Approval flow - Personal tool safety
+          - name: Personal tool safety
             coverageIds: [personal.tool-safety]
-          - name: Approval flow - Runtime approvals
+          - name: Runtime approvals
             coverageIds: [runtime.approvals]
-          - name: Approval flow - Tool followthrough
+          - name: Tool followthrough
             coverageIds: [tools.followthrough]
-          - name: Approval flow - Tool safety
+          - name: Tool safety
             coverageIds: [tools.safety]
           - name: Elevated execution
             coverageIds: [elevated-execution]
             description: Elevated host execution rules and related controls.
-          - name: Tool safety controls - Personal approval denial
-            coverageIds: [personal.approval-denial]
-          - name: Tool safety controls - Personal tool safety
-            coverageIds: [personal.tool-safety]
-          - name: Tool safety controls - Runtime approvals
-            coverageIds: [runtime.approvals]
-          - name: Tool safety controls - Tool followthrough
-            coverageIds: [tools.followthrough]
-          - name: Tool safety controls - Tool safety
-            coverageIds: [tools.safety]
           - name: Delegated tool access
             coverageIds: [delegated-tool-access]
             description: Inherited or narrowed tool policy for subagents and delegated execution.
@@ -1627,26 +1589,26 @@ surfaces:
       - name: Token Management
         id: token-management
         features:
-          - name: Compaction - Runtime compaction
+          - name: Runtime compaction
             coverageIds: [runtime.compaction]
-          - name: Compaction - Runtime empty response recovery
+          - name: Runtime empty response recovery
             coverageIds: [runtime.empty-response-recovery]
-          - name: Compaction - Runtime reasoning only recovery
+          - name: Runtime reasoning only recovery
             coverageIds: [runtime.reasoning-only-recovery]
-          - name: Compaction - Retry policy
+          - name: Retry policy
             coverageIds: [runtime.retry-policy]
           - name: Pruning
             coverageIds: [pruning]
             description: Covers Pruning across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
-          - name: Token Pressure - Codex app server runtime
+          - name: Codex app server runtime
             coverageIds: [runtime.codex-app-server]
-          - name: Token Pressure - First-hour 20-turn runtime
+          - name: First-hour 20-turn runtime
             coverageIds: [runtime.first-hour-20]
-          - name: Token Pressure - Gateway log sentinel Codex progress
+          - name: Gateway log sentinel Codex progress
             coverageIds: [runtime.gateway-log-sentinel.codex-progress]
-          - name: Token Pressure - Long context runtime
+          - name: Long context runtime
             coverageIds: [runtime.long-context]
-          - name: Token Pressure - 100-turn soak
+          - name: 100-turn soak
             coverageIds: [runtime.soak-100]
         docs:
           - docs/concepts/compaction.md
@@ -1663,19 +1625,19 @@ surfaces:
       - name: Context Engine
         id: context-engine
         features:
-          - name: Context Engine - Docs discovery
+          - name: Docs discovery
             coverageIds: [docs.discovery]
-          - name: Context Engine - Workspace artifacts
+          - name: Workspace artifacts
             coverageIds: [workspace.artifacts]
-          - name: Context Engine - Long-running workspace task
+          - name: Long-running workspace task
             coverageIds: [workspace.long-running-task]
-          - name: Context Engine - Repo discovery
+          - name: Repo discovery
             coverageIds: [workspace.repo-discovery]
-          - name: Runtime Assembly - OpenClaw harness agent
+          - name: OpenClaw harness agent
             coverageIds: [agents.openclaw-harness]
-          - name: Runtime Assembly - Codex CLI model
+          - name: Codex CLI model
             coverageIds: [models.codex-cli]
-          - name: Runtime Assembly - Workspace planning
+          - name: Workspace planning
             coverageIds: [workspace.planning]
         docs:
           - docs/concepts/context.md
@@ -1691,15 +1653,15 @@ surfaces:
       - name: Cross-client History and Session Parity
         id: cross-client-history-and-session-parity
         features:
-          - name: Cross-client History - Channel threads
+          - name: Channel threads
             coverageIds: [channels.threads]
-          - name: Cross-client History - Memory thread isolation
+          - name: Memory thread isolation
             coverageIds: [memory.thread-isolation]
-          - name: Session Parity - Model switching
+          - name: Model switching
             coverageIds: [models.switching]
-          - name: Session Parity - Model thinking
+          - name: Model thinking
             coverageIds: [models.thinking]
-          - name: Session Parity - Session continuity
+          - name: Session continuity
             coverageIds: [runtime.session-continuity]
         docs:
           - docs/web/webchat.md
@@ -1721,21 +1683,21 @@ surfaces:
           - name: Session maintenance warnings
             coverageIds: [session-maintenance-warnings]
             description: Covers restart maintenance warnings, delivery queues, memory/session cleanup signals, and operator-visible maintenance state.
-          - name: Session and transcript recovery - Restart config apply
+          - name: Restart config apply
             coverageIds: [config.restart-apply]
-          - name: Session and transcript recovery - Memory failure handling
+          - name: Memory failure handling
             coverageIds: [memory.failure-handling]
-          - name: Session and transcript recovery - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
-          - name: Session and transcript recovery - Runtime fallbacks
+          - name: Runtime fallbacks
             coverageIds: [runtime.fallbacks]
-          - name: Session and transcript recovery - Gateway restart
+          - name: Gateway restart
             coverageIds: [runtime.gateway-restart]
-          - name: Session and transcript recovery - Package update runtime
+          - name: Package update runtime
             coverageIds: [runtime.package-update]
-          - name: Session and transcript recovery - Runtime restart recovery
+          - name: Runtime restart recovery
             coverageIds: [runtime.restart-recovery]
-          - name: Session and transcript recovery - Update run runtime
+          - name: Update run runtime
             coverageIds: [runtime.update-run]
         docs:
           - docs/gateway/diagnostics.md
@@ -1753,21 +1715,21 @@ surfaces:
       - name: Core Prompts and Context
         id: core-prompts-and-context
         features:
-          - name: Instruction Profile - Agent instructions
+          - name: Agent instructions
             coverageIds: [agents.instructions]
-          - name: Instruction Profile - Character persona
+          - name: Character persona
             coverageIds: [character.persona]
-          - name: Instruction Profile - First action runtime
+          - name: First action runtime
             coverageIds: [runtime.first-action]
-          - name: Instruction Profile - Workspace artifacts
+          - name: Workspace artifacts
             coverageIds: [workspace.artifacts]
-          - name: Context Visibility - Docs discovery
+          - name: Docs discovery
             coverageIds: [docs.discovery]
-          - name: Context Visibility - Codex CLI model
+          - name: Codex CLI model
             coverageIds: [models.codex-cli]
-          - name: Context Visibility - Runtime no meta leak
+          - name: Runtime no meta leak
             coverageIds: [runtime.no-meta-leak]
-          - name: Context Visibility - Repo discovery
+          - name: Repo discovery
             coverageIds: [workspace.repo-discovery]
         docs:
           - docs/concepts/context.md
@@ -1786,48 +1748,30 @@ surfaces:
           - name: Memory Backend Storage
             coverageIds: [memory-backend-storage]
             description: Covers Memory Backend Storage across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
-          - name: Embedding Search - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Embedding Search - Memory active recall
+          - name: Memory active recall
             coverageIds: [memory.active-recall]
-          - name: Embedding Search - Memory ranking
+          - name: Memory ranking
             coverageIds: [memory.ranking]
-          - name: Embedding Search - Memory recall
+          - name: Memory recall
             coverageIds: [memory.recall]
-          - name: Embedding Search - Personal memory recall
+          - name: Personal memory recall
             coverageIds: [personal.memory-recall]
-          - name: Memory Files - Memory dreaming
+          - name: Memory dreaming
             coverageIds: [memory.dreaming]
-          - name: Memory Files - Memory promotion
+          - name: Memory promotion
             coverageIds: [memory.promotion]
-          - name: Memory Files - QA artifact safety
+          - name: QA artifact safety
             coverageIds: [qa.artifact-safety]
-          - name: Memory search and store tools - Group channel messages
+          - name: Group channel messages
             coverageIds: [channels.group-messages]
-          - name: Memory search and store tools - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Memory search and store tools - Memory active recall
-            coverageIds: [memory.active-recall]
-          - name: Memory search and store tools - Memory ranking
-            coverageIds: [memory.ranking]
-          - name: Memory search and store tools - Memory recall
-            coverageIds: [memory.recall]
-          - name: Memory search and store tools - Memory tools
+          - name: Memory tools
             coverageIds: [memory.tools]
-          - name: Memory search and store tools - Personal memory recall
-            coverageIds: [personal.memory-recall]
-          - name: Memory search and store tools - Tool memory add
+          - name: Tool memory add
             coverageIds: [tools.memory.add]
-          - name: Memory search and store tools - Tool memory recall
+          - name: Tool memory recall
             coverageIds: [tools.memory.recall]
-          - name: Active Memory - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Active Memory - Memory active recall
-            coverageIds: [memory.active-recall]
-          - name: Active Memory - Memory recall
-            coverageIds: [memory.recall]
-          - name: Active Memory - Personal memory recall
-            coverageIds: [personal.memory-recall]
         docs:
           - docs/reference/memory-config.md
           - docs/concepts/memory-qmd.md
@@ -1852,11 +1796,11 @@ surfaces:
           - name: Session Routing
             coverageIds: [session-routing]
             description: Covers Session Routing across `sessionKey` construction, target resolution, conversation bindings, session labels, per-conversation isolation, thread binding, model selection continuity tied to sessions, and agent/workspace store targeting.
-          - name: Conversation routing - Webchat channel
+          - name: Webchat channel
             coverageIds: [channels.webchat]
-          - name: Conversation routing - Runtime direct reply routing
+          - name: Runtime direct reply routing
             coverageIds: [runtime.direct-reply-routing]
-          - name: Conversation routing - Tool message
+          - name: Tool message
             coverageIds: [tools.message]
         docs:
           - docs/concepts/session.md
@@ -1941,11 +1885,11 @@ surfaces:
           - name: Channel status taxonomy in channels list
             coverageIds: [channel-status-taxonomy-in-channels-list]
             description: Channel status taxonomy in channels list, channels status, and setup status output
-          - name: Setup/onboarding flows - Agent creation
+          - name: Agent creation
             coverageIds: [agents.create]
-          - name: Setup/onboarding flows - Discord channel config
+          - name: Discord channel config
             coverageIds: [channels.discord-config]
-          - name: Setup/onboarding flows - Crestodian setup config
+          - name: Crestodian setup config
             coverageIds: [config.crestodian-setup]
           - name: Install-on-demand
             coverageIds: [install-on-demand]
@@ -1967,27 +1911,23 @@ surfaces:
       - name: Group Thread and Ambient Room Behavior
         id: group-thread-and-ambient-room-behavior
         features:
-          - name: Group/channel session isolation - Group channel messages
+          - name: Group channel messages
             coverageIds: [channels.group-messages]
-          - name: Group/channel session isolation - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Group/channel session isolation - Memory tools
+          - name: Memory tools
             coverageIds: [memory.tools]
-          - name: Mention-required - Group channel visible replies
+          - name: Group channel visible replies
             coverageIds: [channels.group-visible-replies]
-          - name: Mention-required - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Mention-required - Tool message
+          - name: Tool message
             coverageIds: [tools.message]
-          - name: Native threads - DM channel
+          - name: DM channel
             coverageIds: [channels.dm]
-          - name: Native threads - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Native threads - Channel threads
+          - name: Channel threads
             coverageIds: [channels.threads]
-          - name: Native threads - Memory thread isolation
+          - name: Memory thread isolation
             coverageIds: [memory.thread-isolation]
-          - name: Native threads - Personal channel replies
+          - name: Personal channel replies
             coverageIds: [personal.channel-replies]
           - name: Broadcast groups
             coverageIds: [broadcast-groups]
@@ -2066,63 +2006,47 @@ surfaces:
       - name: Outbound Delivery and Reply Pipeline
         id: outbound-delivery-and-reply-pipeline
         features:
-          - name: Automatic final reply delivery - Subagents
+          - name: Subagents
             coverageIds: [agents.subagents]
-          - name: Automatic final reply delivery - Channel deduplication
+          - name: Channel deduplication
             coverageIds: [channels.dedup]
-          - name: Automatic final reply delivery - Direct channel visible replies
+          - name: Direct channel visible replies
             coverageIds: [channels.direct-visible-replies]
-          - name: Automatic final reply delivery - DM channel
+          - name: DM channel
             coverageIds: [channels.dm]
-          - name: Automatic final reply delivery - Group channel visible replies
+          - name: Group channel visible replies
             coverageIds: [channels.group-visible-replies]
-          - name: Automatic final reply delivery - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Automatic final reply delivery - Channel reconnect
+          - name: Channel reconnect
             coverageIds: [channels.reconnect]
-          - name: Automatic final reply delivery - Channel streaming
+          - name: Channel streaming
             coverageIds: [channels.streaming]
-          - name: Automatic final reply delivery - Channel threads
+          - name: Channel threads
             coverageIds: [channels.threads]
-          - name: Automatic final reply delivery - No-target heartbeat commitments
+          - name: No-target heartbeat commitments
             coverageIds: [commitments.heartbeat-target-none]
-          - name: Automatic final reply delivery - Commitment scope
+          - name: Commitment scope
             coverageIds: [commitments.scope]
-          - name: Automatic final reply delivery - Personal channel replies
+          - name: Personal channel replies
             coverageIds: [personal.channel-replies]
-          - name: Automatic final reply delivery - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
-          - name: Automatic final reply delivery - Fallback delivery
+          - name: Fallback delivery
             coverageIds: [runtime.fallback-delivery]
-          - name: Automatic final reply delivery - Gateway restart
+          - name: Gateway restart
             coverageIds: [runtime.gateway-restart]
-          - name: Automatic final reply delivery - Runtime restart recovery
+          - name: Runtime restart recovery
             coverageIds: [runtime.restart-recovery]
-          - name: Automatic final reply delivery - Tool message
+          - name: Tool message
             coverageIds: [tools.message]
-          - name: Durable outbound send orchestration - Channel deduplication
-            coverageIds: [channels.dedup]
-          - name: Durable outbound send orchestration - Channel reconnect
-            coverageIds: [channels.reconnect]
-          - name: Durable outbound send orchestration - Runtime delivery
-            coverageIds: [runtime.delivery]
-          - name: Reply pipeline transforms - Channel message actions
+          - name: Channel message actions
             coverageIds: [channels.message-actions]
-          - name: Reply pipeline transforms - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Provider outbound adapter bridge - Direct channel visible replies
-            coverageIds: [channels.direct-visible-replies]
-          - name: Provider outbound adapter bridge - Group channel visible replies
-            coverageIds: [channels.group-visible-replies]
-          - name: Provider outbound adapter bridge - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Provider outbound adapter bridge - Webchat channel
+          - name: Webchat channel
             coverageIds: [channels.webchat]
-          - name: Provider outbound adapter bridge - Runtime direct reply routing
+          - name: Runtime direct reply routing
             coverageIds: [runtime.direct-reply-routing]
-          - name: Provider outbound adapter bridge - Tool message
-            coverageIds: [tools.message]
-          - name: Provider outbound adapter bridge - Message tool
+          - name: Message tool
             coverageIds: [tools.message-tool]
         docs:
           - docs/channels/groups.md
@@ -2139,13 +2063,13 @@ surfaces:
       - name: Conversation Routing and Delivery
         id: conversation-routing-and-delivery
         features:
-          - name: Inbound conversation routing - DM channel
+          - name: DM channel
             coverageIds: [channels.dm]
-          - name: Inbound conversation routing - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Inbound conversation routing - Channel threads
+          - name: Channel threads
             coverageIds: [channels.threads]
-          - name: Inbound conversation routing - Personal channel replies
+          - name: Personal channel replies
             coverageIds: [personal.channel-replies]
           - name: Session key construction
             coverageIds: [session-key-construction]
@@ -2159,43 +2083,35 @@ surfaces:
           - name: Thread/parent-child placement
             coverageIds: [thread-parent-child-placement]
             description: Thread/parent-child placement and provider-owned target normalization
-          - name: Plugin registry resolution - Subagents
+          - name: Subagents
             coverageIds: [agents.subagents]
-          - name: Plugin registry resolution - Direct channel visible replies
+          - name: Direct channel visible replies
             coverageIds: [channels.direct-visible-replies]
-          - name: Plugin registry resolution - DM channel
-            coverageIds: [channels.dm]
-          - name: Plugin registry resolution - Group channel messages
+          - name: Group channel messages
             coverageIds: [channels.group-messages]
-          - name: Plugin registry resolution - Group channel visible replies
+          - name: Group channel visible replies
             coverageIds: [channels.group-visible-replies]
-          - name: Plugin registry resolution - Channel message actions
+          - name: Channel message actions
             coverageIds: [channels.message-actions]
-          - name: Plugin registry resolution - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Plugin registry resolution - Channel threads
-            coverageIds: [channels.threads]
-          - name: Plugin registry resolution - Image generation media
+          - name: Image generation media
             coverageIds: [media.image-generation]
-          - name: Plugin registry resolution - Image understanding media
+          - name: Image understanding media
             coverageIds: [media.image-understanding]
-          - name: Plugin registry resolution - Memory recall
+          - name: Memory recall
             coverageIds: [memory.recall]
-          - name: Plugin registry resolution - Personal channel replies
-            coverageIds: [personal.channel-replies]
-          - name: Plugin registry resolution - Personal memory recall
+          - name: Personal memory recall
             coverageIds: [personal.memory-recall]
-          - name: Plugin registry resolution - Personal reminders
+          - name: Personal reminders
             coverageIds: [personal.reminders]
-          - name: Plugin registry resolution - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
-          - name: Plugin registry resolution - Scheduling cron
+          - name: Scheduling cron
             coverageIds: [scheduling.cron]
-          - name: Plugin registry resolution - Scheduling dedup
+          - name: Scheduling dedup
             coverageIds: [scheduling.dedup]
-          - name: Plugin registry resolution - Tool message
+          - name: Tool message
             coverageIds: [tools.message]
-          - name: Plugin registry resolution - UI control
+          - name: UI control
             coverageIds: [ui.control]
           - name: Channel account startup
             coverageIds: [channel-account-startup]
@@ -2232,11 +2148,11 @@ surfaces:
           - name: channels.status
             coverageIds: [channels-status]
             description: channels.status, probes, account snapshots, and warnings
-          - name: Channel health policy - Channel deduplication
+          - name: Channel deduplication
             coverageIds: [channels.dedup]
-          - name: Channel health policy - Channel reconnect
+          - name: Channel reconnect
             coverageIds: [channels.reconnect]
-          - name: Channel health policy - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
           - name: Operator CLI controls
             coverageIds: [operator-cli-controls]
@@ -2272,15 +2188,15 @@ surfaces:
       - name: Approval Policy and Tool Safeguards
         id: approval-policy-and-tool-safeguards
         features:
-          - name: Approval Policy - Personal approval denial
+          - name: Personal approval denial
             coverageIds: [personal.approval-denial]
-          - name: Approval Policy - Personal tool safety
+          - name: Personal tool safety
             coverageIds: [personal.tool-safety]
-          - name: Approval Policy - Runtime approvals
+          - name: Runtime approvals
             coverageIds: [runtime.approvals]
-          - name: Approval Policy - Tool followthrough
+          - name: Tool followthrough
             coverageIds: [tools.followthrough]
-          - name: Approval Policy - Tool safety
+          - name: Tool safety
             coverageIds: [tools.safety]
           - name: Dangerous Tool Safeguards
             coverageIds: [dangerous-tool-safeguards]
@@ -2457,19 +2373,19 @@ surfaces:
           - name: Secrets Storage
             coverageIds: [secrets-storage]
             description: Covers Secrets Storage across SecretRef contract and providers, runtime secret snapshots, gateway auth SecretRefs, auth-profile and generated model residues, and related secrets storage, redaction, and configuration hygiene behavior.
-          - name: Redaction - Memory dreaming
+          - name: Memory dreaming
             coverageIds: [memory.dreaming]
-          - name: Redaction - Memory promotion
+          - name: Memory promotion
             coverageIds: [memory.promotion]
-          - name: Redaction - Personal diagnostics
+          - name: Personal diagnostics
             coverageIds: [personal.diagnostics]
-          - name: Redaction - Personal redaction
+          - name: Personal redaction
             coverageIds: [personal.redaction]
-          - name: Redaction - QA artifact safety
+          - name: QA artifact safety
             coverageIds: [qa.artifact-safety]
-          - name: Redaction - Runtime tool policy
+          - name: Runtime tool policy
             coverageIds: [runtime.tool-policy]
-          - name: Redaction - Security redaction
+          - name: Security redaction
             coverageIds: [security.redaction]
           - name: Configuration Hygiene
             coverageIds: [configuration-hygiene]
@@ -2521,11 +2437,11 @@ surfaces:
           - name: Restart logging
             coverageIds: [restart-logging]
             description: Restart logging and runtime snapshot evaluation
-          - name: openclaw doctor - Codex plugin auth
+          - name: Codex plugin auth
             coverageIds: [runtime.codex-plugin.auth]
-          - name: openclaw doctor - Codex plugin lifecycle
+          - name: Codex plugin lifecycle
             coverageIds: [runtime.codex-plugin.lifecycle]
-          - name: openclaw doctor - Runtime doctor repair
+          - name: Runtime doctor repair
             coverageIds: [runtime.doctor-repair]
           - name: Structured health checks
             coverageIds: [structured-health-checks]
@@ -2545,15 +2461,15 @@ surfaces:
           - name: Gateway RPC health
             coverageIds: [gateway-rpc-health]
             description: Gateway RPC health and status
-          - name: Cached health snapshots - Gateway performance
+          - name: Gateway performance
             coverageIds: [gateway.performance]
-          - name: Cached health snapshots - Live OpenAI models
+          - name: Live OpenAI models
             coverageIds: [models.live-openai]
-          - name: Cached health snapshots - Kitchen sink plugin
+          - name: Kitchen sink plugin
             coverageIds: [plugins.kitchen-sink]
-          - name: Cached health snapshots - Plugin lifecycle
+          - name: Plugin lifecycle
             coverageIds: [plugins.lifecycle]
-          - name: Cached health snapshots - Plugin tools
+          - name: Plugin tools
             coverageIds: [plugins.plugin-tools]
         docs:
           - docs/gateway/health.md
@@ -2615,11 +2531,11 @@ surfaces:
           - name: Chat /diagnostics
             coverageIds: [chat-diagnostics]
             description: Chat /diagnostics and /codex diagnostics approval flows
-          - name: Support zip composition - Personal diagnostics
+          - name: Personal diagnostics
             coverageIds: [personal.diagnostics]
-          - name: Support zip composition - Personal redaction
+          - name: Personal redaction
             coverageIds: [personal.redaction]
-          - name: Support zip composition - QA artifact safety
+          - name: QA artifact safety
             coverageIds: [qa.artifact-safety]
           - name: Bounded in-process stability recorder
             coverageIds: [bounded-in-process-stability-recorder]
@@ -2668,34 +2584,30 @@ surfaces:
           - name: diagnostics-otel plugin install
             coverageIds: [diagnostics-otel-plugin-install]
             description: diagnostics-otel plugin install, enablement, config, env overrides, sampling, flush interval, and preloaded SDK mode
-          - name: OTLP/HTTP traces - QA Lab harness
+          - name: QA Lab harness
             coverageIds: [harness.qa-lab]
-          - name: OTLP/HTTP traces - OTel telemetry
+          - name: OTel telemetry
             coverageIds: [telemetry.otel]
           - name: Trusted trace context
             coverageIds: [trusted-trace-context]
             description: Trusted trace context, W3C traceparent propagation to model calls, file-log correlation, content-capture controls, and redacted/bounded attributes
-          - name: Model and runtime telemetry - Docker E2E
+          - name: Docker E2E
             coverageIds: [docker.e2e]
-          - name: Model and runtime telemetry - QA Lab harness
-            coverageIds: [harness.qa-lab]
-          - name: Model and runtime telemetry - Tool trace visibility harness
+          - name: Tool trace visibility harness
             coverageIds: [harness.tool-trace-visibility]
-          - name: Model and runtime telemetry - Personal failure recovery
+          - name: Personal failure recovery
             coverageIds: [personal.failure-recovery]
-          - name: Model and runtime telemetry - Personal no fake progress
+          - name: Personal no fake progress
             coverageIds: [personal.no-fake-progress]
-          - name: Model and runtime telemetry - Personal task followthrough
+          - name: Personal task followthrough
             coverageIds: [personal.task-followthrough]
-          - name: Model and runtime telemetry - QA bus runtime
+          - name: QA bus runtime
             coverageIds: [runtime.qa-bus]
-          - name: Model and runtime telemetry - OTel telemetry
-            coverageIds: [telemetry.otel]
-          - name: Model and runtime telemetry - Telemetry prometheus
+          - name: Telemetry prometheus
             coverageIds: [telemetry.prometheus]
-          - name: Model and runtime telemetry - Evidence tools
+          - name: Evidence tools
             coverageIds: [tools.evidence]
-          - name: Model and runtime telemetry - Tool trace
+          - name: Tool trace
             coverageIds: [tools.trace]
           - name: diagnostics-prometheus plugin install
             coverageIds: [diagnostics-prometheus-plugin-install]
@@ -2703,12 +2615,6 @@ surfaces:
           - name: Gateway-authenticated GET /api/diagnostics/prometheus
             coverageIds: [gateway-authenticated-get-api-diagnostics-prometheus]
             description: Gateway-authenticated GET /api/diagnostics/prometheus behavior, status, and operator-visible verification.
-          - name: Prometheus text exposition - Docker E2E
-            coverageIds: [docker.e2e]
-          - name: Prometheus text exposition - QA Lab harness
-            coverageIds: [harness.qa-lab]
-          - name: Prometheus text exposition - Telemetry prometheus
-            coverageIds: [telemetry.prometheus]
           - name: Trusted diagnostic event subscription
             coverageIds: [trusted-diagnostic-event-subscription]
             description: Trusted diagnostic event subscription and rendering of run, model, tool, message, Talk, queue, session, liveness, payload, memory, and exporter metrics
@@ -2787,37 +2693,17 @@ surfaces:
           - name: Cron RPCs
             coverageIds: [cron-rpcs]
             description: Covers Cron RPCs across cron job creation, listing, inspection, editing, and related cron job lifecycle behavior.
-          - name: Agent cron tool - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Agent cron tool - Personal reminders
+          - name: Personal reminders
             coverageIds: [personal.reminders]
-          - name: Agent cron tool - Scheduling cron
+          - name: Scheduling cron
             coverageIds: [scheduling.cron]
-          - name: Manual cron runs - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Manual cron runs - Personal reminders
-            coverageIds: [personal.reminders]
-          - name: Manual cron runs - Scheduling cron
-            coverageIds: [scheduling.cron]
-          - name: Manual cron runs - Scheduling dedup
-            coverageIds: [scheduling.dedup]
-          - name: Isolated cron execution - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Isolated cron execution - Personal reminders
-            coverageIds: [personal.reminders]
-          - name: Isolated cron execution - Scheduling cron
-            coverageIds: [scheduling.cron]
-          - name: Isolated cron execution - Scheduling dedup
+          - name: Scheduling dedup
             coverageIds: [scheduling.dedup]
           - name: Model/provider preflight
             coverageIds: [model-provider-preflight]
             description: Covers Model/provider preflight across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.
-          - name: Run history - QA channel
-            coverageIds: [channels.qa-channel]
-          - name: Run history - Scheduling cron
-            coverageIds: [scheduling.cron]
-          - name: Run history - Scheduling dedup
-            coverageIds: [scheduling.dedup]
           - name: Timeout and denial diagnostics
             coverageIds: [timeout-and-denial-diagnostics]
             description: Covers Timeout and denial diagnostics across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.
@@ -3062,11 +2948,11 @@ surfaces:
           - name: Due-only heartbeat tasks
             coverageIds: [due-only-heartbeat-tasks]
             description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
-          - name: Commitment check-ins - No-target heartbeat commitments
+          - name: No-target heartbeat commitments
             coverageIds: [commitments.heartbeat-target-none]
-          - name: Commitment check-ins - Commitment scope
+          - name: Commitment scope
             coverageIds: [commitments.scope]
-          - name: Commitment check-ins - Runtime delivery
+          - name: Runtime delivery
             coverageIds: [runtime.delivery]
         docs:
           - docs/automation/index.md
@@ -3279,11 +3165,11 @@ surfaces:
           - name: Audio proxy and limit handling
             coverageIds: [audio-proxy-and-limit-handling]
             description: Covers Audio proxy and limit handling across batch audio/STT media understanding, local CLI fallbacks, provider transcription, voice-note preflight before mention gates, and related audio transcription and voice note understanding behavior.
-          - name: Inbound image summarization - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Inbound image summarization - Image understanding media
+          - name: Image understanding media
             coverageIds: [media.image-understanding]
-          - name: Inbound image summarization - UI control
+          - name: UI control
             coverageIds: [ui.control]
           - name: Active vision model bypass
             coverageIds: [active-vision-model-bypass]
@@ -3334,17 +3220,13 @@ surfaces:
       - name: Media Generation
         id: media-generation
         features:
-          - name: Image generation tool invocation - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Image generation tool invocation - Image generation media
+          - name: Image generation media
             coverageIds: [media.image-generation]
-          - name: Image generation tool invocation - Tool image generate
+          - name: Tool image generate
             coverageIds: [tools.image-generate]
-          - name: Image generation tool invocation - Tool native image generation
-            coverageIds: [tools.native-image-generation]
-          - name: Provider and model selection - Image generation media
-            coverageIds: [media.image-generation]
-          - name: Provider and model selection - Tool native image generation
+          - name: Tool native image generation
             coverageIds: [tools.native-image-generation]
           - name: Reference image editing
             coverageIds: [reference-image-editing]
@@ -3744,11 +3626,11 @@ surfaces:
       - name: Browser UI
         id: browser-ui
         features:
-          - name: Gateway-hosted UI - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: Gateway-hosted UI - Image understanding media
+          - name: Image understanding media
             coverageIds: [media.image-understanding]
-          - name: Gateway-hosted UI - UI control
+          - name: UI control
             coverageIds: [ui.control]
           - name: Dashboard open/auth bootstrap
             coverageIds: [dashboard-open-auth-bootstrap]
@@ -3819,17 +3701,17 @@ surfaces:
           - name: chat.history projection
             coverageIds: [chat-history-projection]
             description: Covers chat.history projection across Gateway WebChat RPC/runtime contract, durable transcript projection, active run lifecycle, abort and partial retention, and related webchat runtime and session continuity behavior.
-          - name: chat.send lifecycle - QA channel
+          - name: QA channel
             coverageIds: [channels.qa-channel]
-          - name: chat.send lifecycle - Webchat channel
+          - name: Webchat channel
             coverageIds: [channels.webchat]
-          - name: chat.send lifecycle - Image understanding media
+          - name: Image understanding media
             coverageIds: [media.image-understanding]
-          - name: chat.send lifecycle - Runtime direct reply routing
+          - name: Runtime direct reply routing
             coverageIds: [runtime.direct-reply-routing]
-          - name: chat.send lifecycle - Tool message
+          - name: Tool message
             coverageIds: [tools.message]
-          - name: chat.send lifecycle - UI control
+          - name: UI control
             coverageIds: [ui.control]
           - name: Abort/partial retention
             coverageIds: [abort-partial-retention]
@@ -3891,11 +3773,11 @@ surfaces:
           - name: Live log tail
             coverageIds: [live-log-tail]
             description: Covers Live log tail across Debug, Logs, Update, Activity, and related diagnostics, logs, update, and activity behavior.
-          - name: Update run/status - Gateway restart
+          - name: Gateway restart
             coverageIds: [runtime.gateway-restart]
-          - name: Update run/status - Package update runtime
+          - name: Package update runtime
             coverageIds: [runtime.package-update]
-          - name: Update run/status - Update run runtime
+          - name: Update run runtime
             coverageIds: [runtime.update-run]
           - name: Activity summaries
             coverageIds: [activity-summaries]
@@ -4545,19 +4427,19 @@ surfaces:
           - name: ToolSpace
             coverageIds: [toolspace]
             description: Tool discovery and invocation abstraction for external apps.
-          - name: Artifacts - Character persona
+          - name: Character persona
             coverageIds: [character.persona]
-          - name: Artifacts - Personal task followthrough
+          - name: Personal task followthrough
             coverageIds: [personal.task-followthrough]
-          - name: Artifacts - Tool followthrough
+          - name: Tool followthrough
             coverageIds: [tools.followthrough]
-          - name: Artifacts - Workspace artifacts
+          - name: Workspace artifacts
             coverageIds: [workspace.artifacts]
-          - name: Artifacts - Workspace builds
+          - name: Workspace builds
             coverageIds: [workspace.builds]
-          - name: Artifacts - Long-running workspace task
+          - name: Long-running workspace task
             coverageIds: [workspace.long-running-task]
-          - name: Artifacts - Repo discovery
+          - name: Repo discovery
             coverageIds: [workspace.repo-discovery]
           - name: Tasks
             coverageIds: [tasks]
@@ -5615,11 +5497,11 @@ surfaces:
       - name: Diagnostics and Repair
         id: diagnostics-and-repair
         features:
-          - name: openclaw doctor - Codex plugin auth
+          - name: Codex plugin auth
             coverageIds: [runtime.codex-plugin.auth]
-          - name: openclaw doctor - Codex plugin lifecycle
+          - name: Codex plugin lifecycle
             coverageIds: [runtime.codex-plugin.lifecycle]
-          - name: openclaw doctor - Runtime doctor repair
+          - name: Runtime doctor repair
             coverageIds: [runtime.doctor-repair]
           - name: openclaw status
             coverageIds: [openclaw-status]
@@ -6780,11 +6662,11 @@ surfaces:
           - name: Docker E2E package artifact generation
             coverageIds: [docker-e2e-package-artifact-generation]
             description: Docker E2E package artifact generation and shared build helpers
-          - name: Docker E2E plan/scheduler scripts - Docker E2E
+          - name: Docker E2E
             coverageIds: [docker.e2e]
-          - name: Docker E2E plan/scheduler scripts - QA Lab harness
+          - name: QA Lab harness
             coverageIds: [harness.qa-lab]
-          - name: Docker E2E plan/scheduler scripts - Telemetry prometheus
+          - name: Telemetry prometheus
             coverageIds: [telemetry.prometheus]
           - name: Release-path install
             coverageIds: [release-path-install]
@@ -9131,18 +9013,18 @@ surfaces:
       - name: Model and Auth
         id: model-and-auth
         features:
-          - name: Canonical OpenAI Model Routing - OpenAI model
+          - name: OpenAI model
             coverageIds: [models.openai]
-          - name: Canonical OpenAI Model Routing - Tool web search
+          - name: Tool web search
             coverageIds: [tools.web-search]
           - name: Catalog
             coverageIds: [catalog]
             description: 'Covers Catalog across user/operator-facing model route contract: canonical `openai/gpt-*` refs, legacy `openai-codex/*` model refs, model catalog rows, context limits, and related canonical openai model routing and catalog behavior.'
-          - name: Codex OAuth Profiles - Auth profiles provider selection
+          - name: Auth profiles provider selection
             coverageIds: [auth-profiles.provider-selection]
-          - name: Codex OAuth Profiles - Codex plugin auth
+          - name: Codex plugin auth
             coverageIds: [runtime.codex-plugin.auth]
-          - name: Codex OAuth Profiles - Runtime doctor repair
+          - name: Runtime doctor repair
             coverageIds: [runtime.doctor-repair]
           - name: Subscription Usage
             coverageIds: [subscription-usage]
@@ -9181,17 +9063,11 @@ surfaces:
           - name: Codex Responses Transport
             coverageIds: [codex-responses-transport]
             description: Covers Codex Responses Transport across low-level provider request/streaming path for `openai-codex-responses` and the shared OpenAI Responses conversion code used by direct OpenAI and Codex-auth compatibility routes.
-          - name: Payload Compatibility - Codex native workspace read
+          - name: Codex native workspace read
             coverageIds: [runtime.codex-native-workspace.read]
-          - name: Payload Compatibility - Runtime prompt compatibility
+          - name: Runtime prompt compatibility
             coverageIds: [runtime.prompt-compatibility]
-          - name: Payload Compatibility - File read tool
-            coverageIds: [tools.fs.read]
-          - name: Tool Context - Codex native workspace read
-            coverageIds: [runtime.codex-native-workspace.read]
-          - name: Tool Context - Runtime prompt compatibility
-            coverageIds: [runtime.prompt-compatibility]
-          - name: Tool Context - File read tool
+          - name: File read tool
             coverageIds: [tools.fs.read]
           - name: Capability Compatibility
             coverageIds: [capability-compatibility]
@@ -9215,29 +9091,23 @@ surfaces:
       - name: Native Codex Harness
         id: native-codex-harness
         features:
-          - name: Native Codex App-server Harness - Codex CLI model
+          - name: Codex CLI model
             coverageIds: [models.codex-cli]
-          - name: Native Codex App-server Harness - Codex app server runtime
+          - name: Codex app server runtime
             coverageIds: [runtime.codex-app-server]
-          - name: Native Codex App-server Harness - Gateway log sentinel Codex progress
+          - name: Gateway log sentinel Codex progress
             coverageIds: [runtime.gateway-log-sentinel.codex-progress]
-          - name: Native Codex App-server Harness - Long context runtime
+          - name: Long context runtime
             coverageIds: [runtime.long-context]
-          - name: Native Codex App-server Harness - Runtime no meta leak
+          - name: Runtime no meta leak
             coverageIds: [runtime.no-meta-leak]
-          - name: Native Codex App-server Harness - Workspace planning
+          - name: Workspace planning
             coverageIds: [workspace.planning]
-          - name: Thread Lifecycle - Codex app server runtime
-            coverageIds: [runtime.codex-app-server]
-          - name: Thread Lifecycle - Codex plugin lifecycle
+          - name: Codex plugin lifecycle
             coverageIds: [runtime.codex-plugin.lifecycle]
-          - name: Thread Lifecycle - Runtime doctor repair
+          - name: Runtime doctor repair
             coverageIds: [runtime.doctor-repair]
-          - name: Thread Lifecycle - Gateway log sentinel Codex progress
-            coverageIds: [runtime.gateway-log-sentinel.codex-progress]
-          - name: Thread Lifecycle - Long context runtime
-            coverageIds: [runtime.long-context]
-          - name: Thread Lifecycle - Turn ordering
+          - name: Turn ordering
             coverageIds: [runtime.turn-ordering]
         docs:
           - docs/plugins/codex-harness.md
@@ -9359,13 +9229,13 @@ surfaces:
           - name: Bundled Claude catalog
             coverageIds: [bundled-claude-catalog]
             description: 'Covers Bundled Claude catalog across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
-          - name: Canonical anthropic refs - Anthropic model
+          - name: Anthropic model
             coverageIds: [models.anthropic]
-          - name: Canonical anthropic refs - Provider model auth
+          - name: Provider model auth
             coverageIds: [models.provider-auth]
-          - name: Claude CLI compatibility - Claude CLI model
+          - name: Claude CLI model
             coverageIds: [models.claude-cli]
-          - name: Claude CLI compatibility - Provider model capabilities
+          - name: Provider model capabilities
             coverageIds: [models.provider-capabilities]
           - name: Model picker availability
             coverageIds: [model-picker-availability]
@@ -10572,9 +10442,9 @@ surfaces:
       - name: Tool Availability and Fetch
         id: tool-availability-and-fetch
         features:
-          - name: web_search exposure - OpenAI model
+          - name: OpenAI model
             coverageIds: [models.openai]
-          - name: web_search exposure - Tool web search
+          - name: Tool web search
             coverageIds: [tools.web-search]
           - name: web_fetch exposure
             coverageIds: [tools.web-fetch]
@@ -10648,19 +10518,19 @@ surfaces:
           - name: Snapshots
             coverageIds: [snapshots]
             description: Covers Snapshots across browser tool action schemas, navigate/act/snapshot/screenshot operations, AI/role/ARIA snapshot formats, action ref storage, and related browser actions, snapshots, and artifacts behavior.
-          - name: Artifacts - Character persona
+          - name: Character persona
             coverageIds: [character.persona]
-          - name: Artifacts - Personal task followthrough
+          - name: Personal task followthrough
             coverageIds: [personal.task-followthrough]
-          - name: Artifacts - Tool followthrough
+          - name: Tool followthrough
             coverageIds: [tools.followthrough]
-          - name: Artifacts - Workspace artifacts
+          - name: Workspace artifacts
             coverageIds: [workspace.artifacts]
-          - name: Artifacts - Workspace builds
+          - name: Workspace builds
             coverageIds: [workspace.builds]
-          - name: Artifacts - Long-running workspace task
+          - name: Long-running workspace task
             coverageIds: [workspace.long-running-task]
-          - name: Artifacts - Repo discovery
+          - name: Repo discovery
             coverageIds: [workspace.repo-discovery]
           - name: Browser Plugin Service
             coverageIds: [browser-plugin-service]
@@ -10703,23 +10573,23 @@ surfaces:
       - name: Tool Invocation and Execution
         id: tool-invocation-and-execution
         features:
-          - name: Exec Routing - Tool bash
+          - name: Tool bash
             coverageIds: [tools.bash]
-          - name: Exec Routing - Tool exec
+          - name: Tool exec
             coverageIds: [tools.exec]
-          - name: Process Lifecycle - Workspace artifacts
+          - name: Workspace artifacts
             coverageIds: [workspace.artifacts]
-          - name: Process Lifecycle - Workspace builds
+          - name: Workspace builds
             coverageIds: [workspace.builds]
-          - name: Process Lifecycle - Long-running workspace task
+          - name: Long-running workspace task
             coverageIds: [workspace.long-running-task]
-          - name: Process Lifecycle - Repo discovery
+          - name: Repo discovery
             coverageIds: [workspace.repo-discovery]
-          - name: Direct Tool Invoke API - MCP plugin tools
+          - name: MCP plugin tools
             coverageIds: [plugins.mcp-tools]
-          - name: Direct Tool Invoke API - Plugin skills
+          - name: Plugin skills
             coverageIds: [plugins.skills]
-          - name: Direct Tool Invoke API - Tool invocation
+          - name: Tool invocation
             coverageIds: [tools.invocation]
           - name: Node System.run
             coverageIds: [node-system-run]
