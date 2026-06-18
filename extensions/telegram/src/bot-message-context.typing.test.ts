@@ -58,6 +58,7 @@ describe("buildTelegramMessageContext typing", () => {
         message: {
           chat: { id: 42, type: "private", first_name: "Pat" },
           from: { id: 42, first_name: "Pat" },
+          text: undefined,
           voice: { file_id: "voice-1", duration: 1 },
         },
         allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
