@@ -203,6 +203,14 @@ function isDispatchReplyOperationAbortedError(
   return error instanceof DispatchReplyOperationAbortedError;
 }
 
+// Identity for collapsing byte-identical final payloads within one turn (#84623):
+// a non-streaming resolution can carry the same final twice (e.g. a provider
+// resends full content on text_end while block streaming is disabled), and each
+// copy would otherwise be delivered — re-uploading media — once per entry. The
+// key spans every delivery-visible field plus the internal identity that keeps
+// same-text finals intentionally distinct (threading explicitness, reply policy
+// /route, transcript-mirror identity, assistant message index). Too broad drops
+// a legitimately distinct final; too narrow fails to dedupe the real duplicate.
 function createFinalReplyDispatchKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   const metadata = getReplyPayloadMetadata(payload);
@@ -218,7 +226,12 @@ function createFinalReplyDispatchKey(payload: ReplyPayload): string {
     replyToId: payload.replyToId ?? null,
     replyToTag: payload.replyToTag === true,
     replyToCurrent: payload.replyToCurrent === true,
-    metadata: metadata ?? null,
+    assistantMessageIndex: metadata?.assistantMessageIndex ?? null,
+    assistantTranscriptOwned: metadata?.assistantTranscriptOwned === true,
+    replyToIdExplicit: metadata?.replyToIdExplicit === true,
+    replyDelivery: metadata?.replyDelivery ?? null,
+    replyDeliverySource: metadata?.replyDeliverySource ?? null,
+    sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror ?? null,
     audioAsVoice: payload.audioAsVoice === true,
     spokenText: payload.spokenText ?? null,
     ttsSupplement: payload.ttsSupplement ?? null,
@@ -3324,6 +3337,9 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      // Skip a final already delivered in this turn so duplicate resolver
+      // entries ship (and upload media) once. Runs after suppression so a
+      // suppressed copy never seeds the key set and blocks a later real send.
       const finalPayloadKey = createFinalReplyDispatchKey(reply);
       if (deliveredFinalPayloadKeys.has(finalPayloadKey)) {
         continue;
