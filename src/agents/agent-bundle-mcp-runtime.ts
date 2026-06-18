@@ -1,7 +1,10 @@
 /** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
 import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
@@ -234,6 +237,42 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
   return message.includes("-32601") || /method not found/i.test(message);
 }
 
+const SESSION_LOST_MESSAGE = /session not found/i;
+
+/**
+ * Detects whether an MCP tool-call error means the server lost our session
+ * (typically because a remote streamable-HTTP server restarted and dropped its
+ * in-memory session map). The signal arrives in two shapes:
+ *  - `StreamableHTTPError` on a failed POST: HTTP 404 is the MCP-spec
+ *    session-terminated signal; some servers instead surface a
+ *    `-32603 "Session not found"` body that the SDK folds into the error
+ *    message regardless of the HTTP status.
+ *  - An `McpError`-shaped `-32603 "...Session not found..."` when the server
+ *    returns the JSON-RPC error inside an HTTP-200 body, which the SDK parses
+ *    as a structured error response rather than a transport error.
+ * Pure predicate over the error only; the streamable-http transport gate lives
+ * in `callTool`, so this stays trivially unit-testable.
+ */
+function isMcpSessionLostError(error: unknown): boolean {
+  if (error instanceof StreamableHTTPError) {
+    if (error.code === 404) {
+      return true;
+    }
+    return typeof error.message === "string" && SESSION_LOST_MESSAGE.test(error.message);
+  }
+  if (isMcpConfigRecord(error)) {
+    const { code, message } = error;
+    if (
+      code === ErrorCode.InternalError &&
+      typeof message === "string" &&
+      SESSION_LOST_MESSAGE.test(message)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function listAllToolsBestEffort(params: {
   client: Client;
   timeoutMs: number;
@@ -380,13 +419,15 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
 // Safety net for hung MCP servers, not a tuning parameter.
 const DISPOSE_TIMEOUT_MS = 5_000;
 
-async function disposeSession(session: BundleMcpSession) {
+async function disposeSession(session: BundleMcpSession, options?: { terminateRemote?: boolean }) {
   session.detachStderr?.();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   await Promise.race([
     (async () => {
-      if (session.transportType === "streamable-http") {
+      // Skip the (guaranteed-404) DELETE round-trip when the remote session is
+      // already known to be gone — see the reconnect path.
+      if (session.transportType === "streamable-http" && options?.terminateRemote !== false) {
         await (session.transport as StreamableHTTPClientTransport)
           .terminateSession()
           .catch(() => {});
@@ -507,6 +548,9 @@ export function createSessionMcpRuntime(params: {
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
+  // Dedupes concurrent reconnects per server so two tool calls that fail on the
+  // same lost session don't double-dispose or orphan a freshly opened client.
+  const reconnectInFlight = new Map<string, Promise<BundleMcpSession>>();
   const recordServerToolFailure = (serverName: string, nowMs: number) => {
     const previous = serverBackoff.get(serverName);
     const failures = (previous?.failures ?? 0) + 1;
@@ -541,6 +585,37 @@ export function createSessionMcpRuntime(params: {
       throw createDisposedError(params.sessionId);
     }
   };
+
+  // Builds an MCP client with the shared bundle config (schema validator +
+  // tools/list-changed invalidation). Used both for the initial catalog connect
+  // and for streamable-http session reconnects, so a reconnected client behaves
+  // identically to the one the catalog was built from.
+  const createServerClient = (serverName: string): Client =>
+    new Client(
+      {
+        name: "openclaw-bundle-mcp",
+        version: "0.0.0",
+      },
+      {
+        jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+        listChanged: {
+          tools: {
+            autoRefresh: false,
+            debounceMs: 0,
+            onChanged: (error) => {
+              if (error) {
+                logWarn(
+                  `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                );
+              }
+              catalogInvalidationGeneration += 1;
+              catalog = null;
+              catalogInFlight = undefined;
+            },
+          },
+        },
+      },
+    );
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
@@ -584,31 +659,7 @@ export function createSessionMcpRuntime(params: {
           const reusedSession = Boolean(session);
           let connected = Boolean(session);
           if (!session) {
-            const client = new Client(
-              {
-                name: "openclaw-bundle-mcp",
-                version: "0.0.0",
-              },
-              {
-                jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
-                listChanged: {
-                  tools: {
-                    autoRefresh: false,
-                    debounceMs: 0,
-                    onChanged: (error) => {
-                      if (error) {
-                        logWarn(
-                          `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
-                        );
-                      }
-                      catalogInvalidationGeneration += 1;
-                      catalog = null;
-                      catalogInFlight = undefined;
-                    },
-                  },
-                },
-              },
-            );
+            const client = createServerClient(serverName);
             session = {
               serverName,
               client,
@@ -744,6 +795,67 @@ export function createSessionMcpRuntime(params: {
     }
   };
 
+  // Re-handshakes a streamable-http server after it dropped our session. Reuses
+  // the cached catalog (no tools/list) so the model's tool payload — and thus
+  // the prompt prefix — stays byte-identical across a reconnect.
+  const reconnectSession = (
+    serverName: string,
+    deadSession: BundleMcpSession,
+  ): Promise<BundleMcpSession> => {
+    const existing = reconnectInFlight.get(serverName);
+    if (existing) {
+      return existing;
+    }
+    const promise = (async () => {
+      failIfDisposed();
+      if (sessions.get(serverName) === deadSession) {
+        sessions.delete(serverName);
+        // Remote session is already gone; don't pay for the 404 DELETE.
+        await disposeSession(deadSession, { terminateRemote: false });
+      } else {
+        const current = sessions.get(serverName);
+        if (current) {
+          // Someone already reconnected this server; reuse their session.
+          return current;
+        }
+      }
+      failIfDisposed();
+      const resolved = resolveMcpTransport(serverName, loaded.mcpServers[serverName]);
+      if (!resolved) {
+        throw new Error(`bundle-mcp server "${serverName}" is no longer resolvable`);
+      }
+      const client = createServerClient(serverName);
+      const session: BundleMcpSession = {
+        serverName,
+        client,
+        transport: resolved.transport,
+        transportType: resolved.transportType,
+        requestTimeoutMs: resolved.requestTimeoutMs,
+        supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+        detachStderr: resolved.detachStderr,
+      };
+      try {
+        await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+        failIfDisposed();
+      } catch (error) {
+        // Never leak a half-open client (connect failed or disposed mid-reconnect).
+        await disposeSession(session);
+        throw error;
+      }
+      sessions.set(serverName, session);
+      logWarn(`bundle-mcp: reconnected MCP session for "${serverName}" after lost session.`);
+      return session;
+    })();
+    const cleanup = () => {
+      if (reconnectInFlight.get(serverName) === promise) {
+        reconnectInFlight.delete(serverName);
+      }
+    };
+    promise.then(cleanup, cleanup);
+    reconnectInFlight.set(serverName, promise);
+    return promise;
+  };
+
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -783,18 +895,27 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return await runGuardedServerRequest(
-        serverName,
-        async () =>
-          (await session.client.callTool(
-            {
-              name: toolName,
-              arguments: isMcpConfigRecord(input) ? input : {},
-            },
-            undefined,
-            { timeout: session.requestTimeoutMs },
-          )) as CallToolResult,
-      );
+      const args = isMcpConfigRecord(input) ? input : {};
+      return await runGuardedServerRequest(serverName, async () => {
+        try {
+          return (await session.client.callTool({ name: toolName, arguments: args }, undefined, {
+            timeout: session.requestTimeoutMs,
+          })) as CallToolResult;
+        } catch (error) {
+          if (session.transportType !== "streamable-http" || !isMcpSessionLostError(error)) {
+            throw error;
+          }
+          // The remote dropped our streamable-http session (e.g. server
+          // restart). Re-handshake once and retry on the fresh session. No
+          // recursion: at most one reconnect + one retry per call, so a
+          // flapping server can't loop.
+          const fresh = await reconnectSession(serverName, session);
+          failIfDisposed();
+          return (await fresh.client.callTool({ name: toolName, arguments: args }, undefined, {
+            timeout: fresh.requestTimeoutMs,
+          })) as CallToolResult;
+        }
+      });
     },
     async listResources(serverName) {
       failIfDisposed();
@@ -1151,6 +1272,7 @@ export const testing = {
   },
   setBundleMcpCatalogListTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
+  isMcpSessionLostError,
 };
 export { testing as __testing };
 

@@ -884,6 +884,7 @@ This audited record covers the complete v2026.6.2-beta.1..v2026.6.5 history: 94 
 - Release/CI/E2E: fail PTY-backed E2E commands when transcript logs cannot be written instead of letting missing proof capture crash around a live child process.
 - Release/CI/E2E: fail mock OpenAI request-log write errors with clear HTTP responses instead of leaving provider proof clients waiting on a broken socket.
 - Release/CI/E2E: fail Parallels host-command log write errors through the command result path instead of leaving streaming smoke phases unresolved.
+- Agents/MCP: auto-reconnect a streamable-HTTP MCP server after it drops our session (for example when the remote restarts), retrying the tool call once on a fresh handshake instead of failing every call with "Session not found" until the agent session is reset.
 
 ### Complete contribution ledger
 
