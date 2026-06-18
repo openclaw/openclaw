@@ -17,7 +17,6 @@ type ExecHostOverride = {
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 const DEFAULT_AGENT_ID = "main";
-const DEFAULT_MAIN_KEY = "main";
 const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
 const LEADING_DASH_PATTERN = /^-+/;
@@ -165,34 +164,18 @@ function shouldReadRuntimeSessionEntry(params: {
   }
   const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
   if (!sessionAgentId) {
-    return isDefaultSessionAliasForAgent({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: explicitAgentId,
-    });
+    return isDefaultAgentSessionKeyForAgent({ config: params.config, agentId: explicitAgentId });
   }
   return sessionAgentId === explicitAgentId;
 }
 
-function isDefaultSessionAliasForAgent(params: {
+function isDefaultAgentSessionKeyForAgent(params: {
   config: OpenClawConfig;
-  sessionKey: string;
   agentId: string;
 }): boolean {
   return (
     normalizeAgentId(params.agentId) ===
-      resolveDefaultPolicyAgentId(listAgentEntries(params.config)) &&
-    isDefaultSessionAlias({ config: params.config, sessionKey: params.sessionKey })
-  );
-}
-
-function isDefaultSessionAlias(params: { config: OpenClawConfig; sessionKey: string }): boolean {
-  const raw = params.sessionKey.trim().toLowerCase();
-  const mainKey = params.config.session?.mainKey?.trim().toLowerCase() || DEFAULT_MAIN_KEY;
-  return (
-    raw === DEFAULT_MAIN_KEY ||
-    raw === mainKey ||
-    (params.config.session?.scope === "global" && raw === "global")
+    resolveDefaultPolicyAgentId(listAgentEntries(params.config))
   );
 }
 

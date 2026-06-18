@@ -133,7 +133,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
   });
 
-  it("honors persisted default-session exec hosts for the configured default agent", () => {
+  it("honors persisted unscoped exec hosts for the configured default agent", () => {
     sessionStoreMocks.getSessionEntry.mockReturnValue({
       sessionId: "session-1",
       updatedAt: 1,
@@ -147,7 +147,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
           tools: { exec: { host: "gateway" } },
           agents: { list: [{ id: "bot-a", default: true }] },
         },
-        sessionKey: "main",
+        sessionKey: "node-session",
         agentId: "bot-a",
         readRuntimeSessionEntry: true,
       }),
@@ -158,7 +158,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       node: "worker-6",
     });
     expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
-      sessionKey: "main",
+      sessionKey: "node-session",
       agentId: "bot-a",
       hydrateSkillPromptRefs: false,
     });

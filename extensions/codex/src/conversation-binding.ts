@@ -72,7 +72,6 @@ import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 const DEFAULT_AGENT_ID = "main";
-const DEFAULT_MAIN_KEY = "main";
 const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
 const LEADING_DASH_PATTERN = /^-+/;
@@ -906,11 +905,7 @@ function canReadSessionExecOverrides(params: {
   }
   const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
   if (!sessionAgentId) {
-    return isDefaultSessionAliasForAgent({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId,
-    });
+    return isDefaultAgentSessionKeyForAgent({ config: params.config, agentId });
   }
   return sessionAgentId === agentId;
 }
@@ -927,28 +922,11 @@ function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
   return normalizeAgentIdOrDefault(parts[1]);
 }
 
-function isDefaultSessionAliasForAgent(params: {
+function isDefaultAgentSessionKeyForAgent(params: {
   config: ResolvedCodexConversationConfig;
-  sessionKey: string;
   agentId: string;
 }): boolean {
-  return (
-    normalizeAgentId(params.agentId) === resolveDefaultPolicyAgentId(params.config) &&
-    isDefaultSessionAlias({ config: params.config, sessionKey: params.sessionKey })
-  );
-}
-
-function isDefaultSessionAlias(params: {
-  config: ResolvedCodexConversationConfig;
-  sessionKey: string;
-}): boolean {
-  const raw = params.sessionKey.trim().toLowerCase();
-  const mainKey = params.config.session?.mainKey?.trim().toLowerCase() || DEFAULT_MAIN_KEY;
-  return (
-    raw === DEFAULT_MAIN_KEY ||
-    raw === mainKey ||
-    (params.config.session?.scope === "global" && raw === "global")
-  );
+  return normalizeAgentId(params.agentId) === resolveDefaultPolicyAgentId(params.config);
 }
 
 function resolveDefaultPolicyAgentId(config: ResolvedCodexConversationConfig): string {
