@@ -49,6 +49,8 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 class WizardSessionPrompter implements WizardPrompter {
+  readonly presentsAuthChallenge = true;
+
   constructor(private session: WizardSession) {}
 
   async intro(title: string): Promise<void> {

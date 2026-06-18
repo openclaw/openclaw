@@ -617,6 +617,32 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
   });
 
+  it("treats auth-presenting prompters as remote provider auth clients", async () => {
+    let receivedIsRemote: boolean | undefined;
+    const method: ProviderAuthMethod = {
+      id: "oauth",
+      label: "OAuth",
+      kind: "oauth",
+      run: async (ctx) => {
+        receivedIsRemote = ctx.isRemote;
+        return { profiles: [] };
+      },
+    };
+
+    await runProviderPluginAuthMethod({
+      config: {},
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        presentsAuthChallenge: true,
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(isRemoteEnvironment).toHaveBeenCalledOnce();
+    expect(receivedIsRemote).toBe(true);
+  });
+
   it("replaces provider-owned default model maps during auth migrations", async () => {
     const method: ProviderAuthMethod = {
       id: "local",

@@ -296,9 +296,18 @@ export async function waitForOpenRouterOAuthCallback(params: {
 async function promptForOpenRouterRedirect(
   ctx: ProviderAuthContext,
   expectedState: string,
+  authorizeUrl?: string,
 ): Promise<string> {
   const input = await ctx.prompter.text({
-    message: "Paste the OpenRouter redirect URL",
+    message: authorizeUrl
+      ? [
+          "Open this URL in your LOCAL browser:",
+          "",
+          authorizeUrl,
+          "",
+          "After signing in, paste the OpenRouter redirect URL here:",
+        ].join("\n")
+      : "Paste the OpenRouter redirect URL",
     placeholder: `${OPENROUTER_OAUTH_REDIRECT_URI}?state=...&code=...`,
     validate: (value: string) => (value.trim().length > 0 ? undefined : "Required"),
   });
@@ -333,14 +342,17 @@ async function resolveOpenRouterOAuthCode(
 
   if (ctx.isRemote) {
     ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${params.authorizeUrl}\n`);
-    return await promptForOpenRouterRedirect(ctx, params.state);
+    return await promptForOpenRouterRedirect(ctx, params.state, params.authorizeUrl);
   }
 
   const callbackPromise = params
     .waitForCallback({ expectedState: params.state, onProgress: params.onProgress })
     .catch(async () => {
       params.onProgress("OAuth callback not detected; waiting for redirect URL...");
-      return { code: await promptForOpenRouterRedirect(ctx, params.state), state: params.state };
+      return {
+        code: await promptForOpenRouterRedirect(ctx, params.state, params.authorizeUrl),
+        state: params.state,
+      };
     });
   void callbackPromise.catch(() => undefined);
 
