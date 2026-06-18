@@ -1600,6 +1600,8 @@ export function createExecTool(
           ? (resolveExistingWorkdir(rawWorkdir) ?? undefined)
           : resolveWorkdir(rawWorkdir, warnings);
         if (!workdir) {
+          // Workdir availability is a precondition for execution, so fail before
+          // any command-side validation.
           return buildExecForegroundResult({
             outcome: {
               status: "failed",

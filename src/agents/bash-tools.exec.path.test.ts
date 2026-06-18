@@ -234,7 +234,7 @@ describe("exec PATH login shell merge", () => {
     expect(result.details?.status).toBe("failed");
     expect(value).toContain(`workdir "${missingWorkdir}" is unavailable`);
     expect(value).toContain("command was not executed");
-    expect(value).not.toBe("ok");
+    expect(value).not.toMatch(/^ok/);
   });
 
   it("merges login-shell PATH for host=gateway", async () => {
