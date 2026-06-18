@@ -128,6 +128,38 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
     expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
       sessionKey: "main",
+      agentId: "main",
+      hydrateSkillPromptRefs: false,
+    });
+  });
+
+  it("honors persisted default-session exec hosts for the configured default agent", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: { list: [{ id: "bot-a", default: true }] },
+        },
+        sessionKey: "main",
+        agentId: "bot-a",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      node: "worker-6",
+    });
+    expect(sessionStoreMocks.getSessionEntry).toHaveBeenCalledWith({
+      sessionKey: "main",
+      agentId: "bot-a",
       hydrateSkillPromptRefs: false,
     });
   });

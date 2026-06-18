@@ -17,6 +17,7 @@ type ExecHostOverride = {
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 const DEFAULT_AGENT_ID = "main";
+const DEFAULT_MAIN_KEY = "main";
 const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
 const LEADING_DASH_PATTERN = /^-+/;
@@ -44,12 +45,15 @@ export function resolveCodexNativeExecutionPolicy(params: {
 }): CodexNativeExecutionPolicy {
   const config = params.config ?? {};
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+  const agentId = resolvePolicyAgentId({ config, sessionKey, agentId: params.agentId });
   const canReadSessionEntry =
     params.readRuntimeSessionEntry &&
-    shouldReadRuntimeSessionEntry({ sessionKey, agentId: params.agentId });
+    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId: params.agentId });
   const sessionEntry =
     params.sessionEntry ??
-    (canReadSessionEntry && sessionKey ? readRuntimeSessionEntryBestEffort(sessionKey) : undefined);
+    (canReadSessionEntry && sessionKey
+      ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
+      : undefined);
   const sandboxAvailable =
     params.sandboxAvailable ??
     (sessionKey
@@ -58,7 +62,6 @@ export function resolveCodexNativeExecutionPolicy(params: {
           sessionKey,
         }).sandboxed
       : false);
-  const agentId = resolvePolicyAgentId({ config, sessionKey, agentId: params.agentId });
   const agentExec = resolvePolicyAgentExec({ config, agentId });
   const globalExec = config.tools?.exec;
   const requestedExecHost =
@@ -118,8 +121,7 @@ function resolvePolicyAgentId(params: {
     return sessionAgentId;
   }
   const agents = listAgentEntries(params.config);
-  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
-  return normalizeAgentId(defaultEntry?.id);
+  return resolveDefaultPolicyAgentId(agents);
 }
 
 function resolvePolicyAgentExec(params: {
@@ -150,9 +152,10 @@ function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
 }
 
 function shouldReadRuntimeSessionEntry(params: {
+  config: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
-}): params is { sessionKey: string; agentId?: string } {
+}): boolean {
   if (!params.sessionKey) {
     return false;
   }
@@ -162,9 +165,40 @@ function shouldReadRuntimeSessionEntry(params: {
   }
   const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
   if (!sessionAgentId) {
-    return explicitAgentId === DEFAULT_AGENT_ID;
+    return isDefaultSessionAliasForAgent({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: explicitAgentId,
+    });
   }
   return sessionAgentId === explicitAgentId;
+}
+
+function isDefaultSessionAliasForAgent(params: {
+  config: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+}): boolean {
+  return (
+    normalizeAgentId(params.agentId) ===
+      resolveDefaultPolicyAgentId(listAgentEntries(params.config)) &&
+    isDefaultSessionAlias({ config: params.config, sessionKey: params.sessionKey })
+  );
+}
+
+function isDefaultSessionAlias(params: { config: OpenClawConfig; sessionKey: string }): boolean {
+  const raw = params.sessionKey.trim().toLowerCase();
+  const mainKey = params.config.session?.mainKey?.trim().toLowerCase() || DEFAULT_MAIN_KEY;
+  return (
+    raw === DEFAULT_MAIN_KEY ||
+    raw === mainKey ||
+    (params.config.session?.scope === "global" && raw === "global")
+  );
+}
+
+function resolveDefaultPolicyAgentId(agents: AgentEntry[]): string {
+  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
+  return normalizeAgentId(defaultEntry?.id);
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
@@ -213,9 +247,16 @@ function resolveEffectiveExecHost(params: {
   return params.requestedExecHost;
 }
 
-function readRuntimeSessionEntryBestEffort(sessionKey: string): SessionEntry | undefined {
+function readRuntimeSessionEntryBestEffort(params: {
+  sessionKey: string;
+  agentId: string;
+}): SessionEntry | undefined {
   try {
-    return getSessionEntry({ sessionKey, hydrateSkillPromptRefs: false });
+    return getSessionEntry({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      hydrateSkillPromptRefs: false,
+    });
   } catch {
     return undefined;
   }
