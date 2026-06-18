@@ -114,6 +114,30 @@ describe("memory index schema", () => {
     }
   });
 
+  it("honors shipped custom cache and FTS table names", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const result = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: true,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+      });
+
+      expect(result.ftsAvailable).toBe(true);
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('embedding_cache', 'chunks_fts', 'memory_embedding_cache', 'memory_index_chunks_fts') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: "chunks_fts" }, { name: "embedding_cache" }]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("upgrades canonical source tables keyed only by path", () => {
     const db = new DatabaseSync(":memory:");
     try {
