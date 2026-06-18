@@ -19,6 +19,7 @@ import {
 
 type RuntimeInfoInput = {
   agentId?: string;
+  identityName?: string;
   sessionKey?: string;
   sessionId?: string;
   host: string;
@@ -47,7 +48,7 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "identityName">;
   workspaceDir?: string;
   cwd?: string;
 }): SystemPromptRuntimeParams {
@@ -62,6 +63,7 @@ export function buildSystemPromptParams(params: {
   return {
     runtimeInfo: {
       agentId: params.agentId,
+      identityName: resolveAgentIdentityName(params.config, params.agentId),
       ...params.runtime,
       repoRoot,
     },
@@ -69,6 +71,18 @@ export function buildSystemPromptParams(params: {
     userTime,
     userTimeFormat,
   };
+}
+
+function resolveAgentIdentityName(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): string | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+  const agent = config?.agents?.list?.find((entry) => entry.id === agentId);
+  const name = agent?.identity?.name?.trim();
+  return name || undefined;
 }
 
 function resolveRepoRoot(params: {
