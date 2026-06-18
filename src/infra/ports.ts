@@ -39,7 +39,7 @@ export async function describePortOwner(port: number): Promise<string | undefine
 export async function ensurePortAvailable(port: number): Promise<void> {
   // Detect EADDRINUSE early with a friendly message.
   try {
-    await tryListenOnPort({ port });
+    await tryListenOnPort({ port, host: "127.0.0.1" });
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       throw new PortInUseError(port);
