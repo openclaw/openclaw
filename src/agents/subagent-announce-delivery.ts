@@ -922,7 +922,13 @@ function capDirectTextContent(text: string, maxChars = 4000): string {
 
   const headChars = Math.floor(maxChars * 0.65); // 2600
   const tailChars = Math.floor(maxChars * 0.25); // 1000
-  const marker = `\n\n... [truncated ${text.length - maxChars} chars] ...\n\n`;
+  // The omitted count is `text.length - headChars - tailChars`, NOT
+  // `text.length - maxChars`. The marker used to over-state how many
+  // characters were dropped relative to the original `maxChars` cap
+  // (e.g. for 5000 chars with the default 4000 cap, head=2600 and
+  // tail=1000 so we keep 3600 and drop 1400, not the reported 1000).
+  const omitted = text.length - headChars - tailChars;
+  const marker = `\n\n... [truncated ${omitted} chars] ...\n\n`;
 
   return text.slice(0, headChars) + marker + text.slice(-tailChars);
 }

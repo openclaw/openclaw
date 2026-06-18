@@ -4644,7 +4644,8 @@ describe("capDirectTextContent", () => {
     const capped = testing.capDirectTextContent(longText);
 
     expect(capped.length).toBeLessThanOrEqual(4000);
-    expect(capped).toContain("... [truncated 1000 chars] ...");
+    // 5000 chars - 2600 head - 1000 tail = 1400 omitted (not 1000)
+    expect(capped).toContain("... [truncated 1400 chars] ...");
     expect(capped.startsWith("x".repeat(2600))).toBe(true);
     expect(capped.endsWith("x".repeat(1000))).toBe(true);
   });
@@ -4659,7 +4660,8 @@ describe("capDirectTextContent", () => {
     const text = "z".repeat(3000);
     const capped = testing.capDirectTextContent(text, 2000);
     expect(capped.length).toBeLessThanOrEqual(2000);
-    expect(capped).toContain("... [truncated 1000 chars] ...");
+    // 3000 chars - 1300 head (0.65*2000) - 500 tail (0.25*2000) = 1200 omitted
+    expect(capped).toContain("... [truncated 1200 chars] ...");
   });
 
   it("handles edge case of exactly maxChars", () => {
@@ -4667,6 +4669,16 @@ describe("capDirectTextContent", () => {
     const capped = testing.capDirectTextContent(text);
     expect(capped).toBe(text);
     expect(capped.length).toBe(4000);
+  });
+
+  it("reports accurate omitted count for head+tail cap (regression for misleading marker)", () => {
+    // 5000 chars, cap 4000 → head 2600 + tail 1000 = 3600 kept, 1400 omitted.
+    const text = "z".repeat(5000);
+    const capped = testing.capDirectTextContent(text);
+    const match = capped.match(/\[truncated (\d+) chars\]/);
+    expect(match).not.toBeNull();
+    const reported = Number(match?.[1]);
+    expect(reported).toBe(1400);
   });
 });
 
@@ -4860,7 +4872,7 @@ describe("active wake failure fallback", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining("... [truncated 2000 chars] ..."),
+        content: expect.stringContaining("... [truncated 2400 chars] ..."),
       }),
     );
   });
