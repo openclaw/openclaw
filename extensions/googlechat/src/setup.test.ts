@@ -404,6 +404,46 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
+  it("uses Application Default Credentials when serviceAccountAdc is set and no key is provided", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            bot: {
+              serviceAccountAdc: true,
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "bot" });
+
+    expect(resolved.credentialSource).toBe("adc");
+    expect(resolved.credentials).toBeUndefined();
+    expect(resolved.credentialsFile).toBeUndefined();
+  });
+
+  it("prefers an explicit service account over serviceAccountAdc", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            bot: {
+              serviceAccountAdc: true,
+              serviceAccountFile: "/tmp/bot-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "bot" });
+
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/bot-sa.json");
+  });
+
   it("parses default-account env JSON credentials only when they decode to an object", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
 
