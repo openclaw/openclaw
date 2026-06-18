@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
@@ -349,11 +350,11 @@ describe("openai-compatible generic embedding provider", () => {
         remote: { baseUrl: "https://llm.internal/v1" },
       }),
     );
-    expect(client.ssrfPolicy?.hostnameAllowlist).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
     expect(client.ssrfPolicy?.allowPrivateNetwork).toBe(true);
   });
 
-  it("keeps the SSRF-safe default (no allowPrivateNetwork) when the provider does not opt in", async () => {
+  it("preserves exact-host trust without broader allowPrivateNetwork when the provider does not opt in", async () => {
     const { client } = await createOpenAICompatibleEmbeddingProvider(
       createOptions({
         provider: "openai-compatible",
@@ -370,11 +371,17 @@ describe("openai-compatible generic embedding provider", () => {
         remote: { baseUrl: "https://llm.internal/v1" },
       }),
     );
-    expect(client.ssrfPolicy?.hostnameAllowlist).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
     expect(client.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    await expect(
+      resolvePinnedHostnameWithPolicy("llm.internal", {
+        policy: client.ssrfPolicy,
+        lookupFn: async () => [{ address: "169.254.169.254", family: 4 as const }],
+      }),
+    ).rejects.toThrow("Blocked: resolves to private/internal/special-use IP address");
   });
 
-  it("blocks configured provider private endpoints unless request.allowPrivateNetwork opts in", async () => {
+  it("preserves configured provider exact-host trust for private endpoints without request.allowPrivateNetwork", async () => {
     const server = await startEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
       createOptions({
@@ -393,8 +400,8 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     );
 
-    await expect(provider.embed("hello")).rejects.toThrow("Blocked");
-    expect(server.requests).toHaveLength(0);
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests).toHaveLength(1);
   });
 
   it("allows configured provider private endpoints when request.allowPrivateNetwork opts in", async () => {

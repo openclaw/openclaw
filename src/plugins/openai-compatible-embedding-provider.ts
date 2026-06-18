@@ -42,34 +42,11 @@ type ConfiguredEmbeddingProvider = {
   };
 };
 
-/**
- * Build the SSRF policy for the configured OpenAI-compatible embedding endpoint.
- * Defaults to allowlisting the exact configured hostname only (private/internal
- * IPs stay blocked). When the backing provider explicitly opts in via
- * `models.providers.<id>.request.allowPrivateNetwork`, honor that same transport
- * trust for memory embeddings — mirroring the model-provider self-hosted path —
- * so an operator-configured private endpoint is reachable without weakening the
- * SSRF-safe default for everyone else.
- */
-function ssrfPolicyFromHttpBaseUrlHostnameAllowlist(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { hostnameAllowlist: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
-
 function buildEmbeddingSsrfPolicy(
   baseUrl: string,
   configuredProvider: ConfiguredEmbeddingProvider | undefined,
 ): SsrFPolicy | undefined {
-  const base = configuredProvider
-    ? ssrfPolicyFromHttpBaseUrlHostnameAllowlist(baseUrl)
-    : ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
+  const base = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
   if (!base) {
     return base;
   }

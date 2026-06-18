@@ -402,7 +402,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
               "tenant-embeddings": {
                 api: "openai-responses",
                 baseUrl: genericEmbeddingBaseUrl,
-                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
