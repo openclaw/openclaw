@@ -7,6 +7,29 @@ function readScript(pathname: string): string {
 }
 
 describe("Docker E2E seed scripts", () => {
+  it("keeps the shared OpenAI seed helper aligned with packaged provider onboarding", () => {
+    const source = readScript("scripts/e2e/docker-openai-seed.ts");
+
+    expect(source).toContain("../../dist/plugin-sdk/provider-onboard.js");
+    expect(source).toContain('const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.5"');
+    expect(source).toContain('api: "openai-responses"');
+    expect(source).toContain("aliases: [{ modelRef: DOCKER_OPENAI_MODEL_REF, alias: \"GPT\" }]");
+    expect(source).toContain("primaryModelRef: DOCKER_OPENAI_MODEL_REF");
+    expect(source).toContain("openAiProvider.apiKey = apiKey");
+  });
+
+  it("keeps MCP channels config wired to seeded transcript artifacts", () => {
+    const source = readScript("scripts/e2e/mcp-channels-seed.ts");
+
+    expect(source).toContain('const sessionsDir = path.join(stateDir, "agents", "main", "sessions")');
+    expect(source).toContain('const sessionFile = path.join(sessionsDir, "sess-main.jsonl")');
+    expect(source).toContain('const storePath = path.join(sessionsDir, "sessions.json")');
+    expect(source).toContain('channel: "imessage"');
+    expect(source).toContain('accountId: "imessage-default"');
+    expect(source).toContain('"hello from seeded transcript"');
+    expect(source).toContain('media_type: "image/png"');
+  });
+
   it("keeps cron MCP cleanup config wired to its probe server artifacts", () => {
     const source = readScript("scripts/e2e/cron-mcp-cleanup-seed.ts");
 

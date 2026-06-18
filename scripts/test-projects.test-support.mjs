@@ -488,6 +488,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/mcp-channels-docker-client.ts",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
+  ["scripts/e2e/mcp-channels-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
+  ["scripts/e2e/docker-openai-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   [
     "scripts/e2e/mcp-code-mode-gateway-docker.sh",
     [
