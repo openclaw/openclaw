@@ -113,7 +113,7 @@ describe("DebugProxyCaptureStore", () => {
     expect(lease.store.readBlob(blob.blobId)).toBe("legacy sdk payload");
     expect(blob.path).toBe(path.join(blobDir, `${blob.blobId}.bin.gz`));
     expect(fs.existsSync(dbPath)).toBe(true);
-    expect(fs.existsSync(blob.path ?? "")).toBe(true);
+    expect(fs.existsSync(blob.path)).toBe(true);
     expect(
       lease.store.db
         .prepare("SELECT db_path AS dbPath, blob_dir AS blobDir FROM capture_sessions WHERE id = ?")
@@ -129,7 +129,7 @@ describe("DebugProxyCaptureStore", () => {
       events: 1,
       blobs: 1,
     });
-    expect(fs.existsSync(blob.path ?? "")).toBe(false);
+    expect(fs.existsSync(blob.path)).toBe(false);
 
     lease.release();
     expect(lease.store.isClosed).toBe(true);
