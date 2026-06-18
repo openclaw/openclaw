@@ -2,23 +2,23 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
-import {
-  deleteMessageTelegram,
-  editMessageTelegram,
-  sendMessageTelegram,
-} from "../../../../extensions/telegram/runtime-api.js";
-import type { TelegramThreadSpec } from "../../../../extensions/telegram/src/bot/helpers.js";
-import {
-  createTelegramDraftStream,
-  type TelegramDraftStream,
-} from "../../../../extensions/telegram/src/draft-stream.js";
+import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
+import { formatChannelProgressDraftText } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { TelegramThreadSpec } from "../bot/helpers.js";
+import { createTelegramDraftStream, type TelegramDraftStream } from "../draft-stream.js";
 import {
   buildTelegramRichMarkdown,
+  type TelegramEditRichMessageTextParams,
   type TelegramInputRichMessage,
-} from "../../../../extensions/telegram/src/rich-message.js";
-import { formatReasoningMessage } from "../../../../src/agents/embedded-agent-utils.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { formatChannelProgressDraftText } from "../../../../src/plugin-sdk/channel-outbound.js";
+  type TelegramSendRichMessageParams,
+} from "../rich-message.js";
+import { deleteMessageTelegram, editMessageTelegram, sendMessageTelegram } from "../send.js";
+
+type TelegramApi = Bot["api"];
+type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>;
+type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>;
+type TelegramDeleteMessageParams = Parameters<TelegramApi["deleteMessage"]>;
 
 type SupportedFlow = "thinking-final" | "working-final";
 
@@ -130,15 +130,15 @@ function richMessageText(richMessage: TelegramInputRichMessage): {
   text: string;
   textMode: "markdown" | "html";
 } {
-  return "html" in richMessage
+  return richMessage.html !== undefined
     ? { text: richMessage.html, textMode: "html" }
     : { text: richMessage.markdown, textMode: "markdown" };
 }
 
 function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig }): Bot["api"] {
-  return {
+  const api = {
     raw: {
-      sendRichMessage: async (sendParams) => {
+      sendRichMessage: async (sendParams: TelegramSendRichMessageParams) => {
         const richText = richMessageText(sendParams.rich_message);
         const result = await sendMessageTelegram(String(sendParams.chat_id), richText.text, {
           accountId: params.accountId,
@@ -148,7 +148,7 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
         });
         return { message_id: Number(result.messageId) } as Message;
       },
-      editMessageText: async (editParams) => {
+      editMessageText: async (editParams: TelegramEditRichMessageTextParams) => {
         if (typeof editParams.message_id !== "number") {
           throw new Error("Telegram flow rich edit requires message_id.");
         }
@@ -166,7 +166,11 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
         return true;
       },
     },
-    sendMessage: async (chatId, text, sendParams) => {
+    sendMessage: async (
+      chatId: TelegramSendMessageParams[0],
+      text: TelegramSendMessageParams[1],
+      sendParams: TelegramSendMessageParams[2],
+    ) => {
       const result = await sendMessageTelegram(String(chatId), text, {
         accountId: params.accountId,
         cfg: params.cfg,
@@ -175,7 +179,12 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
       });
       return { message_id: Number(result.messageId) };
     },
-    editMessageText: async (chatId, messageId, text, editParams) => {
+    editMessageText: async (
+      chatId: TelegramEditMessageTextParams[0],
+      messageId: TelegramEditMessageTextParams[1],
+      text: TelegramEditMessageTextParams[2],
+      editParams: TelegramEditMessageTextParams[3],
+    ) => {
       await editMessageTelegram(String(chatId), messageId, text, {
         accountId: params.accountId,
         cfg: params.cfg,
@@ -183,14 +192,18 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
       });
       return true;
     },
-    deleteMessage: async (chatId, messageId) => {
+    deleteMessage: async (
+      chatId: TelegramDeleteMessageParams[0],
+      messageId: TelegramDeleteMessageParams[1],
+    ) => {
       await deleteMessageTelegram(String(chatId), messageId, {
         accountId: params.accountId,
         cfg: params.cfg,
       });
       return true;
     },
-  } as Bot["api"];
+  };
+  return api as unknown as Bot["api"];
 }
 
 export function resolveTelegramFlowThreadSpec(threadId?: number): TelegramThreadSpec | undefined {

@@ -1,11 +1,11 @@
 // Channel Message Flows tests cover QA Lab channel delivery evidence.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import {
   resolveTelegramFlowThreadSpec,
   runTelegramThinkingFinalFlow,
   runTelegramWorkingFinalFlow,
-} from "./channel-message-flows-runtime.js";
+} from "./test-support/channel-message-flows.js";
 
 describe("channel message flows QA e2e", () => {
   function createTestDraftStream(params?: {
@@ -15,6 +15,7 @@ describe("channel message flows QA e2e", () => {
   }) {
     return {
       update: vi.fn(params?.update ?? (() => {})),
+      updatePreview: vi.fn(),
       flush: vi.fn(params?.flush ?? (async () => {})),
       clear: vi.fn(params?.clear ?? (async () => {})),
       stop: vi.fn(async () => {}),
@@ -35,6 +36,7 @@ describe("channel message flows QA e2e", () => {
       clear: vi.fn(async () => {
         events.push("clear");
       }),
+      updatePreview: vi.fn(),
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
@@ -82,6 +84,7 @@ describe("channel message flows QA e2e", () => {
         throw new Error("flush failed");
       }),
       clear: vi.fn(async () => {}),
+      updatePreview: vi.fn(),
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
@@ -113,6 +116,7 @@ describe("channel message flows QA e2e", () => {
       update: vi.fn(() => {}),
       flush: vi.fn(async () => {}),
       clear: vi.fn(async () => {}),
+      updatePreview: vi.fn(),
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),

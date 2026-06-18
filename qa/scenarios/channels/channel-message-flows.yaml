@@ -19,9 +19,9 @@ scenario:
     - docs/channels/telegram.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts
-    - test/e2e/qa-lab/channels/channel-message-flows-runtime.ts
+    - extensions/telegram/src/channel-message-flows.qa.e2e.test.ts
+    - extensions/telegram/src/test-support/channel-message-flows.ts
   execution:
     kind: vitest
-    path: test/e2e/qa-lab/channels/channel-message-flows.e2e.test.ts
+    path: extensions/telegram/src/channel-message-flows.qa.e2e.test.ts
     summary: Vitest coverage for channel message flow sequencing.
