@@ -126,6 +126,54 @@ describe("image asset helpers", () => {
     ).toThrow("Sample image response malformed");
   });
 
+  it("skips invalid entries and returns valid ones in strict mode (mixed batch)", () => {
+    // Regression: parseOpenAiCompatibleImageResponse must not fail the entire
+    // batch when a single entry has empty/missing/invalid b64_json.  Some
+    // OpenAI-compatible proxies return entries without b64_json alongside valid
+    // ones, and the strict mode must still return the valid entries.
+    const validBytes = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
+    const validBase64 = validBytes.toString("base64");
+    const images = parseOpenAiCompatibleImageResponse(
+      {
+        data: [
+          { b64_json: validBase64, revised_prompt: "good" },
+          { b64_json: "" },
+          { b64_json: "not-base64!" },
+          {}, // missing b64_json
+          { b64_json: validBase64 }, // second valid entry
+        ],
+      },
+      {
+        defaultMimeType: "image/png",
+        sniffMimeType: true,
+        malformedResponseError: "Sample image response malformed",
+      },
+    );
+    expect(images).toHaveLength(2);
+    expect(images[0].buffer).toEqual(validBytes);
+    expect(images[0].revisedPrompt).toBe("good");
+    expect(images[1].buffer).toEqual(validBytes);
+  });
+
+  it("still throws in strict mode when every entry is invalid", () => {
+    // All entries invalid → must still throw so a completely malformed
+    // response is not silently accepted.
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        {
+          data: [
+            { b64_json: "" },
+            { b64_json: "not-base64!" },
+            {},
+          ],
+        },
+        {
+          malformedResponseError: "Sample image response malformed",
+        },
+      ),
+    ).toThrow("Sample image response malformed");
+  });
+
   it("resolves source upload filenames from explicit names or MIME types", () => {
     expect(
       imageSourceUploadFileName({

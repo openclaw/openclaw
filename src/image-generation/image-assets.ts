@@ -231,15 +231,18 @@ export function parseOpenAiCompatibleImageResponse(
   const images: GeneratedImageAsset[] = [];
   for (const [index, entry] of data.entries()) {
     if (!isRecord(entry)) {
-      throwMalformedImageResponse(options.malformedResponseError);
       continue;
     }
     const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
     if (!image) {
-      throwMalformedImageResponse(options.malformedResponseError);
       continue;
     }
     images.push(image);
+  }
+  // Distinguish "API returned no entries" (caller handles via emptyResponseError)
+  // from "API returned entries but none were valid" (we throw malformedResponseError).
+  if (images.length === 0 && data.length > 0 && options.malformedResponseError) {
+    throwMalformedImageResponse(options.malformedResponseError);
   }
   return images;
 }
