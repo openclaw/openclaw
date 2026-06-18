@@ -80,17 +80,24 @@ export function resolveOutboundTargetWithPlugin(params: {
   if (targetPrefixError) {
     return { ok: false, error: targetPrefixError };
   }
-  const hint = plugin.messaging?.targetResolver?.hint;
-  const reservedLiteral = resolveReservedTargetLiteral({ raw: effectiveTo, plugin });
-  if (reservedLiteral) {
-    return {
-      ok: false,
-      error: reservedTargetLiteralError(
-        plugin.meta.label ?? params.target.channel,
-        reservedLiteral,
-        hint,
-      ),
-    };
+  // Reserved-literal rejection is skipped for heartbeat mode so the
+  // async directory-capable resolver (resolveChannelTarget →
+  // resolveMessagingTarget) can do directory-first lookup before deciding.
+  // Rejecting here would suppress a heartbeat route to an existing directory
+  // entry whose name matches a reserved literal.
+  if (params.target.mode !== "heartbeat") {
+    const hint = plugin.messaging?.targetResolver?.hint;
+    const reservedLiteral = resolveReservedTargetLiteral({ raw: effectiveTo, plugin });
+    if (reservedLiteral) {
+      return {
+        ok: false,
+        error: reservedTargetLiteralError(
+          plugin.meta.label ?? params.target.channel,
+          reservedLiteral,
+          hint,
+        ),
+      };
+    }
   }
 
   const resolveTarget = plugin.outbound?.resolveTarget;
