@@ -6,7 +6,11 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
-import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
+import {
+  isSafeToRetrySendError,
+  isTelegramRateLimitError,
+  isTelegramRichMessageUnsupportedError,
+} from "../network-errors.js";
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
@@ -126,22 +130,31 @@ export async function sendTelegramText(
       skipEntityDetection: opts.linkPreview === false,
       tableMode: opts.tableMode,
     });
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendRichMessage",
-      runtime,
-      thread: opts.thread,
-      requestParams: toTelegramRichMessageContextParams(baseParams),
-      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-      send: (effectiveParams) =>
-        getTelegramRichRawApi(bot.api).sendRichMessage({
-          chat_id: chatId,
-          rich_message: richMessage,
-          ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
-    });
-    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
+    try {
+      const res = await sendTelegramWithThreadFallback({
+        operation: "sendRichMessage",
+        runtime,
+        thread: opts.thread,
+        requestParams: toTelegramRichMessageContextParams(baseParams),
+        removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+        send: (effectiveParams) =>
+          getTelegramRichRawApi(bot.api).sendRichMessage({
+            chat_id: chatId,
+            rich_message: richMessage,
+            ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+      });
+      runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+      return res.message_id;
+    } catch (err) {
+      if (!isTelegramRichMessageUnsupportedError(err)) {
+        throw err;
+      }
+      runtime.log?.(
+        `telegram sendRichMessage not supported by client; falling back to HTML: ${formatErrorMessage(err)}`,
+      );
+    }
   }
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;

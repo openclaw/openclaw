@@ -272,6 +272,8 @@ export function isTelegramRateLimitError(err: unknown): boolean {
 
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const RICH_MESSAGE_UNSUPPORTED_RE =
+  /400:\s*Bad Request:\s*(?:this )?message\b.*\bnot supported|MESSAGE_UNSUPPORTED|UNSUPPORTED/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const EDIT_TARGET_MISSING_RE =
   /400:\s*Bad Request:\s*message to edit not found|400:\s*Bad Request:\s*message can't be edited|MESSAGE_ID_INVALID/i;
@@ -289,6 +291,11 @@ export function isTelegramMessageHasNoTextError(err: unknown): boolean {
 /** True when the edit target is gone or locked (deleted message, invalid id); retrying the same edit cannot succeed. */
 export function isTelegramEditTargetMissingError(err: unknown): boolean {
   return EDIT_TARGET_MISSING_RE.test(formatErrorMessage(err));
+}
+
+/** True when Telegram rich message format is not supported by the target client (e.g. Telegram Web). */
+export function isTelegramRichMessageUnsupportedError(err: unknown): boolean {
+  return RICH_MESSAGE_UNSUPPORTED_RE.test(formatErrorMessage(err));
 }
 
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */

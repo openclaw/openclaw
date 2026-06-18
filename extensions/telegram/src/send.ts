@@ -32,6 +32,7 @@ import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
   isTelegramRateLimitError,
+  isTelegramRichMessageUnsupportedError,
   isTelegramServerError,
 } from "./network-errors.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
@@ -841,10 +842,22 @@ export async function sendMessageTelegram(
     }));
   };
 
-  const sendChunkedText = async (rawText: string, context: string) =>
-    useRichMessages
-      ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context)
-      : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+  const sendChunkedText = async (rawText: string, context: string) => {
+    if (!useRichMessages) {
+      return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+    }
+    try {
+      return await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context);
+    } catch (err) {
+      if (!isTelegramRichMessageUnsupportedError(err)) {
+        throw err;
+      }
+      logVerbose(
+        `telegram rich message not supported; falling back to HTML: ${formatErrorMessage(err)}`,
+      );
+      return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+    }
+  };
 
   const buildRichTextPlan = (rawText: string): TelegramRichTextChunk[] => {
     const textLimit = Math.min(
