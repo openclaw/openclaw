@@ -370,7 +370,7 @@ describe("createBackspaceDeduper", () => {
   it("suppresses duplicate backspace events within the dedupe window", () => {
     const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
+    expect(dedupe("\x7f")).toBe("\x08");
     advance(1);
     expect(dedupe("\x08")).toBe("");
   });
@@ -378,9 +378,9 @@ describe("createBackspaceDeduper", () => {
   it("preserves backspace events outside the dedupe window", () => {
     const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
+    expect(dedupe("\x7f")).toBe("\x08");
     advance(10);
-    expect(dedupe("\x7f")).toBe("\x7f");
+    expect(dedupe("\x7f")).toBe("\x08");
   });
 
   it("treats ASCII BS as backspace when it is the first event", () => {
