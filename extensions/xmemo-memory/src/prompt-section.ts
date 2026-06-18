@@ -9,16 +9,30 @@ export const buildXMemoPromptSection: MemoryPromptSectionBuilder = ({ availableT
   );
 
   if (availableTools.has("memory_search")) {
-    lines.push("- Use `memory_search` to recall relevant memories before answering questions about prior work.");
+    lines.push(
+      "- Use `memory_search` to recall relevant memories before answering questions about prior work.",
+    );
   }
   if (availableTools.has("memory_store")) {
-    lines.push("- Use `memory_store` to persist durable decisions, conventions, bug fixes, and high-signal context.");
+    lines.push(
+      "- Use `memory_store` to persist durable decisions, conventions, bug fixes, and high-signal context.",
+    );
   }
   if (availableTools.has("memory_forget")) {
     lines.push("- Use `memory_forget` to delete a memory by its path/id.");
   }
+  if (availableTools.has("xmemo_todo_create")) {
+    lines.push("- Use `xmemo_todo_create` to track actionable follow-ups in XMemo.");
+  }
+  if (availableTools.has("xmemo_record_event")) {
+    lines.push(
+      "- Use `xmemo_record_event` to record lightweight timeline milestones or decisions.",
+    );
+  }
 
-  lines.push("- Never store secrets, API keys, tokens, credentials, or sensitive customer data in XMemo.");
+  lines.push(
+    "- Never store secrets, API keys, tokens, credentials, or sensitive customer data in XMemo.",
+  );
 
   return lines;
 };

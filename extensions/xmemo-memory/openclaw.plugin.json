@@ -8,7 +8,16 @@
     "onCommands": ["memory"]
   },
   "contracts": {
-    "tools": ["memory_search", "memory_get", "memory_store", "memory_forget"]
+    "tools": [
+      "memory_search",
+      "memory_get",
+      "memory_store",
+      "memory_forget",
+      "xmemo_todo_create",
+      "xmemo_todo_list",
+      "xmemo_todo_complete",
+      "xmemo_record_event"
+    ]
   },
   "uiHints": {
     "baseUrl": {
@@ -17,11 +26,24 @@
       "help": "Base URL of the XMemo instance. Use a private/self-hosted URL if not using the hosted service.",
       "advanced": true
     },
-    "token": {
-      "label": "XMemo Token",
+    "apiKey": {
+      "label": "XMemo API Key",
       "placeholder": "xmemo_...",
-      "help": "XMemo API/MCP token. Prefer setting XMEMO_KEY environment variable instead of storing here.",
+      "help": "Create a scoped API key in XMemo Memory Console -> API Keys -> Create API key. Prefer setting XMEMO_KEY instead of storing the key here.",
       "sensitive": true
+    },
+    "token": {
+      "label": "XMemo Token (deprecated)",
+      "placeholder": "xmemo_...",
+      "help": "Deprecated alias for apiKey. Prefer apiKey or the XMEMO_KEY environment variable.",
+      "sensitive": true,
+      "advanced": true
+    },
+    "authMode": {
+      "label": "Auth Mode",
+      "placeholder": "api-key",
+      "help": "How to send the credential: api-key (X-API-Key header), bearer (Authorization: Bearer), or both.",
+      "advanced": true
     },
     "bucket": {
       "label": "Default Bucket",
@@ -46,10 +68,6 @@
       "help": "Non-secret agent identifier sent to XMemo for attribution.",
       "advanced": true
     },
-    "autoRecall": {
-      "label": "Auto Recall",
-      "help": "Automatically recall relevant XMemo context before each turn."
-    },
     "autoCapture": {
       "label": "Auto Capture",
       "help": "Automatically persist high-signal decisions and fixes to XMemo."
@@ -59,6 +77,11 @@
       "help": "Maximum message length eligible for auto-capture.",
       "advanced": true,
       "placeholder": "500"
+    },
+    "customTriggers": {
+      "label": "Custom Auto-Capture Triggers",
+      "help": "Additional words or phrases that trigger auto-capture (case-insensitive).",
+      "advanced": true
     },
     "recallMaxChars": {
       "label": "Recall Query Max Chars",
@@ -87,8 +110,40 @@
         "type": "string",
         "format": "uri"
       },
+      "apiKey": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": { "type": "string", "enum": ["env", "file", "exec"] },
+              "provider": { "type": "string" },
+              "id": { "type": "string" }
+            },
+            "required": ["source", "provider", "id"]
+          }
+        ]
+      },
       "token": {
-        "type": "string"
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": { "type": "string", "enum": ["env", "file", "exec"] },
+              "provider": { "type": "string" },
+              "id": { "type": "string" }
+            },
+            "required": ["source", "provider", "id"]
+          }
+        ]
+      },
+      "authMode": {
+        "type": "string",
+        "enum": ["api-key", "bearer", "both"],
+        "default": "api-key"
       },
       "bucket": {
         "type": "string",
@@ -104,19 +159,19 @@
         "type": "string",
         "default": "openclaw"
       },
-      "autoRecall": {
-        "type": "boolean",
-        "default": true
-      },
       "autoCapture": {
         "type": "boolean",
-        "default": true
+        "default": false
       },
       "captureMaxChars": {
         "type": "number",
         "minimum": 100,
         "maximum": 10000,
         "default": 500
+      },
+      "customTriggers": {
+        "type": "array",
+        "items": { "type": "string" }
       },
       "recallMaxChars": {
         "type": "number",

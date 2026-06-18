@@ -6,7 +6,8 @@
 // MemorySearchManager backed by the XMemo REST API.
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { registerXMemoAutoCapture } from "./src/auto-capture.js";
+import { registerXMemoCli } from "./src/cli.js";
 import { buildXMemoPromptSection } from "./src/prompt-section.js";
 import { createXMemoMemoryRuntime } from "./src/runtime.js";
 import { registerXMemoTools } from "./src/tools.js";
@@ -19,19 +20,14 @@ export default definePluginEntry({
   register(api) {
     api.registerMemoryCapability({
       promptBuilder: buildXMemoPromptSection,
-      flushPlanResolver: () => ({
-        // XMemo does not rely on local transcript flushing; keep conservative
-        // defaults so OpenClaw does not discard context aggressively.
-        softThresholdTokens: 8192,
-        forceFlushTranscriptBytes: 524_288,
-        reserveTokensFloor: 2048,
-        prompt: "",
-        systemPrompt: "",
-        relativePath: "",
-      }),
+      // XMemo is a remote memory backend; there is no local transcript flush
+      // path. Returning null keeps OpenClaw from writing memory files locally.
+      flushPlanResolver: () => null,
       runtime: createXMemoMemoryRuntime(api),
     });
 
     registerXMemoTools(api);
+    registerXMemoAutoCapture(api);
+    registerXMemoCli(api);
   },
 });
