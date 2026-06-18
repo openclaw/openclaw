@@ -12,7 +12,12 @@ type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
   command: CommandContext;
 };
 
-/** Builds a status reply or suppresses unauthorized status requests. */
+/** Builds a status reply or suppresses unauthorized status requests.
+ *
+ *  The outer try-catch ensures that any unhandled rejection from
+ *  buildStatusText (e.g. a lazy dynamic import failure in a cold path)
+ *  returns a graceful error message instead of leaving LINE/webhook
+ *  callers with no reply (#94626). */
 export async function buildStatusReply(
   params: BuildStatusReplyParams,
 ): Promise<ReplyPayload | undefined> {
@@ -22,13 +27,21 @@ export async function buildStatusReply(
     return undefined;
   }
 
-  return {
-    text: await buildStatusText({
-      ...params,
-      statusChannel: command.channel,
-      statusAccountId: command.accountId,
-    }),
-  };
+  try {
+    return {
+      text: await buildStatusText({
+        ...params,
+        statusChannel: command.channel,
+        statusAccountId: command.accountId,
+      }),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logVerbose(`buildStatusReply failed, returning degraded reply: ${message}`);
+    return {
+      text: "⚠️ Status generation failed. Please try again. If this persists, check gateway logs for details.",
+    };
+  }
 }
 
 export async function buildStatusPluginsReply(

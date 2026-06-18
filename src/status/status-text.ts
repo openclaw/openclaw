@@ -32,6 +32,7 @@ import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { logWarn } from "../globals.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
   formatUsageWindowSummary,
@@ -104,38 +105,43 @@ let statusPluginHealthRuntimePromise: Promise<
   typeof import("./status-plugin-health.runtime.js")
 > | null = null;
 
-function loadStatusMessageRuntime(): Promise<typeof import("../auto-reply/status.runtime.js")> {
-  const runtimePromise = (statusMessageRuntimePromise ??=
-    import("./status-message.runtime.js").then((module) =>
-      module.loadStatusMessageRuntimeModule(),
-    ));
+function loadStatusMessageRuntime(): Promise<
+  typeof import("../auto-reply/status.runtime.js") | undefined
+> {
+  const runtimePromise = (statusMessageRuntimePromise ??= import("./status-message.runtime.js")
+    .then((module) => module.loadStatusMessageRuntimeModule())
+    .catch(() => undefined));
   return runtimePromise;
 }
 
 function loadAgentHarnessSelectionRuntime(): Promise<
-  typeof import("../agents/harness/selection.js")
+  typeof import("../agents/harness/selection.js") | undefined
 > {
   const runtimePromise = (agentHarnessSelectionRuntimePromise ??=
-    import("../agents/harness/selection.js"));
+    import("../agents/harness/selection.js").catch(() => undefined));
   return runtimePromise;
 }
 
-function loadStatusSubagentsRuntime(): Promise<typeof import("./status-subagents.runtime.js")> {
+function loadStatusSubagentsRuntime(): Promise<
+  typeof import("./status-subagents.runtime.js") | undefined
+> {
   const runtimePromise = (statusSubagentsRuntimePromise ??=
-    import("./status-subagents.runtime.js"));
+    import("./status-subagents.runtime.js").catch(() => undefined));
   return runtimePromise;
 }
 
-function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js")> {
-  const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js"));
+function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js") | undefined> {
+  const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js").catch(
+    () => undefined,
+  ));
   return runtimePromise;
 }
 
 function loadStatusPluginHealthRuntime(): Promise<
-  typeof import("./status-plugin-health.runtime.js")
+  typeof import("./status-plugin-health.runtime.js") | undefined
 > {
   const runtimePromise = (statusPluginHealthRuntimePromise ??=
-    import("./status-plugin-health.runtime.js"));
+    import("./status-plugin-health.runtime.js").catch(() => undefined));
   return runtimePromise;
 }
 
@@ -323,7 +329,22 @@ async function resolveRuntimePluginHealthLine(): Promise<string> {
 
 // Public status text builder for CLI/chat status commands. It resolves dynamic
 // runtime details just-in-time and returns the formatted multiline status body.
+//
+// The function wraps its entire body in try-catch so that any dynamic import
+// failure, runtime data collection error, or lazy module unavailability
+// produces a graceful degradation message instead of a silent rejection that
+// would leave LINE/webhook callers with no reply (#94626).
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
+  try {
+    return await buildStatusTextImpl(params);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logWarn(`buildStatusText failed, returning degraded status: ${message}`);
+    return "⚠️ Status generation failed. Please try again. If this persists, check gateway logs for details.";
+  }
+}
+
+async function buildStatusTextImpl(params: BuildStatusTextParams): Promise<string> {
   const {
     cfg,
     sessionEntry,
