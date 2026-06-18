@@ -299,6 +299,7 @@ export async function resolveOllamaDiscoveryResult(params: {
     return {
       provider: {
         ...explicit,
+        models: explicit.models ?? [],
         baseUrl: resolveOllamaRuntimeBaseUrl({ api, configuredBaseUrl, discoveredBaseUrl }),
         api,
         ...(apiKey ? { apiKey } : {}),
