@@ -145,7 +145,7 @@ export async function awaitAgentHarnessAgentEndHook(params: {
 }
 
 /** Normalized before-finalize hook decision consumed by harness loops. */
-export type AgentHarnessBeforeAgentFinalizeOutcome =
+type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }
   | { action: "finalize"; reason?: string };

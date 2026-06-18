@@ -57,6 +57,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  formatMattermostDirectMessageDropLog,
   normalizeMattermostAllowEntry,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
@@ -1391,7 +1392,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               return;
             }
-            logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
+            logVerboseMessage(
+              formatMattermostDirectMessageDropLog({
+                senderId,
+                dmPolicy,
+                reasonCode: accessDecision.senderAccess.reasonCode,
+              }),
+            );
             return;
           }
           if (accessDecision.ingress.reasonCode === "group_policy_disabled") {

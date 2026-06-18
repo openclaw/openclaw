@@ -1,20 +1,15 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  canonicalizeAbsoluteSessionFilePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  resolveCompactionSessionFile,
   setSessionRuntimeModel,
   type SessionEntry,
-  rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -299,7 +294,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
       sessionKey,
     },
     (_currentEntry, context) => {
-      if (preserveUserFacingRunState && !context.existingEntry) {
+      if (
+        (!preserveUserFacingRunState &&
+          context.existingEntry &&
+          context.existingEntry.sessionId !== entry.sessionId) ||
+        (!context.existingEntry && sessionStore[sessionKey])
+      ) {
+        // A normal run may rotate its session id, so compare to the pre-run entry.
+        // Do not merge stale finalizer metadata after a delete or a competing reset.
         return null;
       }
       return metadataPatch;
@@ -320,8 +322,9 @@ export async function clearCliSessionInStore(params: {
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
+  expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -336,7 +339,15 @@ export async function clearCliSessionInStore(params: {
       storePath,
       sessionKey,
     },
-    () => next,
+    (currentEntry, context) => {
+      if (
+        expectedSessionId &&
+        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
+      ) {
+        return null;
+      }
+      return next;
+    },
     { fallbackEntry: entry },
   );
   if (persisted) {
@@ -354,8 +365,9 @@ export async function recordCliCompactionInStore(params: {
   tokensAfter?: number;
   newSessionId?: string;
   newSessionFile?: string;
+  expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
@@ -410,38 +422,19 @@ export async function recordCliCompactionInStore(params: {
       storePath,
       sessionKey,
     },
-    () => next,
+    (currentEntry, context) => {
+      if (
+        expectedSessionId &&
+        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
+      ) {
+        return null;
+      }
+      return next;
+    },
     { fallbackEntry: entry },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
   return persisted ?? undefined;
-}
-
-function resolveCompactionSessionFile(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath?: string;
-  newSessionId: string;
-}): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const pathOpts = resolveSessionFilePathOptions({
-    agentId,
-    storePath: params.storePath,
-  });
-  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-    sessionFile: params.entry.sessionFile,
-    previousSessionId: params.entry.sessionId,
-    nextSessionId: params.newSessionId,
-  });
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  return resolveSessionFilePath(
-    params.newSessionId,
-    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
-    pathOpts,
-  );
 }

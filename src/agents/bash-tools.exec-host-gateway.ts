@@ -7,20 +7,28 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
-  addDurableCommandApproval,
+  type AllowAlwaysPersistenceDecision,
   commandRequiresSecurityAuditSuppressionApproval,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
+  type ExecCommandSegment,
   type ExecSecurity,
+  type ExecSegmentSatisfiedBy,
   buildEnforcedShellCommand,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
-  persistAllowAlwaysPatterns,
+  hasExactCommandDurableExecApproval,
+  persistAllowAlwaysDecision,
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
+  resolveAllowAlwaysPersistenceDecision,
+  resolveExecApprovalUnavailableDecisions,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
+import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   defaultExecAutoReviewer,
   type ExecAutoReviewer,
@@ -62,7 +70,7 @@ import type {
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Full input bundle for gateway-host allowlist and approval processing. */
-export type ProcessGatewayAllowlistParams = {
+type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
@@ -104,7 +112,7 @@ export type ProcessGatewayAllowlistParams = {
 };
 
 /** Gateway allowlist outcome before command execution continues. */
-export type ProcessGatewayAllowlistResult = {
+type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
@@ -153,6 +161,47 @@ function resolveGatewayAutoReviewReason(params: {
     return "allowlist-miss";
   }
   return "approval-required";
+}
+
+function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
+  return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
+}
+
+function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
+  command: string;
+  allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
+  requiresAllowlistPlanApproval: boolean;
+}): AllowAlwaysPersistenceDecision {
+  if (!params.requiresAllowlistPlanApproval) {
+    return params.allowAlwaysPersistence;
+  }
+  if (params.allowAlwaysPersistence.kind !== "patterns") {
+    return params.allowAlwaysPersistence;
+  }
+  // If the gateway cannot rebuild an enforceable command, a reusable grant
+  // would only be keyed by command text and could run under a different cwd/env.
+  return createOneShotAllowAlwaysDecision();
+}
+
+function resolveGatewayEnforcedCommand(params: {
+  command: string;
+  segments: ExecCommandSegment[];
+  authorizationPlan?: ExecAuthorizationPlan;
+  segmentSatisfiedBy?: readonly ExecSegmentSatisfiedBy[];
+}): { ok: boolean; command?: string; reason?: string } {
+  return process.platform === "win32"
+    ? buildEnforcedShellCommand({
+        command: params.command,
+        segments: params.segments,
+        platform: process.platform,
+      })
+    : params.authorizationPlan
+      ? buildAuthorizedShellCommandFromPlan({
+          plan: params.authorizationPlan,
+          mode: "enforced",
+          segmentSatisfiedBy: params.segmentSatisfiedBy,
+        })
+      : { ok: false, reason: "authorization plan unavailable" };
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -248,6 +297,59 @@ function formatDiagnosticsExportSuccess(aggregated: string): string {
   } catch {
     return trimmed;
   }
+}
+
+function emitGatewayExecApprovalSecurityEvent(params: {
+  action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
+  outcome: "success" | "denied" | "error";
+  severity: "low" | "medium" | "high";
+  agentId?: string | null;
+  reason?: string;
+  hostSecurity: ExecSecurity;
+  hostAsk: ExecAsk;
+  host: "gateway";
+  segmentCount: number;
+  trigger?: string;
+  decision?: string | null;
+}) {
+  emitTrustedSecurityEvent({
+    category: "approval",
+    action: params.action,
+    outcome: params.outcome,
+    severity: params.severity,
+    actor: {
+      kind: "agent",
+    },
+    target: {
+      kind: "tool",
+      name: "system.exec",
+      owner: params.host,
+    },
+    policy: {
+      id: "exec.approval",
+      decision:
+        params.action === "exec.approval.requested"
+          ? "ask"
+          : params.outcome === "success"
+            ? "allow"
+            : "deny",
+      ...(params.reason ? { reason: params.reason } : {}),
+    },
+    control: {
+      id: "exec.approval",
+      family: "approval",
+    },
+    ...(params.reason ? { reason: params.reason } : {}),
+    attributes: {
+      host: params.host,
+      security: params.hostSecurity,
+      ask: params.hostAsk,
+      segment_count: params.segmentCount,
+      has_agent_id: Boolean(params.agentId?.trim()),
+      ...(params.trigger ? { trigger: params.trigger } : {}),
+      ...(params.decision ? { decision: params.decision } : {}),
+    },
+  });
 }
 
 function formatDiagnosticsExportFailure(params: {
@@ -354,7 +456,7 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
-  const allowlistEval = evaluateShellAllowlist({
+  const allowlistEval = await evaluateShellAllowlistWithAuthorization({
     command: params.command,
     allowlist: approvals.allowlist,
     safeBins: params.safeBins,
@@ -376,6 +478,16 @@ export async function processGatewayAllowlist(
   });
   const inlineEvalHit =
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
+  const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+    segments: allowlistEval.segments,
+    cwd: params.workdir,
+    env: params.env,
+    platform: process.platform,
+    commandText: params.command,
+    strictInlineEval: params.strictInlineEval === true,
+    authorizationPlan: allowlistEval.authorizationPlan,
+    runtimePayload: inlineEvalHit !== null,
+  });
   if (inlineEvalHit) {
     params.warnings.push(
       `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
@@ -383,16 +495,25 @@ export async function processGatewayAllowlist(
       )}.`,
     );
   }
+  const gatewayEnforcedCommand =
+    hostSecurity === "allowlist" && analysisOk
+      ? resolveGatewayEnforcedCommand({
+          command: params.command,
+          segments: allowlistEval.segments,
+          authorizationPlan: allowlistEval.authorizationPlan,
+          segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+        })
+      : null;
   let enforcedCommand: string | undefined;
   let allowlistPlanUnavailableReason: string | null = null;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
-    const enforced = buildEnforcedShellCommand({
-      command: params.command,
-      segments: allowlistEval.segments,
-      platform: process.platform,
-    });
+    const enforced = gatewayEnforcedCommand ?? {
+      ok: false,
+      reason: "authorization plan unavailable",
+    };
     if (!enforced.ok || !enforced.command) {
-      allowlistPlanUnavailableReason = enforced.reason ?? "unsupported platform";
+      allowlistPlanUnavailableReason =
+        ("reason" in enforced ? enforced.reason : undefined) ?? "unsupported platform";
     } else {
       enforcedCommand = enforced.command;
     }
@@ -411,10 +532,20 @@ export async function processGatewayAllowlist(
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
   const requiresInlineEvalApproval = inlineEvalHit !== null;
+  // Exact-command durable trust must bypass plan approval: allow-always here
+  // persists an `=command:` grant for the raw command text, so unenforceability
+  // is moot and re-prompting would make that grant permanently ineffective.
+  // Pattern-based durable trust stays gated because enforcement cannot pin the
+  // resolved executables for an unenforceable plan.
+  const exactCommandDurableApprovalSatisfied = hasExactCommandDurableExecApproval({
+    allowlist: approvals.allowlist,
+    commandText: params.command,
+  });
   const requiresAllowlistPlanApproval =
     hostSecurity === "allowlist" &&
     analysisOk &&
     allowlistSatisfied &&
+    !exactCommandDurableApprovalSatisfied &&
     !enforcedCommand &&
     allowlistPlanUnavailableReason !== null;
   const requiresSecurityAuditSuppressionApproval =
@@ -446,6 +577,23 @@ export async function processGatewayAllowlist(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
+  const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
+    command: params.command,
+    allowAlwaysPersistence,
+    requiresAllowlistPlanApproval,
+  });
+  const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
+    ask: hostAsk,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+  });
+  const approvalUnavailableDecisions = resolveExecApprovalUnavailableDecisions({
+    ask: hostAsk,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+  });
+  const unavailableDecisionRequestParams =
+    approvalUnavailableDecisions.length > 0
+      ? { unavailableDecisions: approvalUnavailableDecisions }
+      : {};
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
@@ -534,6 +682,7 @@ export async function processGatewayAllowlist(
         host: "gateway",
         security: hostSecurity,
         ask: hostAsk,
+        ...unavailableDecisionRequestParams,
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
         ...buildExecApprovalRequesterContext({
@@ -559,6 +708,17 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
+    emitGatewayExecApprovalSecurityEvent({
+      action: "exec.approval.requested",
+      outcome: "success",
+      severity: "low",
+      agentId: params.agentId,
+      hostSecurity,
+      hostAsk,
+      host: "gateway",
+      segmentCount: allowlistEval.segments.length,
+      trigger: params.trigger,
+    });
     if (
       shouldResolveExecApprovalUnavailableInline({
         trigger: params.trigger,
@@ -579,6 +739,20 @@ export async function processGatewayAllowlist(
       });
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
+        const inlineDeniedReason = strictInlineEvalDecision.deniedReason ?? "approval-required";
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.denied",
+          outcome: "denied",
+          severity: "medium",
+          agentId: params.agentId,
+          reason: inlineDeniedReason,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: preResolvedDecision,
+        });
         throw new Error(
           buildHeadlessExecApprovalDeniedMessage({
             trigger: params.trigger,
@@ -590,6 +764,18 @@ export async function processGatewayAllowlist(
         );
       }
 
+      emitGatewayExecApprovalSecurityEvent({
+        action: "exec.approval.approved",
+        outcome: "success",
+        severity: "medium",
+        agentId: params.agentId,
+        hostSecurity,
+        hostAsk,
+        host: "gateway",
+        segmentCount: allowlistEval.segments.length,
+        trigger: params.trigger,
+        decision: preResolvedDecision,
+      });
       recordMatchedAllowlistUse(
         resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
@@ -612,6 +798,18 @@ export async function processGatewayAllowlist(
         onFailure,
       });
       if (decision === undefined) {
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.denied",
+          outcome: "error",
+          severity: "high",
+          agentId: params.agentId,
+          reason: "approval-request-failed",
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+        });
         return { deniedReason: "approval-request-failed", requestFailed: true };
       }
 
@@ -640,20 +838,11 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        if (!requiresInlineEvalApproval) {
-          const patterns = persistAllowAlwaysPatterns({
-            approvals: approvals.file,
-            agentId: params.agentId,
-            segments: allowlistEval.segments,
-            cwd: params.workdir,
-            env: params.env,
-            platform: process.platform,
-            strictInlineEval: params.strictInlineEval === true,
-          });
-          if (patterns.length === 0) {
-            addDurableCommandApproval(approvals.file, params.agentId, params.command);
-          }
-        }
+        persistAllowAlwaysDecision({
+          approvals: approvals.file,
+          agentId: params.agentId,
+          decision: effectiveAllowAlwaysPersistence,
+        });
       }
 
       const strictBoundaryDecision = enforceStrictInlineEvalApprovalBoundary({
@@ -678,6 +867,19 @@ export async function processGatewayAllowlist(
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 
+      emitGatewayExecApprovalSecurityEvent({
+        action: deniedReason ? "exec.approval.denied" : "exec.approval.approved",
+        outcome: deniedReason ? "denied" : "success",
+        severity: "medium",
+        agentId: params.agentId,
+        reason: deniedReason ?? undefined,
+        hostSecurity,
+        hostAsk,
+        host: "gateway",
+        segmentCount: allowlistEval.segments.length,
+        trigger: params.trigger,
+        decision,
+      });
       return { deniedReason, requestFailed: false };
     };
 
@@ -802,7 +1004,7 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
-        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+        allowedDecisions: approvalAllowedDecisions,
       }),
     };
   }

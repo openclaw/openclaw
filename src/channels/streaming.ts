@@ -444,6 +444,15 @@ function buildCommandOutputProgressLine(
     return line;
   }
   if (status === "completed") {
+    if (!line.detail) {
+      const statusLine = {
+        ...line,
+        detail: status,
+        text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
+      };
+      setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+      return statusLine;
+    }
     return line;
   }
   if (!line.detail || line.detail === status) {
@@ -1144,6 +1153,7 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   if (
     line.kind !== "command-output" ||
     !line.status ||
+    line.status === "completed" ||
     (line.detail && line.detail !== line.status)
   ) {
     return line;

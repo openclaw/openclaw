@@ -24,6 +24,10 @@ const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set(["toolresult", "tool_result"]);
 
 type MiddlewareContentBlock = OpenClawAgentToolResult["content"][number];
 type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
+type MiddlewareToolResultCoerceOptions = {
+  sanitizeContent?: boolean;
+  sanitizeDetails?: boolean;
+};
 
 function isValidMiddlewareContentBlock(value: unknown): boolean {
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -158,6 +162,7 @@ function stringifyMiddlewareTextPayload(value: unknown): string | undefined {
 function coerceMiddlewareText(
   value: unknown,
   state: MiddlewareContentCoerceState = createMiddlewareContentCoerceState(),
+  options: MiddlewareToolResultCoerceOptions = {},
 ): string | undefined {
   if (typeof value === "string") {
     return value;
@@ -173,14 +178,14 @@ function coerceMiddlewareText(
     return undefined;
   }
   for (const key of ["text", "output", "result", "message"]) {
-    const text = coerceMiddlewareText(value[key], nextState);
+    const text = coerceMiddlewareText(value[key], nextState, options);
     if (text !== undefined) {
       return text;
     }
   }
   const content = value.content;
   if (Array.isArray(content)) {
-    const chunks = coerceMiddlewareContentArray(content, nextState)
+    const chunks = coerceMiddlewareContentArray(content, nextState, options)
       .filter(
         (block): block is Extract<MiddlewareContentBlock, { type: "text" }> =>
           block.type === "text",
@@ -224,6 +229,7 @@ function appendMiddlewareContentBlock(
 function coerceMiddlewareContentArray(
   content: unknown[],
   state: MiddlewareContentCoerceState,
+  options: MiddlewareToolResultCoerceOptions = {},
 ): MiddlewareContentBlock[] {
   const blocks: MiddlewareContentBlock[] = [];
   let inspectedBlocks = 0;
@@ -235,7 +241,7 @@ function coerceMiddlewareContentArray(
     ) {
       break;
     }
-    const coercedBlocks = coerceMiddlewareContentBlocks(entry, state);
+    const coercedBlocks = coerceMiddlewareContentBlocks(entry, state, options);
     if (coercedBlocks.length > 0) {
       for (const block of coercedBlocks) {
         appendMiddlewareContentBlock(blocks, block);
@@ -245,7 +251,7 @@ function coerceMiddlewareContentArray(
       }
       continue;
     }
-    const text = coerceMiddlewareText(entry, state);
+    const text = coerceMiddlewareText(entry, state, options);
     if (text) {
       appendMiddlewareContentBlock(blocks, {
         type: "text",
@@ -259,9 +265,21 @@ function coerceMiddlewareContentArray(
 function coerceMiddlewareContentBlocks(
   value: unknown,
   state: MiddlewareContentCoerceState = createMiddlewareContentCoerceState(),
+  options: MiddlewareToolResultCoerceOptions = {},
 ): MiddlewareContentBlock[] {
   if (isValidMiddlewareContentBlock(value)) {
     return [value as MiddlewareContentBlock];
+  }
+  // Tool emitters can produce legitimate transcript text larger than the
+  // middleware cap. Normalize that only before the first handler; handlers
+  // remain fail-closed if they return an oversized replacement.
+  if (
+    options.sanitizeContent === true &&
+    isRecord(value) &&
+    value.type === "text" &&
+    typeof value.text === "string"
+  ) {
+    return [{ type: "text", text: truncateUtf16Safe(value.text, MAX_MIDDLEWARE_TEXT_CHARS) }];
   }
   if (!isRecord(value) || typeof value.type !== "string") {
     return [];
@@ -273,9 +291,10 @@ function coerceMiddlewareContentBlocks(
   const content = value.content;
   if (Array.isArray(content) && content.length > 0) {
     const nextState = descendMiddlewareContentCoerceState(value, state);
-    return nextState ? coerceMiddlewareContentArray(content, nextState) : [];
+    return nextState ? coerceMiddlewareContentArray(content, nextState, options) : [];
   }
-  const text = coerceMiddlewareText(content, state) ?? coerceMiddlewareText(value, state);
+  const text =
+    coerceMiddlewareText(content, state, options) ?? coerceMiddlewareText(value, state, options);
   if (!text) {
     return [];
   }
@@ -289,7 +308,7 @@ function coerceMiddlewareContentBlocks(
 
 function coerceMiddlewareToolResult(
   value: unknown,
-  options: { sanitizeDetails?: boolean } = {},
+  options: MiddlewareToolResultCoerceOptions = {},
 ): OpenClawAgentToolResult | undefined {
   if (isValidMiddlewareToolResult(value)) {
     return value;
@@ -305,7 +324,7 @@ function coerceMiddlewareToolResult(
     if (inspectedBlocks > MAX_MIDDLEWARE_CONTENT_BLOCKS) {
       break;
     }
-    for (const coerced of coerceMiddlewareContentBlocks(block, state)) {
+    for (const coerced of coerceMiddlewareContentBlocks(block, state, options)) {
       content.push(coerced);
       if (content.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
         break;
@@ -379,7 +398,10 @@ function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
  * subsequent middleware-side mutations are still validated strictly.
  */
 function sanitizeToolResultForMiddleware(result: OpenClawAgentToolResult): OpenClawAgentToolResult {
-  const coerced = coerceMiddlewareToolResult(result, { sanitizeDetails: true });
+  const coerced = coerceMiddlewareToolResult(result, {
+    sanitizeContent: true,
+    sanitizeDetails: true,
+  });
   if (coerced) {
     return coerced;
   }

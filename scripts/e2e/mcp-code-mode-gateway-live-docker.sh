@@ -38,12 +38,12 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   echo "ERROR: OPENAI_API_KEY was not available after sourcing $PROFILE_STATUS." >&2
   exit 1
 fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-code-mode-gateway-live
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-code-mode-gateway-live empty)"
+
 # The profile is only a credential source. Keep this lane's OpenClaw runtime
 # isolated from host/testbox mode flags that can change packaged behavior.
 unset OPENCLAW_TESTBOX
-
-docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-code-mode-gateway-live
-OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-code-mode-gateway-live empty)"
 
 echo "Running live Docker Gateway code-mode MCP API-file smoke..."
 echo "Profile file: $PROFILE_STATUS"

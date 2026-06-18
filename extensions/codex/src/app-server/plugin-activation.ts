@@ -47,6 +47,7 @@ export type EnsureCodexPluginActivationParams = {
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
   installEvenIfActive?: boolean;
+  targetAppIds?: readonly string[];
 };
 
 /** Diagnostics from refreshing Codex runtime surfaces after plugin activation. */
@@ -107,6 +108,7 @@ export async function ensureCodexPluginActivation(
       request: params.request,
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
+      targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
   } catch (error) {
@@ -145,6 +147,7 @@ export async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
   await params.request("plugin/list", {
@@ -174,6 +177,7 @@ export async function refreshCodexPluginRuntimeState(params: {
         key: params.appCacheKey,
         request,
         forceRefetch: true,
+        targetAppIds: params.targetAppIds,
       });
     } catch (error) {
       diagnostics.push({
@@ -274,13 +278,14 @@ function activationFailure(
   identity: ResolvedCodexPluginPolicy,
   reason: CodexPluginActivationReason,
   diagnostic: CodexPluginActivationDiagnostic,
+  extraDiagnostics: CodexPluginActivationDiagnostic[] = [],
 ): CodexPluginActivationResult {
   return {
     identity,
     ok: false,
     reason,
     installAttempted: false,
-    diagnostics: [diagnostic],
+    diagnostics: [diagnostic, ...extraDiagnostics],
   };
 }
 

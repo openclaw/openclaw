@@ -192,7 +192,11 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
     env,
     includeUntrustedWorkspacePlugins: false,
   })) {
-    if (configuredProviders.has(entry.providerId.toLowerCase())) {
+    if (
+      [entry.providerId, ...(entry.providerAliases ?? [])].some((providerId) =>
+        configuredProviders.has(providerId.toLowerCase()),
+      )
+    ) {
       ids.add(entry.pluginId);
     }
   }

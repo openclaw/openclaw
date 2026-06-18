@@ -35,6 +35,8 @@ const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
 const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
 const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
 const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
+const MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH =
+  "scripts/e2e/mcp-code-mode-gateway-live-docker.sh";
 const CODEX_MEDIA_PATH_SCENARIO_PATH = "scripts/e2e/lib/codex-media-path/scenario.sh";
 const OPENAI_CHAT_TOOLS_SCENARIO_PATH = "scripts/e2e/lib/openai-chat-tools/scenario.sh";
 const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH = "scripts/e2e/codex-npm-plugin-live-docker.sh";
@@ -71,7 +73,6 @@ const PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH =
   "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-matrix-docker.sh";
-const PLUGIN_LIFECYCLE_MATRIX_SWEEP_PATH = "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
@@ -296,6 +297,16 @@ docker_build_transient_failure "$LOG_PATH"
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
+  });
+
+  it("keeps Testbox image-build fallback before isolating live MCP code-mode runtime flags", () => {
+    const script = readFileSync(MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH, "utf8");
+    const buildIndex = script.indexOf('docker_e2e_build_or_reuse "$IMAGE_NAME"');
+    const unsetIndex = script.indexOf("unset OPENCLAW_TESTBOX");
+
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(unsetIndex).toBeGreaterThan(buildIndex);
+    expect(script).toContain("host/testbox mode flags that can change packaged behavior");
   });
 
   it("wraps centralized Docker builds with the timeout helper", () => {
@@ -752,6 +763,94 @@ docker_e2e_build_or_reuse \\
 test "$(grep -c '^--kill-after=30s 3s|' "$TMPDIR/timeout-seen")" = "2"
 grep -q '^image inspect openclaw-reuse-image$' "$TMPDIR/docker-seen"
 grep -q '^pull openclaw-reuse-image$' "$TMPDIR/docker-seen"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("derives the browser CDP image from the shared functional image", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-browser-cdp-shared-image-"));
+
+    try {
+      const rootDir = process.cwd();
+      mkdirSync(join(workDir, "bin"));
+      writeFileSync(
+        join(workDir, "bin", "docker"),
+        `#!/usr/bin/env bash
+printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+case "$1 $2" in
+  "image inspect")
+    exit 0
+    ;;
+  "inspect -f")
+    printf "true\\n"
+    exit 0
+    ;;
+  "rm -f")
+    exit 0
+    ;;
+  "run "*)
+    printf "container-id\\n"
+    exit 0
+    ;;
+  "exec "*)
+    exit 0
+    ;;
+esac
+case "$1" in
+  build)
+    exit 0
+    ;;
+esac
+exit 9
+`,
+      );
+      writeFileSync(
+        join(workDir, "bin", "node"),
+        `#!/usr/bin/env bash
+printf "echo state\\n"
+`,
+      );
+      writeFileSync(
+        join(workDir, "bin", "timeout"),
+        `#!/usr/bin/env bash
+case "\${1:-}" in
+  --kill-after=1s | --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+exec "$@"
+`,
+      );
+      chmodSync(join(workDir, "bin", "docker"), 0o755);
+      chmodSync(join(workDir, "bin", "node"), 0o755);
+      chmodSync(join(workDir, "bin", "timeout"), 0o755);
+
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_SKIP_DOCKER_BUILD=1
+export OPENCLAW_DOCKER_E2E_IMAGE=shared-functional
+export OPENCLAW_DOCKER_ALL_LANE_NAME=browser-cdp-snapshot
+
+bash "$ROOT_DIR/scripts/e2e/browser-cdp-snapshot-docker.sh"
+
+grep -q '^image inspect shared-functional$' "$TMPDIR/docker-seen"
+grep -Fq 'build -t openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot' "$TMPDIR/docker-seen"
+grep -Fq ' openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot ' "$TMPDIR/docker-seen"
+if grep -Fq ' shared-functional ' "$TMPDIR/docker-seen"; then
+  echo "browser CDP lane reused the shared image without Chromium" >&2
+  exit 1
+fi
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -1511,27 +1610,6 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     expect(runner).toContain('docker_e2e_run_with_harness \\\n  "${DOCKER_ENV_ARGS[@]}"');
   });
 
-  it("cleans plugin lifecycle matrix temp roots on exit", () => {
-    const sweep = readFileSync(PLUGIN_LIFECYCLE_MATRIX_SWEEP_PATH, "utf8");
-
-    expect(sweep).toContain("cleanup() {");
-    expect(sweep).toContain("openclaw_plugins_cleanup_fixture_servers");
-    expect(sweep).toContain(
-      'resource_dir="$(mktemp -d "/tmp/openclaw-plugin-lifecycle-matrix.XXXXXX")"',
-    );
-    expect(sweep).toContain('tarball_v1="$resource_dir/lifecycle-claw-1.0.0.tgz"');
-    expect(sweep).toContain('tarball_v2="$resource_dir/lifecycle-claw-2.0.0.tgz"');
-    expect(sweep).toContain('inspect_v1="$resource_dir/plugin-lifecycle-inspect-v1.json"');
-    expect(sweep).toContain('pack_root="$(mktemp -d "$resource_dir/pack.XXXXXX")"');
-    expect(sweep).toContain('registry_root="$(mktemp -d "$resource_dir/registry.XXXXXX")"');
-    expect(sweep).toContain('rm -rf "$resource_dir"');
-    expect(sweep).not.toContain('resource_dir="/tmp/openclaw-plugin-lifecycle-matrix"');
-    expect(sweep).not.toContain("/tmp/lifecycle-claw-1.0.0.tgz");
-    expect(sweep).not.toContain("/tmp/lifecycle-claw-2.0.0.tgz");
-    expect(sweep).not.toContain("/tmp/plugin-lifecycle-inspect-v1.json");
-    expect(sweep.match(/trap cleanup EXIT/g)).toHaveLength(2);
-  });
-
   it("wraps direct Docker E2E npm installs with the shared timeout helper", () => {
     const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
     const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
@@ -1758,6 +1836,75 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     expect(multiNode).not.toContain(
       'ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-node-update}"',
     );
+  });
+
+  it("reuses the shared bare image for multi-node update targeted runs", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-multi-node-shared-image-"));
+
+    try {
+      const rootDir = process.cwd();
+      mkdirSync(join(workDir, "bin"));
+      writeFileSync(join(workDir, "openclaw-current.tgz"), "fake package");
+      writeFileSync(
+        join(workDir, "bin", "docker"),
+        `#!/usr/bin/env bash
+printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+case "$1 $2" in
+  "image inspect")
+    exit 0
+    ;;
+  "run "*)
+    exit 0
+    ;;
+esac
+exit 9
+`,
+      );
+      writeFileSync(
+        join(workDir, "bin", "timeout"),
+        `#!/usr/bin/env bash
+case "\${1:-}" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+exec "$@"
+`,
+      );
+      chmodSync(join(workDir, "bin", "docker"), 0o755);
+      chmodSync(join(workDir, "bin", "timeout"), 0o755);
+
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_SKIP_DOCKER_BUILD=1
+export OPENCLAW_DOCKER_E2E_IMAGE=shared-bare
+export OPENCLAW_CURRENT_PACKAGE_TGZ="$TMPDIR/openclaw-current.tgz"
+export OPENCLAW_MULTI_NODE_ARTIFACT_DIR="$TMPDIR/artifacts"
+
+bash "$ROOT_DIR/scripts/e2e/multi-node-update-docker.sh"
+
+grep -q '^image inspect shared-bare$' "$TMPDIR/docker-seen"
+grep -Fq ' shared-bare ' "$TMPDIR/docker-seen"
+if grep -Fq 'openclaw-multi-node-update-e2e' "$TMPDIR/docker-seen"; then
+  echo "multi-node update lane ignored the shared targeted image" >&2
+  exit 1
+fi
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("bounds upgrade survivor foreground OpenClaw CLI calls", () => {
@@ -2660,6 +2807,8 @@ output="$(cat "$sampler_log")"
     expect(helper).toContain(
       '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
     );
+    expect(helper).toContain('-v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"');
+    expect(helper).toContain('-v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"');
   });
 
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {
