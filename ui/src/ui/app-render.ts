@@ -1406,9 +1406,8 @@ export function renderApp(state: AppViewState) {
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const activeAssistantAgentId = resolveSidebarSelectedAgentId(state);
   const localAssistantAvatarOverride =
-    normalizeOptionalString(
-      loadLocalAssistantIdentity({ agentId: activeAssistantAgentId }).avatar,
-    ) ?? null;
+    normalizeOptionalString(loadLocalAssistantIdentity({ agentId: activeAssistantAgentId }).avatar) ??
+    null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAssistantAvatarStatus = localAssistantAvatarOverride
     ? "data"
