@@ -13,7 +13,7 @@ describe("Crestodian Docker E2E scripts", () => {
 
     expect(source).toContain("../../dist/cli/run-main.js");
     expect(source).toContain("../../dist/crestodian/crestodian.js");
-    expect(source).toContain("shouldStartOnboardingForFreshInstall");
+    expect(source).toContain("shouldHandleBareRoot");
     expect(source).toContain("shouldStartCrestodianForModernOnboard");
     expect(source).toContain('runCli(["node", "openclaw", "onboard"');
     expect(source).toContain("runCrestodian(");
