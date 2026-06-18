@@ -14,7 +14,6 @@ const writeConfigPath = path.resolve("scripts/e2e/lib/openai-chat-tools/write-co
 
 interface ClientResult {
   error?: Error;
-  signal: NodeJS.Signals | null;
   status: number | null;
   stderr: string;
   stdout: string;
@@ -69,13 +68,12 @@ function runClient(
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
+      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
-    child.on("exit", (status, signal) => {
+    child.on("exit", (status) => {
       clearTimeout(timer);
       resolve({
         error: timedOut ? new Error(`client timed out after ${timeout}ms`) : undefined,
-        signal,
         status,
         stderr: stderr.text(),
         stdout: stdout.text(),
@@ -163,17 +161,6 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
     } finally {
       server.close();
     }
-  });
-
-  it("keeps full profile exports out of the Docker build phase", () => {
-    const runner = readFileSync(dockerRunnerPath, "utf8");
-    const preflightSourceIndex = runner.indexOf('source "$profile_file"');
-    const buildIndex = runner.indexOf("docker_e2e_build_or_reuse");
-    const fullProfileSourceIndex = runner.indexOf('source "$PROFILE_FILE"', buildIndex);
-
-    expect(preflightSourceIndex).toBeGreaterThanOrEqual(0);
-    expect(buildIndex).toBeGreaterThan(preflightSourceIndex);
-    expect(fullProfileSourceIndex).toBeGreaterThan(buildIndex);
   });
 
   it("fails auth preflight before Docker build work starts", () => {

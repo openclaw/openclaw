@@ -11,7 +11,6 @@ const probePath = path.resolve("scripts/e2e/openwebui-probe.mjs");
 
 interface ProbeResult {
   error?: Error;
-  signal: NodeJS.Signals | null;
   status: number | null;
   stderr: string;
   stdout: string;
@@ -67,13 +66,12 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
+      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
-    child.on("exit", (status, signal) => {
+    child.on("exit", (status) => {
       clearTimeout(timer);
       resolve({
         error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
-        signal,
         status,
         stderr: stderr.text(),
         stdout: stdout.text(),
