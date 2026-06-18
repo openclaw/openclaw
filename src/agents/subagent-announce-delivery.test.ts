@@ -5003,6 +5003,44 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fallback-steer after wrapped prompt-lock takeover error with send evidence", async () => {
+    const takeoverErr = new Error(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    );
+    takeoverErr.name = "EmbeddedAttemptSessionTakeoverError";
+
+    const promptErr = new Error("some model error");
+    (promptErr as unknown as Record<string, unknown>).visibleReplySent = true;
+
+    const wrapperErr = new Error("some model error", { cause: takeoverErr });
+    wrapperErr.name = "EmbeddedAttemptSessionTakeoverError";
+    Object.assign(wrapperErr, {
+      cleanupError: takeoverErr,
+      promptError: promptErr,
+    });
+
+    const callGateway = vi.fn(async () => {
+      throw wrapperErr;
+    }) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-lock-race-wrapped-evidence",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-permanent-wrapped-lock-error-evidence",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("some model error");
+    expect(result.terminal).toBe(true);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
+  });
+
   it("allows retry when session-file-changed error has no send evidence (pre-send recovery)", async () => {
     // Without send evidence, the error may be pre-send — retry can recover.
     let attempts = 0;
@@ -5094,5 +5132,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     // The message contains the model error text, not the session-file-changed text
     expect(testing.hasAnnounceSendEvidence(wrapperErr)).toBe(true);
+    expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
 });

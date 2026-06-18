@@ -404,18 +404,59 @@ function isSessionFileChangedAnnounceError(message: string): boolean {
   return SESSION_FILE_CHANGED_ANNOUNCE_RE.test(message);
 }
 
-function isTransientAnnounceDeliveryError(error: unknown): boolean {
+function hasSessionFileChangedAnnounceError(
+  error: unknown,
+  seen: Set<object> = new Set(),
+): boolean {
   const message = summarizeDeliveryError(error);
-  if (!message) {
+  if (message && isSessionFileChangedAnnounceError(message)) {
+    return true;
+  }
+  if (!error || typeof error !== "object") {
     return false;
   }
-  if (PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
+  if (seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+
+  const candidate = error as {
+    cause?: unknown;
+    cleanupError?: unknown;
+    error?: unknown;
+    promptError?: unknown;
+    reason?: unknown;
+  };
+  return (
+    hasSessionFileChangedAnnounceError(candidate.cause, seen) ||
+    hasSessionFileChangedAnnounceError(candidate.cleanupError, seen) ||
+    hasSessionFileChangedAnnounceError(candidate.error, seen) ||
+    hasSessionFileChangedAnnounceError(candidate.promptError, seen) ||
+    hasSessionFileChangedAnnounceError(candidate.reason, seen)
+  );
+}
+
+function isTransientAnnounceDeliveryError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  const topLevelPermanent = Boolean(
+    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+  );
+  if (topLevelPermanent && !isSessionFileChangedAnnounceError(message)) {
+    return false;
+  }
+
+  const sessionFileChanged = hasSessionFileChangedAnnounceError(error);
+  if (sessionFileChanged) {
     // Safety valve: a session-file-changed error without send evidence is still
     // transient — the send may not have occurred yet, so retry can recover.
     // When send evidence exists, the error is truly permanent (duplicate prevention).
-    if (isSessionFileChangedAnnounceError(message) && !hasAnnounceSendEvidence(error)) {
-      return true;
-    }
+    return !hasAnnounceSendEvidence(error);
+  }
+
+  if (!message) {
+    return false;
+  }
+  if (topLevelPermanent) {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
@@ -424,7 +465,8 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   return Boolean(
-    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+    (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
+    hasSessionFileChangedAnnounceError(error),
   );
 }
 
@@ -1870,6 +1912,7 @@ export const testing = {
   },
   // Exported for focused testing of session-file-changed send-evidence behavior (#91527)
   hasAnnounceSendEvidence,
+  hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
 export { testing as __testing };
