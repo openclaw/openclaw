@@ -340,6 +340,7 @@ export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): str
 export function buildStatusSessionsRows(params: {
   recent: SessionsRecentLike[];
   verbose?: boolean;
+  showCost?: boolean;
   shortenText: (value: string, maxLen: number) => string;
   formatTimeAgo: (ageMs: number) => string;
   formatTokensCompact: (value: SessionsRecentLike) => string;
@@ -356,7 +357,7 @@ export function buildStatusSessionsRows(params: {
     Model: sess.model ?? "unknown",
     Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
-    Cost: formatUsd(sess.costUsd) ?? params.muted("—"),
+    ...(params.showCost ? { Cost: formatUsd(sess.costUsd) ?? params.muted("—") } : {}),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
       : {}),

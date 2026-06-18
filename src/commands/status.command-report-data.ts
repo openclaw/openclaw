@@ -121,6 +121,9 @@ export async function buildStatusCommandReportData(
     updateRestartValue: params.updateRestartValue,
   });
 
+  const showSessionCosts = params.summary.sessions.recent.some(
+    (session) => typeof session.costUsd === "number" && Number.isFinite(session.costUsd),
+  );
   const sessionsColumns = [
     { key: "Key", header: "Key", minWidth: 20, flex: true },
     { key: "Kind", header: "Kind", minWidth: 6 },
@@ -128,7 +131,7 @@ export async function buildStatusCommandReportData(
     { key: "Model", header: "Model", minWidth: 14 },
     { key: "Runtime", header: "Runtime", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
-    { key: "Cost", header: "Cost", minWidth: 8 },
+    ...(showSessionCosts ? [{ key: "Cost", header: "Cost", minWidth: 8 }] : []),
     // Verbose mode exposes prompt-cache details because it can widen rows substantially.
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
@@ -196,6 +199,7 @@ export async function buildStatusCommandReportData(
     sessionsRows: buildStatusSessionsRows({
       recent: params.summary.sessions.recent,
       verbose: params.opts.verbose,
+      showCost: showSessionCosts,
       shortenText: params.shortenText,
       formatTimeAgo: params.formatTimeAgo,
       formatTokensCompact: params.formatTokensCompact,

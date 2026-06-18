@@ -96,6 +96,7 @@ describe("status.command-sections", () => {
         },
       ],
       verbose: true,
+      showCost: true,
       shortenText: (value) => value.slice(0, 8),
       formatTimeAgo: (value) => `${value}ms`,
       formatTokensCompact: () => "12k",
