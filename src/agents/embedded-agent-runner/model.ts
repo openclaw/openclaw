@@ -1512,6 +1512,7 @@ function normalizeProviderModelRef(params: {
 }): { provider: string; model: string } {
   const provider = canonicalizeManifestModelCatalogProviderAlias({
     provider: params.provider,
+    modelId: params.modelId,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
   });
