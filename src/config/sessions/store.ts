@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -20,6 +21,7 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { getRuntimeConfig } from "../io.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import {
   enforceSessionDiskBudget,
@@ -326,6 +328,17 @@ export type SessionEntryLifecycleMutationResult = {
   maintenanceReport: SessionMaintenanceApplyReport | null;
   afterCount: number;
   artifactCleanupError?: unknown;
+};
+
+export type DeletedAgentSessionEntryPurgeParams = {
+  /** Runtime config used to preserve legacy default-agent key ownership rules. */
+  cfg: OpenClawConfig;
+  /** Deleted agent whose session entries should be purged. */
+  agentId: string;
+  /** Agent id represented by the current store path for legacy unscoped keys. */
+  storeAgentId: string;
+  /** Resolved session store path to mutate. */
+  storePath: string;
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
@@ -1515,6 +1528,50 @@ export async function applySessionEntryLifecycleMutation(params: {
     maintenanceReport,
     afterCount,
     artifactCleanupError,
+  };
+}
+
+/**
+ * Purges entries owned by a deleted agent while holding the store writer lock.
+ * This preserves the old delete-time current-store owner check without
+ * exposing a mutable whole-store callback to callers.
+ */
+export async function purgeDeletedAgentSessionEntries(
+  params: DeletedAgentSessionEntryPurgeParams,
+): Promise<SessionEntryLifecycleMutationResult> {
+  const storePath = path.resolve(params.storePath);
+  const removedSessionKeys: string[] = [];
+  let maintenanceReport: SessionMaintenanceApplyReport | null = null;
+  let afterCount = 0;
+
+  await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    for (const sessionKey of Object.keys(store)) {
+      const ownerAgentId = resolveStoredSessionOwnerAgentId({
+        cfg: params.cfg,
+        agentId: params.storeAgentId,
+        sessionKey,
+      });
+      if (ownerAgentId === params.agentId) {
+        delete store[sessionKey];
+        removedSessionKeys.push(sessionKey);
+      }
+    }
+    await saveSessionStoreUnlocked(storePath, store, {
+      onMaintenanceApplied: (report) => {
+        maintenanceReport = report;
+      },
+    });
+    afterCount = Object.keys(store).length;
+  });
+
+  return {
+    removedEntries: removedSessionKeys.length,
+    removedSessionKeys,
+    archivedTranscriptDirectories: [],
+    unreferencedArtifacts: null,
+    maintenanceReport,
+    afterCount,
   };
 }
 
