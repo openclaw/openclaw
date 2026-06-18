@@ -1203,6 +1203,18 @@ export const dispatchTelegramMessage = async ({
     lane.stream?.forceNewMessage();
     resetDraftLaneState(lane);
   };
+  const clearReasoningLaneForNewMessage = async () => {
+    if (
+      !reasoningLane.hasStreamedMessage &&
+      typeof reasoningLane.stream?.messageId() !== "number"
+    ) {
+      resetDraftLaneState(reasoningLane);
+      return;
+    }
+    await reasoningLane.stream?.clear();
+    reasoningLane.stream?.forceNewMessage();
+    resetDraftLaneState(reasoningLane);
+  };
   const rotateAnswerLaneForNewMessage = async () => {
     if (materializeAnswerLaneBeforeRotation) {
       await materializeAnswerLaneBeforeRotation();
@@ -2358,8 +2370,7 @@ export const dispatchTelegramMessage = async ({
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
                           if (splitReasoningOnNextStream) {
-                            reasoningLane.stream?.forceNewMessage();
-                            resetDraftLaneState(reasoningLane);
+                            await clearReasoningLaneForNewMessage();
                             splitReasoningOnNextStream = false;
                           }
                           await ingestDraftLaneSegments(payload, true);
