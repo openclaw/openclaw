@@ -1,8 +1,8 @@
 // Slack plugin module implements reconnect policy behavior.
 import { formatSlackError } from "../errors.js";
 
-const SLACK_NON_RECOVERABLE_ERROR_RE =
-  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token|slack_webapi_request_error|slack_webapi_http_error/i;
+const SLACK_AUTH_ERROR_RE =
+  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
 const NO_ERROR_DETAIL = "no error detail";
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
@@ -87,11 +87,11 @@ export function waitForSlackSocketDisconnect(
 }
 
 /**
- * Detect errors that Slack's Socket Mode client treats as non-recoverable.
- * This preserves SDK fail-fast behavior outside its native reconnect loop.
+ * Detect permanent Slack account and credential failures.
+ * Transient request and HTTP failures stay in OpenClaw's reconnect loop.
  */
-export function isNonRecoverableSlackSocketError(error: unknown): boolean {
-  return SLACK_NON_RECOVERABLE_ERROR_RE.test(formatUnknownError(error, ""));
+export function isNonRecoverableSlackAuthError(error: unknown): boolean {
+  return SLACK_AUTH_ERROR_RE.test(formatUnknownError(error, ""));
 }
 
 export function formatUnknownError(error: unknown, fallback = NO_ERROR_DETAIL): string {

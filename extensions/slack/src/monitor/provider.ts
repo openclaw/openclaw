@@ -63,7 +63,7 @@ import {
 import {
   formatUnknownError,
   getSocketEmitter,
-  isNonRecoverableSlackSocketError,
+  isNonRecoverableSlackAuthError,
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
@@ -564,10 +564,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
           publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
 
-          // Preserve the Slack SDK's fail-fast classes outside its native reconnect loop.
-          if (disconnect.error && isNonRecoverableSlackSocketError(disconnect.error)) {
+          // Permanent account and credential failures need operator action.
+          if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
             runtime.error?.(
-              `slack socket mode disconnected due to non-recoverable error — skipping channel (${formatUnknownError(disconnect.error)})`,
+              `slack socket mode disconnected due to non-recoverable auth error — skipping channel (${formatUnknownError(disconnect.error)})`,
             );
             throw disconnect.error instanceof Error
               ? disconnect.error
@@ -593,9 +593,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             break;
           }
         } catch (err) {
-          if (isNonRecoverableSlackSocketError(err)) {
+          if (isNonRecoverableSlackAuthError(err)) {
             runtime.error?.(
-              `slack socket mode failed to start due to non-recoverable error — skipping channel (${formatUnknownError(err)})`,
+              `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
             );
             throw err;
           }
@@ -634,7 +634,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackSocketError } from "./reconnect-policy.js";
+export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
