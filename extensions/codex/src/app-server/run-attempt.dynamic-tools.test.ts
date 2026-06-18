@@ -18,9 +18,7 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import {
-  type CodexDynamicToolCallParams,
-} from "./protocol.js";
+import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   createParams,
   createRuntimeDynamicTool,
