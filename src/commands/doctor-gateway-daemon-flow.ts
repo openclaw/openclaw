@@ -412,7 +412,6 @@ export async function maybeRepairGatewayDaemon(params: {
       {
         message: "Start gateway service now?",
         initialValue: true,
-        requiresInteractiveConfirmation: true,
       },
       serviceRepairPolicy,
     );

@@ -550,13 +550,13 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it("skips stopped service start during non-interactive repairs", async () => {
+  it("starts stopped service during non-interactive repairs", async () => {
     setPlatform("linux");
     service.readRuntime.mockResolvedValue({ status: "stopped" });
 
     await runNonInteractiveRepair();
 
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
   it("skips gateway service install when service repair policy is external", async () => {
