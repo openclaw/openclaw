@@ -33,7 +33,6 @@ describe("official external plugin catalog", () => {
       ["kimi", "@openclaw/kimi-provider"],
       ["qianfan", "@openclaw/qianfan-provider"],
       ["qwen", "@openclaw/qwen-provider"],
-      ["stepfun", "@openclaw/stepfun-provider"],
     ] as const;
     const plugins = [
       ["exa", "@openclaw/exa-plugin"],
@@ -52,6 +51,14 @@ describe("official external plugin catalog", () => {
         minHostVersion: ">=2026.6.8",
       });
     }
+  });
+
+  it("keeps StepFun npm-only because its ClawHub package name is unavailable", () => {
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("stepfun"))).toEqual({
+      npmSpec: "@openclaw/stepfun-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
   });
 
   it("resolves third-party channel lookup aliases to published plugin ids", () => {
