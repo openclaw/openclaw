@@ -68,17 +68,18 @@ If a call returns `1Password CLI couldn't connect to the 1Password desktop app`,
 
 ### Standalone signin (no app, interactive password)
 
-This is the only mode where tmux helps. `op signin` prints an `eval`-style export setting an `OP_SESSION_*` token; later commands in the same shell are authenticated by that env var. The gateway's per-command shells lose that state between calls, so a persistent tmux pane keeps the session token alive — but only if the export is actually applied with `eval`. Sending `op signin` as a plain command leaves stdout printed to the pane and `op whoami` will fail.
+This is the only mode where tmux helps. `op signin` prints an `eval`-style export setting an `OP_SESSION_*` token for POSIX shells; later commands in the same shell are authenticated by that env var. The gateway's per-command shells lose that state between calls, so a persistent tmux pane keeps the session token alive — but only if the export is actually applied with `eval` in a POSIX shell. Sending `op signin` as a plain command leaves stdout printed to the pane and `op whoami` will fail.
 
-The tmux flow is only actionable on macOS/Linux hosts where the `tmux` skill is available. On Windows, prefer desktop app integration or service account auth. If the user only has standalone interactive signin on Windows, stop and ask them to provide a persistent PowerShell session mechanism or switch to desktop integration/service account auth; do not translate the tmux commands directly.
+The tmux flow is only actionable on macOS/Linux hosts where the `tmux` skill is available. The example intentionally opens `/bin/sh` so the POSIX `eval "$(op signin ...)"` output is valid even when the user's normal shell is fish. On Windows, prefer desktop app integration or service account auth. If the user only has standalone interactive signin on Windows, stop and ask them to provide a persistent PowerShell session mechanism or switch to desktop integration/service account auth; do not translate the tmux commands directly.
 
 ```bash
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
 mkdir -p "$SOCKET_DIR"
+chmod 700 "$SOCKET_DIR"
 SOCKET="$SOCKET_DIR/openclaw-op.sock"
 SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
 
-tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
+tmux -S "$SOCKET" new -d -s "$SESSION" -n shell /bin/sh
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- 'eval "$(op signin --account my.1password.com)"' Enter
 tmux -S "$SOCKET" capture-pane -t "$SESSION":0.0 -p -S - | tail -40
 ```
@@ -100,7 +101,7 @@ tmux -S "$SOCKET" capture-pane -t "$SESSION":0.0 -p -S - | tail -80
 
 Keep the tmux session running so later `op read` / `op run` commands reuse the same authenticated shell.
 
-See the `tmux` skill for socket conventions; do not reuse old session names.
+Use the same `SOCKET` and `SESSION` values for every follow-up command in this standalone signin flow. The `-S "$SOCKET"` flag selects the tmux server socket; keep it in a user-owned `0700` directory, do not share it between users, and choose a new session name for each new signin attempt.
 
 ## Guardrails
 
