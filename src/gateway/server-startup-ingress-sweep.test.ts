@@ -22,6 +22,37 @@ describe("runStartupIngressClaimSweep", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("skips the sweep during supervised restart handoff", async () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const mockSweep = vi.fn();
+    const readGatewayRestartHandoffSync = vi.fn().mockReturnValue({
+      kind: "gateway-supervisor-restart-handoff",
+      version: 1,
+      intentId: "restart-1",
+      pid: 123,
+      createdAt: 100,
+      expiresAt: 60_100,
+      source: "operator-restart",
+      restartKind: "full-process",
+      supervisorMode: "external",
+    });
+
+    await runStartupIngressClaimSweep({
+      log: { info, warn },
+      deps: {
+        recoverAllStaleChannelIngressClaims: mockSweep,
+        readGatewayRestartHandoffSync,
+      },
+    });
+
+    expect(mockSweep).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "gateway: skipping stale ingress claim sweep during supervised restart handoff",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("logs warning and continues when sweep throws", async () => {
     const info = vi.fn();
     const warn = vi.fn();
