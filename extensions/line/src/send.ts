@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 // Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -8,6 +9,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
+import { withRetry } from "./retry.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineSendResult } from "./types.js";
 
@@ -237,18 +239,23 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
-  const pushRequest = client.pushMessage({
-    to: chatId,
-    messages,
-  });
+  const xLineRetryKey = randomUUID();
 
-  if (behavior.errorContext) {
-    await pushRequest.catch((err: unknown) => {
-      logLineHttpError(err, behavior.errorContext!);
-      throw err;
-    });
-  } else {
-    await pushRequest;
+  try {
+    await withRetry(() =>
+      client.pushMessage(
+        {
+          to: chatId,
+          messages,
+        },
+        xLineRetryKey,
+      ),
+    );
+  } catch (err) {
+    if (behavior?.errorContext) {
+      logLineHttpError(err, behavior.errorContext);
+    }
+    throw err;
   }
 
   recordLineOutboundActivity(account.accountId);
