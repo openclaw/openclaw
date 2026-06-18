@@ -258,7 +258,12 @@ function parseArgs(argv: string[]): CliOptions {
   }
 
   const expectedScenarioId = LOGS_EXPORTER_SCENARIO_IDS[options.logsExporter];
-  if (scenarioExplicit && options.scenarioId !== expectedScenarioId) {
+  const knownLogsExporterScenarioIds = new Set(Object.values(LOGS_EXPORTER_SCENARIO_IDS));
+  if (
+    scenarioExplicit &&
+    knownLogsExporterScenarioIds.has(options.scenarioId) &&
+    options.scenarioId !== expectedScenarioId
+  ) {
     throw new Error(
       `--logs-exporter ${options.logsExporter} requires --scenario ${expectedScenarioId}; ` +
         `got ${options.scenarioId}`,

@@ -139,6 +139,16 @@ describe("qa-otel-smoke receiver bounds", () => {
     ).toThrow("--logs-exporter stdout requires --scenario otel-stdout-log-smoke");
   });
 
+  it("allows explicit custom scenarios to own their exporter config", () => {
+    expect(testing.parseArgs(["--scenario", "custom-otel-smoke"]).scenarioId).toBe(
+      "custom-otel-smoke",
+    );
+    expect(
+      testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "custom-stdout-smoke"])
+        .scenarioId,
+    ).toBe("custom-stdout-smoke");
+  });
+
   it("parses body-size limit env values as strict positive integers", () => {
     expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
     expect(
