@@ -72,12 +72,17 @@ function runXaiToolPayloadWrapper(params: {
   api?: XaiStreamApi;
   modelId?: string;
   input?: string[];
+  config?: Record<string, unknown>;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
 }) {
   const baseStreamFn: StreamFn = (_model, _context, options) => {
     options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
     return {} as ReturnType<StreamFn>;
   };
-  const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+  const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn, {
+    config: params.config,
+    nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
+  });
   const api = params.api ?? "openai-responses";
 
   void wrapped(
@@ -287,6 +292,183 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
     expect(payload.tools[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("converts managed web_search function tools to xAI server-side web_search", () => {
+    const payload = {
+      tools: [
+        {
+          type: "function",
+          name: "web_search",
+          description: "managed search",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        },
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({ payload });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        name: "read",
+        parameters: { type: "object", properties: {} },
+      },
+      { type: "web_search" },
+    ]);
+  });
+
+  it("keeps managed web_search when another search provider is configured", () => {
+    const payload = {
+      tools: [
+        {
+          type: "function",
+          name: "web_search",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        },
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({
+      payload,
+      config: { tools: { web: { search: { enabled: true, provider: "brave" } } } },
+    });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        name: "web_search",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      {
+        type: "function",
+        name: "read",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
+  it("does not inject xAI server-side web_search when managed search is absent", () => {
+    const payload = {
+      tools: [
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({
+      payload,
+      nativeWebSearchAllowedByToolPolicy: true,
+    });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        name: "read",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
+  it("leaves managed web_search unchanged when native search is denied by policy", () => {
+    const payload = {
+      tools: [
+        {
+          type: "function",
+          name: "web_search",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        },
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({
+      payload,
+      nativeWebSearchAllowedByToolPolicy: false,
+    });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        name: "web_search",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+      {
+        type: "function",
+        name: "read",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
+  it("rewrites forced managed web_search tool_choice after native conversion", () => {
+    const payload = {
+      tool_choice: { type: "function", name: "web_search" },
+      tools: [
+        {
+          type: "function",
+          name: "web_search",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({ payload });
+
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
+    expect(payload.tool_choice).toEqual({ type: "web_search" });
+  });
+
+  it("rewrites managed web_search allowed_tools choices after native conversion", () => {
+    const payload = {
+      tool_choice: {
+        type: "allowed_tools",
+        mode: "required",
+        tools: [
+          { type: "function", name: "web_search" },
+          { type: "function", name: "read" },
+        ],
+      },
+      tools: [
+        {
+          type: "function",
+          name: "web_search",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        },
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({ payload });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        name: "read",
+        parameters: { type: "object", properties: {} },
+      },
+      { type: "web_search" },
+    ]);
+    expect(payload.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "web_search" }, { type: "function", name: "read" }],
+    });
   });
 
   it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {

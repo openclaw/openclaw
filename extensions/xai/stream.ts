@@ -14,6 +14,7 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-4", "grok-4-fast"],
   ["grok-4-0709", "grok-4-fast"],
 ]);
+const XAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
 
 function resolveXaiFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -38,6 +39,139 @@ function stripUnsupportedStrictFlag(tool: unknown): unknown {
   const nextFunction = { ...fnObj };
   delete nextFunction.strict;
   return { ...toolObj, function: nextFunction };
+}
+
+type XaiNativeWebSearchOptions = {
+  config?: unknown;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
+};
+
+function readNativeWebSearchAllowedByToolPolicy(
+  ctx: ProviderWrapStreamFnContext,
+): boolean | undefined {
+  return (ctx as { nativeWebSearchAllowedByToolPolicy?: boolean })
+    .nativeWebSearchAllowedByToolPolicy;
+}
+
+function isXaiResponsesWebSearchTool(tool: unknown): boolean {
+  if (!tool || typeof tool !== "object") {
+    return false;
+  }
+  return (tool as Record<string, unknown>).type === "web_search";
+}
+
+function isManagedWebSearchFunctionTool(tool: unknown): boolean {
+  if (!tool || typeof tool !== "object") {
+    return false;
+  }
+  const toolObj = tool as Record<string, unknown>;
+  if (toolObj.type !== "function") {
+    return false;
+  }
+  if (toolObj.name === "web_search") {
+    return true;
+  }
+  const fn = toolObj.function;
+  return (
+    Boolean(fn) && typeof fn === "object" && (fn as Record<string, unknown>).name === "web_search"
+  );
+}
+
+function readWebSearchConfig(config: unknown): Record<string, unknown> | undefined {
+  if (!config || typeof config !== "object") {
+    return undefined;
+  }
+  const tools = (config as Record<string, unknown>).tools;
+  if (!tools || typeof tools !== "object") {
+    return undefined;
+  }
+  const web = (tools as Record<string, unknown>).web;
+  if (!web || typeof web !== "object") {
+    return undefined;
+  }
+  const search = (web as Record<string, unknown>).search;
+  return search && typeof search === "object" ? (search as Record<string, unknown>) : undefined;
+}
+
+function shouldUseXaiNativeWebSearchProvider(config: unknown): boolean {
+  const search = readWebSearchConfig(config);
+  if (search?.enabled === false) {
+    return false;
+  }
+  if (typeof search?.provider !== "string") {
+    return true;
+  }
+  const provider = search.provider.trim().toLowerCase();
+  return provider === "" || provider === "auto" || provider === "grok";
+}
+
+function normalizeXaiWebSearchToolChoice(payloadObj: Record<string, unknown>): void {
+  const choice = payloadObj.tool_choice;
+  if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
+    return;
+  }
+  const choiceObj = choice as Record<string, unknown>;
+  if (isManagedWebSearchFunctionTool(choiceObj)) {
+    payloadObj.tool_choice = XAI_WEB_SEARCH_TOOL;
+    return;
+  }
+  if (choiceObj.type !== "allowed_tools" || !Array.isArray(choiceObj.tools)) {
+    return;
+  }
+
+  let changed = false;
+  let hasNativeWebSearch = false;
+  const tools: unknown[] = [];
+  for (const tool of choiceObj.tools) {
+    if (isManagedWebSearchFunctionTool(tool)) {
+      changed = true;
+      if (!hasNativeWebSearch) {
+        tools.push(XAI_WEB_SEARCH_TOOL);
+        hasNativeWebSearch = true;
+      }
+      continue;
+    }
+    if (isXaiResponsesWebSearchTool(tool)) {
+      if (hasNativeWebSearch) {
+        changed = true;
+        continue;
+      }
+      hasNativeWebSearch = true;
+    }
+    tools.push(tool);
+  }
+  if (!changed) {
+    return;
+  }
+  payloadObj.tool_choice = { ...choiceObj, tools };
+}
+
+function normalizeXaiResponsesWebSearchTools(
+  payloadObj: Record<string, unknown>,
+  model: { api?: unknown },
+  options?: XaiNativeWebSearchOptions,
+): void {
+  if (model.api !== "openai-responses") {
+    return;
+  }
+  const nativeWebSearchAllowedByPolicy = options?.nativeWebSearchAllowedByToolPolicy !== false;
+  const shouldUseNativeWebSearch =
+    nativeWebSearchAllowedByPolicy && shouldUseXaiNativeWebSearchProvider(options?.config);
+  if (!shouldUseNativeWebSearch) {
+    return;
+  }
+
+  const existingTools = Array.isArray(payloadObj.tools) ? payloadObj.tools : [];
+  const filteredTools = existingTools.filter((tool) => !isManagedWebSearchFunctionTool(tool));
+  const hasManagedWebSearch = filteredTools.length !== existingTools.length;
+  const hasNativeWebSearch = filteredTools.some(isXaiResponsesWebSearchTool);
+
+  if (!hasManagedWebSearch) {
+    return;
+  }
+
+  payloadObj.tools = hasNativeWebSearch ? filteredTools : [...filteredTools, XAI_WEB_SEARCH_TOOL];
+  normalizeXaiWebSearchToolChoice(payloadObj);
 }
 
 function supportsExplicitImageInput(model: { input?: unknown }): boolean {
@@ -166,18 +300,20 @@ function normalizeXaiResponsesToolResultPayload(
 
 export function createXaiToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
+  wrapperOptions?: XaiNativeWebSearchOptions,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
+  return (model, context, streamOptions) => {
+    const originalOnPayload = streamOptions?.onPayload;
     return underlying(model, context, {
-      ...options,
+      ...streamOptions,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           if (Array.isArray(payloadObj.tools)) {
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
+          normalizeXaiResponsesWebSearchTools(payloadObj, model, wrapperOptions);
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
             delete payloadObj.reasoning;
@@ -217,7 +353,10 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
   const fastMode = extraParams?.fastMode;
   const toolStreamEnabled = extraParams?.tool_stream !== false;
   return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
-    let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
+    let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn, {
+      config: ctx.config,
+      nativeWebSearchAllowedByToolPolicy: readNativeWebSearchAllowedByToolPolicy(ctx),
+    });
     if (typeof fastMode === "boolean") {
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
     }
