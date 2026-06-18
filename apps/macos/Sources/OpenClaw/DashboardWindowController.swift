@@ -19,7 +19,7 @@ private final class DashboardWindowDragRegionView: NSView {
 }
 
 @MainActor
-final class DashboardWindowController: NSWindowController, WKNavigationDelegate, NSWindowDelegate {
+final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private let webView: WKWebView
     private var currentURL: URL
     private var auth: DashboardWindowAuth
@@ -44,6 +44,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         super.init(window: window)
 
         self.webView.navigationDelegate = self
+        self.webView.uiDelegate = self
         self.window?.delegate = self
     }
 
@@ -265,6 +266,29 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         NSWorkspace.shared.open(url)
         decisionHandler(.cancel)
+    }
+
+    func webView(
+        _: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame _: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void)
+    {
+        let panel = Self.makeOpenPanel(
+            allowsDirectories: parameters.allowsDirectories,
+            allowsMultipleSelection: parameters.allowsMultipleSelection)
+        panel.begin { result in
+            completionHandler(result == .OK ? panel.urls : nil)
+        }
+    }
+
+    static func makeOpenPanel(allowsDirectories: Bool, allowsMultipleSelection: Bool) -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = allowsDirectories
+        panel.allowsMultipleSelection = allowsMultipleSelection
+        panel.resolvesAliases = true
+        return panel
     }
 
     func webView(_: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
