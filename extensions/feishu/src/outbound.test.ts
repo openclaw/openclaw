@@ -453,7 +453,9 @@ describe("feishuOutbound.sendPayload native cards", () => {
     if (!rendered) {
       throw new Error("expected Feishu presentation renderer to return a payload");
     }
-    expect(rendered.text).toBe("Approval\n\nApprove the request?\n\n- Approve");
+    expect(rendered.text).toBe(
+      "Approval\n\nApprove the request?\n\n- Approve: `/approve req_1 allow-once`",
+    );
     const renderedChannelData = rendered.channelData as
       | { feishu?: { card?: Record<string, any> } }
       | undefined;
@@ -849,7 +851,9 @@ describe("feishuOutbound.sendPayload native cards", () => {
     });
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(commentThreadParams()?.content).toBe("Review this\n\n- Approve");
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    );
     expectFeishuResult(result, "reply_msg");
   });
 });

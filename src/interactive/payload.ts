@@ -529,7 +529,14 @@ export function renderMessagePresentationFallbackText(params: {
       const labels = block.buttons
         .map((button) => {
           const targetUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
-          return targetUrl ? `${button.label}: ${targetUrl}` : button.label;
+          if (targetUrl) {
+            return `${button.label}: ${targetUrl}`;
+          }
+          const controlValue = resolveMessagePresentationControlValue(button);
+          if (controlValue) {
+            return `${button.label}: \`${controlValue}\``;
+          }
+          return button.label;
         })
         .filter(Boolean);
       if (labels.length > 0) {
