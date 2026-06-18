@@ -25,6 +25,12 @@ let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
+type SyncImpl = (params?: {
+  reason?: string;
+  force?: boolean;
+  sessionFiles?: string[];
+}) => Promise<void> | void;
+let syncImpl: SyncImpl = () => undefined;
 let getManagerImpl:
   | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
       manager?: unknown;
@@ -55,7 +61,7 @@ const stubManager = {
     sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
     custom: customStatus,
   }),
-  sync: vi.fn(),
+  sync: vi.fn(async (params?: Parameters<SyncImpl>[0]) => await syncImpl(params)),
   probeVectorAvailability: vi.fn(async () => true),
   close: vi.fn(),
 };
@@ -97,6 +103,10 @@ export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
 
+export function setMemorySyncImpl(next: SyncImpl): void {
+  syncImpl = next;
+}
+
 export function setMemorySearchManagerImpl(
   next: (params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
     manager?: unknown;
@@ -122,6 +132,7 @@ export function resetMemoryToolMockState(overrides?: {
   customStatus = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
+  syncImpl = () => undefined;
   readFileImpl =
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({

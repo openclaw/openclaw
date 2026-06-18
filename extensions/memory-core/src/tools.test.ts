@@ -11,6 +11,7 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+  setMemorySyncImpl,
 } from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
@@ -146,8 +147,9 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the index/embedding backend responded.",
+        action:
+          "Retry memory_search; if timeouts persist, check embedding-provider latency and index health (openclaw memory status --deep).",
       });
     } finally {
       vi.useRealTimers();
@@ -172,16 +174,18 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the index/embedding backend responded.",
+        action:
+          "Retry memory_search; if timeouts persist, check embedding-provider latency and index health (openclaw memory status --deep).",
       });
       // The deadline must abort the orphaned search, not just race past it.
       expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the index/embedding backend responded.",
+        action:
+          "Retry memory_search; if timeouts persist, check embedding-provider latency and index health (openclaw memory status --deep).",
       });
       expect(searchCalls).toBe(1);
     } finally {
@@ -210,8 +214,9 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the index/embedding backend responded.",
+        action:
+          "Retry memory_search; if timeouts persist, check embedding-provider latency and index health (openclaw memory status --deep).",
       });
     } finally {
       vi.useRealTimers();
@@ -344,6 +349,75 @@ describe("memory_search unavailable payloads", () => {
       "MEMORY.md",
     );
     expect(searchCalls).toBe(2);
+  });
+
+  it("abandons a zero-hit forced sync that outruns the deadline without latching a cooldown", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return [];
+      });
+      // Forced sync never settles: it must be abandoned at the budget, not
+      // awaited until the hard tool timeout.
+      setMemorySyncImpl(() => new Promise<void>(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { citations: "off" },
+        },
+      });
+
+      const resultPromise = tool.execute("slow-forced-sync", { query: "hidden thread codename" });
+      // Advance past the forced-sync budget (timeout - safety margin) but the
+      // call must already have resolved well before the 15s hard deadline.
+      await vi.advanceTimersByTimeAsync(13_000);
+      const result = await resultPromise;
+
+      // Available, empty result — NOT an unavailable/timeout payload.
+      const details = result.details as { results?: unknown[]; disabled?: boolean };
+      expect(details.disabled).toBeUndefined();
+      expect(details.results).toEqual([]);
+      // Only the initial search ran; the post-sync retry was skipped because the
+      // sync was abandoned.
+      expect(searchCalls).toBe(1);
+      expect(getMemorySyncMockCalls()).toBe(1);
+
+      // A merely-slow sync must not trip the 60s provider-error cooldown: the
+      // next call still queries memory rather than short-circuiting.
+      setMemorySyncImpl(() => undefined);
+      let secondCallSearches = 0;
+      setMemorySearchImpl(async () => {
+        secondCallSearches += 1;
+        return [];
+      });
+      await tool.execute("after-slow-forced-sync", { query: "hidden thread codename" });
+      expect(secondCallSearches).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces an honest timeout message instead of blaming the embedding provider", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("honest-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await resultPromise;
+
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search timed out before the index/embedding backend responded.",
+        action:
+          "Retry memory_search; if timeouts persist, check embedding-provider latency and index health (openclaw memory status --deep).",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns unavailable metadata when the index identity is paused", async () => {

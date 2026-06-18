@@ -102,8 +102,9 @@ async function closeMemoryManagers(
 
 async function runMemorySearchToolWithDeadline<T>(params: {
   timeoutMs: number;
-  run: (signal: AbortSignal) => Promise<T>;
+  run: (ctx: { signal: AbortSignal; timeoutMs: number; startedAt: number }) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
+  const startedAt = Date.now();
   const timeoutError = () =>
     new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`);
   // Abort the losing task when the deadline fires so in-flight embedding work
@@ -121,7 +122,11 @@ async function runMemorySearchToolWithDeadline<T>(params: {
     }, params.timeoutMs);
     timer.unref?.();
   });
-  const task = params.run(controller.signal);
+  const task = params.run({
+    signal: controller.signal,
+    timeoutMs: params.timeoutMs,
+    startedAt,
+  });
   task.catch(() => undefined);
 
   try {
@@ -140,6 +145,71 @@ async function runMemorySearchToolWithDeadline<T>(params: {
       clearTimeout(timer);
     }
   }
+}
+
+// Reserve a slice of the tool deadline so the optional zero-hit forced refresh
+// can never push the call into a hard timeout. When the forced sync would run
+// past `deadline - margin` we abandon the wait (the sync keeps running in the
+// background, deduped by the manager) and return whatever results we have as a
+// normal response, instead of blocking to the hard timeout and latching the
+// provider-error cooldown on a healthy-but-slow store. See esqandil/openclaw#4.
+const MEMORY_SEARCH_FORCED_SYNC_SAFETY_MARGIN_MS = 2_000;
+
+type ForcedSyncOutcome = "completed" | "abandoned";
+
+/**
+ * Await the zero-hit forced index refresh, bounded by `budgetMs` and by the
+ * tool deadline.
+ *
+ * `manager.sync({ force: true })` does not accept an AbortSignal and can run
+ * for many seconds against a large or degraded store. Awaiting it unbounded
+ * made a zero-hit query block to the hard `memory_search` timeout and then
+ * latch the 60s cooldown — even when the store was healthy and merely slow,
+ * and even though `manager.search()` has already scheduled an async background
+ * sync that catches the index up for the next call.
+ *
+ * Resolves "completed" only when the sync settled in time (so the caller should
+ * run the retry search); resolves "abandoned" on budget/deadline expiry (caller
+ * keeps its current results). A sync rejection that arrives before the budget
+ * fires is re-thrown so the prior surfaced-error behavior is preserved.
+ */
+async function waitForForcedSyncWithinBudget(
+  forcedSync: Promise<void> | void,
+  budgetMs: number,
+  deadlineSignal: AbortSignal,
+): Promise<ForcedSyncOutcome> {
+  let rejected = false;
+  let rejection: unknown;
+  // Normalize: a manager may return void/undefined (e.g. a no-op or test
+  // double) rather than a promise; treat that as an immediately-settled sync.
+  const guarded = Promise.resolve(forcedSync).then(
+    () => undefined,
+    (err: unknown) => {
+      rejected = true;
+      rejection = err;
+    },
+  );
+  if (budgetMs <= 0 || deadlineSignal.aborted) {
+    return "abandoned";
+  }
+  const outcome = await new Promise<ForcedSyncOutcome>((resolve) => {
+    const timer = setTimeout(() => resolve("abandoned"), budgetMs);
+    timer.unref?.();
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve("abandoned");
+    };
+    deadlineSignal.addEventListener("abort", onAbort, { once: true });
+    void guarded.then(() => {
+      clearTimeout(timer);
+      deadlineSignal.removeEventListener("abort", onAbort);
+      resolve("completed");
+    });
+  });
+  if (outcome === "completed" && rejected) {
+    throw rejection;
+  }
+  return outcome;
 }
 
 const PAUSED_MEMORY_INDEX_WARNING =
@@ -414,7 +484,11 @@ export function createMemorySearchTool(options: {
 
         const outcome = await runMemorySearchToolWithDeadline({
           timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
-          run: async (deadlineSignal) => {
+          run: async ({
+            signal: deadlineSignal,
+            timeoutMs: toolTimeoutMs,
+            startedAt: runStartedAt,
+          }) => {
             const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
@@ -532,13 +606,34 @@ export function createMemorySearchTool(options: {
                     return;
                   }
                   if (rawResults.length === 0 && activeMemory.manager.sync) {
-                    await activeMemory.manager.sync({ reason: "search", force: true });
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
-                    pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
-                      activeMemory.manager.status(),
+                    // A zero-hit query against a populated index triggers a
+                    // one-shot forced refresh in case the index is stale. Bound
+                    // that refresh so a slow/degraded sync cannot consume the
+                    // whole interactive budget (and falsely trip the
+                    // provider-error cooldown). If the sync outruns its budget
+                    // we keep our current results and let the background sync
+                    // already scheduled by search() catch up the next call.
+                    const forcedSync = activeMemory.manager.sync({
+                      reason: "search",
+                      force: true,
+                    });
+                    const forcedSyncBudgetMs =
+                      toolTimeoutMs -
+                      (Date.now() - runStartedAt) -
+                      MEMORY_SEARCH_FORCED_SYNC_SAFETY_MARGIN_MS;
+                    const forcedSyncOutcome = await waitForForcedSyncWithinBudget(
+                      forcedSync,
+                      forcedSyncBudgetMs,
+                      deadlineSignal,
                     );
-                    if (pausedIndexIdentityReason) {
-                      return;
+                    if (forcedSyncOutcome === "completed") {
+                      rawResults = await activeMemory.manager.search(query, searchOptions);
+                      pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                        activeMemory.manager.status(),
+                      );
+                      if (pausedIndexIdentityReason) {
+                        return;
+                      }
                     }
                   }
                   rawResults = await filterMemorySearchHitsBySessionVisibility({

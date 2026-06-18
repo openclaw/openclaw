@@ -113,17 +113,28 @@ export function buildMemorySearchUnavailableResult(
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
+  const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
+  const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
+  // A tool-deadline timeout is not necessarily a provider misconfiguration: it
+  // is just as often a slow/stalled index refresh or backend latency. Surface
+  // an honest, actionable message instead of blaming the embedding-provider
+  // config (which has sent at least one investigation down the wrong path).
+  // See esqandil/openclaw#4.
+  const isTimeoutError = normalizedReason.includes("timed out");
   const warning =
     overrides?.warning ??
     (isQuotaError
       ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : "Memory search is unavailable due to an embedding/provider error.");
+      : isTimeoutError
+        ? "Memory search timed out before the index/embedding backend responded."
+        : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
-      : "Check embedding provider configuration and retry memory_search.");
+      : isTimeoutError
+        ? "Retry memory_search; if timeouts persist, check embedding-provider latency and index health (openclaw memory status --deep)."
+        : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,
