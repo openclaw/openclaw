@@ -72,6 +72,7 @@ import {
 } from "./manager-provider-state.js";
 import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
+  MEMORY_FTS_TEXT_FORMAT_CURRENT,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
@@ -585,6 +586,7 @@ export abstract class MemoryManagerSyncOps {
           ? Boolean(params.hasIndexedChunks)
           : this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
+      ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
     });
   }
 
@@ -2327,6 +2329,7 @@ export abstract class MemoryManagerSyncOps {
       vectorReady,
       hasIndexedChunks: this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
+      ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
     });
     const hasIndexedChunks = this.hasIndexedChunks();
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
@@ -2648,6 +2651,7 @@ export abstract class MemoryManagerSyncOps {
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         ftsTokenizer: this.settings.store.fts.tokenizer,
+        ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
       };
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;

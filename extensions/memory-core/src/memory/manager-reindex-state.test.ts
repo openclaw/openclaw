@@ -2,6 +2,7 @@
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
+  MEMORY_FTS_TEXT_FORMAT_CURRENT,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
@@ -20,6 +21,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
     chunkTokens: 4000,
     chunkOverlap: 0,
     ftsTokenizer: "unicode61",
+    ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
     ...overrides,
   };
 }
@@ -38,6 +40,7 @@ function createIdentityParams(
     vectorReady?: boolean;
     hasIndexedChunks?: boolean;
     ftsTokenizer?: string;
+    ftsTextFormat?: string;
   } = {},
 ) {
   return {
@@ -51,6 +54,7 @@ function createIdentityParams(
     vectorReady: false,
     hasIndexedChunks: true,
     ftsTokenizer: "unicode61",
+    ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
     ...overrides,
   };
 }
@@ -304,6 +308,38 @@ describe("memory reindex state", () => {
         createIdentityParams({
           provider: { id: "openai", model: "  " },
           meta: createMeta({ model: "fts-only" }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("marks identity dirty when meta is missing the FTS text format (legacy index)", () => {
+    // Regression for #94102: pre-upgrade indexes wrote chunk body only to chunks_fts.text
+    // and would otherwise pass identity checks, leaving filename queries broken on upgrade.
+    const legacyMeta = createMeta();
+    delete legacyMeta.ftsTextFormat;
+    const state = resolveMemoryIndexIdentityState(createIdentityParams({ meta: legacyMeta }));
+    expect(state.status).toBe("mismatched");
+    if (state.status === "mismatched") {
+      expect(state.reason).toContain("FTS text format");
+    }
+  });
+
+  it("marks identity dirty when the configured FTS text format differs from meta", () => {
+    expect(
+      isMemoryIndexIdentityDirty(
+        createIdentityParams({
+          meta: createMeta({ ftsTextFormat: "future-format-v2" }),
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats indexes that record the current FTS text format as valid", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT }),
         }),
       ),
     ).toEqual({ status: "valid" });
