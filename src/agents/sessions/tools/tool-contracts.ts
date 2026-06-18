@@ -71,7 +71,6 @@ export interface ReadToolInput {
   path: string;
   offset?: number;
   limit?: number;
-  encoding?: string;
 }
 
 export interface ReadToolDetails {
