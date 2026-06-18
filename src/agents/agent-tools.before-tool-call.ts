@@ -37,7 +37,8 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getGlobalHookRunner, getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {

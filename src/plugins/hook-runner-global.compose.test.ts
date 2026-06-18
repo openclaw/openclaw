@@ -5,8 +5,8 @@
  * loader.hook-runner-live-view.test.ts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import {
-  getGlobalHookRunnerRegistry,
   getGlobalHookRunner,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,

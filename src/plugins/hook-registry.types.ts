@@ -1,7 +1,6 @@
 // Defines plugin hook registry entry and dispatch types.
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginHookRegistration as TypedPluginHookRegistration } from "./hook-types.js";
-import type { PluginTrustedToolPolicyRegistryRegistration } from "./registry-types.js";
 
 /** Legacy hook registration stored by the global hook runner registry. */
 export type PluginLegacyHookRegistration = {
@@ -24,5 +23,4 @@ export type GlobalHookRunnerRegistry = HookRunnerRegistry & {
     id: string;
     status: "loaded" | "disabled" | "error";
   }>;
-  trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
 };

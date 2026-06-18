@@ -13,6 +13,10 @@ async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
 }
 
+async function importHookRunnerGlobalStateModule() {
+  return import("./hook-runner-global-state.js");
+}
+
 type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
 type HookRunner = NonNullable<ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>>;
 
@@ -114,8 +118,9 @@ describe("hook-runner-global", () => {
         true,
       );
       expect(mod.getGlobalPluginRegistry()).toBe(laterRegistry);
+      const stateMod = await importHookRunnerGlobalStateModule();
       expect(
-        mod
+        stateMod
           .getGlobalHookRunnerRegistry()
           ?.trustedToolPolicies?.map((registration) => [
             registration.pluginId,
