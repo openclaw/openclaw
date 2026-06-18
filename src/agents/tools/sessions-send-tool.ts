@@ -577,6 +577,11 @@ export function createSessionsSendTool(opts?: {
               }).catch(() => undefined)
             : undefined;
 
+      // Load the target session entry to derive the delivery channel from
+      // the resolved session metadata instead of hardcoding INTERNAL_MESSAGE_CHANNEL.
+      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
+      const resolvedChannel = targetSessionEntry?.channel?.trim() || INTERNAL_MESSAGE_CHANNEL;
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
@@ -594,7 +599,7 @@ export function createSessionsSendTool(opts?: {
         idempotencyKey,
         deliver: false,
         sourceReplyDeliveryMode: "message_tool_only" as const,
-        channel: INTERNAL_MESSAGE_CHANNEL,
+        channel: resolvedChannel,
         lane: resolveNestedAgentLaneForSession(resolvedKey),
         extraSystemPrompt: agentMessageContext,
         inputProvenance,
@@ -617,7 +622,6 @@ export function createSessionsSendTool(opts?: {
       // unrelated sender that can see the same target (e.g. under
       // `tools.sessions.visibility=all`) must still go through the normal A2A
       // path so it actually receives a follow-up delivery.
-      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
       const targetAcpMeta = readAcpSessionMeta({ sessionKey: resolvedKey });
       const targetSessionEntryWithAcp =
         targetAcpMeta && targetSessionEntry
