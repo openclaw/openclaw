@@ -1184,10 +1184,24 @@ function createConfigEphemeralState(): ConfigEphemeralState {
 
 const cvs = createConfigEphemeralState();
 let lastConfigContextKey: string | null = null;
+let lastFormModeForScroll: ConfigProps["formMode"] | null = null;
 
 function resetConfigEphemeralState() {
   Object.assign(cvs, createConfigEphemeralState());
   rawDiffCache = undefined;
+}
+
+function resetContentScroll() {
+  const content = globalThis.document?.querySelector<HTMLElement>(".config-content");
+  if (!content) {
+    return;
+  }
+  if (typeof content.scrollTo === "function") {
+    content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    return;
+  }
+  content.scrollTop = 0;
+  content.scrollLeft = 0;
 }
 
 function configContextKey(props: ConfigProps): string {
@@ -1237,6 +1251,12 @@ export function renderConfig(props: ConfigProps) {
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Reset scroll position when switching between form and raw mode
+  if (lastFormModeForScroll !== null && lastFormModeForScroll !== formMode) {
+    queueMicrotask(() => resetContentScroll());
+  }
+  lastFormModeForScroll = formMode;
+
   const currentContextKey = configContextKey(props);
   if (lastConfigContextKey !== currentContextKey) {
     resetConfigEphemeralState();
