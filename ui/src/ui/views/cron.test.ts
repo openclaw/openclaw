@@ -900,4 +900,40 @@ describe("cron view", () => {
       "cron-thinking-suggestions",
     ]);
   });
+
+  it("scrolls the run history card into view when History is clicked", () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    try {
+      const container = document.createElement("div");
+      const onLoadRuns = vi.fn();
+      render(
+        renderCron(
+          createProps({
+            jobs: [createJob("job-1")],
+            onLoadRuns,
+          }),
+        ),
+        container,
+      );
+
+      const runHistory = getElement(container, "[data-run-history]", HTMLElement);
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(runHistory, "scrollIntoView", {
+        configurable: true,
+        value: scrollIntoView,
+      });
+
+      getButtonByText(container, "History").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+
+      expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
