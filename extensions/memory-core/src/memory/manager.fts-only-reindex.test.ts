@@ -65,7 +65,7 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
+    params: { provider?: string; vectorEnabled?: boolean; onSearch?: boolean } = {},
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
@@ -83,7 +83,11 @@ describe("memory manager FTS-only reindex", () => {
             model: "",
             store,
             cache: { enabled: false },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
+            sync: {
+              watch: false,
+              onSessionStart: false,
+              onSearch: params.onSearch ?? false,
+            },
           },
         },
         list: [{ id: "main", default: true }],
@@ -279,6 +283,82 @@ describe("memory manager FTS-only reindex", () => {
       const ftsHit = verifyDb
         .prepare(`SELECT COUNT(*) AS c FROM chunks_fts WHERE chunks_fts MATCH ?`)
         .get("1649") as { c: number } | undefined;
+      expect(ftsHit?.c ?? 0).toBeGreaterThan(0);
+    } finally {
+      verifyDb.close();
+    }
+  });
+
+  it("self-heals legacy FTS-only indexes during shared memory_search (#94102)", async () => {
+    // Same upgrade scenario as the prior test, but exercises the path real users hit:
+    // they call manager.search()/memory_search rather than running the CLI sync. The
+    // self-heal trigger has to fire on the default `reason: "search"` path too, not
+    // just `reason: "cli"`.
+    const filenameStem = "2026-06-17-1701";
+    const memoryFilePath = path.join(workspaceDir, "memory", `${filenameStem}.md`);
+    await fs.writeFile(
+      memoryFilePath,
+      "Token has been expired or revoked Google OAuth Testing mode\n",
+    );
+
+    let memoryManager = await createManager({
+      provider: "none",
+      vectorEnabled: false,
+      onSearch: true,
+    });
+    await memoryManager.sync({ force: true });
+
+    const downgradeDb = new DatabaseSync(indexPath);
+    try {
+      const metaRow = downgradeDb
+        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .get() as { value: string } | undefined;
+      const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
+      delete meta.ftsTextFormat;
+      downgradeDb
+        .prepare(`UPDATE meta SET value = ? WHERE key = 'memory_index_meta_v1'`)
+        .run(JSON.stringify(meta));
+      const ftsRows = downgradeDb.prepare(`SELECT id, text FROM chunks_fts`).all() as Array<{
+        id: string;
+        text: string;
+      }>;
+      const stripPrefix = downgradeDb.prepare(`UPDATE chunks_fts SET text = ? WHERE id = ?`);
+      const prefix = `memory/${filenameStem}.md\n`;
+      for (const row of ftsRows) {
+        const legacyText = row.text.startsWith(prefix) ? row.text.slice(prefix.length) : row.text;
+        stripPrefix.run(legacyText, row.id);
+      }
+    } finally {
+      downgradeDb.close();
+    }
+
+    await memoryManager.close();
+    manager = null;
+
+    memoryManager = await createManager({
+      provider: "none",
+      vectorEnabled: false,
+      onSearch: true,
+    });
+    expect(memoryManager.status().custom?.indexIdentity).toMatchObject({
+      status: "mismatched",
+    });
+
+    // The user-facing entry point — no force, no reason="cli" — must self-heal.
+    await memoryManager.search(filenameStem);
+
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    const verifyDb = new DatabaseSync(indexPath);
+    try {
+      const metaRow = verifyDb
+        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .get() as { value: string } | undefined;
+      const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
+      expect(meta.ftsTextFormat).toBe("path-prefixed-v1");
+      const ftsHit = verifyDb
+        .prepare(`SELECT COUNT(*) AS c FROM chunks_fts WHERE chunks_fts MATCH ?`)
+        .get("1701") as { c: number } | undefined;
       expect(ftsHit?.c ?? 0).toBeGreaterThan(0);
     } finally {
       verifyDb.close();
