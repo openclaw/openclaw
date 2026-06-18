@@ -4496,6 +4496,7 @@ export async function runEmbeddedAttempt(
             systemPromptChars: systemLen,
             promptChars: promptLen,
             promptImages: imageResult.images.length,
+            durationMs: Date.now() - promptStartedAt,
             contextTokenBudget,
             reserveTokens,
             trace: freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),

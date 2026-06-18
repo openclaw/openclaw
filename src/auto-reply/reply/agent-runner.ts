@@ -38,7 +38,6 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -119,6 +118,7 @@ import {
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { measureReplyPhaseDiagnostics } from "./reply-phase-diagnostics.js";
 import {
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -1213,10 +1213,15 @@ export async function runReplyAgent(params: {
     blockStreamingEnabled,
   };
   const traceAgentPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
+    measureReplyPhaseDiagnostics(name, run, {
+      timelinePhase: "agent-turn",
       config: followupRun.run.config,
       attributes: traceAttributes,
+      channel: followupRun.run.messageProvider,
+      provider: followupRun.run.provider,
+      model: followupRun.run.model,
+      sessionKey: sessionKey ?? followupRun.run.sessionKey,
+      sessionId: followupRun.run.sessionId,
     });
   const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;

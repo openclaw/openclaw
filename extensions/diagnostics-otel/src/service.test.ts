@@ -2459,6 +2459,7 @@ describe("diagnostics-otel service", () => {
       systemPromptChars: 789,
       promptChars: 42,
       promptImages: 1,
+      durationMs: 37,
       contextTokenBudget: 128_000,
       reserveTokens: 4096,
       trace: {
@@ -2489,6 +2490,14 @@ describe("diagnostics-otel service", () => {
     expect(contextOptions?.attributes?.["openclaw.context.reserve_tokens"]).toBe(4096);
     expect(contextOptions?.attributes).toBeTypeOf("object");
     expect(contextOptions?.startTime).toBeTypeOf("number");
+    const contextDuration = lastHistogramRecord("openclaw.context.assembly.duration_ms");
+    expect(contextDuration?.[0]).toBe(37);
+    expect(contextDuration?.[1]).toMatchObject({
+      "openclaw.channel": "webchat",
+      "openclaw.model": "gpt-5.4",
+      "openclaw.provider": "openai",
+      "openclaw.trigger": "message",
+    });
     expect(JSON.stringify(contextCall)).not.toContain("session-key");
     expect(JSON.stringify(contextCall)).not.toContain("prompt text");
     const linkedSpanContext = firstSetSpanContext();
@@ -4033,6 +4042,117 @@ describe("diagnostics-otel service", () => {
     expect(deliveryOptions?.attributes?.["openclaw.outcome"]).toBe("completed");
     expect(deliveryOptions?.attributes?.["openclaw.delivery.result_count"]).toBe(1);
     expect(deliveryOptions?.startTime).toBeTypeOf("number");
+    await service.stop?.(ctx);
+  });
+
+  test("exports reply phase spans and metrics with bounded attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.build_prompt_bodies",
+      phaseGroup: "pre_model",
+      durationMs: 999,
+      outcome: "completed",
+      channel: "telegram",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.build_prompt_bodies",
+      phaseGroup: "pre_model",
+      durationMs: Number.NaN,
+      outcome: "completed",
+      channel: "telegram",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.build_prompt_bodies",
+      phaseGroup: "pre_model",
+      durationMs: 999,
+      outcome: "secret" as never,
+      channel: "telegram",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.secret_user_input" as never,
+      phaseGroup: "pre_model",
+      durationMs: 999,
+      outcome: "completed",
+      channel: "telegram",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.build_prompt_bodies",
+      phaseGroup: "pre_model",
+      durationMs: 42,
+      outcome: "completed",
+      channel: "telegram",
+      provider: "openai",
+      model: "gpt-5.5",
+      trigger: "message",
+      runId: "run-secret",
+      sessionKey: "session-secret",
+      sessionId: "session-id",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.memory_flush",
+      phaseGroup: "pre_model",
+      durationMs: 12,
+      outcome: "error",
+      errorCategory: "TypeError",
+      channel: "telegram/custom" as never,
+    });
+    await flushDiagnosticEvents();
+
+    const records = telemetryState.histograms.get("openclaw.reply.phase.duration_ms")?.record.mock
+      .calls as Array<[unknown, Record<string, unknown>]>;
+    expect(records).toHaveLength(2);
+    expect(records[0]?.[0]).toBe(42);
+    expect(records[0]?.[1]).toMatchObject({
+      "openclaw.reply.phase": "reply.build_prompt_bodies",
+      "openclaw.reply.phase_group": "pre_model",
+      "openclaw.outcome": "completed",
+      "openclaw.channel": "telegram",
+      "openclaw.provider": "openai",
+      "openclaw.model": "gpt-5.5",
+      "openclaw.trigger": "message",
+    });
+    expect(records[1]?.[0]).toBe(12);
+    expect(records[1]?.[1]).toMatchObject({
+      "openclaw.reply.phase": "reply.memory_flush",
+      "openclaw.reply.phase_group": "pre_model",
+      "openclaw.outcome": "error",
+      "openclaw.channel": "unknown",
+      "openclaw.errorCategory": "TypeError",
+    });
+
+    const replyPhaseSpanCalls = telemetryState.tracer.startSpan.mock.calls.filter(
+      (call) => call[0] === "openclaw.reply.phase",
+    );
+    expect(replyPhaseSpanCalls).toHaveLength(2);
+    const firstOptions = replyPhaseSpanCalls[0]?.[1] as
+      | { attributes?: Record<string, unknown>; startTime?: unknown }
+      | undefined;
+    expect(firstOptions?.attributes).toMatchObject(records[0]?.[1] ?? {});
+    expect(firstOptions?.startTime).toBeTypeOf("number");
+    expect(JSON.stringify(firstOptions?.attributes)).not.toContain("run-secret");
+    expect(JSON.stringify(firstOptions?.attributes)).not.toContain("session-secret");
+    const errorSpan = telemetryState.spans.find(
+      (span) => span.name === "openclaw.reply.phase" && span.setStatus.mock.calls.length > 0,
+    );
+    expect(errorSpan?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "TypeError",
+    });
     await service.stop?.(ctx);
   });
 

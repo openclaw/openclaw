@@ -9,6 +9,7 @@ export {
   isValidDiagnosticTraceId,
   onDiagnosticEvent,
   parseDiagnosticTraceparent,
+  resolveDiagnosticReplyPhaseGroup,
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
   type DiagnosticTraceContext,

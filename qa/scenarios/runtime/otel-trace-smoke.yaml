@@ -62,14 +62,15 @@ flow:
         - set: startCursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: runAgentPrompt
+        - call: state.addInboundMessage
           args:
-            - ref: env
-            - sessionKey: agent:qa:otel-trace-smoke
-              message:
+            - conversation:
+                id: qa-operator
+                kind: direct
+              senderId: qa-operator
+              senderName: QA Operator
+              text:
                 expr: config.prompt
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 30000)
         - call: waitForCondition
           saveAs: outbound
           args:

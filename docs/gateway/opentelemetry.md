@@ -216,6 +216,8 @@ on the public diagnostic event bus.
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`, `openclaw.delivery.kind`)
 - `openclaw.message.delivery.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`)
+- `openclaw.reply.phase.duration_ms` (histogram, attrs: `openclaw.reply.phase`, `openclaw.reply.phase_group`, `openclaw.outcome`, optional `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.trigger`, `openclaw.errorCategory`)
+- `openclaw.context.assembly.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.trigger`)
 
 ### Talk
 
@@ -341,10 +343,13 @@ Liveness warnings also emit:
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
+- `openclaw.reply.phase`
+  - `openclaw.reply.phase`, `openclaw.reply.phase_group`, `openclaw.outcome`, optional `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.trigger`, `openclaw.errorCategory`
+  - Phase names come from a closed OpenClaw-owned allowlist; aggregate wrapper phases and raw run/session/message identifiers are not exported.
 - `openclaw.session.stuck`
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
 - `openclaw.context.assembled`
-  - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, response, or session-key content)
+  - Prompt and history size attributes such as `openclaw.context.message_count`, `openclaw.context.history_text_chars`, `openclaw.context.prompt_chars`, `openclaw.context.prompt_images`, and token-budget fields when known (no prompt, history, response, or session-key content)
 - `openclaw.tool.loop`
   - `openclaw.toolName`, `openclaw.outcome`, `openclaw.iterations`, `openclaw.errorCategory` (no loop messages, params, or tool output)
 - `openclaw.memory.pressure`

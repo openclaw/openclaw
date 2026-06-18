@@ -62,7 +62,6 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
@@ -154,6 +153,7 @@ import type {
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import { measureReplyPhaseDiagnostics } from "./reply-phase-diagnostics.js";
 import {
   forceClearReplyRunBySessionId,
   replyRunRegistry,
@@ -1128,10 +1128,13 @@ export async function dispatchReplyFromConfig(
   });
   const traceReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     replyHotPathTiming.measure(name, () =>
-      measureDiagnosticsTimelineSpan(name, run, {
-        phase: "agent-turn",
+      measureReplyPhaseDiagnostics(name, run, {
+        timelinePhase: "agent-turn",
         config: cfg,
         attributes: traceAttributes,
+        channel,
+        runId: params.replyOptions?.runId,
+        sessionKey,
       }),
     );
   let agentDispatchStartedAt = 0;

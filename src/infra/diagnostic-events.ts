@@ -228,6 +228,61 @@ export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseE
   errorCategory: string;
 };
 
+export const DIAGNOSTIC_REPLY_PHASE_GROUP_BY_NAME = {
+  "reply.load_runtime_plugins": "dispatch",
+  "reply.ensure_runtime_plugins": "dispatch",
+  "reply.before_dispatch_hooks": "dispatch",
+  "reply.reply_dispatch_hooks": "dispatch",
+  "reply.load_reply_resolver": "dispatch",
+  "reply.native_slash_command_fast_path": "resolver",
+  "reply.ensure_workspace": "resolver",
+  "reply.stage_remote_media_pre_understanding": "resolver",
+  "reply.apply_media_understanding": "resolver",
+  "reply.apply_link_understanding": "resolver",
+  "reply.init_session_state": "resolver",
+  "reply.resolve_directives": "resolver",
+  "reply.handle_inline_actions": "resolver",
+  "reply.before_agent_reply_hooks": "pre_model",
+  "reply.stage_media": "pre_model",
+  "reply.resolve_thinking_catalog_for_hint": "pre_model",
+  "reply.ensure_skill_snapshot": "pre_model",
+  "reply.build_prompt_bodies": "pre_model",
+  "reply.resolve_default_thinking": "pre_model",
+  "reply.resolve_thinking_catalog": "pre_model",
+  "reply.load_embedded_agent_runtime": "pre_model",
+  "reply.resolve_auth_profile": "pre_model",
+  "reply.load_agent_runner_runtime": "pre_model",
+  "reply.resolve_current_turn_images": "pre_model",
+  "reply.preflight_compaction": "pre_model",
+  "reply.memory_flush": "pre_model",
+} as const;
+
+export type DiagnosticReplyPhaseName = keyof typeof DIAGNOSTIC_REPLY_PHASE_GROUP_BY_NAME;
+export type DiagnosticReplyPhaseGroup =
+  (typeof DIAGNOSTIC_REPLY_PHASE_GROUP_BY_NAME)[DiagnosticReplyPhaseName];
+
+export function resolveDiagnosticReplyPhaseGroup(
+  phase: string,
+): DiagnosticReplyPhaseGroup | undefined {
+  return DIAGNOSTIC_REPLY_PHASE_GROUP_BY_NAME[phase as DiagnosticReplyPhaseName];
+}
+
+export type DiagnosticReplyPhaseCompletedEvent = DiagnosticBaseEvent & {
+  type: "reply.phase.completed";
+  phase: DiagnosticReplyPhaseName;
+  phaseGroup: DiagnosticReplyPhaseGroup;
+  durationMs: number;
+  outcome: "completed" | "error";
+  channel?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  errorCategory?: string;
+};
+
 export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
   type: "talk.event";
   sessionId?: string;
@@ -632,6 +687,7 @@ export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
   systemPromptChars: number;
   promptChars: number;
   promptImages: number;
+  durationMs?: number;
   contextTokenBudget?: number;
   reserveTokens?: number;
 };
@@ -725,6 +781,7 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
+  | DiagnosticReplyPhaseCompletedEvent
   | DiagnosticTalkEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionLongRunningEvent
@@ -844,6 +901,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "reply.phase.completed",
   "talk.event",
   "model.call.started",
   "model.call.completed",
