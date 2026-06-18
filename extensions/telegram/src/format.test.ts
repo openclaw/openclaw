@@ -1,6 +1,7 @@
 // Telegram tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  escapeTelegramMarkdownV2,
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
@@ -448,6 +449,57 @@ describe("markdownToTelegramHtml", () => {
       expect(containsLoneSurrogate(chunk.html)).toBe(false);
       expect(containsLoneSurrogate(chunk.text)).toBe(false);
     }
+  });
+});
+
+describe("escapeTelegramMarkdownV2", () => {
+  const specials = "_*[]()~>#+-=|{}.!";
+  const escapedSpecials = "\\_\\*\\[\\]\\(\\)\\~\\>\\#\\+\\-\\=\\|\\{\\}\\.\\!";
+
+  it("escapes all MarkdownV2 special characters", () => {
+    expect(escapeTelegramMarkdownV2(specials)).toBe(escapedSpecials);
+  });
+
+  it("preserves regular text unchanged", () => {
+    expect(escapeTelegramMarkdownV2("hello world")).toBe("hello world");
+    expect(escapeTelegramMarkdownV2("abc 123")).toBe("abc 123");
+  });
+
+  it("escapes special characters embedded in sentences", () => {
+    expect(escapeTelegramMarkdownV2("Price: $10.50!")).toBe("Price: $10\\.50\\!");
+    expect(escapeTelegramMarkdownV2("x = 3 + 2 - 1")).toBe(
+      "x \\= 3 \\+ 2 \\- 1",
+    );
+    expect(escapeTelegramMarkdownV2("email@example.com #test (ref)")).toBe(
+      "email@example\\.com \\#test \\(ref\\)",
+    );
+  });
+
+  it("handles empty string", () => {
+    expect(escapeTelegramMarkdownV2("")).toBe("");
+  });
+
+  it("does not double-escape already escaped characters", () => {
+    const already = "\\_already\\*escaped\\.";
+    expect(escapeTelegramMarkdownV2(already)).toBe(already);
+  });
+
+  it("escapes underscores in markdown-like text", () => {
+    expect(escapeTelegramMarkdownV2("API_KEY_value")).toBe(
+      "API\\_KEY\\_value",
+    );
+  });
+
+  it("escapes asterisks in plain text", () => {
+    expect(escapeTelegramMarkdownV2("not *bold* text")).toBe(
+      "not \\*bold\\* text",
+    );
+  });
+
+  it("escapes tildes", () => {
+    expect(escapeTelegramMarkdownV2("~50% of users~")).toBe(
+      "\\~50% of users\\~",
+    );
   });
 });
 

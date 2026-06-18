@@ -184,6 +184,7 @@ export type { StickerMetadata } from "./src/bot/types.js";
 export type { TelegramTokenResolution } from "./src/token.js";
 export {
   escapeTelegramHtml,
+  escapeTelegramMarkdownV2,
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   markdownToTelegramHtmlChunks,

@@ -24,6 +24,15 @@ export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// Characters that must be escaped with a backslash in Telegram MarkdownV2 parse_mode:
+// _ * [ ] ( ) ~ > # + - = | { } . !
+// Negative lookbehind (?<!\\) prevents double-escaping already-escaped characters.
+const MARKDOWNV2_ESCAPE_RE = /(?<!\\)([_*[\]()~>#+\-=|{}.!])/g;
+
+export function escapeTelegramMarkdownV2(text: string): string {
+  return text.replace(MARKDOWNV2_ESCAPE_RE, "\\$1");
+}
+
 function escapeHtml(text: string): string {
   return escapeTelegramHtml(text);
 }
