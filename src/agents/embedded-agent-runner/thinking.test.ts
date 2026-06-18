@@ -610,6 +610,74 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     });
   });
 
+  it("recovers a thinking-signature rejection delivered as a terminal result message", async () => {
+    // Regression: the provider 400 arrives as a resolved result message
+    // (stopReason "error" + errorMessage), not an error event or a thrown
+    // rejection, and no content streams first. The wrapper must still retry once
+    // without thinking blocks and notify so the session is repaired, rather than
+    // returning the error and wedging on every replay (replay_invalid).
+    let callCount = 0;
+    const recovered = vi.fn();
+    const errorResult = createTestAssistantMessage({
+      content: [{ type: "text", text: "" }],
+      stopReason: "error",
+      errorMessage:
+        '{"type":"error","error":{"type":"invalid_request_error",' +
+        '"message":"messages.11.content.12: Invalid `signature` in `thinking` block"}}',
+    });
+    const finalMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "recovered" }],
+      stopReason: "stop",
+    });
+    const originalMessages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "", thinkingSignature: "" },
+          { type: "text", text: "visible answer" },
+        ],
+      },
+    ]);
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      ((_model, context) => {
+        callCount += 1;
+        contexts.push(context as { messages?: AgentMessage[] });
+        const stream = createAssistantMessageEventStream();
+        if (callCount === 1) {
+          // Resolve the final result with an error message and stream no chunks,
+          // i.e. the provider 400 surfaces only via result(), not as an event.
+          queueMicrotask(() => stream.end(errorResult));
+        } else {
+          queueMicrotask(() => {
+            stream.push({ type: "done", reason: "stop", message: finalMessage });
+            stream.end();
+          });
+        }
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session", onRecoveredAnthropicThinking: recovered },
+    );
+
+    const response = (await wrapped(
+      {} as never,
+      { messages: originalMessages } as never,
+      {} as never,
+    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const event of response) {
+      void event;
+    }
+
+    await expect(response.result()).resolves.toEqual(finalMessage);
+    expect(callCount).toBe(2);
+    expect(recovered).toHaveBeenCalledTimes(1);
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
+  });
+
   it("does not notify recovery when the stripped-thinking retry also fails", async () => {
     const recovered = vi.fn();
     let callCount = 0;

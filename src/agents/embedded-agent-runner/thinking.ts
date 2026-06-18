@@ -678,6 +678,27 @@ async function pumpStreamWithRecovery(
       outer.push(chunk as Parameters<typeof outer.push>[0]);
     }
     const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
+    // A provider signature rejection can surface as a *terminal result
+    // message* (stopReason "error" + errorMessage) — not an in-stream error
+    // event or a thrown rejection — when the stream resolves the 400 instead of
+    // throwing. The latest-turn exemption in stripInvalidThinkingSignatures
+    // intentionally lets a corrupted latest thinking block flow through to this
+    // recovery path, so if recovery does not fire here the session 400s on every
+    // replay (replay_invalid) and wedges until a manual restart. Recover this
+    // carrier once, the same as the error-event branch above. Guarded by
+    // !yieldedOutput because a signature 400 is rejected before any content
+    // streams, so this only fires for a turn that produced no visible output.
+    if (
+      !yieldedOutput &&
+      result?.stopReason === "error" &&
+      shouldRecoverAnthropicThinkingError(result, sessionMeta)
+    ) {
+      sessionMeta.recoveredAnthropicThinking = true;
+      log.warn(
+        `[session-recovery] Anthropic thinking error in terminal result; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+      );
+      return retryStreamWithoutThinking(outer, retry, notify);
+    }
     return result as AssistantMessage;
   } catch (error: unknown) {
     if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
