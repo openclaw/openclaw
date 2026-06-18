@@ -279,4 +279,66 @@ describe("capturePluginToolDescriptor availability validation", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it("warns when allOf value is not an array", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cached = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { allOf: "not-an-array" } }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Non-array availability group"),
+      );
+      // Malformed availability must be stripped so the evaluator never sees it
+      expect(cached.descriptor.availability).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns when anyOf value is not an array", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cached = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({ availability: { anyOf: 123 } }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Non-array availability group"),
+      );
+      expect(cached.descriptor.availability).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for nested availability entries when the top-level shape is valid", () => {
+    // The shape guard only validates the top-level group fields.
+    // Nested entries inside allOf/anyOf arrays are validated later by the
+    // evaluator (if recursively structured), not by this boundary check.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cached = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({
+          availability: { allOf: [{ kind: "always" }, { kind: "always" }] },
+        }),
+        optional: false,
+      });
+      // Top-level allOf is a valid array — no shape warning expected
+      const shapeWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("Non-array availability group"),
+      );
+      expect(shapeWarnings).toHaveLength(0);
+      // Descriptor should preserve the valid availability
+      expect(cached.descriptor.availability).toBeDefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

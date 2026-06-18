@@ -149,6 +149,26 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+/**
+ * Validates that availability expression group fields are arrays before the
+ * evaluator iterates them.  Plugin-authored data is untyped at this boundary;
+ * a non-array {@code allOf} / {@code anyOf} value would reach
+ * {@code evaluateExpression} and throw on {@code .flatMap} / {@code .map},
+ * crashing tool registration.
+ */
+function hasValidAvailabilityGroupShape(
+  expr: ToolAvailabilityExpression,
+): boolean {
+  if ("allOf" in expr) {
+    return Array.isArray(expr.allOf);
+  }
+  if ("anyOf" in expr) {
+    return Array.isArray(expr.anyOf);
+  }
+  // kind-based expressions don't have group fields — always valid
+  return true;
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
@@ -162,7 +182,7 @@ export function capturePluginToolDescriptor(params: {
   // descriptor cache stays decoupled from the agent-tool type contract.
   const rawAvailability = (params.tool as { availability?: unknown })
     .availability;
-  const availability: ToolAvailabilityExpression | undefined =
+  let availability: ToolAvailabilityExpression | undefined =
     rawAvailability !== undefined &&
     typeof rawAvailability === "object" &&
     rawAvailability !== null &&
@@ -172,6 +192,18 @@ export function capturePluginToolDescriptor(params: {
       "anyOf" in rawAvailability)
       ? (rawAvailability as ToolAvailabilityExpression)
       : undefined;
+
+  // Defensive shape guard: plugin-authored availability is untyped at this
+  // boundary.  Non-array allOf / anyOf values would reach the evaluator and
+  // throw on .flatMap / .map, crashing tool registration.  Diagnose and
+  // strip the malformed expression so the evaluator stays pure.
+  if (availability && !hasValidAvailabilityGroupShape(availability)) {
+    console.warn(
+      `[plugins] tool descriptor authoring error (${params.pluginId}/${params.tool.name}): ` +
+        `Non-array availability group — allOf/anyOf values must be arrays`,
+    );
+    availability = undefined;
+  }
 
   const descriptor: ToolDescriptor = {
     name: params.tool.name,
