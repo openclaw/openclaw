@@ -958,6 +958,35 @@ async function sweepSubagentRuns() {
             continue;
           }
 
+          // Try to reconcile child output before marking as lost.
+          // The child may have produced output that hasn't been reconciled yet.
+          let reconciledOutput = false;
+          try {
+            const captured = await subagentRegistryDeps.captureSubagentCompletionReply(
+              entry.childSessionKey,
+            );
+            if (captured?.trim()) {
+              await completeSubagentRunWithRecovery(
+                {
+                  runId,
+                  endedAt: now,
+                  outcome: { status: "ok" },
+                  reason: SUBAGENT_ENDED_REASON_COMPLETE,
+                  sendFarewell: true,
+                  accountId: entry.requesterOrigin?.accountId,
+                  triggerCleanup: true,
+                },
+                "sweeper-output-reconciliation",
+              );
+              reconciledOutput = true;
+            }
+          } catch {
+            // Best-effort: fall through to lost-context error.
+          }
+          if (reconciledOutput) {
+            continue;
+          }
+
           await completeSubagentRunWithRecovery(
             {
               runId,
