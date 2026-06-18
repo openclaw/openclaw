@@ -19,6 +19,14 @@ permissions: {}
 
 jobs:
   auto-response:
+    if: >-
+      ${{
+        github.event_name != 'pull_request_target' ||
+        github.event.action != 'edited' ||
+        github.event.changes.title ||
+        github.event.changes.body ||
+        github.event.changes.base
+      }}
     permissions:
       contents: read
       issues: write

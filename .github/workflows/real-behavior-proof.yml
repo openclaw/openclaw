@@ -16,6 +16,13 @@ permissions: {}
 jobs:
   real-behavior-proof:
     name: Real behavior proof
+    if: >-
+      ${{
+        github.event_name != 'pull_request_target' ||
+        github.event.action != 'edited' ||
+        github.event.changes.body ||
+        github.event.changes.base
+      }}
     permissions:
       contents: read
       issues: read

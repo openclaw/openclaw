@@ -407,7 +407,11 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  [".github/workflows/auto-response.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/clawsweeper-dispatch.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/labeler.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/real-behavior-proof.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/security-sensitive-guard.yml",
     ["test/scripts/security-sensitive-guard-workflow.test.ts"],
