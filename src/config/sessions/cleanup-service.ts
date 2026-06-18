@@ -356,13 +356,19 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
+  // Build preserve set from active key and configured preserveKeys using the existing collector
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
+    params.activeKey,
+    ...(params.maintenance.preserveKeys ?? []),
+  ]);
+
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
     onPruned: ({ key }) => {
       staleKeys.add(key);
     },
+    preserveKeys: preserveSessionKeys,
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
@@ -370,6 +376,7 @@ async function previewStoreCleanup(params: {
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
+    preserveKeys: preserveSessionKeys,
   });
   const entryCleanupArtifactPaths = new Set<string>();
   addEntryArtifactPathsToSet({

@@ -51,13 +51,8 @@ import {
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
 } from "./store-cache.js";
-import { resolveSessionStoreEntry } from "./store-entry.js";
-import {
-  loadSessionStore,
-  normalizeSessionStore,
-  readSessionEntries,
-  readSessionEntry,
-} from "./store-load.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -873,7 +868,10 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
+        opts?.activeSessionKey,
+        ...(maintenance.preserveKeys ?? []),
+      ]);
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {

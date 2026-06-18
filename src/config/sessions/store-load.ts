@@ -27,8 +27,6 @@ import {
   type SessionStoreSnapshotEntries,
   type SessionStoreSnapshotEntry,
 } from "./store-cache.js";
-import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
-import { resolveSessionStoreEntry } from "./store-entry.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -439,7 +437,9 @@ export function loadSessionStore(
     let pruned = 0;
     let capped = 0;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      // Build preserve set from configured preserveKeys using the existing collector
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys(maintenance.preserveKeys);
+
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,
