@@ -643,7 +643,11 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).toContain("Exec");
   });
 
-  it("shows exec tool errors when assistant output claims success", () => {
+  it("suppresses exec tool warning when assistant already replied (#94360)", () => {
+    // Exec stderr is operational noise — when the assistant already has a
+    // user-facing reply, the warning covers the actual response in channel
+    // UIs. Suppress it unless verbose details are warranted or the command
+    // timed out.
     const payloads = buildPayloads({
       assistantTexts: ["The script is ready to use and saved in your workspace."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
@@ -653,14 +657,40 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("The script is ready to use and saved in your workspace.");
+  });
+
+  it("shows exec tool warning when no assistant reply exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastAssistant: undefined,
+      lastToolError: {
+        toolName: "exec",
+        error: "/bin/bash: line 1: python: command not found",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Exec");
+  });
+
+  it("shows exec tool warning with details when verbose is full despite reply", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      verboseLevel: "full",
+      lastToolError: {
+        toolName: "exec",
+        error: "Copy-Item : failed to copy",
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Exec");
-    expect(payloads[1]?.text).not.toContain("python: command not found");
-    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
-      undefined,
-    );
+    expect(payloads[1]?.text).toContain("Copy-Item : failed to copy");
   });
 
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {

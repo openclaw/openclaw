@@ -202,6 +202,22 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
+    // Exec-like tools: suppress the diagnostic warning when the assistant
+    // already has a user-facing reply and verbose details are not warranted.
+    // Stderr is operational noise that covers the actual response in channel
+    // UIs such as Feishu and Telegram (#94360). The warning still fires when
+    // no reply exists (so the user is not left with silence), when
+    // includeDetails is on (verbose:full, heartbeat, cron timeout), or when
+    // the command timed out (the user needs to know it did not complete).
+    if (
+      isExecLikeToolName(params.lastToolError.toolName) &&
+      !includeDetails &&
+      params.hasUserFacingReply &&
+      !params.lastToolError.timedOut &&
+      !params.lastToolError.middlewareError
+    ) {
+      return { showWarning: false, includeDetails };
+    }
     return {
       showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
