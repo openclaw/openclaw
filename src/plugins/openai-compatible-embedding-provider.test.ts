@@ -381,6 +381,33 @@ describe("openai-compatible generic embedding provider", () => {
     ).rejects.toThrow("Blocked: resolves to private/internal/special-use IP address");
   });
 
+  it("does not apply exact-host trust when the configured provider explicitly denies private network access", async () => {
+    const { client } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai-compatible",
+        config: {
+          models: {
+            providers: {
+              "openai-compatible": {
+                api: "openai-compatible",
+                baseUrl: "https://llm.internal/v1",
+                request: { allowPrivateNetwork: false },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://llm.internal/v1" },
+      }),
+    );
+    expect(client.ssrfPolicy).toBeUndefined();
+    await expect(
+      resolvePinnedHostnameWithPolicy("llm.internal", {
+        policy: client.ssrfPolicy,
+        lookupFn: async () => [{ address: "10.0.0.5", family: 4 as const }],
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use IP address/u);
+  });
+
   it("preserves configured provider exact-host trust for private endpoints without request.allowPrivateNetwork", async () => {
     const server = await startEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(

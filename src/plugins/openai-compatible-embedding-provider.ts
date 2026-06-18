@@ -46,11 +46,15 @@ function buildEmbeddingSsrfPolicy(
   baseUrl: string,
   configuredProvider: ConfiguredEmbeddingProvider | undefined,
 ): SsrFPolicy | undefined {
+  const allowPrivateNetwork = configuredProvider?.request?.allowPrivateNetwork;
+  if (allowPrivateNetwork === false) {
+    return undefined;
+  }
   const base = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
   if (!base) {
     return base;
   }
-  if (configuredProvider?.request?.allowPrivateNetwork === true) {
+  if (allowPrivateNetwork === true) {
     return { ...base, allowPrivateNetwork: true };
   }
   return base;
