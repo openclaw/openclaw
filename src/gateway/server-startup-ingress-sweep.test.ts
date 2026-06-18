@@ -22,6 +22,24 @@ describe("runStartupIngressClaimSweep", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("skips the sweep during SIGUSR1 in-process restart", async () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const mockSweep = vi.fn();
+
+    await runStartupIngressClaimSweep({
+      inProcessRestart: true,
+      log: { info, warn },
+      deps: { recoverAllStaleChannelIngressClaims: mockSweep },
+    });
+
+    expect(mockSweep).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "gateway: skipping stale ingress claim sweep during SIGUSR1 in-process restart",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("skips the sweep during supervised restart handoff", async () => {
     const info = vi.fn();
     const warn = vi.fn();

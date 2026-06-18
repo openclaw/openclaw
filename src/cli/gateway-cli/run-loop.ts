@@ -101,6 +101,7 @@ async function waitForHealthyGatewayChild(
 export async function runGatewayLoop(params: {
   start: (params?: {
     startupStartedAt?: number;
+    inProcessRestart?: boolean;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   lockPort?: number;
@@ -818,7 +819,7 @@ export async function runGatewayLoop(params: {
       restartDrainingMarkPromise = null;
       let startupFailedBeforeServerHandle = false;
       try {
-        server = await params.start({ startupStartedAt });
+        server = await params.start({ startupStartedAt, inProcessRestart: !isFirstStart });
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;
       } catch (err) {

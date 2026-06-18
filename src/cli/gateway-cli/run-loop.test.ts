@@ -812,6 +812,7 @@ describe("runGatewayLoop", () => {
 
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
+      expect(start.mock.calls[1]?.[0]).toMatchObject({ inProcessRestart: true });
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });

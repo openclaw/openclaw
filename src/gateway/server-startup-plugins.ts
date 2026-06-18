@@ -50,6 +50,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
+  inProcessRestart?: boolean;
   loadRuntimePlugins?: boolean;
   loadSetupRuntimePlugins?: boolean;
 }) {
@@ -82,6 +83,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         }),
         runStartupIngressClaimSweep({
           env: process.env,
+          inProcessRestart: params.inProcessRestart === true,
           log: params.log,
         }),
       );

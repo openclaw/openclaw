@@ -526,6 +526,10 @@ export type GatewayServerOptions = {
    */
   startupStartedAt?: number;
   /**
+   * True when this server start is the next iteration of a SIGUSR1 in-process restart.
+   */
+  inProcessRestart?: boolean;
+  /**
    * Config snapshot already read by the CLI gateway preflight. Passing it avoids
    * reparsing openclaw.json during server startup.
    */
@@ -683,6 +687,7 @@ export async function startGatewayServer(
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       minimalTestGateway,
       log,
+      inProcessRestart: opts.inProcessRestart === true,
       loadRuntimePlugins: false,
       loadSetupRuntimePlugins: true,
     }),

@@ -10,9 +10,9 @@ type IngressSweepLogger = {
  * Recover stale channel ingress queue claims at gateway startup.
  *
  * Runs during `prepareGatewayPluginBootstrap`, before `startChannels()`. It is
- * limited to fresh process starts without a supervised restart handoff: unclean
- * exits leave claimed rows behind, while graceful in-process restarts can leave
- * old channel handlers settling after the replacement process starts.
+ * limited to starts that cannot still have a previous in-process channel
+ * lifecycle settling: unclean exits leave claimed rows behind, while SIGUSR1 or
+ * supervised restarts can leave old channel handlers alive during the next start.
  *
  * Best-effort and non-blocking: if the sweep fails, gateway startup continues
  * normally. After a crash, claimed rows in `channel_ingress_events` can remain
@@ -22,12 +22,19 @@ type IngressSweepLogger = {
  */
 export async function runStartupIngressClaimSweep(params: {
   env?: NodeJS.ProcessEnv;
+  inProcessRestart?: boolean;
   log: IngressSweepLogger;
   deps?: {
     recoverAllStaleChannelIngressClaims?: typeof recoverAllStaleChannelIngressClaims;
     readGatewayRestartHandoffSync?: typeof readGatewayRestartHandoffSync;
   };
 }): Promise<void> {
+  if (params.inProcessRestart) {
+    params.log.info(
+      "gateway: skipping stale ingress claim sweep during SIGUSR1 in-process restart",
+    );
+    return;
+  }
   const sweep =
     params.deps?.recoverAllStaleChannelIngressClaims ?? recoverAllStaleChannelIngressClaims;
   const env = params.env ?? process.env;
