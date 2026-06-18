@@ -78,7 +78,20 @@ describe("ports helpers", () => {
     });
   });
 
-  it("ensurePortAvailable rejects an IPv4-only occupant on a dual-stack host", async () => {
+  it("ensurePortAvailable resolves when the port is free", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0);
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    await expect(ensurePortAvailable(port)).resolves.toBeUndefined();
+  });
+
+  it("regression: #94379 — ensurePortAvailable detects an IPv4-only occupant on a dual-stack host", async () => {
     // A bare listen binds the IPv6 wildcard and would miss this 127.0.0.1-only
     // occupant; the preflight must probe all address families (regression for
     // the misleading Chrome CDP 401 collision).
