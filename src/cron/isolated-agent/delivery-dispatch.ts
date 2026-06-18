@@ -767,6 +767,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       continue;
     }
     const dedupeKey = [
+      target.channel,
       normalizeDeliveryTarget(target.channel, target.to),
       target.accountId ?? "",
       target.threadId ?? "",

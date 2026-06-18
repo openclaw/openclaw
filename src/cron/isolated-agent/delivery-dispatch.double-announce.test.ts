@@ -502,6 +502,84 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("keeps same-recipient message-tool awareness separate across channels", async () => {
+    vi.mocked(resolveOutboundSessionRoute)
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:telegram:direct:123456",
+        baseSessionKey: "agent:main:telegram:direct:123456",
+        peer: { kind: "direct", id: "123456" },
+        chatType: "direct",
+        from: "telegram:123456",
+        to: "123456",
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:openclaw-weixin:direct:123456",
+        baseSessionKey: "agent:main:openclaw-weixin:direct:123456",
+        peer: { kind: "direct", id: "123456" },
+        chatType: "direct",
+        from: "openclaw-weixin:123456",
+        to: "123456",
+      });
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "isolated",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              text: "Shared cron update.",
+            },
+            verifiedTarget: false,
+          },
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "openclaw-weixin",
+              to: "123456",
+              text: "Shared cron update.",
+            },
+            verifiedTarget: false,
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      {
+        sessionKey: "agent:main:openclaw-weixin:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456:",
+      },
+    );
+  });
+
   it("queues message-tool awareness for verified media-only deliveries", async () => {
     mockResolvedOutboundRoute();
 
