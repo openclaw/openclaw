@@ -1406,11 +1406,16 @@ async function sendSubagentAnnounceDirectly(params: {
           wakeOutcome,
         )}`,
       );
-      // NEW: Try direct text delivery as proactive fallback before requester-agent handoff
+      // NEW: Try direct text delivery as proactive fallback before requester-agent handoff.
+      // Scope the fallback to #92076's failure modes (no_active_run / compacting) — other
+      // queue failures (not_streaming, source_reply_delivery_mode_mismatch,
+      // transcript_commit_wait_unsupported, runtime_rejected) keep the requester handoff.
+      const wakeFailureReason = wakeOutcome.reason;
       if (
         params.expectsCompletionMessage &&
         deliveryTarget.deliver &&
-        isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey)
+        isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey) &&
+        (wakeFailureReason === "no_active_run" || wakeFailureReason === "compacting")
       ) {
         defaultRuntime.log(`[info] Attempting direct text delivery (active wake failed)`);
         const textDelivery = await deliverTextCompletionDirect({
