@@ -4029,9 +4029,9 @@ surfaces:
           - name: ToolSpace
             coverageIds: [toolspace]
             description: Tool discovery and invocation abstraction for external apps.
-          - name: Artifacts
-            coverageIds: [character.persona, personal.task-followthrough, tools.followthrough, workspace.artifacts, workspace.builds, workspace.long-running-task, workspace.repo-discovery]
-            description: Artifact summaries, retention metadata, and download behavior.
+          - name: Artifact resources
+            coverageIds: [workspace.artifacts, workspace.builds]
+            description: SDK helpers for workspace artifact summaries, generated build outputs, retention metadata, and downloads.
           - name: Tasks
             coverageIds: [tasks]
             description: SDK helpers around Gateway task APIs.
