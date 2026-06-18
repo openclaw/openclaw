@@ -13,6 +13,7 @@ import {
   isTelegramClientRejection,
   isTelegramMessageNotModifiedError,
   isTelegramRateLimitError,
+  isTelegramRichMessageUnsupportedError,
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
@@ -233,11 +234,21 @@ export function createTelegramDraftStream(params: {
   };
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
     if (richMessages) {
-      return await getTelegramRichRawApi(params.api).sendRichMessage({
-        chat_id: chatId,
-        rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
-        ...richMessageParams,
-      });
+      try {
+        return await getTelegramRichRawApi(params.api).sendRichMessage({
+          chat_id: chatId,
+          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+          ...richMessageParams,
+        });
+      } catch (err) {
+        if (!isTelegramRichMessageUnsupportedError(err)) {
+          throw err;
+        }
+        params.log?.(
+          `telegram draft rich message not supported; falling back to HTML: ${formatErrorMessage(err)}`,
+        );
+        // Fall through to regular sendMessage below.
+      }
     }
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     const sendPlain = async () =>
@@ -264,12 +275,22 @@ export function createTelegramDraftStream(params: {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       if (richMessages) {
-        await getTelegramRichRawApi(params.api).editMessageText({
-          chat_id: chatId,
-          message_id: streamMessageId,
-          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
-        });
-        return true;
+        try {
+          await getTelegramRichRawApi(params.api).editMessageText({
+            chat_id: chatId,
+            message_id: streamMessageId,
+            rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+          });
+          return true;
+        } catch (err) {
+          if (!isTelegramRichMessageUnsupportedError(err)) {
+            throw err;
+          }
+          params.log?.(
+            `telegram draft rich edit not supported; falling back to HTML edit: ${formatErrorMessage(err)}`,
+          );
+          // Fall through to regular editMessageText below.
+        }
       }
       const transportPreview = normalizeTelegramDraftTransportPreview(preview);
       if (transportPreview.parseMode === "HTML") {
