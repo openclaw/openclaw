@@ -14,7 +14,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { z } from "zod";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
-type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
+type GoogleChatCredentialSource = "file" | "inline" | "env" | "adc" | "none";
 
 export type ResolvedGoogleChatAccount = {
   accountId: string;
@@ -149,6 +149,15 @@ function resolveCredentialsFromConfig(params: {
     if (envFile) {
       return { credentialsFile: envFile, source: "env" };
     }
+  }
+
+  // Opt-in keyless mode: no explicit credential, fall back to Application
+  // Default Credentials. credentials/credentialsFile stay undefined so the
+  // runtime constructs GoogleAuth without a key and resolves via the ambient
+  // ADC chain. "adc" is a configured source (!== "none") so the channel still
+  // activates and mounts its webhook route.
+  if (account.serviceAccountAdc) {
+    return { source: "adc" };
   }
 
   return { source: "none" };

@@ -190,6 +190,7 @@ Use these identifiers for delivery and allowlists:
 Notes:
 
 - Service account credentials: `serviceAccountFile` (path), `serviceAccount` (inline JSON string or object), or `serviceAccountRef` (env/file SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccountRef`.
+- Set `serviceAccountAdc: true` (and provide no explicit `serviceAccount` / `serviceAccountRef` / `serviceAccountFile`) to authenticate outbound calls via Application Default Credentials instead of a downloaded key — useful on GCP, where the attached service account / workload identity (with the `chat.bot` scope) signs requests and no key material lives on disk. An explicit credential, if also present, takes precedence.
 - Default webhook path is `/googlechat` when `webhookPath` is unset; `webhookUrl` can supply the path instead.
 - Group keys must be stable space ids (`spaces/<spaceId>`). Display-name keys are deprecated and logged as such.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode); doctor warns about email entries.
