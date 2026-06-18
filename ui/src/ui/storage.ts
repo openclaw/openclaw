@@ -168,7 +168,10 @@ function isHistoricalRoutedSessionKey(value: string | undefined): boolean {
   if (parts[0] !== "agent" || !parts[1]) {
     return false;
   }
-  const [, , first, second, third, fourth] = parts;
+  const first = parts[2];
+  const second = parts[3];
+  const third = parts[4];
+  const fourth = parts[5];
   if (
     first === "subagent" ||
     first === "cron" ||
