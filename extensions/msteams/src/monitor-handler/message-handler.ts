@@ -502,13 +502,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       replyToId: activity.replyToId,
     });
 
-    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
+    const logPreview = rawBody.replace(/\s+/g, " ").slice(0, 160);
 
     const enqueuePrimaryMessageSystemEvent = () =>
-      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      core.system.enqueueSystemEvent(inboundLabel, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
       });
@@ -829,7 +829,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
     });
 
-    logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
+    logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${logPreview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({

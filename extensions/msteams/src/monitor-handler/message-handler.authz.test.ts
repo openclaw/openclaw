@@ -768,11 +768,12 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please run the deployment"),
+      ([text]) => typeof text === "string" && text.includes("Teams message in channel"),
     );
     if (!systemEventCall) {
       throw new Error("expected skipped Teams message system event");
     }
+    expect(systemEventCall[0]).not.toContain("please run the deployment");
     expect(systemEventCall[1]).toMatchObject({});
   });
 
@@ -810,11 +811,15 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please check the build"),
+      ([text]) => typeof text === "string" && text.includes("Teams message in channel"),
     );
     if (!systemEventCall) {
       throw new Error("expected active Teams message system event");
     }
+    expect(systemEventCall[0]).not.toContain("please check the build");
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("please check the build");
   });
 
   it("authorizes text control commands from static access groups", async () => {
