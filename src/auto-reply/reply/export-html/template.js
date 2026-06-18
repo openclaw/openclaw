@@ -21,6 +21,7 @@
     systemPrompt,
     tools,
     renderedTools,
+    warning,
   } = data;
 
   // ============================================================
@@ -1567,9 +1568,13 @@
       msgParts.push(`${globalStats.branchSummaries} branch summaries`);
     }
 
-    let html = `
+    let html = "";
+    if (warning) {
+      html += `<div class="export-warning">${escapeHtml(warning)}</div>`;
+    }
+    html += `
           <div class="header">
-            <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>
+            <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>`
             <div class="help-bar">
               <span>Ctrl+T toggle thinking · Ctrl+O toggle tools</span>
               <button class="download-json-btn" onclick="downloadSessionJson()" title="Download session as JSONL">↓ JSONL</button>
