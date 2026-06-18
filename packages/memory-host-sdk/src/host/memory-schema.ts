@@ -107,7 +107,10 @@ function migrateCanonicalMemoryIndexSourcesPrimaryKey(db: DatabaseSync): void {
   }
 }
 
-function migrateLegacyMemoryIndexTables(db: DatabaseSync): void {
+function migrateLegacyMemoryIndexTables(
+  db: DatabaseSync,
+  preservedEmbeddingCacheTable?: string,
+): void {
   const hasLegacyCoreTables =
     tableHasExactColumns(db, "meta", ["key", "value"]) &&
     tableHasExactColumns(db, "files", ["path", "source", "hash", "mtime", "size"]) &&
@@ -186,6 +189,7 @@ function migrateLegacyMemoryIndexTables(db: DatabaseSync): void {
       "chunks",
     );
     if (
+      preservedEmbeddingCacheTable !== "embedding_cache" &&
       tableHasExactColumns(db, "embedding_cache", [
         "provider",
         "model",
@@ -253,10 +257,16 @@ function migrateLegacyMemoryIndexTables(db: DatabaseSync): void {
 /** Ensure canonical memory index tables and the optional FTS table exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
+  /** @deprecated Omit to use the canonical memory cache table. */
+  embeddingCacheTable?: string;
   cacheEnabled: boolean;
+  /** @deprecated Omit to use the canonical memory FTS table. */
+  ftsTable?: string;
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
+  const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
+  const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
   params.db.exec(`
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_META_TABLE} (
       key TEXT PRIMARY KEY,
@@ -332,10 +342,14 @@ export function ensureMemoryIndexSchema(params: {
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
-  migrateLegacyMemoryIndexTables(params.db);
+  migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable);
   if (params.cacheEnabled) {
+    const updatedAtIndex =
+      embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE
+        ? "idx_memory_embedding_cache_updated_at"
+        : "idx_embedding_cache_updated_at";
     params.db.exec(`
-      CREATE TABLE IF NOT EXISTS ${MEMORY_EMBEDDING_CACHE_TABLE} (
+      CREATE TABLE IF NOT EXISTS ${embeddingCacheTable} (
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
         provider_key TEXT NOT NULL,
@@ -345,8 +359,8 @@ export function ensureMemoryIndexSchema(params: {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (provider, model, provider_key, hash)
       );
-      CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at
-        ON ${MEMORY_EMBEDDING_CACHE_TABLE}(updated_at);
+      CREATE INDEX IF NOT EXISTS ${updatedAtIndex}
+        ON ${embeddingCacheTable}(updated_at);
     `);
   }
 
@@ -357,7 +371,7 @@ export function ensureMemoryIndexSchema(params: {
       const tokenizer = params.ftsTokenizer ?? "unicode61";
       const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
       params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_FTS_TABLE} USING fts5(\n` +
+        `CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTable} USING fts5(\n` +
           `  text,\n` +
           `  id UNINDEXED,\n` +
           `  path UNINDEXED,\n` +
@@ -370,12 +384,12 @@ export function ensureMemoryIndexSchema(params: {
       // The shipped generic-table migration and a later FTS enablement both
       // create an empty derived table beside already-canonical chunk rows.
       params.db.exec(`
-        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (
+        INSERT INTO ${ftsTable} (
           text, id, path, source, model, start_line, end_line
         )
         SELECT text, id, path, source, model, start_line, end_line
         FROM ${MEMORY_INDEX_CHUNKS_TABLE}
-        WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_FTS_TABLE} LIMIT 1);
+        WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
       `);
       ftsAvailable = true;
     } catch (err) {
