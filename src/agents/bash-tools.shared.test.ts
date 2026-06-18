@@ -1,13 +1,20 @@
+import { existsSync, statSync as statSyncCb } from "node:fs";
 /**
  * Shared bash-tool helper tests.
  * Covers strict env parsing and sandbox workdir mapping between container and
  * host workspace paths.
  */
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, statSync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deriveSessionName, readEnvInt, resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import {
+  deriveSessionName,
+  expandTilde,
+  readEnvInt,
+  resolveSandboxWorkdir,
+  resolveWorkdir,
+} from "./bash-tools.shared.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
@@ -142,5 +149,123 @@ describe("deriveSessionName", () => {
       expect(typeof label).toBe("string");
       expect(elapsedMs).toBeLessThan(100);
     }
+  });
+});
+
+describe("expandTilde", () => {
+  const homeDir = os.homedir();
+
+  it("expands ~ to home directory", () => {
+    expect(expandTilde("~")).toBe(homeDir);
+  });
+
+  it("expands ~/path to homeDir/path", () => {
+    expect(expandTilde("~/test/path")).toBe(`${homeDir}/test/path`);
+    expect(expandTilde("~/Documents/file.txt")).toBe(`${homeDir}/Documents/file.txt`);
+  });
+
+  it("leaves absolute paths unchanged", () => {
+    expect(expandTilde("/usr/local/bin")).toBe("/usr/local/bin");
+    expect(expandTilde("/home/user/test")).toBe("/home/user/test");
+  });
+
+  it("leaves relative paths unchanged", () => {
+    expect(expandTilde("src/index.ts")).toBe("src/index.ts");
+    expect(expandTilde("./local/path")).toBe("./local/path");
+    expect(expandTilde("../parent/path")).toBe("../parent/path");
+  });
+
+  it("handles empty string", () => {
+    expect(expandTilde("")).toBe("");
+  });
+
+  it("does not expand ~user syntax (not supported)", () => {
+    expect(expandTilde("~otheruser")).toBe("~otheruser");
+    expect(expandTilde("~otheruser/path")).toBe("~otheruser/path");
+  });
+
+  it("handles tilde in the middle or end of path", () => {
+    // These should not be expanded as they're not leading tildes
+    expect(expandTilde("/path/to/~cache")).toBe("/path/to/~cache");
+    expect(expandTilde("file~backup.txt")).toBe("file~backup.txt");
+  });
+});
+
+describe("resolveWorkdir", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns existing absolute path if valid directory", () => {
+    const tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
+    try {
+      require("node:fs").mkdirSync(tmpDir, { recursive: true });
+      const warnings: string[] = [];
+      const result = resolveWorkdir(tmpDir, warnings);
+      expect(result).toBe(tmpDir);
+      expect(warnings).toEqual([]);
+    } finally {
+      require("node:fs").rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back for invalid relative path", async () => {
+    const tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
+    try {
+      await mkdir(tmpDir, { recursive: true });
+      const warnings: string[] = [];
+      // Test with a relative path that doesn't exist from any reasonable cwd
+      const result = resolveWorkdir("nonexistent_subdir_12345", warnings);
+      // Should fall back to cwd or homedir since the path doesn't exist
+      expect([process.cwd(), os.homedir()].includes(result)).toBe(true);
+      expect(warnings.length).toBe(1);
+      expect(warnings[0]).toMatch(/Warning: workdir "nonexistent_subdir_\d+" is unavailable/);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands ~ to home directory and returns it if valid", () => {
+    const warnings: string[] = [];
+    const result = resolveWorkdir("~", warnings);
+    expect(result).toBe(os.homedir());
+    expect(warnings).toEqual([]);
+  });
+
+  it("expands ~/path and returns it if valid directory", async () => {
+    const testSubdir = `openclaw-test-${Date.now()}`;
+    const testPath = path.join(os.homedir(), testSubdir);
+    try {
+      await mkdir(testPath, { recursive: true });
+      const warnings: string[] = [];
+      const result = resolveWorkdir(`~/${testSubdir}`, warnings);
+      expect(result).toBe(testPath);
+      expect(warnings).toEqual([]);
+    } finally {
+      await rm(testPath, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back with warning when expanded ~ path does not exist", () => {
+    const warnings: string[] = [];
+    const result = resolveWorkdir("~/nonexistent_dir_12345", warnings);
+    // Should fall back to cwd or homedir
+    expect(result).toBe(process.cwd() ?? os.homedir());
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/Warning: workdir "~\/nonexistent_dir_\d+" is unavailable/);
+  });
+
+  it("falls back with warning for invalid absolute path", () => {
+    const warnings: string[] = [];
+    const result = resolveWorkdir("/nonexistent/path/12345", warnings);
+    expect(result).toBe(process.cwd() ?? os.homedir());
+    expect(warnings.length).toBe(1);
+  });
+
+  it("falls back with warning for invalid relative path", () => {
+    const warnings: string[] = [];
+    const result = resolveWorkdir("nonexistent/relative/path", warnings);
+    expect(result).toBe(process.cwd() ?? os.homedir());
+    expect(warnings.length).toBe(1);
   });
 });

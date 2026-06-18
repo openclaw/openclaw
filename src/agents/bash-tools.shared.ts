@@ -179,14 +179,32 @@ function normalizeContainerPath(input: string): string {
   return path.posix.normalize(normalized);
 }
 
+/** Expands a leading ~ or ~/ to the user's home directory. */
+export function expandTilde(input: string): string {
+  if (!input) {
+    return input;
+  }
+  if (input === "~") {
+    return homedir();
+  }
+  if (input.startsWith("~/")) {
+    return homedir() + input.slice(1);
+  }
+  return input;
+}
+
 /** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
 export function resolveWorkdir(workdir: string, warnings: string[]) {
   const current = safeCwd();
   const fallback = current ?? homedir();
+
+  // Expand leading tilde before validating the path
+  const expandedWorkdir = expandTilde(workdir);
+
   try {
-    const stats = statSync(workdir);
+    const stats = statSync(expandedWorkdir);
     if (stats.isDirectory()) {
-      return workdir;
+      return expandedWorkdir;
     }
   } catch {
     // ignore, fallback below
