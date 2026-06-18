@@ -530,16 +530,22 @@ export async function compactEmbeddedAgentSession(
               ...hookCtx,
               sessionId: postCompactionSessionId,
             };
-            await hookRunner.runAfterCompaction(
-              {
-                messageCount: result.compacted ? -1 : (result.result?.messageCount ?? -1),
-                compactedCount: result.compacted ? -1 : 0,
-                tokenCount: result.result?.tokensAfter,
-                sessionFile: postCompactionSessionFile,
-                compactWasNoOp: !result.compacted,
-              },
-              afterHookCtx,
-            );
+            const hookMetrics: {
+              messageCount: number;
+              compactedCount: number;
+              tokenCount?: number;
+              sessionFile: string;
+              compactWasNoOp?: boolean;
+            } = {
+              messageCount: -1,
+              compactedCount: result.compacted ? -1 : 0,
+              tokenCount: result.result?.tokensAfter,
+              sessionFile: postCompactionSessionFile,
+            };
+            if (!result.compacted) {
+              hookMetrics.compactWasNoOp = true;
+            }
+            await hookRunner.runAfterCompaction(hookMetrics, afterHookCtx);
           } catch (err) {
             log.warn("after_compaction hook failed", {
               errorMessage: formatErrorMessage(err),
