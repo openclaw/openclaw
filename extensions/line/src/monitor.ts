@@ -252,12 +252,14 @@ export async function monitorLineProvider(
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
-                  if (ctx.userId && !ctx.isGroup) {
-                    void showLoadingAnimation(ctx.userId, {
-                      cfg: config,
-                      accountId: ctx.accountId,
-                    }).catch(() => {});
-                  }
+                  const stopDeliveryLoading =
+                    ctx.userId && !ctx.isGroup
+                      ? startLineLoadingKeepalive({
+                          cfg: config,
+                          userId: ctx.userId,
+                          accountId: ctx.accountId,
+                        })
+                      : null;
 
                   const deliveryResult = await deliverLineAutoReply({
                     payload,
@@ -307,6 +309,8 @@ export async function monitorLineProvider(
                       lastOutboundAt: Date.now(),
                     },
                   });
+
+                  stopDeliveryLoading?.();
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
