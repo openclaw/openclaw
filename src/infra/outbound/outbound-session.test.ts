@@ -538,9 +538,10 @@ describe("resolveOutboundSessionRoute", () => {
       },
     });
 
-    expect(route.chatType).toBe("direct");
-    expect(route.sessionKey).toContain(":direct:");
-    expect(route.sessionKey).not.toContain(":group:");
+    expect(route).not.toBeNull();
+    expect(route!.chatType).toBe("direct");
+    expect(route!.sessionKey).toContain(":direct:");
+    expect(route!.sessionKey).not.toContain(":group:");
   });
 });
 
