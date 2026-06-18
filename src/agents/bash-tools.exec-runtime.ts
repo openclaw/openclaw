@@ -19,9 +19,6 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import {
-  sanitizeHostInheritedEnvEntry,
-} from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -91,19 +88,6 @@ export function detectCursorKeyMode(raw: string): "application" | "normal" | nul
   return lastSmkx > lastRmkx ? "application" : "normal";
 }
 
-/** Removes dangerous inherited host env vars before non-sandboxed execution. */
-export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
-  const sanitized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
-    if (!sanitizedEntry) {
-      continue;
-    }
-    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
-    sanitized[sanitizedKey] = sanitizedValue;
-  }
-  return sanitized;
-}
 /** Default retained aggregate output cap for exec sessions. */
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
