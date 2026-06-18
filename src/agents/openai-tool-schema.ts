@@ -323,3 +323,14 @@ export function resolveOpenAIStrictToolFlagForProjection(
   }
   return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
 }
+
+/** Resolves strict mode for the projected tools that will be emitted in the request payload. */
+export function resolveOpenAIProjectedToolsStrictToolFlag(
+  projection: OpenAIToolProjection,
+  strict: boolean | null | undefined,
+): boolean | undefined {
+  if (strict !== true) {
+    return strict === false ? false : undefined;
+  }
+  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+}
