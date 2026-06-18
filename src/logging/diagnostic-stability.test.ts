@@ -149,7 +149,7 @@ describe("diagnostic stability recorder", () => {
 
     emitDiagnosticEvent({
       type: "reply.phase.completed",
-      phase: "reply.dispatch_from_config",
+      phase: "reply.load_runtime_plugins",
       phaseGroup: "dispatch",
       durationMs: 123,
       outcome: "error",
@@ -172,7 +172,7 @@ describe("diagnostic stability recorder", () => {
     expectFields(snapshot.events[0], {
       type: "reply.phase.completed",
       channel: "telegram",
-      phase: "reply.dispatch_from_config",
+      phase: "reply.load_runtime_plugins",
       durationMs: 123,
       outcome: "error",
       reason: "reply_timeout",
