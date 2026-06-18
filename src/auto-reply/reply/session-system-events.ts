@@ -144,8 +144,12 @@ export async function drainFormattedSystemEvents(params: {
   }
 
   // Each sub-line gets its own prefix so continuation lines can't be mistaken
-  // for regular user content.
-  return summaryLines.length > 0
-    ? [...summaryLines, ...systemLines].join("\n")
-    : systemLines.join("\n");
+  // for regular user content. Trailing newline prevents the events block from
+  // fusing into the following block when the consumer does not add a separator
+  // (e.g. runtime-context injection path — issue #94549).
+  return (
+    (summaryLines.length > 0
+      ? [...summaryLines, ...systemLines].join("\n")
+      : systemLines.join("\n")) + "\n"
+  );
 }

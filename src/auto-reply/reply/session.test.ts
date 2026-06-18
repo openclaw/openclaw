@@ -3551,7 +3551,7 @@ describe("drainFormattedSystemEvents", () => {
     });
 
     expect(result).toContain("System: WhatsApp: linked");
-    for (const line of result!.split("\n")) {
+    for (const line of result!.split("\n").filter(Boolean)) {
       expect(line).toMatch(/^System:/);
     }
   });

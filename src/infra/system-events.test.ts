@@ -259,7 +259,7 @@ describe("system events (session routing)", () => {
     if (!result) {
       throw new Error("expected formatted system events");
     }
-    const lines = result.split("\n");
+    const lines = result.split("\n").filter(Boolean);
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
       expect(line).toMatch(/^System:/);
