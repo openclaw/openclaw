@@ -4690,10 +4690,6 @@ describe("active wake failure fallback", () => {
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session-wake-fail",
-        isActive: true, // Session is active but wake fails
-      }),
     });
 
     const internalEvents: AgentInternalEvent[] = [
@@ -4782,11 +4778,6 @@ describe("active wake failure fallback", () => {
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
-      callGateway,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session-locked",
-        isActive: true, // Session is active but locked
-      }),
     });
 
     const internalEvents: AgentInternalEvent[] = [
@@ -4864,10 +4855,6 @@ describe("active wake failure fallback", () => {
     testing.setDepsForTest({
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session-long",
-        isActive: true, // Session is active but wake fails
-      }),
     });
 
     const longOutput = "x".repeat(6000);
