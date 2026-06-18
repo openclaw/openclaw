@@ -4919,7 +4919,14 @@ export async function runEmbeddedAttempt(
         // Only trust snapshot if compaction wasn't running before or after capture
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
-        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
+        // Use the configured compaction timeout (default 180s) as the
+        // aggregate retry deadline instead of a hardcoded 60s.  On large
+        // sessions (~200K tokens) the summary model call can take 143–187s,
+        // so 60s abandons valid results and triggers a self-compounding
+        // retry storm where every attempt times out before the provider
+        // finishes. (#94391)
+        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS =
+          resolveCompactionTimeoutMs(params.config);
 
         try {
           // Flush buffered block replies before waiting for compaction so the
