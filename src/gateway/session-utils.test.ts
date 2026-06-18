@@ -271,6 +271,80 @@ describe("gateway session utils", () => {
     expect(parseGroupKey("foo:bar")).toBeNull();
   });
 
+  test("direct channel session rows fall back to configured account names", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            quote: { name: "Quote Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:quote:feishu:direct:ou_8ad348410b",
+      entry: {
+        sessionId: "feishu-direct-session",
+        updatedAt: 1,
+        origin: {
+          provider: "feishu",
+          label: "ou_8ad348410b",
+        },
+      },
+    });
+
+    expect(row.displayName).toBe("Quote Assistant");
+  });
+
+  test("direct channel account names preserve labels and meaningful origin labels", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            main: { name: "Main Bot" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const labeled = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:feishu:direct:ou_802c30dd",
+      entry: {
+        sessionId: "labeled-session",
+        updatedAt: 1,
+        label: "nightly-summary",
+        origin: {
+          provider: "feishu",
+          label: "ou_802c30dd",
+        },
+      },
+    });
+    const namedPeer = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:feishu:direct:ou_802c30dd",
+      entry: {
+        sessionId: "named-peer-session",
+        updatedAt: 1,
+        origin: {
+          provider: "feishu",
+          label: "Ada Lovelace",
+        },
+      },
+    });
+
+    expect(labeled.displayName).toBe("nightly-summary");
+    expect(namedPeer.displayName).toBe("Ada Lovelace");
+  });
+
   test("session defaults include provider-owned thinking options", () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
