@@ -2,13 +2,8 @@
 import path from "node:path";
 import {
   onAgentEvent,
-  wrapToolWithBeforeToolCallHook,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createTerminalPresentationContractTool,
-  textToolResult,
-} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
