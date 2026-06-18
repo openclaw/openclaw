@@ -533,6 +533,57 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves current transcript when family targets hit the cap", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const currentSessionId = "current-cap-session";
+      const ancestorSessionIds = Array.from(
+        { length: 40 },
+        (_, index) => `ancestor-cap-session-${String(index).padStart(2, "0")}`,
+      );
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: currentSessionId,
+            updatedAt: Date.now(),
+            usageFamilySessionIds: [...ancestorSessionIds, currentSessionId],
+          },
+        },
+      });
+      await fs.writeFile(
+        path.join(sessionDir, currentSessionId + ".jsonl"),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "current survives family target cap" }],
+            timestamp: Date.now(),
+          },
+        }) + "\n",
+        "utf-8",
+      );
+      for (const [index, ancestorSessionId] of ancestorSessionIds.entries()) {
+        await fs.writeFile(
+          path.join(sessionDir, ancestorSessionId + ".jsonl"),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `ancestor cap context ${index}` }],
+              timestamp: Date.now() - index - 1,
+            },
+          }) + "\n",
+          "utf-8",
+        );
+      }
+
+      const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
+      expect(familyHistory).toContain("current survives family target cap");
+      expect(familyHistory).toContain("ancestor cap context 0");
+      expect(familyHistory).not.toContain("ancestor cap context 31");
+      expect(familyHistory).not.toContain("ancestor cap context 39");
+    });
+  });
+
   test("chat.history returns reset archive history when the active transcript is missing", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

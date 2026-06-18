@@ -233,24 +233,14 @@ describe("embedded gateway stub", () => {
       1,
       {
         agentId: "main",
-        sessionFile: ancestorArchive,
-        sessionId: "ancestor-session",
+        sessionFile: currentActive,
+        sessionId: "current-session",
         storePath,
       },
       expect.any(Object),
     );
     expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
       2,
-      {
-        agentId: "main",
-        sessionFile: ancestorActive,
-        sessionId: "ancestor-session",
-        storePath,
-      },
-      expect.any(Object),
-    );
-    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
-      3,
       {
         agentId: "main",
         sessionFile: currentArchive,
@@ -260,11 +250,21 @@ describe("embedded gateway stub", () => {
       expect.any(Object),
     );
     expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      3,
+      {
+        agentId: "main",
+        sessionFile: ancestorArchive,
+        sessionId: "ancestor-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
       4,
       {
         agentId: "main",
-        sessionFile: currentActive,
-        sessionId: "current-session",
+        sessionFile: ancestorActive,
+        sessionId: "ancestor-session",
         storePath,
       },
       expect.any(Object),
@@ -273,6 +273,60 @@ describe("embedded gateway stub", () => {
       maxChars: 100_000,
       maxMessages: 200,
     });
+  });
+
+  it("keeps embedded current chat history when family targets hit the cap", async () => {
+    const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-cap-"));
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const currentSessionId = "current-cap-session";
+    const currentActive = path.join(sessionsDir, `${currentSessionId}.jsonl`);
+    const ancestorSessionIds = Array.from(
+      { length: 40 },
+      (_, index) => `ancestor-cap-session-${String(index).padStart(2, "0")}`,
+    );
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    for (const ancestorSessionId of ancestorSessionIds) {
+      fs.writeFileSync(path.join(sessionsDir, `${ancestorSessionId}.jsonl`), "", "utf8");
+    }
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: currentSessionId,
+        sessionFile: currentActive,
+        usageFamilySessionIds: [...ancestorSessionIds, currentSessionId],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(
+      async (scope: { sessionId: string; sessionFile?: string }) => [
+        { role: "user", content: `${scope.sessionId}:${path.basename(scope.sessionFile ?? "")}` },
+      ],
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true },
+    });
+
+    const calls = runtime.readSessionMessagesAsync.mock.calls.map(
+      ([scope]) =>
+        scope as {
+          sessionFile?: string;
+          sessionId: string;
+        },
+    );
+    expect(result.includeFamily).toBe(true);
+    expect(calls).toHaveLength(32);
+    expect(calls[0]).toMatchObject({
+      sessionFile: currentActive,
+      sessionId: currentSessionId,
+    });
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-00")).toBe(true);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-31")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(false);
+    expect(JSON.stringify(result.messages)).toContain("current-cap-session");
   });
 
   it("scopes embedded global chat history to the requested agent", async () => {
