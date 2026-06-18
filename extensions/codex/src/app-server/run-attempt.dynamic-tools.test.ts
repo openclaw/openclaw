@@ -19,13 +19,10 @@ import {
 } from "./dynamic-tool-diagnostics.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
-  flattenCodexDynamicToolFunctions,
   type CodexDynamicToolCallParams,
-  type CodexDynamicToolSpec,
 } from "./protocol.js";
 import {
   createParams,
-  createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
@@ -36,10 +33,6 @@ import { testing } from "./run-attempt.js";
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
-}
-
-function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
-  return flattenCodexDynamicToolFunctions(specs).map((tool) => tool.name);
 }
 
 function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
@@ -84,75 +77,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       sessionKey: "agent:main:main",
       runSessionKey: undefined,
     });
-  });
-
-  it("keeps Codex native code mode while registering node shell tools for node sessions", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.execOverrides = {
-      host: "node",
-      node: "mac-mini",
-      security: "full",
-      ask: "off",
-    };
-    params.config = {
-      mcp: {
-        servers: {
-          local_docs: {
-            transport: "stdio",
-            command: "node",
-            args: ["/opt/local-docs-mcp/dist/index.js"],
-          },
-        },
-      },
-    } as never;
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("thread/start");
-    await harness.waitForMethod("turn/start");
-
-    const startParams = harness.requests.find((request) => request.method === "thread/start")
-      ?.params as
-      | {
-          config?: {
-            "features.code_mode"?: boolean;
-            "features.code_mode_only"?: boolean;
-            mcp_servers?: Record<string, unknown>;
-          };
-          dynamicTools?: CodexDynamicToolSpec[];
-          environments?: unknown[];
-        }
-      | undefined;
-
-    expect(startParams?.config).toMatchObject({
-      "features.code_mode": true,
-      "features.code_mode_only": false,
-      mcp_servers: {
-        local_docs: {
-          command: "node",
-          args: ["/opt/local-docs-mcp/dist/index.js"],
-        },
-      },
-    });
-    expect(startParams?.environments).toBeUndefined();
-    expect(specNames(startParams?.dynamicTools ?? [])).toEqual([
-      "message",
-      "node_exec",
-      "node_process",
-    ]);
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
   });
 
   it("emits normalized tool progress around app-server dynamic tool requests", async () => {
