@@ -130,16 +130,23 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
 }
 
 async function isPortBusy(port: number): Promise<boolean> {
-  try {
-    await tryListenOnPort({ port, exclusive: true });
-    return false;
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EADDRINUSE") {
-      return true;
+  const hosts = ["127.0.0.1", "0.0.0.0", "::1", "::"];
+  for (const host of hosts) {
+    try {
+      await tryListenOnPort({ port, host, exclusive: true });
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EADDRINUSE") {
+        return true;
+      }
+      if (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT") {
+        // Host not available on this system (e.g., IPv6 not enabled), skip
+        continue;
+      }
+      throw err instanceof Error ? err : new Error(String(err));
     }
-    throw err instanceof Error ? err : new Error(String(err));
   }
+  return false;
 }
 
 export function parseLsofOutput(output: string): PortProcess[] {

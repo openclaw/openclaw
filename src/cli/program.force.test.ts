@@ -236,7 +236,7 @@ describe("gateway --force helpers", () => {
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValue(undefined);
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 300,
