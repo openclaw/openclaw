@@ -150,6 +150,42 @@ export function isMemoryIndexIdentityDirty(params: {
   return resolveMemoryIndexIdentityState(params).status !== "valid";
 }
 
+// Returns true when meta is mismatched against the configured identity *only* because
+// of the persisted FTS text-format payload version. Provider/model/scope/tokenizer
+// mismatches still return false so callers preserve the existing pause-and-wait
+// behavior for semantically incompatible indexes; only the FTS payload format is
+// safe to self-heal automatically because rebuilding it never throws away embeddings
+// or user data — it just re-emits chunks_fts.text in the current shape.
+export function isMemoryIndexFtsTextFormatOnlyMismatch(params: {
+  meta: MemoryIndexMeta | null;
+  provider: { id: string; model: string } | null;
+  providerKey?: string;
+  providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
+  providerKeyKnown?: boolean;
+  configuredSources: MemorySource[];
+  configuredScopeHash: string;
+  chunkTokens: number;
+  chunkOverlap: number;
+  vectorReady: boolean;
+  hasIndexedChunks?: boolean;
+  ftsTokenizer: string;
+  ftsTextFormat?: string;
+}): boolean {
+  if (!params.meta) {
+    return false;
+  }
+  if (resolveMemoryIndexIdentityState(params).status !== "mismatched") {
+    return false;
+  }
+  // Re-run identity with the configured FTS text format pinned to whatever the index
+  // already has. If everything else is fine, only ftsTextFormat differs.
+  const probe = resolveMemoryIndexIdentityState({
+    ...params,
+    ftsTextFormat: params.meta.ftsTextFormat ?? "legacy-body-only",
+  });
+  return probe.status === "valid";
+}
+
 export function resolveMemoryIndexIdentityState(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;

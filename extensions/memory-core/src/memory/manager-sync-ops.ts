@@ -73,6 +73,7 @@ import {
 import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   MEMORY_FTS_TEXT_FORMAT_CURRENT,
+  isMemoryIndexFtsTextFormatOnlyMismatch,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
@@ -2356,6 +2357,34 @@ export abstract class MemoryManagerSyncOps {
       indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
+    // FTS payload format mismatches (e.g. legacy body-only chunks_fts.text rows from
+    // before #94135) are safe to self-heal on any sync path: rebuilding FTS rows never
+    // discards embeddings or chunk content. Provider/model/scope mismatches stay
+    // gated on cli/force/missing identity so we do not silently invalidate a user's
+    // semantically incompatible index.
+    const needsFtsTextFormatSelfHeal =
+      isMemoryIndexFtsTextFormatOnlyMismatch({
+        meta,
+        provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
+        providerKey: this.providerKey ?? undefined,
+        providerAliases: this.resolveProviderIndexIdentities().slice(1),
+        configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+        configuredScopeHash: resolveConfiguredScopeHash({
+          workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
+          multimodal: {
+            enabled: this.settings.multimodal.enabled,
+            modalities: this.settings.multimodal.modalities,
+            maxFileBytes: this.settings.multimodal.maxFileBytes,
+          },
+        }),
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+        vectorReady,
+        hasIndexedChunks,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+        ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
+      }) && !hasTargetSessionFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
@@ -2363,6 +2392,7 @@ export abstract class MemoryManagerSyncOps {
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
+      needsFtsTextFormatSelfHeal ||
       (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
       (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;

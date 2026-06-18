@@ -2,12 +2,13 @@
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
+  isMemoryIndexFtsTextFormatOnlyMismatch,
+  isMemoryIndexIdentityDirty,
   MEMORY_FTS_TEXT_FORMAT_CURRENT,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
-  resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  isMemoryIndexIdentityDirty,
+  resolveMemoryIndexProviderIdentities,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 
@@ -343,5 +344,25 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("flags FTS-text-format-only mismatches as self-heal candidates", () => {
+    const legacyMeta = createMeta();
+    delete legacyMeta.ftsTextFormat;
+    expect(isMemoryIndexFtsTextFormatOnlyMismatch(createIdentityParams({ meta: legacyMeta }))).toBe(
+      true,
+    );
+  });
+
+  it("does not self-heal when provider/model identity also changed", () => {
+    const legacyMeta = createMeta({ model: "mock-embed-v0" });
+    delete legacyMeta.ftsTextFormat;
+    expect(isMemoryIndexFtsTextFormatOnlyMismatch(createIdentityParams({ meta: legacyMeta }))).toBe(
+      false,
+    );
+  });
+
+  it("does not self-heal when identity is fully valid", () => {
+    expect(isMemoryIndexFtsTextFormatOnlyMismatch(createIdentityParams())).toBe(false);
   });
 });
