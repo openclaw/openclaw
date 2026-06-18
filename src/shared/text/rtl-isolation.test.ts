@@ -20,6 +20,21 @@ describe("applyRtlIsolation", () => {
     expect(applyRtlIsolation(input)).toBe(expected);
   });
 
+  it("leaves RTL text inside fenced code blocks unchanged", () => {
+    const input = ["Before", "```text", "שלום?", "```", "After"].join("\n");
+    expect(applyRtlIsolation(input)).toBe(input);
+  });
+
+  it("does not wrap lines where RTL text appears only inside inline code", () => {
+    const input = "Use `שלום?` as the example.";
+    expect(applyRtlIsolation(input)).toBe(input);
+  });
+
+  it("still wraps RTL prose lines that also contain inline code", () => {
+    const input = "שלום `code`?";
+    expect(applyRtlIsolation(input)).toBe(`${RLI}${input}${PDI}`);
+  });
+
   it("is idempotent: re-wrapping already-isolated text is a no-op", () => {
     const input = "שלום?";
     const once = applyRtlIsolation(input);

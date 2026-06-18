@@ -942,6 +942,16 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       expect(sanitizeAssistantVisibleText(input)).toBe(expected);
     });
 
+    it("does not wrap RTL examples inside fenced code blocks on the delivery profile", () => {
+      const input = ["Example:", "```text", "שלום?", "```"].join("\n");
+      expect(sanitizeAssistantVisibleText(input)).toBe(input);
+    });
+
+    it("does not wrap lines where RTL appears only inside inline code on the delivery profile", () => {
+      const input = "Use `שלום?` as the example.";
+      expect(sanitizeAssistantVisibleText(input)).toBe(input);
+    });
+
     it("does not wrap RTL lines on the history profile (transcript storage stays byte-clean)", () => {
       const input = "שלום?";
       expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
