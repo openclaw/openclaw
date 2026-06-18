@@ -277,6 +277,14 @@ Use one TLS termination point and apply HSTS there.
     nginx config snippet:
 
     ```nginx
+    # PWA public assets — serve without auth so browsers can request the
+    # manifest, service worker, and favicons without triggering the proxy
+    # login flow. These paths are served by OpenClaw without authentication.
+    location ~ ^/(__openclaw__/)?(manifest\.webmanifest|sw\.js|favicon\.ico|favicon\.svg|favicon-32\.png|apple-touch-icon\.png)$ {
+        proxy_pass http://openclaw:18789;
+        proxy_http_version 1.1;
+    }
+
     location / {
         auth_request /oauth2/auth;
         auth_request_set $user $upstream_http_x_auth_request_email;
@@ -288,6 +296,10 @@ Use one TLS termination point and apply HSTS there.
         proxy_set_header Connection "upgrade";
     }
     ```
+
+    <Note>
+    Browsers request `manifest.webmanifest` (PWA manifest) and `sw.js` (service worker) automatically after loading the Control UI. When your proxy requires authentication for all paths, these automatic subresource requests may not carry auth cookies and will fail with 403 unless you exclude the public asset paths from proxy authentication. OpenClaw serves these files without authentication, so skipping auth at the proxy layer for these paths is safe.
+    </Note>
 
   </Accordion>
   <Accordion title="Traefik with forward auth">
@@ -446,6 +458,30 @@ The audit checks for:
     - Supports WebSocket upgrades (`Upgrade: websocket`, `Connection: upgrade`).
     - Passes the identity headers on WebSocket upgrade requests (not just HTTP).
     - Doesn't have a separate auth path for WebSocket connections.
+
+  </Accordion>
+  <Accordion title="403 on manifest.webmanifest or other PWA assets behind auth proxy">
+    Browsers automatically request `manifest.webmanifest` (PWA manifest), `sw.js` (service worker), and favicon files after loading the Control UI. These subresource requests may not carry the same auth cookies that the main page request used, so an auth proxy (oauth2-proxy, Pomerium, etc.) that requires authentication on all paths will reject them with 403.
+
+    **Why this happens:**
+
+    - OpenClaw serves `manifest.webmanifest`, `sw.js`, `favicon.ico`, `favicon.svg`, `favicon-32.png`, and `apple-touch-icon.png` as public static files without authentication.
+    - When your reverse proxy applies `auth_request` (or equivalent) to every path, the browser's automatic subresource requests get blocked before they ever reach the Gateway.
+
+    **Fix:**
+
+    Configure your reverse proxy to skip authentication for these static asset paths. Example patterns to exclude:
+
+    - `/__openclaw__/manifest.webmanifest`
+    - `/__openclaw__/sw.js`
+    - `/__openclaw__/favicon.ico`
+    - `/__openclaw__/favicon.svg`
+    - `/__openclaw__/favicon-32.png`
+    - `/__openclaw__/apple-touch-icon.png`
+
+    If your Control UI is root-mounted (no `gateway.controlUi.basePath`), also exclude the bare `/manifest.webmanifest`, `/sw.js`, etc. paths.
+
+    See the [nginx + oauth2-proxy example](#nginx--oauth2-proxy) above for a complete nginx configuration that excludes these assets from authentication.
 
   </Accordion>
 </AccordionGroup>
