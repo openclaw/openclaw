@@ -53,6 +53,20 @@ describe("tool mutation helpers", () => {
     expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
   });
 
+  it("treats Codex exec_command cmd input like exec for mutation classification", () => {
+    expect(isLikelyMutatingToolName("exec_command")).toBe(true);
+    expect(isMutatingToolCall("exec_command", { cmd: "rg -n tool-mutation src/agents" })).toBe(
+      false,
+    );
+    expect(
+      buildToolMutationState("exec_command", { cmd: "rg -n tool-mutation src/agents" })
+        .mutatingAction,
+    ).toBe(false);
+    expect(buildToolActionFingerprint("exec_command", { cmd: "npm start" }, "npm start")).toBe(
+      "tool=exec_command|meta=npm start",
+    );
+  });
+
   it.each([
     ["exec", "sed -i 's/a/b/' file.txt"],
     ["exec", "sed --in-place 's/a/b/' file.txt"],
