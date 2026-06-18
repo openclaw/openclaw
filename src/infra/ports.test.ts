@@ -65,9 +65,9 @@ afterEach(() => {
 });
 
 describe("ports helpers", () => {
-  it("ensurePortAvailable rejects when port busy", async () => {
+  it("ensurePortAvailable rejects when IPv4 loopback is busy", async () => {
     const server = net.createServer();
-    const address = await listenServer(server, 0);
+    const address = await listenServer(server, 0, "127.0.0.1");
     if (!address) {
       return;
     }
