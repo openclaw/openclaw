@@ -10,12 +10,10 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
-import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   enqueueCommandInLane,
   GatewayDrainingError,
-  getQueueSize,
   isGatewayDraining,
 } from "../../process/command-queue.js";
 import {
@@ -33,7 +31,6 @@ import {
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
   rewriteTranscriptEntriesInSessionFile,
@@ -44,7 +41,6 @@ const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
 const TURN_MAINTENANCE_TASK_TASK = "Deferred context-engine maintenance after turn.";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
-const TURN_MAINTENANCE_WAIT_POLL_MS = 100;
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
@@ -210,6 +206,14 @@ export function resetDeferredTurnMaintenanceStateForTest(): void {
   delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
 }
 
+export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  if (!normalizedSessionKey) {
+    return;
+  }
+  await activeDeferredTurnMaintenanceRuns.get(normalizedSessionKey)?.promise;
+}
+
 function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
   sessionKey: string;
   taskId: string;
@@ -305,7 +309,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   allowDeferredCompactionExecution?: boolean;
-  deferTranscriptRewriteToSessionLane?: boolean;
   config?: OpenClawConfig;
   purpose?: string;
   contextEnginePluginId?: string;
@@ -342,13 +345,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           config: params.config,
           request,
         });
-      const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
-      if (params.deferTranscriptRewriteToSessionLane && rewriteSessionKey) {
-        return await enqueueCommandInLane(
-          resolveSessionLane(rewriteSessionKey),
-          async () => await rewriteTranscriptEntriesInFile(),
-        );
-      }
       return await rewriteTranscriptEntriesInFile();
     },
   };
@@ -384,7 +380,6 @@ async function executeContextEngineMaintenance(params: {
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       allowDeferredCompactionExecution: params.executionMode === "background",
-      deferTranscriptRewriteToSessionLane: params.executionMode === "background",
       config: params.config,
       purpose: `context-engine.${params.reason}.maintenance`,
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
@@ -433,33 +428,6 @@ async function runDeferredTurnMaintenanceWorker(params: {
   };
 
   try {
-    const sessionLane = resolveSessionLane(params.sessionKey);
-    const startedWaitingAt = Date.now();
-    let lastWaitNoticeAt = 0;
-
-    for (;;) {
-      while (getQueueSize(sessionLane) > 0) {
-        const now = Date.now();
-        if (
-          now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS &&
-          now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS
-        ) {
-          lastWaitNoticeAt = now;
-          surfaceMaintenanceUpdate(
-            "Waiting for the session lane to go idle.",
-            surfacedUserNotice
-              ? "Still waiting for the session lane to go idle."
-              : "Deferred maintenance is waiting for the session lane to go idle.",
-          );
-        }
-        await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
-      }
-      await Promise.resolve();
-      if (getQueueSize(sessionLane) === 0) {
-        break;
-      }
-    }
-
     const runningAt = Date.now();
     startTaskRunByRunId({
       runId: params.runId,

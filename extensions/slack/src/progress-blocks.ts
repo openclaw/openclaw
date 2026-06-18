@@ -59,7 +59,12 @@ function compactChunkText(value: string): string {
 }
 
 function lineDetailParts(line: ChannelProgressDraftLine): string[] {
-  return [line.detail, line.status && !line.detail?.includes(line.status) ? line.status : undefined]
+  return [
+    line.detail,
+    line.status && line.status !== "completed" && !line.detail?.includes(line.status)
+      ? line.status
+      : undefined,
+  ]
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part));
 }

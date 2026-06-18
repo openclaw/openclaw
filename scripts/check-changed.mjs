@@ -45,6 +45,10 @@ const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+const ANDROID_VERSION_SYNC_PATHS = new Set([
+  "apps/android/Config/Version.properties",
+  "apps/android/version.json",
+]);
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -63,6 +67,12 @@ function isTruthyEnvFlag(value) {
     .trim()
     .toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function hasAndroidVersionSyncPath(paths) {
+  return paths.some((changedPath) =>
+    ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
+  );
 }
 
 function executableExistsOnPath(command, env = process.env) {
@@ -260,6 +270,7 @@ export function createChangedCheckPlan(result, options = {}) {
 
   const lanes = result.lanes;
   const runAll = lanes.all;
+  const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -269,6 +280,7 @@ export function createChangedCheckPlan(result, options = {}) {
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    add("Android version sync", ["android:version:check"]);
     add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
@@ -277,6 +289,10 @@ export function createChangedCheckPlan(result, options = {}) {
       commands,
       summary: "release metadata",
     };
+  }
+
+  if (shouldRunAndroidVersionSync) {
+    add("Android version sync", ["android:version:check"]);
   }
 
   if (runAll) {

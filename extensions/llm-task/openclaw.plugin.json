@@ -35,7 +35,7 @@
     },
     "additionalProperties": false
   },
-  "version": "2026.5.21",
+  "version": "2026.6.9",
   "contracts": {
     "tools": [
       "llm-task"

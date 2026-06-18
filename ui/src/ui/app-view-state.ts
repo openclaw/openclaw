@@ -487,7 +487,10 @@ export type AppViewState = {
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
-    loadAssistantIdentity: () => Promise<void>;
+    loadAssistantIdentity: (opts?: {
+      sessionKey?: string;
+      expectedSessionKey?: string;
+    }) => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;
     handleWhatsAppWait: () => Promise<void>;

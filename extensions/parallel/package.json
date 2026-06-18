@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/parallel-plugin",
-  "version": "2026.5.21",
+  "version": "2026.6.9",
   "private": true,
   "description": "OpenClaw Parallel web search plugin",
   "type": "module",

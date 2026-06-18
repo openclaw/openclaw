@@ -43,6 +43,17 @@ function isOllamaApiKeyMarker(value: string): boolean {
   return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
 }
 
+export function resolveOllamaRuntimeBaseUrl(params: {
+  api?: ModelProviderConfig["api"];
+  configuredBaseUrl?: string;
+  discoveredBaseUrl: string;
+}): string {
+  if (params.configuredBaseUrl && params.api && params.api !== "ollama") {
+    return params.configuredBaseUrl;
+  }
+  return params.discoveredBaseUrl;
+}
+
 function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
   baseUrl?: string;
@@ -262,8 +273,8 @@ export async function resolveOllamaDiscoveryResult(params: {
   // Cloud instances are shared tenants where available models are managed
   // by the provider; only use explicitly configured models.
   // Remote self-hosted Ollama endpoints still auto-discover as before.
-  const resolvedBaseUrl = readProviderBaseUrl(explicit);
-  if (!hasExplicitModels && resolvedBaseUrl && isHostedOllamaCloud(resolvedBaseUrl)) {
+  const configuredBaseUrl = readProviderBaseUrl(explicit);
+  if (!hasExplicitModels && configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl)) {
     return null;
   }
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
@@ -276,10 +287,11 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
   if (hasExplicitModels && explicit) {
-    const baseUrl = resolveOllamaApiBase(readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL);
+    const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
+    const api = explicit.api ?? "ollama";
     const apiKey = resolveOllamaDiscoveryApiKey({
       env: params.ctx.env,
-      baseUrl,
+      baseUrl: discoveredBaseUrl,
       explicitApiKey,
       resolvedApiKey: ollamaKey,
       resolvedDiscoveryApiKey: ollamaDiscoveryKey,
@@ -287,9 +299,8 @@ export async function resolveOllamaDiscoveryResult(params: {
     return {
       provider: {
         ...explicit,
-        models: explicit.models ?? [],
-        baseUrl,
-        api: explicit.api ?? "ollama",
+        baseUrl: resolveOllamaRuntimeBaseUrl({ api, configuredBaseUrl, discoveredBaseUrl }),
+        api,
         ...(apiKey ? { apiKey } : {}),
       },
     };
@@ -313,12 +324,12 @@ export async function resolveOllamaDiscoveryResult(params: {
     keyParts: [
       OLLAMA_PROVIDER_ID,
       "models",
-      resolvedBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
+      configuredBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
       ollamaKey,
       quiet,
     ],
     load: async () =>
-      await params.buildProvider(resolvedBaseUrl, {
+      await params.buildProvider(configuredBaseUrl, {
         quiet,
       }),
   });
@@ -327,14 +338,21 @@ export async function resolveOllamaDiscoveryResult(params: {
   }
   const apiKey = resolveOllamaDiscoveryApiKey({
     env: params.ctx.env,
-    baseUrl: provider.baseUrl ?? resolvedBaseUrl,
+    baseUrl: provider.baseUrl ?? configuredBaseUrl,
     explicitApiKey,
     resolvedApiKey: ollamaKey,
     resolvedDiscoveryApiKey: ollamaDiscoveryKey,
   });
+  const api = explicit?.api ?? provider.api;
   return {
     provider: {
       ...provider,
+      baseUrl: resolveOllamaRuntimeBaseUrl({
+        api,
+        configuredBaseUrl,
+        discoveredBaseUrl: provider.baseUrl,
+      }),
+      api,
       ...(apiKey ? { apiKey } : {}),
     },
   };
