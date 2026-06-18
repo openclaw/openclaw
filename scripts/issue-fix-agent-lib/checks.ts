@@ -7,10 +7,14 @@ export type CheckSnapshot = {
 
 type RawCheckSnapshot = {
   readonly conclusion?: string | null;
+  readonly context?: string;
   readonly detailsUrl?: string | null;
   readonly details_url?: string | null;
   readonly name?: string;
+  readonly state?: string;
   readonly status?: string;
+  readonly targetUrl?: string | null;
+  readonly target_url?: string | null;
 };
 
 type CheckClassification =
@@ -37,8 +41,26 @@ function isRelevantCheck(snapshot: CheckSnapshot): boolean {
 }
 
 function normalizeCheckName(raw: RawCheckSnapshot): string | null {
-  const name = raw.name?.trim();
+  const name = raw.name?.trim() || raw.context?.trim();
   return name ? name : null;
+}
+
+function normalizeStatusContext(raw: RawCheckSnapshot): Pick<CheckSnapshot, "conclusion" | "status"> {
+  switch (raw.state) {
+    case "ERROR":
+    case "FAILURE":
+      return { conclusion: raw.state, status: "COMPLETED" };
+    case "SUCCESS":
+      return { conclusion: "SUCCESS", status: "COMPLETED" };
+    case "EXPECTED":
+    case "PENDING":
+      return { conclusion: null, status: raw.state };
+    default:
+      return {
+        conclusion: raw.conclusion ?? null,
+        status: raw.status ?? "UNKNOWN",
+      };
+  }
 }
 
 export function normalizePrCheckRollup(raw: readonly RawCheckSnapshot[]): CheckSnapshot[] {
@@ -47,12 +69,13 @@ export function normalizePrCheckRollup(raw: readonly RawCheckSnapshot[]): CheckS
     if (!name) {
       return [];
     }
+    const status = normalizeStatusContext(entry);
     return [
       {
-        conclusion: entry.conclusion ?? null,
-        detailsUrl: entry.detailsUrl ?? entry.details_url ?? null,
+        conclusion: status.conclusion,
+        detailsUrl: entry.detailsUrl ?? entry.details_url ?? entry.targetUrl ?? entry.target_url ?? null,
         name,
-        status: entry.status ?? "UNKNOWN",
+        status: status.status,
       },
     ];
   });

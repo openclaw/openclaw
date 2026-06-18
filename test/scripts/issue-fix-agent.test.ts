@@ -372,6 +372,21 @@ describe("issue-fix-agent checks", () => {
     });
   });
 
+  it("reports failed commit status contexts", () => {
+    const snapshots = normalizePrCheckRollup([
+      {
+        context: "ci/external",
+        state: "FAILURE",
+        targetUrl: "https://example.test/status",
+      },
+    ]);
+
+    expect(classifyCheckSnapshots(snapshots)).toMatchObject({
+      failed: [{ detailsUrl: "https://example.test/status", name: "ci/external" }],
+      kind: "failed",
+    });
+  });
+
   it("ignores routine checks", () => {
     const snapshots = normalizePrCheckRollup([
       {
