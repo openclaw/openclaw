@@ -244,7 +244,9 @@ describe("command-startup-policy", () => {
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
     });
+  });
 
+  it("treats mcp serve as stdout-clean protocol startup", () => {
     expect(
       resolveCliStartupPolicy({
         commandPath: ["mcp", "serve"],
