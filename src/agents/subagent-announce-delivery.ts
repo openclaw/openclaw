@@ -957,9 +957,9 @@ async function deliverTextCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = resolveTextCompletionDirectFallback(params.internalEvents);
+  const rawContent = resolveTextCompletionDirectFallback(params.internalEvents);
   if (
-    !content ||
+    !rawContent ||
     !params.deliveryTarget.deliver ||
     !params.deliveryTarget.channel ||
     !params.deliveryTarget.to ||
@@ -967,6 +967,8 @@ async function deliverTextCompletionDirect(params: {
   ) {
     return undefined;
   }
+  // Cap long output to avoid amplifying session lock issues
+  const content = capDirectTextContent(rawContent);
   const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   try {
@@ -1404,6 +1406,25 @@ async function sendSubagentAnnounceDirectly(params: {
           wakeOutcome,
         )}`,
       );
+      // NEW: Try direct text delivery as proactive fallback before requester-agent handoff
+      if (
+        params.expectsCompletionMessage &&
+        deliveryTarget.deliver &&
+        isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey)
+      ) {
+        defaultRuntime.log(`[info] Attempting direct text delivery (active wake failed)`);
+        const textDelivery = await deliverTextCompletionDirect({
+          cfg,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          directIdempotencyKey: params.directIdempotencyKey,
+          deliveryTarget,
+          internalEvents: params.internalEvents,
+        });
+        if (textDelivery && textDelivery.delivered) {
+          defaultRuntime.log(`[info] Direct text delivery succeeded (active wake fallback)`);
+          return textDelivery;
+        }
+      }
     }
     if (
       params.expectsCompletionMessage &&
@@ -1506,6 +1527,26 @@ async function sendSubagentAnnounceDirectly(params: {
         const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
         if (generatedMediaDelivery) {
           return generatedMediaDelivery;
+        }
+      }
+      // NEW: Try direct text delivery as reactive fallback for session lock errors
+      if (
+        activeRequesterWakeFailed &&
+        isSessionWriteLockAnnounceAgentError(err) &&
+        deliveryTarget.deliver &&
+        isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey)
+      ) {
+        defaultRuntime.log(`[info] Attempting direct text delivery (session lock fallback)`);
+        const textDelivery = await deliverTextCompletionDirect({
+          cfg,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          directIdempotencyKey: params.directIdempotencyKey,
+          deliveryTarget,
+          internalEvents: params.internalEvents,
+        });
+        if (textDelivery && textDelivery.delivered) {
+          defaultRuntime.log(`[info] Direct text delivery succeeded (session lock fallback)`);
+          return textDelivery;
         }
       }
       // The requester-agent handoff is the delivery contract for background
@@ -1746,5 +1787,6 @@ export const testing = {
         }
       : defaultSubagentAnnounceDeliveryDeps;
   },
+  capDirectTextContent,
 };
 export { testing as __testing };
