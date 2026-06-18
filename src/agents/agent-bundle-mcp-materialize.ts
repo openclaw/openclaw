@@ -41,8 +41,15 @@ type McpContentBlockMaterialization = {
   content: ToolResultContentBlock;
   attachments: McpRelayMediaAttachment[];
 };
+type McpRelayMediaBudget = {
+  attachmentCount: number;
+  decodedBytes: number;
+};
 
-function decodeBoundedBase64Data(data: string, maxBytes: number): Buffer | undefined {
+const MAX_MCP_RELAY_MEDIA_ATTACHMENTS_PER_RESULT = 8;
+const MAX_MCP_RELAY_MEDIA_BYTES_PER_RESULT = 32 * 1024 * 1024;
+
+function estimateBoundedBase64DataBytes(data: string, maxBytes: number): number | undefined {
   const estimatedBytes = estimateBase64DecodedBytes(data);
   if (estimatedBytes === 0) {
     return undefined;
@@ -50,13 +57,28 @@ function decodeBoundedBase64Data(data: string, maxBytes: number): Buffer | undef
   if (estimatedBytes > maxBytes) {
     throw new Error(`MCP content too large: ${estimatedBytes} bytes (limit: ${maxBytes} bytes)`);
   }
-  const canonicalBase64 = canonicalizeBase64(data);
+  return estimatedBytes;
+}
+
+function decodeBoundedBase64Data(params: {
+  data: string;
+  maxBytes: number;
+  estimatedBytes: number;
+}): Buffer {
+  if (params.estimatedBytes > params.maxBytes) {
+    throw new Error(
+      `MCP content too large: ${params.estimatedBytes} bytes (limit: ${params.maxBytes} bytes)`,
+    );
+  }
+  const canonicalBase64 = canonicalizeBase64(params.data);
   if (!canonicalBase64) {
     throw new Error("MCP content has invalid base64 data");
   }
   const buffer = Buffer.from(canonicalBase64, "base64");
-  if (buffer.byteLength > maxBytes) {
-    throw new Error(`MCP content too large: ${buffer.byteLength} bytes (limit: ${maxBytes} bytes)`);
+  if (buffer.byteLength > params.maxBytes) {
+    throw new Error(
+      `MCP content too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
+    );
   }
   return buffer;
 }
@@ -79,6 +101,32 @@ function mcpAttachmentFileName(params: {
   );
 }
 
+function reserveMcpRelayMediaBudget(params: {
+  budget: McpRelayMediaBudget;
+  estimatedBytes: number;
+  serverName: string;
+  toolName: string;
+  type: McpRelayMediaAttachment["type"];
+}): boolean {
+  if (params.budget.attachmentCount >= MAX_MCP_RELAY_MEDIA_ATTACHMENTS_PER_RESULT) {
+    logWarn(
+      `bundle-mcp: skipping ${params.type} content from ${params.serverName}/${params.toolName}: ` +
+        `MCP media attachment count limit reached (${MAX_MCP_RELAY_MEDIA_ATTACHMENTS_PER_RESULT})`,
+    );
+    return false;
+  }
+  if (params.budget.decodedBytes + params.estimatedBytes > MAX_MCP_RELAY_MEDIA_BYTES_PER_RESULT) {
+    logWarn(
+      `bundle-mcp: skipping ${params.type} content from ${params.serverName}/${params.toolName}: ` +
+        `MCP media decoded-byte limit reached (${MAX_MCP_RELAY_MEDIA_BYTES_PER_RESULT} bytes)`,
+    );
+    return false;
+  }
+  params.budget.attachmentCount += 1;
+  params.budget.decodedBytes += params.estimatedBytes;
+  return true;
+}
+
 async function stageMcpBinaryAttachment(params: {
   serverName: string;
   toolName: string;
@@ -87,14 +135,31 @@ async function stageMcpBinaryAttachment(params: {
   data: string;
   mimeType?: string;
   uri?: string;
+  budget: McpRelayMediaBudget;
 }): Promise<McpRelayMediaAttachment | undefined> {
   const mimeType = normalizeMimeType(params.mimeType);
   const maxBytes = maxBytesForMime(mimeType);
   try {
-    const buffer = decodeBoundedBase64Data(params.data, maxBytes);
-    if (!buffer) {
+    const estimatedBytes = estimateBoundedBase64DataBytes(params.data, maxBytes);
+    if (estimatedBytes === undefined) {
       return undefined;
     }
+    if (
+      !reserveMcpRelayMediaBudget({
+        budget: params.budget,
+        estimatedBytes,
+        serverName: params.serverName,
+        toolName: params.toolName,
+        type: params.type,
+      })
+    ) {
+      return undefined;
+    }
+    const buffer = decodeBoundedBase64Data({
+      data: params.data,
+      maxBytes,
+      estimatedBytes,
+    });
     const staged = await resolveOutboundAttachmentFromBuffer(buffer, maxBytes, {
       ...(mimeType ? { contentType: mimeType } : {}),
       filename: mcpAttachmentFileName({
@@ -132,6 +197,7 @@ async function mcpContentBlockToToolResult(params: {
   toolName: string;
   block: ContentBlock;
   index: number;
+  budget: McpRelayMediaBudget;
 }): Promise<McpContentBlockMaterialization> {
   const { block } = params;
   const attachments: McpRelayMediaAttachment[] = [];
@@ -148,6 +214,7 @@ async function mcpContentBlockToToolResult(params: {
           type: "image",
           data: block.data,
           mimeType: block.mimeType,
+          budget: params.budget,
         });
         if (attachment) {
           attachments.push(attachment);
@@ -167,6 +234,7 @@ async function mcpContentBlockToToolResult(params: {
             type: "audio",
             data: block.data,
             mimeType: block.mimeType,
+            budget: params.budget,
           })
         : undefined;
       if (attachment) {
@@ -197,6 +265,7 @@ async function mcpContentBlockToToolResult(params: {
           data: resource.blob,
           mimeType,
           uri: resource.uri,
+          budget: params.budget,
         });
         if (attachment) {
           attachments.push(attachment);
@@ -216,18 +285,21 @@ async function toAgentToolResult(params: {
   toolName: string;
   result: CallToolResult;
 }): Promise<AgentToolResult<unknown>> {
-  const materializedBlocks: McpContentBlockMaterialization[] = Array.isArray(params.result.content)
-    ? await Promise.all(
-        params.result.content.map((block, index) =>
-          mcpContentBlockToToolResult({
-            serverName: params.serverName,
-            toolName: params.toolName,
-            block,
-            index,
-          }),
-        ),
-      )
-    : [];
+  const materializedBlocks: McpContentBlockMaterialization[] = [];
+  const relayMediaBudget: McpRelayMediaBudget = { attachmentCount: 0, decodedBytes: 0 };
+  if (Array.isArray(params.result.content)) {
+    for (const [index, block] of params.result.content.entries()) {
+      materializedBlocks.push(
+        await mcpContentBlockToToolResult({
+          serverName: params.serverName,
+          toolName: params.toolName,
+          block,
+          index,
+          budget: relayMediaBudget,
+        }),
+      );
+    }
+  }
   const content: AgentToolResult<unknown>["content"] = materializedBlocks.map(
     (block) => block.content,
   );
