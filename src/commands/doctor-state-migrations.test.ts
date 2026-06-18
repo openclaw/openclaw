@@ -1739,6 +1739,15 @@ describe("doctor legacy state migrations", () => {
     const sourcePath = path.join(root, "custom-capture", "capture.sqlite");
     const blobDir = path.join(root, "custom-capture", "blobs");
     writeLegacyDebugProxyCaptureSidecar(root, { sourcePath, blobDir });
+    const sqlite = requireNodeSqlite();
+    const legacyDb = new sqlite.DatabaseSync(sourcePath);
+    try {
+      legacyDb
+        .prepare("UPDATE capture_sessions SET blob_dir = ?")
+        .run(path.join(root, "stale-machine-specific-blobs"));
+    } finally {
+      legacyDb.close();
+    }
     const env = {
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_DEBUG_PROXY_DB_PATH: sourcePath,
@@ -1757,6 +1766,28 @@ describe("doctor legacy state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
     expect(fs.existsSync(`${blobDir}.migrated`)).toBe(true);
+  });
+
+  it("uses stored per-session debug proxy blob directories without active overrides", async () => {
+    const root = await makeTempRoot();
+    const blobDir = path.join(root, "custom-session-blobs");
+    const { sourcePath, blobId } = writeLegacyDebugProxyCaptureSidecar(root, { blobDir });
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([
+      `Left migrated debug proxy capture blobs in stored session directory: ${blobDir}`,
+    ]);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    expect(fs.existsSync(blobDir)).toBe(true);
+    const state = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      state.db.prepare("SELECT blob_id FROM capture_blobs WHERE blob_id = ?").get(blobId),
+    ).toEqual({ blob_id: blobId });
+    expect(state.db.prepare("SELECT COUNT(*) AS count FROM capture_events").get()).toEqual({
+      count: 1,
+    });
   });
 
   it("ignores a legacy debug proxy override that points at shared state", async () => {

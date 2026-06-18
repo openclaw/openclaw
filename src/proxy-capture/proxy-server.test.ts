@@ -39,6 +39,8 @@ async function makeSettings(): Promise<DebugProxySettings> {
   return {
     enabled: true,
     required: false,
+    dbPath: join(testRoot, "capture.sqlite"),
+    blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-server-test",
     sourceProcess: "test",
