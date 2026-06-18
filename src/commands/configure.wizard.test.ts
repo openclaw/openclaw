@@ -467,6 +467,39 @@ describe("runConfigureWizard", () => {
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
 
+  it("keeps web_search disabled when provider setup has no credential", async () => {
+    setupBaseWizardState();
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      tools: {
+        ...cfg.tools,
+        web: {
+          ...cfg.tools?.web,
+          fetch: { provider: "firecrawl" },
+          search: { enabled: false, provider: "firecrawl" },
+        },
+      },
+    }));
+    queueWizardPrompts({
+      select: [],
+      confirm: [true, true],
+    });
+
+    await runWebConfigureWizard();
+
+    const written = requireWriteConfig();
+    expect(getWebSearch(written)).toMatchObject({
+      enabled: false,
+      provider: "firecrawl",
+    });
+    const tools = requireRecord(written.tools, "tools config");
+    const web = requireRecord(tools.web, "web config");
+    expect(requireRecord(web.fetch, "web fetch config")).toEqual({
+      enabled: true,
+      provider: "firecrawl",
+    });
+  });
+
   it("notes unavailable web search providers under plugin policy", async () => {
     setupBaseWizardState();
     mocks.resolveSearchProviderOptions.mockReturnValue([]);

@@ -403,7 +403,7 @@ describe("setupSearch", () => {
       });
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
-      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      expect(result.tools?.web?.search?.enabled).toBe(false);
       const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
       expect(missingNote?.message).toContain("No Brave Search API key stored");
     } finally {
@@ -427,7 +427,7 @@ describe("setupSearch", () => {
       const result = await setupSearch({}, runtime, prompter);
 
       expect(result.tools?.web?.search?.provider).toBe("firecrawl");
-      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      expect(result.tools?.web?.search?.enabled).toBe(false);
       expect(result.tools?.web?.fetch?.provider).toBe("firecrawl");
       expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     } finally {
@@ -517,7 +517,7 @@ describe("setupSearch", () => {
       });
       expect(prompter.text).toHaveBeenCalled();
       expect(result.tools?.web?.search?.provider).toBe("grok");
-      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+      expect(result.tools?.web?.search?.enabled).toBe(false);
     } finally {
       if (original === undefined) {
         delete process.env.XAI_API_KEY;

@@ -686,6 +686,7 @@ export async function runSearchSetupFlow(
 
   const search: SearchConfig = {
     ...config.tools?.web?.search,
+    enabled: false,
     provider: choice,
   };
   return applySearchProviderSelectionConfig(

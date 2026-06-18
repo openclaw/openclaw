@@ -338,9 +338,11 @@ async function promptWebToolsConfig(
         }
       } else {
         workingConfig = await setupSearch(workingConfig, runtime, prompter);
+        const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
-          ...workingConfig.tools?.web?.search,
-          enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+          ...selectedSearch,
+          enabled:
+            selectedSearch?.enabled ?? (selectedSearch?.provider ? true : existingSearch?.enabled),
           openaiCodex: {
             ...existingSearch?.openaiCodex,
             ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
