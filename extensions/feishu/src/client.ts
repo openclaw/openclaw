@@ -67,12 +67,14 @@ let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 // If a future SDK version adds more interceptors, the upgrade will need
 // compatibility verification regardless.
 {
-  const inst = Lark.defaultHttpInstance as {
-    interceptors?: {
-      request: { handlers: unknown[]; use: (fn: (req: unknown) => unknown) => void };
-    };
-  };
-  if (inst.interceptors?.request) {
+  const inst = Lark.defaultHttpInstance as
+    | {
+        interceptors?: {
+          request: { handlers: unknown[]; use: (fn: (req: unknown) => unknown) => void };
+        };
+      }
+    | undefined;
+  if (inst?.interceptors?.request) {
     inst.interceptors.request.handlers = [];
     inst.interceptors.request.use((req: unknown) => {
       const r = req as { headers?: Record<string, string> };
@@ -119,9 +121,10 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * but injects a default request timeout and User-Agent header to prevent
  * indefinite hangs and set a standardized User-Agent per OAPI best practices.
  */
-function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
-  const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
-
+function createTimeoutHttpInstance(
+  base: FeishuHttpInstanceLike,
+  defaultTimeoutMs: number,
+): Lark.HttpInstance {
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
   }
@@ -175,13 +178,19 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client with timeout-aware HTTP instance
+  const defaultHttpInstance = feishuClientSdk.defaultHttpInstance as
+    | FeishuHttpInstanceLike
+    | undefined;
+  if (!defaultHttpInstance) {
+    throw new Error("Feishu SDK default HTTP instance is unavailable");
+  }
+
   const client = new feishuClientSdk.Client({
     appId,
     appSecret,
     appType: feishuClientSdk.AppType.SelfBuild,
     domain: resolveDomain(domain),
-    httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs),
+    httpInstance: createTimeoutHttpInstance(defaultHttpInstance, defaultHttpTimeoutMs),
   });
 
   // Cache it

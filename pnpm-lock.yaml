@@ -966,8 +966,8 @@ importers:
   extensions/matrix:
     dependencies:
       '@matrix-org/matrix-sdk-crypto-nodejs':
-        specifier: 0.6.0
-        version: 0.6.0
+        specifier: 0.4.0
+        version: 0.4.0
       '@matrix-org/matrix-sdk-crypto-wasm':
         specifier: 18.3.0
         version: 18.3.0
@@ -2935,9 +2935,9 @@ packages:
   '@lydell/node-pty@1.2.0-beta.12':
     resolution: {integrity: sha512-qIK890UwPupoj07osVvgOIa++1mxeHbcGry4PKRHhNVNs81V2SCG34eJr46GybiOmBtc8Sj5PB1/GGM5PL549g==}
 
-  '@matrix-org/matrix-sdk-crypto-nodejs@0.6.0':
-    resolution: {integrity: sha512-AndGryzkDtFbaDyPBAQ2B4pUhaA/q4HJf3wgiGpPa/70DsdY1Z3R5Wn9yp+56CeHOpk61mNHz/8WDPlzrZDSJw==}
-    engines: {node: '>= 24'}
+  '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
+    resolution: {integrity: sha512-+qqgpn39XFSbsD0dFjssGO9vHEP7sTyfs8yTpt8vuqWpUpF20QMwpCZi0jpYw7GxjErNTsMshopuo8677DfGEA==}
+    engines: {node: '>= 22'}
 
   '@matrix-org/matrix-sdk-crypto-wasm@18.3.0':
     resolution: {integrity: sha512-9a4feyt8QLysARu7PHKaRWT+wcCd+IYH074LXp9QK5WqfN4zUXueRhiSSMNT18Bm+8q3sBR/4zxDxOSDR0M8Kg==}
@@ -9007,7 +9007,7 @@ snapshots:
       '@lydell/node-pty-win32-arm64': 1.2.0-beta.12
       '@lydell/node-pty-win32-x64': 1.2.0-beta.12
 
-  '@matrix-org/matrix-sdk-crypto-nodejs@0.6.0':
+  '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
     dependencies:
       https-proxy-agent: 7.0.6
       node-downloader-helper: 2.1.11

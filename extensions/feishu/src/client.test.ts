@@ -387,6 +387,23 @@ describe("createFeishuClient HTTP timeout", () => {
     });
   });
 
+  it("rejects client creation when the SDK default HTTP instance is unavailable", () => {
+    setFeishuClientRuntimeForTest({
+      sdk: {
+        defaultHttpInstance: undefined as never,
+      },
+    });
+
+    expect(() =>
+      createFeishuClient({
+        appId: "app-default-http",
+        appSecret: "secret-default-http", // pragma: allowlist secret
+        accountId: "default-http-instance",
+      }),
+    ).toThrow("Feishu SDK default HTTP instance is unavailable");
+    expect(clientCtorMock).not.toHaveBeenCalled();
+  });
+
   it("evicts client cache when SDK is replaced via setFeishuClientRuntimeForTest (#83911)", () => {
     const ctorCountA = clientCtorMock.mock.calls.length;
 
