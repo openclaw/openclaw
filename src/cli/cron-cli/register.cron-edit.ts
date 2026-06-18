@@ -122,6 +122,11 @@ export function registerCronEditCommand(cron: Command) {
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
+      .option(
+        "--fallbacks <list>",
+        "Comma-separated fallback models for agent jobs (e.g. anthropic/claude-haiku-4-5,openai/gpt-5)",
+      )
+      .option("--clear-fallbacks", "Remove per-job fallback model list", false)
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
       .option("--announce", "Fallback-deliver final text to a chat")
@@ -289,6 +294,10 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Use --model or --clear-model, not both");
           }
           const thinking = normalizeOptionalString(opts.thinking);
+          const fallbacks = parseCronToolsAllow(opts.fallbacks);
+          if (fallbacks && opts.clearFallbacks) {
+            throw new Error("Use --fallbacks or --clear-fallbacks, not both");
+          }
           const toolsAllow = parseCronToolsAllow(opts.tools);
           const rawTimeoutSeconds =
             opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds).trim();
@@ -380,7 +389,9 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
-            opts.clearTools;
+            opts.clearTools ||
+            Boolean(fallbacks) ||
+            Boolean(opts.clearFallbacks);
           const hasCommandPayloadField =
             hasCommandSpecificPayloadField ||
             (hasTimeoutSeconds &&
@@ -417,6 +428,11 @@ export function registerCronEditCommand(cron: Command) {
               payload.toolsAllow = null;
             } else if (toolsAllow) {
               payload.toolsAllow = toolsAllow;
+            }
+            if (opts.clearFallbacks) {
+              payload.fallbacks = null;
+            } else if (fallbacks) {
+              payload.fallbacks = fallbacks;
             }
             patch.payload = payload;
           } else if (hasCommandPatch) {

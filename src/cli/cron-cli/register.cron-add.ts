@@ -128,6 +128,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
+      .option(
+        "--fallbacks <list>",
+        "Comma-separated fallback models for agent jobs (e.g. anthropic/claude-haiku-4-5,openai/gpt-5)",
+      )
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--announce", "Fallback-deliver final text to a chat", false)
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
@@ -259,6 +263,7 @@ export function registerCronAddCommand(cron: Command) {
                   timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
                 lightContext: opts.lightContext === true ? true : undefined,
                 toolsAllow: parseCronToolsAllow(opts.tools),
+                fallbacks: parseCronToolsAllow(opts.fallbacks),
               };
             })();
 
