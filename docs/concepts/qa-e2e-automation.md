@@ -73,9 +73,10 @@ pnpm openclaw qa run \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
-Use `smoke-ci` for Crabline-backed PR proof with deterministic mock model
-providers and `release` for the Stable/LTS proof lane. When a command also needs
-an OpenClaw root profile, put the root profile before the QA command:
+Use `smoke-ci` as the CI QA profile: it runs the taxonomy categories selected by
+the profile with deterministic mock model providers and the Crabline SDK-backed
+channel driver. Use `release` for the Stable/LTS proof lane. When a command also
+needs an OpenClaw root profile, put the root profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
@@ -201,7 +202,14 @@ witness video when `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or
 environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
-CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
+The scheduled/manual `.github/workflows/qa-live-transports-convex.yml` workflow
+uses the same command surface. Its `smoke-ci` job runs the full smoke profile by
+default; the Matrix, Telegram, Discord, Slack, and WhatsApp jobs are separate
+live transport lanes for upstream service coverage. Scheduled and default manual
+runs execute the fast Matrix profile with live frontier credentials, `--fast`,
+and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all`
+fans out into the five profile shards so the exhaustive catalog can run in
+parallel while keeping one artifact directory per shard.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
