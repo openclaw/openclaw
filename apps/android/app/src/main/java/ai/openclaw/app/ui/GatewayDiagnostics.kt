@@ -26,6 +26,39 @@ internal fun gatewayStatusHasDiagnostics(statusText: String): Boolean {
   return lower != "offline" && !lower.contains("connecting")
 }
 
+/** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
+internal fun gatewayDiagnosticsEndpoint(
+  remoteAddress: String?,
+  manualHost: String,
+  manualPort: Int,
+  manualTls: Boolean,
+): String {
+  remoteAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+  return composeGatewayManualUrl(manualHost, manualPort.toString(), manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } ?: "Not set"
+}
+
+/** Summarizes why chat is blocked without dumping raw gateway logs into the UI. */
+internal fun gatewayOfflineDiagnosis(
+  statusText: String,
+  gatewayAddress: String,
+): String {
+  val status = gatewayStatusForDisplay(statusText)
+  val lower = status.lowercase()
+  val endpoint = gatewayAddress.trim()
+  return when {
+    endpoint.isBlank() || endpoint.equals("not set", ignoreCase = true) -> "Endpoint not configured"
+    lower.contains("pair") || lower.contains("approve") -> "Pairing needs approval"
+    lower.contains("auth") || lower.contains("token") || lower.contains("password") -> "Authentication needs attention"
+    lower.contains("certificate") || lower.contains("tls") || lower.contains("fingerprint") -> "TLS trust needs review"
+    lower.contains("node") && (lower.contains("not registered") || lower.contains("not paired")) -> "Node is not registered"
+    lower.contains("provider") && (lower.contains("offline") || lower.contains("unavailable") || lower.contains("not ready")) -> "Provider is offline"
+    lower.contains("timeout") || lower.contains("refused") || lower.contains("unreachable") || lower.contains("failed") || lower.contains("error") -> "Gateway is unreachable"
+    lower.contains("connecting") || lower.contains("reconnecting") -> "Connection is still retrying"
+    lower == "offline" || lower.contains("not connected") -> "Gateway is unreachable"
+    else -> status
+  }
+}
+
 /** Detects pairing/approval status text so UI can offer pairing-specific actions. */
 internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
@@ -68,6 +101,7 @@ internal fun buildGatewayDiagnosticsReport(
     - device: $device
     - android: $androidVersion (SDK ${Build.VERSION.SDK_INT})
     - gateway address: $endpoint
+    - diagnosis: ${gatewayOfflineDiagnosis(statusText = status, gatewayAddress = endpoint)}
     - status/error: $status
     """.trimIndent()
 }
