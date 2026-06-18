@@ -451,6 +451,26 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/mcp-code-mode-gateway-client.test.ts"],
       ],
       [
+        "scripts/e2e/codex-media-path-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/codex-media-path-client.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/codex-npm-plugin-live-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/codex-on-demand-docker.sh",
+        ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
+      ],
+      [
         "scripts/e2e/crestodian-first-run-docker.sh",
         [
           "test/scripts/docker-build-helper.test.ts",
@@ -600,6 +620,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/docker-build-helper.test.ts"],
       ],
       [
+        "scripts/e2e/live-plugin-tool-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/live-plugin-tool-assertions.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/openai-image-auth-docker.sh",
         [
           "test/scripts/docker-build-helper.test.ts",
@@ -616,6 +644,15 @@ describe("scripts/test-projects changed-target routing", () => {
           "src/image-generation/openai-compatible-image-provider.test.ts",
         ],
       ],
+      [
+        "scripts/e2e/plugin-binding-command-escape-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      ["scripts/e2e/qr-import-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
     ]);
 
     for (const [source, targets] of expectedTargets) {
@@ -1300,6 +1337,29 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openai-image-auth-docker-client.test.ts",
         "extensions/openai/image-generation-provider.test.ts",
         "src/image-generation/openai-compatible-image-provider.test.ts",
+      ],
+    });
+  });
+
+  it("routes package-backed Docker shell targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/codex-media-path-docker.sh",
+      "scripts/e2e/codex-npm-plugin-live-docker.sh",
+      "scripts/e2e/codex-on-demand-docker.sh",
+      "scripts/e2e/live-plugin-tool-docker.sh",
+      "scripts/e2e/plugin-binding-command-escape-docker.sh",
+      "scripts/e2e/qr-import-docker.sh",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/codex-media-path-client.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/live-plugin-tool-assertions.test.ts",
       ],
     });
   });
