@@ -137,32 +137,21 @@ const ACTIVE_ROUTE_REFRESHERS = {
   },
 } satisfies Record<AppRefreshRouteId, ActiveRouteLoader>;
 
+type AppRouteRunner = ReturnType<typeof appRouter.createRunner>;
+
+const activeRouteRunners = new WeakMap<SettingsHost, AppRouteRunner>();
+
 function isAppRefreshRoute(routeId: RouteId): routeId is AppRefreshRouteId {
   return routeId in ACTIVE_ROUTE_REFRESHERS;
 }
 
-type ActiveRouteRun = {
-  controller: AbortController;
-};
-
-const activeRouteTransitionRuns = new WeakMap<SettingsHost, ActiveRouteRun>();
-const activeRouteLoadRuns = new WeakMap<SettingsHost, ActiveRouteRun>();
-
-function beginActiveRouteRun(host: SettingsHost, runs: WeakMap<SettingsHost, ActiveRouteRun>) {
-  const previous = runs.get(host);
-  previous?.controller.abort();
-  const next = { controller: new AbortController() };
-  runs.set(host, next);
-  return next;
-}
-
-function isCurrentActiveRouteRun(
-  host: SettingsHost,
-  runs: WeakMap<SettingsHost, ActiveRouteRun>,
-  run: ActiveRouteRun,
-  routeId: RouteId,
-): boolean {
-  return runs.get(host) === run && !run.controller.signal.aborted && host.routeId === routeId;
+function routeRunner(host: SettingsHost): AppRouteRunner {
+  let runner = activeRouteRunners.get(host);
+  if (!runner) {
+    runner = appRouter.createRunner();
+    activeRouteRunners.set(host, runner);
+  }
+  return runner;
 }
 
 function routeLoadContext(host: SettingsHost, signal: AbortSignal): RouteLoadContext {
@@ -170,17 +159,13 @@ function routeLoadContext(host: SettingsHost, signal: AbortSignal): RouteLoadCon
 }
 
 export function cancelActiveRouteTransition(host: SettingsHost): void {
-  activeRouteTransitionRuns.get(host)?.controller.abort();
-  activeRouteLoadRuns.get(host)?.controller.abort();
+  routeRunner(host).cancel();
 }
 
 export function enterInitialActiveRoute(host: SettingsHost): void {
-  const run = beginActiveRouteRun(host, activeRouteTransitionRuns);
-  const routeId = host.routeId;
-  const transition = appRouter.enter(routeId, routeLoadContext(host, run.controller.signal), {
-    signal: run.controller.signal,
-    shouldContinue: () => isCurrentActiveRouteRun(host, activeRouteTransitionRuns, run, routeId),
-  });
+  const transition = routeRunner(host).enter(host.routeId, (signal) =>
+    routeLoadContext(host, signal),
+  );
   if (transition) {
     void transition.catch(() => undefined);
   }
@@ -203,15 +188,8 @@ export function applyActiveRouteTransition(
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
   }
-  const run = beginActiveRouteRun(host, activeRouteTransitionRuns);
-  const transition = appRouter.transition(
-    previous,
-    next,
-    routeLoadContext(host, run.controller.signal),
-    {
-      signal: run.controller.signal,
-      shouldContinue: () => isCurrentActiveRouteRun(host, activeRouteTransitionRuns, run, next),
-    },
+  const transition = routeRunner(host).transition(previous, next, (signal) =>
+    routeLoadContext(host, signal),
   );
   if (transition) {
     void transition.catch(() => undefined);
@@ -228,28 +206,21 @@ export function applyActiveRouteTransition(
 }
 
 export async function refreshActiveRoute(host: SettingsHost): Promise<void> {
-  const run = beginActiveRouteRun(host, activeRouteLoadRuns);
   const routeId = host.routeId;
-  const context = routeLoadContext(host, run.controller.signal);
   const refreshRun = beginControlUiRefresh(host, host.routeId);
   try {
-    if (isAppRefreshRoute(routeId)) {
-      await ACTIVE_ROUTE_REFRESHERS[routeId]?.(context);
-    }
-    if (!isCurrentActiveRouteRun(host, activeRouteLoadRuns, run, routeId)) {
-      return;
-    }
-    await appRouter.load(routeId, context, {
-      signal: run.controller.signal,
-      shouldContinue: () => isCurrentActiveRouteRun(host, activeRouteLoadRuns, run, routeId),
-    });
-    if (isCurrentActiveRouteRun(host, activeRouteLoadRuns, run, routeId)) {
-      finishControlUiRefresh(host, refreshRun, "ok");
-    }
+    await routeRunner(host).load(
+      routeId,
+      (signal) => routeLoadContext(host, signal),
+      async (context, options) => {
+        if (isAppRefreshRoute(routeId) && options.shouldRun()) {
+          await ACTIVE_ROUTE_REFRESHERS[routeId]?.(context);
+        }
+      },
+    );
+    finishControlUiRefresh(host, refreshRun, "ok");
   } catch (err) {
-    if (isCurrentActiveRouteRun(host, activeRouteLoadRuns, run, routeId)) {
-      finishControlUiRefresh(host, refreshRun, "error");
-    }
+    finishControlUiRefresh(host, refreshRun, "error");
     throw err;
   }
 }

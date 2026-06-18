@@ -56,17 +56,10 @@ describe("createRouter", () => {
       ],
     });
 
-    const controller = new AbortController();
-    const transition = router.transition(
-      "from",
-      "to",
-      { invalidate: () => undefined },
-      {
-        signal: controller.signal,
-      },
-    );
+    const runner = router.createRunner();
+    const transition = runner.transition("from", "to", () => ({ invalidate: () => undefined }));
     await leaveStarted;
-    controller.abort();
+    runner.cancel();
     releaseLeave?.();
     await transition;
 
@@ -101,17 +94,11 @@ describe("createRouter", () => {
         },
       ],
     });
-    const controller = new AbortController();
-    const enter = router.enter(
-      "logs",
-      { invalidate: () => undefined },
-      {
-        signal: controller.signal,
-      },
-    );
+    const runner = router.createRunner();
+    const enter = runner.enter("logs", () => ({ invalidate: () => undefined }));
 
     await moduleStarted;
-    controller.abort();
+    runner.cancel();
     resolveModule?.({
       page: {
         onEnter: () => calls.push("enter"),
@@ -121,5 +108,28 @@ describe("createRouter", () => {
     await enter;
 
     expect(calls).toEqual([]);
+  });
+
+  it("propagates current route load errors", async () => {
+    const error = new Error("load failed");
+    const router = createRouter({
+      routes: [
+        {
+          id: "logs",
+          path: "/logs",
+          page: async () => ({
+            page: {
+              load: () => {
+                throw error;
+              },
+              render: () => null,
+            },
+          }),
+        },
+      ],
+    });
+    const runner = router.createRunner();
+
+    await expect(runner.load("logs", () => ({ invalidate: () => undefined }))).rejects.toBe(error);
   });
 });

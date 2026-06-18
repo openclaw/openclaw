@@ -1,6 +1,7 @@
 export type MaybePromise<T> = T | Promise<T>;
 
 export type RouteHookOptions = {
+  signal: AbortSignal;
   shouldRun: () => boolean;
 };
 

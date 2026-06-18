@@ -13,17 +13,25 @@ type RouterOptions<
   routes: readonly RouteRecord<TRouteId, TLoadContext, TRenderContext>[];
 };
 
-type TransitionOptions = {
-  signal?: AbortSignal;
-  shouldContinue?: () => boolean;
+type RouteRun = {
+  controller: AbortController;
 };
+
+type RunKind = "transition" | "load";
+
+type RouteContextFactory<TLoadContext> = (signal: AbortSignal) => TLoadContext;
+
+type RouteBeforeLoad<TLoadContext> = (
+  context: TLoadContext,
+  options: RouteHookOptions,
+) => MaybePromise<void>;
 
 function isPromiseLike(value: MaybePromise<void>): value is Promise<void> {
   return Boolean(value && typeof (value as Promise<void>).then === "function");
 }
 
-function shouldRun(options: TransitionOptions | undefined): boolean {
-  return options?.signal?.aborted !== true && options?.shouldContinue?.() !== false;
+function shouldRun(options: RouteHookOptions): boolean {
+  return !options.signal.aborted && options.shouldRun();
 }
 
 export function normalizeRouteBasePath(basePath: string): string {
@@ -166,17 +174,152 @@ export function createRouter<
     id: TRouteId,
     hook: "load" | "onEnter" | "onLeave",
     context: TLoadContext,
-    runOptions?: TransitionOptions,
+    options: RouteHookOptions,
   ): MaybePromise<void> => {
-    if (!shouldRun(runOptions)) {
+    if (!shouldRun(options)) {
       return;
     }
-    try {
-      const hookOptions: RouteHookOptions = { shouldRun: () => shouldRun(runOptions) };
-      return byId.get(id)?.[hook]?.(context, hookOptions);
-    } catch (err) {
-      return Promise.reject(err);
+    return byId.get(id)?.[hook]?.(context, options);
+  };
+
+  const transitionRoute = (
+    from: TRouteId,
+    to: TRouteId,
+    context: TLoadContext,
+    options: RouteHookOptions,
+  ): MaybePromise<void> => {
+    const enter = () => {
+      if (!shouldRun(options)) {
+        return;
+      }
+      return runHook(to, "onEnter", context, options);
+    };
+    const leaveResult = runHook(from, "onLeave", context, options);
+    if (isPromiseLike(leaveResult)) {
+      return leaveResult.then(() => enter());
     }
+    return enter();
+  };
+
+  const createRunner = () => {
+    let transitionRun: RouteRun | null = null;
+    let loadRun: RouteRun | null = null;
+
+    const runFor = (kind: RunKind) => (kind === "transition" ? transitionRun : loadRun);
+    const setRun = (kind: RunKind, run: RouteRun | null) => {
+      if (kind === "transition") {
+        transitionRun = run;
+      } else {
+        loadRun = run;
+      }
+    };
+    const isCurrent = (kind: RunKind, run: RouteRun) =>
+      runFor(kind) === run && !run.controller.signal.aborted;
+    const begin = (kind: RunKind) => {
+      runFor(kind)?.controller.abort();
+      const run = { controller: new AbortController() };
+      setRun(kind, run);
+      return run;
+    };
+    const finish = (kind: RunKind, run: RouteRun) => {
+      if (!isCurrent(kind, run)) {
+        return;
+      }
+      setRun(kind, null);
+    };
+    const optionsFor = (kind: RunKind, run: RouteRun): RouteHookOptions => ({
+      signal: run.controller.signal,
+      shouldRun: () => isCurrent(kind, run),
+    });
+    const settle = (
+      kind: RunKind,
+      run: RouteRun,
+      result: MaybePromise<void>,
+    ): MaybePromise<void> => {
+      if (!isPromiseLike(result)) {
+        finish(kind, run);
+        return;
+      }
+      return result.then(
+        () => finish(kind, run),
+        (error: unknown) => {
+          const current = isCurrent(kind, run);
+          finish(kind, run);
+          if (!current) {
+            return;
+          }
+          throw error;
+        },
+      );
+    };
+
+    return {
+      cancel: () => {
+        transitionRun?.controller.abort();
+        loadRun?.controller.abort();
+        transitionRun = null;
+        loadRun = null;
+      },
+      enter(routeId: TRouteId, contextFor: RouteContextFactory<TLoadContext>): MaybePromise<void> {
+        const run = begin("transition");
+        return settle(
+          "transition",
+          run,
+          runHook(
+            routeId,
+            "onEnter",
+            contextFor(run.controller.signal),
+            optionsFor("transition", run),
+          ),
+        );
+      },
+      load(
+        routeId: TRouteId,
+        contextFor: RouteContextFactory<TLoadContext>,
+        beforeLoad?: RouteBeforeLoad<TLoadContext>,
+      ): MaybePromise<void> {
+        const run = begin("load");
+        const context = contextFor(run.controller.signal);
+        const options = optionsFor("load", run);
+        const loadRoute = () =>
+          isCurrent("load", run) ? runHook(routeId, "load", context, options) : undefined;
+        try {
+          const beforeLoadResult = beforeLoad?.(context, options);
+          if (isPromiseLike(beforeLoadResult)) {
+            return settle(
+              "load",
+              run,
+              beforeLoadResult.then(() => loadRoute()),
+            );
+          }
+          return settle("load", run, loadRoute());
+        } catch (error) {
+          finish("load", run);
+          return Promise.reject(error);
+        }
+      },
+      transition(
+        from: TRouteId,
+        to: TRouteId,
+        contextFor: RouteContextFactory<TLoadContext>,
+      ): MaybePromise<void> {
+        const run = begin("transition");
+        if (from === to) {
+          finish("transition", run);
+          return;
+        }
+        return settle(
+          "transition",
+          run,
+          transitionRoute(
+            from,
+            to,
+            contextFor(run.controller.signal),
+            optionsFor("transition", run),
+          ),
+        );
+      },
+    };
   };
 
   return {
@@ -189,44 +332,6 @@ export function createRouter<
       const routeId = paths.routeIdFromPath(path, basePath);
       return routeId ? (byId.get(routeId) ?? null) : null;
     },
-    enter(
-      routeId: TRouteId,
-      context: TLoadContext,
-      runOptions?: TransitionOptions,
-    ): MaybePromise<void> {
-      return runHook(routeId, "onEnter", context, runOptions);
-    },
-    load(
-      routeId: TRouteId,
-      context: TLoadContext,
-      runOptions?: TransitionOptions,
-    ): MaybePromise<void> {
-      return runHook(routeId, "load", context, runOptions);
-    },
-    transition(
-      from: TRouteId,
-      to: TRouteId,
-      context: TLoadContext,
-      transitionOptions?: TransitionOptions,
-    ): MaybePromise<void> {
-      if (from === to) {
-        return;
-      }
-      const enter = () => {
-        if (!shouldRun(transitionOptions)) {
-          return;
-        }
-        return runHook(to, "onEnter", context, transitionOptions);
-      };
-      try {
-        const leaveResult = runHook(from, "onLeave", context, transitionOptions);
-        if (isPromiseLike(leaveResult)) {
-          return leaveResult.then(() => enter());
-        }
-        return enter();
-      } catch (err) {
-        return Promise.reject(err);
-      }
-    },
+    createRunner,
   };
 }
