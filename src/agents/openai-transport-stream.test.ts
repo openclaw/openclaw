@@ -5683,7 +5683,7 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]).not.toHaveProperty("strict");
   });
 
-  it("keeps native responses strict mode for projected tools after dropping bad schemas", () => {
+  it("downgrades native responses strict mode after dropping bad schemas", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -5732,12 +5732,10 @@ describe("openai transport stream", () => {
         type: "function",
         name: "lookup_weather",
         description: "Get forecast",
-        strict: true,
+        strict: false,
         parameters: {
           type: "object",
           properties: {},
-          required: [],
-          additionalProperties: false,
         },
       },
     ]);

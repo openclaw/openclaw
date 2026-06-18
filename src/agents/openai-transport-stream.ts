@@ -83,6 +83,7 @@ import {
   findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
@@ -1336,7 +1337,10 @@ function resolveOpenAIStrictToolFlagWithDiagnostics(
   strictSetting: boolean | null | undefined,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean | undefined {
-  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
+  const strict =
+    context.transport === "responses"
+      ? resolveOpenAIStrictToolFlagForProjection(projection, strictSetting)
+      : resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false && log.isEnabled("debug", "any")) {
     const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
