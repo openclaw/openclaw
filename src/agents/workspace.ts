@@ -874,6 +874,11 @@ export async function ensureAgentWorkspace(params?: {
 
   await fs.mkdir(dir, { recursive: true });
 
+  // Ensure sandbox skill directories exist before the first container launch so
+  // read-only mounts always take effect (prevents first-write vulnerability window).
+  await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+  await fs.mkdir(path.join(dir, ".agents", "skills"), { recursive: true });
+
   if (!params?.ensureBootstrapFiles) {
     const hasContentEvidence = await hasSkipBootstrapWorkspaceContentEvidence(dir);
     if (recentAttestationPath && !hasContentEvidence) {
