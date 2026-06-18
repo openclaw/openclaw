@@ -906,9 +906,9 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { replaceConfigFile } = await loadConfigModule();
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
-  const shouldWriteConfig =
-    ctx.configResult.shouldWriteConfig ||
-    JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  const changedDuringRepair =
+    ctx.prompter.shouldRepair && JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  const shouldWriteConfig = ctx.configResult.shouldWriteConfig === true || changedDuringRepair;
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     ctx.cfg = applyWizardMetadata(ctx.cfg, {

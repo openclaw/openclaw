@@ -1023,6 +1023,30 @@ describe("doctor health contributions", () => {
       expect(log).not.toHaveBeenCalled();
     });
 
+    it("does not write or print the doctor --fix trailer for non-repair drift without pending config changes", async () => {
+      const log = vi.fn();
+      const ctx = {
+        runtime: { log, error: vi.fn(), exit: vi.fn() },
+        options: {},
+        prompter: buildDoctorPrompter(false),
+        configResult: {
+          cfg: { gateway: { mode: "local" } },
+          shouldWriteConfig: false,
+          pendingChanges: false,
+        },
+        cfg: { gateway: { mode: "remote" } },
+        cfgForPersistence: { gateway: { mode: "local" } },
+        sourceConfigValid: true,
+        configPath: "/tmp/openclaw-doctor-trailer.json",
+        env: {},
+      } as unknown as Parameters<(typeof writeConfigContribution)["run"]>[0];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    });
+
     it("prints the doctor --fix trailer when pending config changes await --fix", async () => {
       const cfg = {};
       const log = vi.fn();
