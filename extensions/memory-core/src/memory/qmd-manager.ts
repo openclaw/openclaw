@@ -2967,7 +2967,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   private buildMcporterProcessEnv(mode: McporterEnvMode): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...this.mcporterEnv };
     delete env.QMD_CONFIG_DIR;
-    delete env.XDG_CACHE_HOME;
     if (mode === "generated") {
       delete env.XDG_CONFIG_HOME;
       delete env.MCPORTER_CONFIG;

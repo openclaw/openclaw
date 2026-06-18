@@ -4136,10 +4136,13 @@ describe("QmdMemoryManager", () => {
     });
   });
 
-  it("keeps manager-scoped QMD env in generated config but not mcporter commands", async () => {
-    process.env.XDG_CONFIG_HOME = path.join(tmpRoot, "user-xdg-config");
-    process.env.XDG_CACHE_HOME = path.join(tmpRoot, "user-xdg-cache");
-    process.env.QMD_CONFIG_DIR = path.join(tmpRoot, "user-qmd-config");
+  it("keeps generated QMD env agent-scoped while preserving user mcporter cache env", async () => {
+    const userXdgConfigHome = path.join(tmpRoot, "user-xdg-config");
+    const userXdgCacheHome = path.join(tmpRoot, "user-xdg-cache");
+    const userQmdConfigDir = path.join(tmpRoot, "user-qmd-config");
+    process.env.XDG_CONFIG_HOME = userXdgConfigHome;
+    process.env.XDG_CACHE_HOME = userXdgCacheHome;
+    process.env.QMD_CONFIG_DIR = userQmdConfigDir;
     delete process.env.MCPORTER_CONFIG;
 
     cfg = {
@@ -4176,7 +4179,7 @@ describe("QmdMemoryManager", () => {
     const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
     expect(spawnOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
     expect(spawnOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(spawnOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(spawnOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     expect(spawnOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
     expect(spawnOpts?.env?.PATH?.split(path.delimiter)).toContain(path.dirname(process.execPath));
 
@@ -4278,7 +4281,7 @@ describe("QmdMemoryManager", () => {
     expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toThrow();
@@ -4289,7 +4292,7 @@ describe("QmdMemoryManager", () => {
     expect(configProbes).toHaveLength(1);
     const probeOpts = configProbes[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(probeOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
-    expect(probeOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(probeOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     expect(probeOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
     expect(probeOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
 
@@ -4774,7 +4777,9 @@ describe("QmdMemoryManager", () => {
   it("discovers an XDG-only mcporter config when MCPORTER_CONFIG is unset", async () => {
     delete process.env.MCPORTER_CONFIG;
     const userXdgConfigHome = path.join(tmpRoot, "xdg-only-config-home");
+    const userXdgCacheHome = path.join(tmpRoot, "xdg-only-cache-home");
     process.env.XDG_CONFIG_HOME = userXdgConfigHome;
+    process.env.XDG_CACHE_HOME = userXdgCacheHome;
     const userMcporterConfig = path.join(userXdgConfigHome, "mcporter", "mcporter.json");
     await fs.mkdir(path.dirname(userMcporterConfig), { recursive: true });
     await fs.writeFile(
@@ -4836,6 +4841,7 @@ describe("QmdMemoryManager", () => {
     );
     const probeOpts = configProbe?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(probeOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
+    expect(probeOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
 
     const mcporterCall = spawnMock.mock.calls.find(
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
@@ -4846,7 +4852,7 @@ describe("QmdMemoryManager", () => {
     expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -5579,7 +5585,7 @@ describe("QmdMemoryManager", () => {
     expect(daemonOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
     expect(daemonOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
     expect(daemonOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(daemonOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(daemonOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
 
     await manager.close();
   });
@@ -5706,7 +5712,7 @@ describe("QmdMemoryManager", () => {
     expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toThrow();
@@ -5840,7 +5846,7 @@ describe("QmdMemoryManager", () => {
     expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toThrow();
@@ -5907,7 +5913,7 @@ describe("QmdMemoryManager", () => {
     expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
-    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBe(userXdgCacheHome);
     await expect(
       fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
     ).rejects.toThrow();
