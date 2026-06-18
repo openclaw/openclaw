@@ -8,7 +8,10 @@ import type {
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
+import {
+  planManifestModelCatalogRows,
+  planManifestModelCatalogSuppressions,
+} from "../../model-catalog/manifest-planner.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
@@ -179,36 +182,51 @@ function hasModelCatalogAliasTransportOverride(alias: ModelCatalogAlias): boolea
   return Boolean(alias.api?.trim() || alias.baseUrl?.trim());
 }
 
-function hasConfiguredModelCatalogProviderSurface(params: {
+function findConfiguredModelCatalogProviderConfig(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+}): Partial<ModelProviderConfig> | undefined {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return undefined;
+  }
+  for (const [providerId, providerConfig] of Object.entries(params.cfg?.models?.providers ?? {})) {
+    if (normalizeProviderId(providerId) === provider) {
+      return providerConfig as Partial<ModelProviderConfig>;
+    }
+  }
+  return undefined;
+}
+
+function hasConfiguredModelCatalogProviderTransportSurface(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+}): boolean {
+  const config = findConfiguredModelCatalogProviderConfig(params);
+  return Boolean(config?.api || config?.baseUrl?.trim());
+}
+
+function hasConfiguredModelCatalogProviderModelRow(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
-  if (!provider) {
+  const modelId = params.modelId?.trim();
+  if (!provider || !modelId) {
     return false;
   }
-  for (const [providerId, providerConfig] of Object.entries(params.cfg?.models?.providers ?? {})) {
-    if (normalizeProviderId(providerId) !== provider) {
-      continue;
-    }
-    const config = providerConfig as Partial<ModelProviderConfig>;
-    const modelId = params.modelId?.trim();
-    if (!modelId) {
-      return Boolean(config.api || config.baseUrl?.trim());
-    }
-    return Boolean(
-      Array.isArray(config.models) &&
-      config.models.some((model) =>
-        staticModelIdMatches({
-          candidateId: model.id,
-          provider,
-          modelId,
-        }),
-      ),
-    );
-  }
-  return false;
+  const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
+  return Boolean(
+    Array.isArray(config?.models) &&
+    config.models.some((model) =>
+      staticModelIdMatches({
+        candidateId: model.id,
+        provider,
+        modelId,
+      }),
+    ),
+  );
 }
 
 function hasManifestModelCatalogAliasModelRow(params: {
@@ -231,6 +249,23 @@ function hasManifestModelCatalogAliasModelRow(params: {
   );
 }
 
+function hasManifestModelCatalogSuppression(params: {
+  provider: string;
+  modelId?: string;
+  plugin: Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  const modelId = params.modelId?.trim();
+  if (!provider || !modelId) {
+    return false;
+  }
+  return planManifestModelCatalogSuppressions({
+    registry: { plugins: [params.plugin] },
+    providerFilter: provider,
+    modelFilter: modelId,
+  }).suppressions.some((suppression) => normalizeProviderId(suppression.provider) === provider);
+}
+
 function resolveManifestModelCatalogProviderAlias(params: {
   provider: string;
   modelId?: string;
@@ -246,10 +281,11 @@ function resolveManifestModelCatalogProviderAlias(params: {
     for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
       const normalizedAlias = normalizeProviderId(rawAlias);
       const normalizedTarget = normalizeProviderId(alias.provider);
+      const hasModelId = Boolean(params.modelId?.trim());
       const retainsTransportAlias =
         hasModelCatalogAliasTransportOverride(alias) &&
-        (!params.modelId?.trim() ||
-          hasConfiguredModelCatalogProviderSurface({
+        (!hasModelId ||
+          hasConfiguredModelCatalogProviderModelRow({
             provider,
             modelId: params.modelId,
             cfg: params.cfg,
@@ -258,7 +294,13 @@ function resolveManifestModelCatalogProviderAlias(params: {
             provider,
             modelId: params.modelId,
             plugin,
-          }));
+          }) ||
+          (hasConfiguredModelCatalogProviderTransportSurface({ provider, cfg: params.cfg }) &&
+            !hasManifestModelCatalogSuppression({
+              provider,
+              modelId: params.modelId,
+              plugin,
+            })));
       if (
         normalizedAlias === provider &&
         normalizedTarget &&
