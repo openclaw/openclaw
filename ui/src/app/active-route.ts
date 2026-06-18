@@ -23,6 +23,7 @@ import {
   roundedControlUiDurationMs,
   scheduleControlUiRouteVisibleTiming,
 } from "../ui/control-ui-performance.ts";
+import { appRouter } from "../router/index.ts";
 import { loadAgentFiles } from "../ui/controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "../ui/controllers/agent-identity.ts";
 import { loadAgentSkills } from "../ui/controllers/agent-skills.ts";
@@ -56,13 +57,11 @@ import { isMonitoredAuthProvider } from "../ui/model-auth-helpers.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
 import { resetChatViewState } from "../ui/views/chat.ts";
 import type { SettingsAppHost, SettingsHost } from "./app-host.ts";
-import { controlUiRouter, type ActiveRouteLoadOptions } from "./control-ui-router.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "./operator-access.ts";
 
 type ActiveRouteLoader = (context: {
   host: SettingsHost;
   app: SettingsAppHost;
-  opts?: ActiveRouteLoadOptions;
 }) => void | Promise<void>;
 
 const refreshSettingsRoute: ActiveRouteLoader = async ({ host, app }) => {
@@ -124,21 +123,18 @@ const ACTIVE_ROUTE_REFRESHERS = {
       loadWikiMemoryPalace(app),
     ]);
   },
-  chat: async ({ host, app, opts }) => {
+  chat: async ({ host, app }) => {
     // Capture this before refreshChat seeds a one-row result from history.
     const hadSessionsResult = Boolean(app.sessionsResult);
     try {
-      await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
-        awaitHistory: opts?.chatStartup === true,
-        startup: opts?.chatStartup === true,
-      });
+      await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
       scheduleChatScroll(
         host as unknown as Parameters<typeof scheduleChatScroll>[0],
         !host.chatHasAutoScrolled,
       );
     } finally {
       void loadModelAuthStatusState(app).catch(() => undefined);
-      if (opts?.chatStartup === true || !hadSessionsResult) {
+      if (!hadSessionsResult) {
         void loadSessions(app, {
           ...createChatSessionsLoadOverrides(app),
           ...scopedAgentListParamsForSession(app, app.sessionKey),
@@ -192,17 +188,14 @@ export function applyActiveRouteTransition(
   }
 }
 
-export async function refreshActiveRoute(
-  host: SettingsHost,
-  opts?: ActiveRouteLoadOptions,
-): Promise<void> {
+export async function refreshActiveRoute(host: SettingsHost): Promise<void> {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.routeId);
   try {
     if (host.routeId !== "skill-workshop") {
-      await ACTIVE_ROUTE_REFRESHERS[host.routeId]?.({ host, app, opts });
+      await ACTIVE_ROUTE_REFRESHERS[host.routeId]?.({ host, app });
     }
-    await controlUiRouter.getRoute(host.routeId)?.load?.({ host, app, opts });
+    await appRouter.getRoute(host.routeId)?.load?.({ host, app });
     finishControlUiRefresh(host, refreshRun, "ok");
   } catch (err) {
     finishControlUiRefresh(host, refreshRun, "error");

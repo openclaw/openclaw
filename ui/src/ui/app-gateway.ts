@@ -14,12 +14,14 @@ import {
   markQueuedChatSendsWaitingForReconnect,
   recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
+  refreshChat,
   refreshChatAvatar,
   scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
+import { scheduleChatScroll } from "./app-scroll.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { switchChatSession } from "./app-render.helpers.ts";
 import { applySettings, setLastActiveSessionKey, syncUrlWithSessionKey } from "./app-settings.ts";
@@ -62,6 +64,7 @@ import {
   pruneExecApprovalQueue,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
+import { loadModelAuthStatusState } from "./controllers/model-auth-status.ts";
 import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
@@ -746,9 +749,7 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
   const agentsListBeforeStartup = host.agentsList;
   const initialRefresh = refreshBeforeAgents
-    ? refreshActiveRoute(host as unknown as Parameters<typeof refreshActiveRoute>[0], {
-        chatStartup: true,
-      }).catch((err: unknown) => {
+    ? refreshStartupChat(host).catch((err: unknown) => {
         initialRefreshError = normalizeStartupRefreshError(err);
       })
     : Promise.resolve();
@@ -774,6 +775,22 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
   if (agentsError) {
     throw agentsError;
+  }
+}
+
+async function refreshStartupChat(host: GatewayHost) {
+  try {
+    await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+      awaitHistory: true,
+      startup: true,
+    });
+    scheduleChatScroll(
+      host as unknown as Parameters<typeof scheduleChatScroll>[0],
+      !(host as { chatHasAutoScrolled?: boolean }).chatHasAutoScrolled,
+    );
+  } finally {
+    void loadModelAuthStatusState(host as unknown as Parameters<typeof loadModelAuthStatusState>[0])
+      .catch(() => undefined);
   }
 }
 
