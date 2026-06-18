@@ -1001,6 +1001,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
+  state.pendingCatchupDeferralJobIds.delete(job.id);
 
   emitJobFinished(state, job, result, result.startedAt);
 
