@@ -195,9 +195,13 @@ async function withLineRetry<T>(fn: () => Promise<T>, context: string): Promise<
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt >= LINE_RETRY_MAX_ATTEMPTS) break;
+      if (attempt >= LINE_RETRY_MAX_ATTEMPTS) {
+        break;
+      }
       const status = (err as { status?: number }).status;
-      if (status !== 429) throw err;
+      if (status !== 429) {
+        throw err;
+      }
       const delay = Math.min(LINE_RETRY_BASE_DELAY_MS * Math.pow(2, attempt), 16000);
       logVerbose(
         `line: ${context} rate-limited (429), retrying in ${delay}ms` +
