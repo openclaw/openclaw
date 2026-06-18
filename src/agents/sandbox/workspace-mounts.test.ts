@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+import {
+  appendWorkspaceMountArgs,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "./workspace-mounts.js";
+import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tmpDirs: string[] = [];
 
@@ -247,6 +251,35 @@ describe("appendWorkspaceMountArgs", () => {
     expect(mounts).toEqual([`${sandboxWorkspaceDir}:/workspace:ro,z`]);
     expect(mounts).not.toContain(
       `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
+    );
+  });
+
+  it("creates skills directories so read-only overlays are always resolved", async () => {
+    // When a new sandbox workspace is created without pre-existing skills
+    // directories, ensureSandboxWorkspace must create them so that
+    // resolveReadOnlyWorkspaceSkillMounts finds existing sources.
+    const agentWorkspaceDir = makeTempWorkspace();
+
+    await ensureSandboxWorkspace(agentWorkspaceDir, undefined, true);
+
+    // Directories must exist after workspace setup.
+    const skillsDir = path.join(agentWorkspaceDir, "skills");
+    const agentsSkillsDir = path.join(agentWorkspaceDir, ".agents", "skills");
+    expect(fs.existsSync(skillsDir)).toBe(true);
+    expect(fs.existsSync(agentsSkillsDir)).toBe(true);
+
+    // Mount resolution must find them and include the read-only overlays.
+    const mounts = resolveReadOnlyWorkspaceSkillMounts({
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+    expect(mounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ containerPath: "/workspace/skills" }),
+        expect.objectContaining({ containerPath: "/workspace/.agents/skills" }),
+      ]),
     );
   });
 });

@@ -70,4 +70,11 @@ export async function ensureSandboxWorkspace(
     ensureBootstrapFiles: !skipBootstrap,
     skipOptionalBootstrapFiles,
   });
+
+  // Ensure skills directories exist on the host so the read-only mount overlay is
+  // always applied. Without this, resolveReadOnlyWorkspaceSkillMounts silently skips
+  // the mount when the host directory is missing, leaving skills paths writable in the
+  // sandbox (reported as #94425).
+  await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+  await fs.mkdir(path.join(workspaceDir, ".agents", "skills"), { recursive: true });
 }
