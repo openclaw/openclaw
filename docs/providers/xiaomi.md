@@ -66,8 +66,8 @@ The same plugin also registers the `xiaomi` speech (TTS) provider.
 
 | Model ref              | Input       | Context   | Max output | Reasoning | Notes           |
 | ---------------------- | ----------- | --------- | ---------- | --------- | --------------- |
-| `xiaomi/mimo-v2.5-pro` | text        | 1,048,576 | 32,000     | Yes       | V2.5 flagship   |
-| `xiaomi/mimo-v2.5`     | text, image | 1,048,576 | 32,000     | Yes       | V2.5 multimodal |
+| `xiaomi/mimo-v2.5-pro` | text        | 1,048,576 | 131,072    | Yes       | V2.5 flagship   |
+| `xiaomi/mimo-v2.5`     | text, image | 1,048,576 | 131,072    | Yes       | V2.5 multimodal |
 | `xiaomi/mimo-v2-flash` | text        | 262,144   | 8,192      | No        | Default model   |
 | `xiaomi/mimo-v2-pro`   | text        | 1,048,576 | 32,000     | Yes       | Large context   |
 | `xiaomi/mimo-v2-omni`  | text, image | 262,144   | 32,000     | Yes       | Multimodal      |
@@ -86,8 +86,8 @@ Choose the Token Plan auth choice that matches the regional base URL shown in Xi
 
 | Model ref                         | Input       | Context   | Max output | Reasoning | Notes         |
 | --------------------------------- | ----------- | --------- | ---------- | --------- | ------------- |
-| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 32,000     | Yes       | Default model |
-| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 32,000     | Yes       | Multimodal    |
+| `xiaomi-token-plan/mimo-v2.5-pro` | text        | 1,048,576 | 131,072    | Yes       | Default model |
+| `xiaomi-token-plan/mimo-v2.5`     | text, image | 1,048,576 | 131,072    | Yes       | Multimodal    |
 
 <Tip>
 Token Plan onboarding validates the key shape and warns when a `tp-...` key is entered into the pay-as-you-go path, or an `sk-...` key is entered into the Token Plan path.
@@ -177,7 +177,7 @@ output to 48kHz Opus with `ffmpeg` before delivery.
             reasoning: true,
             input: ["text"],
             contextWindow: 1048576,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
           {
             id: "mimo-v2.5",
@@ -185,7 +185,7 @@ output to 48kHz Opus with `ffmpeg` before delivery.
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 1048576,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
           {
             id: "mimo-v2-flash",
@@ -240,7 +240,7 @@ Token Plan:
             reasoning: true,
             input: ["text"],
             contextWindow: 1048576,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
           {
             id: "mimo-v2.5",
@@ -248,7 +248,7 @@ Token Plan:
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 1048576,
-            maxTokens: 32000,
+            maxTokens: 131072,
           },
         ],
       },
