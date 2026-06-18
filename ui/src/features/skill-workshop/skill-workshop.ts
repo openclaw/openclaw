@@ -3,8 +3,8 @@ import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
-import { switchChatSessionAndWait } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
+import { switchChatSessionAndWait } from "../../ui/chat-session-switch.ts";
 import { loadChatHistory } from "../../ui/controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "../../ui/controllers/sessions.ts";
 import {
