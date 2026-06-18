@@ -65,6 +65,10 @@ export function resolveSkillWorkshopToolApproval(params: {
     requireApproval: {
       ...text,
       allowedDecisions: ["allow-once", "deny"],
+      // Apply can involve reviewing large proposals (~28 KB); the default 2-minute
+      // plugin-approval timeout is too short for a thorough review. Raise it to 5
+      // minutes so users have adequate time to inspect and approve the change.
+      ...(action === "apply" ? { timeoutMs: 300_000 } : {}),
     },
   };
 }
