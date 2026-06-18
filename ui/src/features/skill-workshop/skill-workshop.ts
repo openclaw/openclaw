@@ -2,6 +2,7 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import type { ControlUiRouteModule } from "../../routes/route-tree.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { switchChatSessionAndWait } from "../../ui/chat-session-switch.ts";
@@ -9,6 +10,7 @@ import { loadChatHistory } from "../../ui/controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "../../ui/controllers/sessions.ts";
 import {
   countSkillWorkshopProposals,
+  loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
@@ -343,5 +345,18 @@ export function createSkillWorkshopFeature(notifyLazyViewChanged: () => void) {
         });
       });
     },
+  };
+}
+
+export function createSkillWorkshopRoute(
+  notifyLazyViewChanged: () => void = () => undefined,
+): ControlUiRouteModule {
+  const feature = createSkillWorkshopFeature(notifyLazyViewChanged);
+  return {
+    id: "skill-workshop",
+    refresh: ({ app }) => loadSkillWorkshopProposals(app, { force: true }),
+    contentClass: feature.contentClass,
+    renderHeaderControls: feature.renderHeaderControls,
+    renderView: feature.renderView,
   };
 }
