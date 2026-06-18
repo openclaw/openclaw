@@ -1,6 +1,7 @@
 // In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import readline from "node:readline";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
@@ -786,6 +787,24 @@ export async function runGatewayLoop(params: {
       }
     });
   };
+
+  // Windows-specific fix: enable proper Ctrl+C handling via readline
+  // On Windows, process.on('SIGINT') may not fire correctly without this
+  if (process.platform === "win32") {
+    readline.emitKeypressEvents(process.stdin);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode?.(true);
+      process.stdin.on("keypress", (str, key) => {
+        if (key.ctrl && key.name === "c") {
+          onSigint();
+        }
+        if (key.ctrl && key.name === "d") {
+          // Also handle Ctrl+D for consistency
+          onSigint();
+        }
+      });
+    }
+  }
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
