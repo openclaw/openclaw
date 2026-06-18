@@ -630,7 +630,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
       console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(error instanceof Error ? error.stack || error.message : String(error));
       process.exitCode = 1;
     });
