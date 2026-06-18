@@ -1,7 +1,17 @@
-import type { ModelProviderConfigInput } from "openclaw/plugin-sdk/config-types";
 // Ollama plugin module implements discovery shared behavior.
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelProviderConfig,
+  ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+
+/**
+ * Provider config input type — partial config without required `models`.
+ * Replaces the deprecated `openclaw/plugin-sdk/config-types` import.
+ */
+type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
+  models?: ModelDefinitionConfig[];
+};
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -19,7 +29,7 @@ export type OllamaPluginConfig = {
 type OllamaDiscoveryContext = {
   config: {
     models?: {
-      providers?: Record<string, ModelProviderConfigInput | undefined>;
+      providers?: Record<string, OllamaProviderConfigInput | undefined>;
     };
   };
   env: NodeJS.ProcessEnv;
@@ -184,7 +194,7 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
 }
 
 function hasExplicitRemoteOllamaApiProvider(
-  providers: Record<string, ModelProviderConfigInput | undefined> | undefined,
+  providers: Record<string, OllamaProviderConfigInput | undefined> | undefined,
 ): boolean {
   if (!providers) {
     return false;
@@ -205,7 +215,7 @@ function hasExplicitRemoteOllamaApiProvider(
 }
 
 export function shouldUseSyntheticOllamaAuth(
-  providerConfig: ModelProviderConfigInput | undefined,
+  providerConfig: OllamaProviderConfigInput | undefined,
 ): boolean {
   if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
     return false;
@@ -214,7 +224,7 @@ export function shouldUseSyntheticOllamaAuth(
 }
 
 function hasMeaningfulExplicitOllamaConfig(
-  providerConfig: ModelProviderConfigInput | undefined,
+  providerConfig: OllamaProviderConfigInput | undefined,
 ): boolean {
   if (!providerConfig) {
     return false;
