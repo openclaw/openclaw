@@ -2,7 +2,8 @@
 summary: "Firecrawl search, scrape, and web_fetch fallback"
 read_when:
   - You want Firecrawl-backed web extraction
-  - You need a Firecrawl API key
+  - You want keyless Firecrawl scraping
+  - You need a Firecrawl API key for search or higher limits
   - You want Firecrawl as a web_search provider
   - You want anti-bot extraction for web_fetch
 title: "Firecrawl"
@@ -17,10 +18,11 @@ OpenClaw can use **Firecrawl** in three ways:
 It is a hosted extraction/search service that supports bot circumvention and caching,
 which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
-## Get an API key
+## Keyless scrape and API keys
 
-1. Create a Firecrawl account and generate an API key.
-2. Store it in config or set `FIRECRAWL_API_KEY` in the gateway environment.
+Hosted Firecrawl scraping works with starter access and no API key. Add
+`FIRECRAWL_API_KEY` in the gateway environment or configure it when you need
+higher limits. Firecrawl `web_search` still requires an API key.
 
 ## Configure Firecrawl search
 
@@ -67,7 +69,6 @@ Notes:
         enabled: true,
         config: {
           webFetch: {
-            apiKey: "FIRECRAWL_API_KEY_HERE",
             baseUrl: "https://api.firecrawl.dev",
             onlyMainContent: true,
             maxAgeMs: 172800000,
@@ -82,7 +83,8 @@ Notes:
 
 Notes:
 
-- Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
+- Firecrawl scrape and fallback requests work without an API key. When configured, OpenClaw sends `plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY` for higher limits.
+- Choosing Firecrawl during onboarding or `openclaw configure --section web` enables the plugin and selects Firecrawl for `web_fetch` unless another fetch provider is already configured.
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
 - Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 - Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.

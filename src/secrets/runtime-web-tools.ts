@@ -512,12 +512,11 @@ function readConfiguredFetchProviderCredentialFallback(params: {
 }
 
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
-  if (provider.requiresCredential === false) {
-    return [];
-  }
   return provider.inactiveSecretPaths?.length
     ? provider.inactiveSecretPaths
-    : [provider.credentialPath];
+    : provider.credentialPath
+      ? [provider.credentialPath]
+      : [];
 }
 
 /**

@@ -6,7 +6,7 @@ import { runFirecrawlScrape } from "./src/firecrawl-client.js";
 export type FetchFirecrawlContentParams = {
   url: string;
   extractMode: "markdown" | "text";
-  apiKey: string;
+  apiKey?: string;
   baseUrl: string;
   onlyMainContent: boolean;
   maxAgeMs: number;
@@ -34,7 +34,7 @@ export async function fetchFirecrawlContent(
           enabled: true,
           config: {
             webFetch: {
-              apiKey: params.apiKey,
+              ...(params.apiKey === undefined ? {} : { apiKey: params.apiKey }),
               baseUrl: params.baseUrl,
               onlyMainContent: params.onlyMainContent,
               maxAgeMs: params.maxAgeMs,

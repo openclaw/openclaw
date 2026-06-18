@@ -179,6 +179,36 @@ describe("web fetch runtime", () => {
     });
   });
 
+  it("uses an explicitly configured keyless provider without an API key", () => {
+    const provider = createFirecrawlProvider({
+      requiresCredential: false,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+  });
+
+  it("does not auto-detect a keyless provider without a credential", () => {
+    const provider = createFirecrawlProvider({
+      requiresCredential: false,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
+  });
+
   it("auto-detects providers from configured fallback credentials", () => {
     const provider = createFirecrawlProvider({
       getConfiguredCredentialFallback: (config) => {
