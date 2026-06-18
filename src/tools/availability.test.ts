@@ -1,5 +1,5 @@
 // Covers tool availability evaluation and disabled-tool reasons.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluateToolAvailability } from "./availability.js";
 import type { ToolDescriptor } from "./types.js";
 
@@ -254,5 +254,35 @@ describe("evaluateToolAvailability", () => {
         context: { authProviderIds: new Set(["openai"]) },
       }).map((entry) => entry.reason),
     ).toEqual(["unsupported-signal"]);
+  });
+
+  it("emits a process warning for empty allOf availability", () => {
+    const warnings: string[] = [];
+    const orig = process.emitWarning.bind(process);
+    process.emitWarning = vi.fn((...args: unknown[]) => {
+      warnings.push(String(args[0]));
+    });
+
+    evaluateToolAvailability({
+      descriptor: { ...baseDescriptor, availability: { allOf: [] } },
+    });
+
+    process.emitWarning = orig;
+    expect(warnings).toContain("Empty availability allOf group");
+  });
+
+  it("emits a process warning for empty anyOf availability", () => {
+    const warnings: string[] = [];
+    const orig = process.emitWarning.bind(process);
+    process.emitWarning = vi.fn((...args: unknown[]) => {
+      warnings.push(String(args[0]));
+    });
+
+    evaluateToolAvailability({
+      descriptor: { ...baseDescriptor, availability: { anyOf: [] } },
+    });
+
+    process.emitWarning = orig;
+    expect(warnings).toContain("Empty availability anyOf group");
   });
 });

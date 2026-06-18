@@ -131,6 +131,7 @@ function evaluateExpression(
   }
   if ("allOf" in expression) {
     if (expression.allOf.length === 0) {
+      process.emitWarning("Empty availability allOf group", "ToolAvailabilityWarning");
       return [
         {
           reason: "unsupported-signal",
@@ -142,6 +143,7 @@ function evaluateExpression(
   }
   if ("anyOf" in expression) {
     if (expression.anyOf.length === 0) {
+      process.emitWarning("Empty availability anyOf group", "ToolAvailabilityWarning");
       return [
         {
           reason: "unsupported-signal",
