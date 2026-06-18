@@ -296,7 +296,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       } else {
         const preUpdateConfig =
           installSurface.kind === "git"
-            ? await readPreUpdateConfigForPostCoreFinalize().catch((err) => {
+            ? await readPreUpdateConfigForPostCoreFinalize().catch((err: unknown) => {
                 context?.logGateway?.warn(
                   `update.run could not capture pre-update config ${formatControlPlaneActor(actor)} error=${formatUpdateRunErrorMessage(err)}`,
                 );
