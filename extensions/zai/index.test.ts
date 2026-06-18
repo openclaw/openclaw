@@ -189,6 +189,28 @@ describe("zai provider plugin", () => {
     ).toEqual(registered);
   });
 
+  // FIX #94269: synthesized model must include baseUrl even when the template model
+  // is not in the registry and no provider config is set.
+  it("falls back to manifest baseUrl when both providerConfig and template model are unavailable", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "zai",
+      modelId: "glm-5-turbo",
+      modelRegistry: {
+        find: () => null,
+      },
+    } as never) as Record<string, unknown> | undefined;
+    expectModelFields(resolved, {
+      id: "glm-5-turbo",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+    });
+  });
+
   it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const template = createGlm47Template();

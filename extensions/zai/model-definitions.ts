@@ -11,6 +11,8 @@ export const ZAI_DEFAULT_MODEL_ID = "glm-5.1";
 export const ZAI_CODING_DEFAULT_MODEL_ID = "glm-5.2";
 
 const ZAI_MANIFEST_CATALOG = manifest.modelCatalog.providers.zai;
+/** Provider-level default baseUrl from the bundled manifest. Used as runtime fallback. */
+export const ZAI_MANIFEST_BASE_URL = ZAI_MANIFEST_CATALOG.baseUrl;
 const ZAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   providerId: "zai",
   catalog: ZAI_MANIFEST_CATALOG,
