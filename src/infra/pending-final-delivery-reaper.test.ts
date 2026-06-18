@@ -6,6 +6,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import {
   type PendingFinalDeliveryReaperDeps,
   type StrandedReply,
+  pendingFinalDeliverySnapshotMatches,
   reapStrandedPendingFinalDeliveries,
 } from "./pending-final-delivery-reaper.js";
 
@@ -106,5 +107,45 @@ describe("reapStrandedPendingFinalDeliveries", () => {
     expect(deps.recordFailedAttempt).toHaveBeenCalledWith(reply, "channel offline");
     expect(deps.clearPending).not.toHaveBeenCalled();
     expect(result).toMatchObject({ failed: 1 });
+  });
+});
+
+describe("pendingFinalDeliverySnapshotMatches", () => {
+  const snap = {
+    pendingFinalDelivery: true as const,
+    pendingFinalDeliveryIntentId: "intent-1",
+    pendingFinalDeliveryText: "hi from the agent",
+    pendingFinalDeliveryCreatedAt: 1000,
+  };
+
+  it("matches when the current entry still holds the delivered snapshot", () => {
+    expect(pendingFinalDeliverySnapshotMatches({ ...snap }, snap)).toBe(true);
+  });
+
+  it("does NOT match a concurrently-replaced reply (different text) — so it is not erased", () => {
+    expect(
+      pendingFinalDeliverySnapshotMatches(
+        { ...snap, pendingFinalDeliveryText: "a newer reply" },
+        snap,
+      ),
+    ).toBe(false);
+  });
+
+  it("does NOT match a replaced reply with a new intent id or createdAt", () => {
+    expect(
+      pendingFinalDeliverySnapshotMatches(
+        { ...snap, pendingFinalDeliveryIntentId: "intent-2" },
+        snap,
+      ),
+    ).toBe(false);
+    expect(
+      pendingFinalDeliverySnapshotMatches({ ...snap, pendingFinalDeliveryCreatedAt: 2000 }, snap),
+    ).toBe(false);
+  });
+
+  it("does NOT match once the entry is no longer pending (already cleared/delivered)", () => {
+    expect(
+      pendingFinalDeliverySnapshotMatches({ ...snap, pendingFinalDelivery: undefined }, snap),
+    ).toBe(false);
   });
 });

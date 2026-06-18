@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type MessageChannelId, resolveKnownChannel } from "../infra/outbound/channel-selection.js";
 import {
   type StrandedReply,
+  pendingFinalDeliverySnapshotMatches,
   reapStrandedPendingFinalDeliveries,
 } from "../infra/pending-final-delivery-reaper.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -99,9 +100,14 @@ export function startPendingFinalDeliveryReaper(params: {
           return true;
         },
         clearPending: async (reply) => {
-          await updateSessionEntry({ sessionKey: reply.sessionKey }, () => ({
-            ...CLEARED_PENDING_FINAL_DELIVERY,
-          }));
+          // Clear only if the current entry still holds the snapshot we delivered;
+          // a same-session run may have written a newer pendingFinalDelivery while
+          // the send was in flight, and clearing by key would erase it (#94150 review).
+          await updateSessionEntry({ sessionKey: reply.sessionKey }, (current) =>
+            pendingFinalDeliverySnapshotMatches(current, reply.entry)
+              ? { ...CLEARED_PENDING_FINAL_DELIVERY }
+              : null,
+          );
         },
         recordFailedAttempt: async (reply, error) => {
           await updateSessionEntry({ sessionKey: reply.sessionKey }, (entry) => ({

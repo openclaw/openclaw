@@ -80,6 +80,33 @@ function isDefinitivelyTerminal(
   return !entry.sessionId || !isRunActive(entry.sessionId);
 }
 
+type PendingFinalDeliverySnapshot = Pick<
+  SessionEntry,
+  | "pendingFinalDelivery"
+  | "pendingFinalDeliveryIntentId"
+  | "pendingFinalDeliveryText"
+  | "pendingFinalDeliveryCreatedAt"
+>;
+
+/**
+ * True when `current` still holds the exact pending reply captured in `snapshot`.
+ * Clearing must be guarded by this: a same-session run can write a *replacement*
+ * `pendingFinalDelivery` while the snapshot is in flight, and an unconditional
+ * clear-by-key would erase that newer reply. Compares the stable intent id plus
+ * text/createdAt so any replacement fails the match and is left intact.
+ */
+export function pendingFinalDeliverySnapshotMatches(
+  current: PendingFinalDeliverySnapshot,
+  snapshot: PendingFinalDeliverySnapshot,
+): boolean {
+  return (
+    current.pendingFinalDelivery === true &&
+    current.pendingFinalDeliveryIntentId === snapshot.pendingFinalDeliveryIntentId &&
+    current.pendingFinalDeliveryText === snapshot.pendingFinalDeliveryText &&
+    current.pendingFinalDeliveryCreatedAt === snapshot.pendingFinalDeliveryCreatedAt
+  );
+}
+
 /**
  * One reaper pass: deliver every definitively-terminal stranded reply once.
  * Pure over its injected deps so the two invariants are tested in isolation.
