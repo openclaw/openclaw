@@ -665,7 +665,7 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(700);
+    testing.setBundleMcpCatalogListTimeoutMsForTest(2_000);
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
