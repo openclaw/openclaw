@@ -1,53 +1,27 @@
-import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
-// Control UI route tree composes route metadata with route-owned lifecycle/render hooks.
-import { createSkillWorkshopRoute } from "../features/skill-workshop/skill-workshop.ts";
-import type { AppViewState } from "../ui/app-view-state.ts";
-import { ROUTE_RECORDS, type RouteId, type RouteRecord } from "./route-registry.ts";
+import type { RouteModule, RouteRecord, RouteRefresh } from "./route-types.ts";
 
-export type RouteRefreshOptions = { chatStartup?: boolean };
+type ControlUiRoute<TRouteId extends string> = RouteRecord<TRouteId> &
+  RouteModule<TRouteId> & {
+    id: TRouteId;
+  };
 
-export type RouteRefreshContext = {
-  host: SettingsHost;
-  app: SettingsAppHost;
-  opts?: RouteRefreshOptions;
+type RouteTreeOptions<TRouteId extends string> = {
+  records: Readonly<Record<TRouteId, RouteRecord<TRouteId>>>;
+  routeModules?: readonly RouteModule<TRouteId>[];
+  refreshers?: Partial<Record<TRouteId, RouteRefresh>>;
 };
 
-export type RouteRefresh = (context: RouteRefreshContext) => void | Promise<void>;
-
-export type ControlUiRoute = RouteRecord & {
-  id: RouteId;
-  refresh?: RouteRefresh;
-  contentClass?: (state: AppViewState) => string;
-  renderHeaderControls?: (state: AppViewState) => unknown;
-  renderView?: (state: AppViewState) => unknown;
-};
-
-export type ControlUiRouteModule = Pick<
-  ControlUiRoute,
-  "id" | "refresh" | "contentClass" | "renderHeaderControls" | "renderView"
->;
-
-type RouteRefreshers = Partial<Record<RouteId, RouteRefresh>>;
-
-type RouteTreeOptions = {
-  notifyLazyViewChanged?: () => void;
-  refreshers?: RouteRefreshers;
-};
-
-export function createRouteTree(
-  options: RouteTreeOptions = {},
-): ReadonlyMap<RouteId, ControlUiRoute> {
-  const refreshers = options.refreshers ?? {};
-  const routes = new Map<RouteId, ControlUiRoute>(
-    Object.entries(ROUTE_RECORDS).map(([id, record]) => {
-      const routeId = id as RouteId;
-      return [routeId, { id: routeId, ...record, refresh: refreshers[routeId] }];
-    }),
+export function createRouteTree<TRouteId extends string>(
+  options: RouteTreeOptions<TRouteId>,
+): ReadonlyMap<TRouteId, ControlUiRoute<TRouteId>> {
+  const refreshers: Partial<Record<TRouteId, RouteRefresh>> = options.refreshers ?? {};
+  const routes = new Map<TRouteId, ControlUiRoute<TRouteId>>(
+    (Object.entries(options.records) as Array<[TRouteId, RouteRecord<TRouteId>]>).map(
+      ([routeId, record]) => [routeId, { id: routeId, ...record, refresh: refreshers[routeId] }],
+    ),
   );
-  const skillWorkshopRoute = createSkillWorkshopRoute(options.notifyLazyViewChanged);
-  routes.set(skillWorkshopRoute.id, {
-    ...ROUTE_RECORDS[skillWorkshopRoute.id],
-    ...skillWorkshopRoute,
-  });
+  for (const route of options.routeModules ?? []) {
+    routes.set(route.id, { ...options.records[route.id], ...route });
+  }
   return routes;
 }
