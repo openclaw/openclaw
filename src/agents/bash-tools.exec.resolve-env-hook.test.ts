@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => mocks.hookRunner,
+  getGlobalHookRunnerRegistry: () => null,
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
