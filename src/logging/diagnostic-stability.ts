@@ -268,6 +268,13 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = "error";
       assignReasonCode(record, event.errorCategory);
       break;
+    case "reply.phase.completed":
+      record.channel = event.channel;
+      record.phase = event.phase;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      assignReasonCode(record, event.errorCategory);
+      break;
     case "talk.event":
       record.talkEventType = event.talkEventType;
       record.mode = event.mode;

@@ -144,6 +144,44 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("records reply phase completions without raw run or session identifiers", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.dispatch_from_config",
+      phaseGroup: "dispatch",
+      durationMs: 123,
+      outcome: "error",
+      channel: "telegram",
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-secret",
+      sessionKey: "agent:main:telegram:direct:u1",
+      sessionId: "session-secret",
+      errorCategory: "reply_timeout",
+    });
+
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.byType).toMatchObject({
+      "reply.phase.completed": 1,
+    });
+    expectFields(snapshot.events[0], {
+      type: "reply.phase.completed",
+      channel: "telegram",
+      phase: "reply.dispatch_from_config",
+      durationMs: 123,
+      outcome: "error",
+      reason: "reply_timeout",
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("runId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionKey");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
+  });
+
   it("summarizes inbound delivery proof events without message content", () => {
     startDiagnosticStabilityRecorder();
 
