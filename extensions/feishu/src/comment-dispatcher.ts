@@ -46,6 +46,7 @@ export function createFeishuCommentReplyDispatcher(
     },
   );
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu");
+  const sendIntervalMs = account.config?.sendIntervalMs;
   const typingReaction = createCommentTypingReactionLifecycle({
     cfg: params.cfg,
     fileToken: params.fileToken,
@@ -77,7 +78,11 @@ export function createFeishuCommentReplyDispatcher(
           return;
         }
         const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
+        let chunkIndex = 0;
         for (const chunk of chunks) {
+          if (chunkIndex > 0 && sendIntervalMs && sendIntervalMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, sendIntervalMs));
+          }
           await deliverCommentThreadText(client, {
             file_token: params.fileToken,
             file_type: params.fileType,
@@ -85,6 +90,7 @@ export function createFeishuCommentReplyDispatcher(
             content: chunk,
             is_whole_comment: params.isWholeComment,
           });
+          chunkIndex++;
         }
       },
       onError: (err, info) => {
