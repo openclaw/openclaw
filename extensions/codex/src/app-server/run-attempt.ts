@@ -1501,6 +1501,7 @@ export async function runCodexAppServerAttempt(
     interruptTimeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
     onInterruptTurn: (input) => interruptCodexTurnBestEffort(client, input),
     onTimeout: (timeout) => {
+      const firstTimeout = !timedOut;
       timedOut = true;
       turnCompletionIdleTimedOut = true;
       turnWatchTimeoutKind = timeout.kind;
@@ -1510,6 +1511,9 @@ export async function runCodexAppServerAttempt(
       turnWatchTimeoutDetails = timeout.details;
       turnCompletionIdleTimeoutMessage =
         "codex app-server turn idle timed out waiting for turn/completed";
+      if (firstTimeout) {
+        params.onAttemptTimeout?.(new Error(turnCompletionIdleTimeoutMessage));
+      }
     },
     onMarkTimedOut: () => projectorRef.current?.markTimedOut(),
     onAbort: (reason) => runAbortController.abort(reason),
@@ -2582,6 +2586,7 @@ export async function runCodexAppServerAttempt(
   turnWatches.touchActivity("turn:start", { arm: true });
   turnWatches.armAttemptIdleWatch();
   turnWatches.touchActivity("turn:start", { attemptProgress: true });
+  params.onAttemptTimeoutArmed?.();
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
@@ -2643,6 +2648,7 @@ export async function runCodexAppServerAttempt(
       });
       return;
     }
+    params.onAttemptAbort?.();
     interruptCodexTurnBestEffort(client, {
       threadId: thread.threadId,
       turnId: activeTurnId,

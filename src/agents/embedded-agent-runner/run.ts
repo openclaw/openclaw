@@ -2006,16 +2006,12 @@ async function runEmbeddedAgentInternal(
             runId: params.runId,
             lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
-            onAttemptTimeoutArmed: pluginHarnessOwnsTransport
-              ? undefined
-              : startLaneProgressHeartbeat,
-            onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-            onAttemptAbort: pluginHarnessOwnsTransport
-              ? undefined
-              : () => {
-                  stopLaneProgressHeartbeat();
-                  laneTaskAbortController.abort();
-                },
+            onAttemptTimeoutArmed: startLaneProgressHeartbeat,
+            onAttemptTimeout: armAttemptTimeoutRelease,
+            onAttemptAbort: () => {
+              stopLaneProgressHeartbeat();
+              laneTaskAbortController.abort();
+            },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
