@@ -1,17 +1,13 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import fs, { mkdirSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
-
-function makeTempDir(): string {
-  return tempDirs.make("openclaw-plugin-lifecycle-probe-");
-}
 
 type ProbeEnv = Pick<NodeJS.ProcessEnv, "HOME" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR">;
 
