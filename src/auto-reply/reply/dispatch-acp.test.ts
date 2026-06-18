@@ -985,6 +985,9 @@ describe("tryDispatchAcpReply", () => {
           contentType: "image/png",
           sender: "@alice",
           messageId: "msg-1",
+          timestampMs: 1_700_000_000_000,
+          historyPosition: 1,
+          historyTotal: 1,
         },
       ]);
     } finally {
@@ -1229,6 +1232,9 @@ describe("tryDispatchAcpReply", () => {
           contentType: "image/png",
           sender: "@alice",
           messageId: "msg-history",
+          timestampMs: 1_700_000_000_000,
+          historyPosition: 1,
+          historyTotal: 1,
         },
       ]);
     } finally {
