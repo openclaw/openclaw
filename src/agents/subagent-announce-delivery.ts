@@ -464,9 +464,9 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
-  return Boolean(
+  return (
     (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
-    hasSessionFileChangedAnnounceError(error),
+    hasSessionFileChangedAnnounceError(error)
   );
 }
 
