@@ -34,6 +34,7 @@ import {
   readNonNegativeIntegerParam,
   readStringArrayParam,
   readStringParam,
+  textResult,
 } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -499,7 +500,14 @@ export function createGatewayTool(opts?: {
 
       if (action === "config.get") {
         const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
+        // The full config snapshot can exceed middleware details limits
+        // (MAX_MIDDLEWARE_DETAILS_BYTES/KEYS/DEPTH). Return it as text content
+        // only; details carry a minimal success marker so the middleware
+        // validation (added in v2026.6.6 via tokenjuice) does not reject it.
+        return textResult(
+          JSON.stringify({ ok: true, result }, null, 2),
+          { ok: true },
+        );
       }
       if (action === "config.schema.lookup") {
         const path = readStringParam(params, "path", {
