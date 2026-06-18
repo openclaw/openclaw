@@ -1,4 +1,7 @@
 // Discord provider module implements model/runtime integration.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
@@ -189,6 +192,32 @@ function resolveTransportActivityAt(event: unknown): number {
   return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : Date.now();
 }
 
+function drainPendingDiscordDeliveriesAfterReconnect(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  runtime: RuntimeEnv;
+}) {
+  const accountId = normalizeAccountId(params.accountId);
+  void drainPendingDeliveries({
+    drainKey: `discord:${accountId}`,
+    logLabel: "Discord reconnect drain",
+    cfg: params.cfg,
+    log: {
+      info: (message) => params.runtime.log?.(`[discord][diag] ${message}`),
+      warn: (message) => params.runtime.log?.(`[discord] ${message}`),
+      error: (message) => params.runtime.log?.(`[discord] ${message}`),
+    },
+    selectEntry: (entry) => ({
+      match: entry.channel === "discord" && normalizeAccountId(entry.accountId) === accountId,
+      bypassBackoff: false,
+    }),
+  }).catch((err: unknown) => {
+    params.runtime.error?.(
+      danger(`discord: reconnect delivery drain failed: ${String(err)}`),
+    );
+  });
+}
+
 function createGatewayStatusObserver(params: {
   gateway?: Pick<MutableDiscordGateway, "isConnected">;
   abortSignal?: AbortSignal;
@@ -196,11 +225,13 @@ function createGatewayStatusObserver(params: {
   pushStatus: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
   isLifecycleStopping: () => boolean;
   runtimeReadyTimeoutMs: number;
+  onReconnect?: () => void;
 }) {
   let forceStopHandler: ((err: unknown) => void) | undefined;
   let queuedForceStopError: unknown;
   let readyPollId: ReturnType<typeof setInterval> | undefined;
   let readyTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let hasConnectedOnce = false;
 
   const shouldStop = () => params.abortSignal?.aborted || params.isLifecycleStopping();
   const clearReadyWatch = () => {
@@ -239,6 +270,10 @@ function createGatewayStatusObserver(params: {
       }
       clearReadyWatch();
       pushConnectedStatus(Date.now());
+      if (hasConnectedOnce) {
+        params.onReconnect?.();
+      }
+      hasConnectedOnce = true;
     };
 
     pollConnected();
@@ -307,6 +342,9 @@ function createGatewayStatusObserver(params: {
   return {
     onGatewayDebug,
     clearReadyWatch,
+    markInitialReady: () => {
+      hasConnectedOnce = true;
+    },
     registerForceStop: (handler: (err: unknown) => void) => {
       forceStopHandler = handler;
       if (queuedForceStopError !== undefined) {
@@ -407,6 +445,7 @@ async function waitForGatewayReady(params: {
 
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
+  cfg: OpenClawConfig;
   gateway?: MutableDiscordGateway;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -448,6 +487,16 @@ export async function runDiscordGatewayLifecycle(params: {
     pushStatus,
     isLifecycleStopping: () => lifecycleStopping,
     runtimeReadyTimeoutMs: gatewayRuntimeReadyTimeoutMs,
+    onReconnect: () => {
+      if (lifecycleStopping || params.abortSignal?.aborted) {
+        return;
+      }
+      drainPendingDiscordDeliveriesAfterReconnect({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        runtime: params.runtime,
+      });
+    },
   });
   gatewayEmitter?.on("debug", statusObserver.onGatewayDebug);
   let lastTransportActivityStatusAt: number | undefined;
@@ -524,6 +573,8 @@ export async function runDiscordGatewayLifecycle(params: {
       beforeRestart: statusObserver.clearReadyWatch,
       readyTimeoutMs: gatewayReadyTimeoutMs,
     });
+
+    statusObserver.markInitialReady();
 
     if (drainPendingGatewayErrors() === "stop") {
       return;
