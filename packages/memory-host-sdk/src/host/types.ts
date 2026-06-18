@@ -34,7 +34,7 @@ export type MemorySyncProgressUpdate = {
 
 /** Runtime backend/mode diagnostics for memory search. */
 export type MemorySearchRuntimeDebug = {
-  backend: "builtin" | "qmd";
+  backend: "builtin" | "qmd" | "xmemo";
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
@@ -52,7 +52,7 @@ export type MemoryReadResult = {
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryProviderStatus = {
-  backend: "builtin" | "qmd";
+  backend: "builtin" | "qmd" | "xmemo";
   provider: string;
   model?: string;
   requestedProvider?: string;

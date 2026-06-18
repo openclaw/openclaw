@@ -47,6 +47,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@lancedb/lancedb", "apache-arrow"],
     minHostVersionBaseline: "2026.3.22",
   },
+  { pluginId: "xmemo-memory", minHostVersionBaseline: "2026.6.8" },
   {
     pluginId: "msteams",
     pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],

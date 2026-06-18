@@ -166,6 +166,24 @@ export function buildStatusMemoryValue(
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
     return params.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
+  if (params.memory.backend === "xmemo") {
+    const custom = params.memory.custom as
+      | { configured?: boolean; connected?: boolean; lastError?: string }
+      | undefined;
+    const remoteParts: string[] = [];
+    if (custom?.configured) {
+      remoteParts.push(custom.connected ? "connected" : "not connected");
+    } else {
+      remoteParts.push("not configured");
+    }
+    if (custom?.lastError) {
+      remoteParts.push(`last error: ${custom.lastError}`);
+    }
+    if (params.memoryPlugin.slot) {
+      remoteParts.push(`plugin ${params.memoryPlugin.slot}`);
+    }
+    return remoteParts.join(" · ");
+  }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";
   parts.push(`${params.memory.files} files · ${params.memory.chunks} chunks${dirtySuffix}`);

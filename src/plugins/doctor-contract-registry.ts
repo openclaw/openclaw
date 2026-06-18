@@ -244,6 +244,13 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
     }
   }
 
+  const pluginsConfig = asNullableRecord(asNullableRecord(root.plugins)?.config);
+  if (pluginsConfig) {
+    for (const pluginId of Object.keys(pluginsConfig)) {
+      ids.add(pluginId);
+    }
+  }
+
   const modelProviders = asNullableRecord(asNullableRecord(root.models)?.providers);
   if (modelProviders) {
     for (const providerId of Object.keys(modelProviders)) {
@@ -280,11 +287,11 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
       continue;
     }
     if (first === "plugins") {
-      if (second !== "entries" || !third) {
-        return collectRelevantDoctorPluginIds(params.raw);
+      if ((second === "entries" || second === "config") && third) {
+        ids.add(third);
+        continue;
       }
-      ids.add(third);
-      continue;
+      return collectRelevantDoctorPluginIds(params.raw);
     }
     if (first === "models") {
       if (second !== "providers" || !third) {

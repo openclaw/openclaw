@@ -365,6 +365,38 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["ollama-cloud"]);
   });
 
+  it("collects legacy plugins.config keys for doctor compatibility migrations", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        plugins: {
+          config: {
+            "xmemo-memory": {
+              apiKey: "old-key",
+            },
+          },
+        },
+      }),
+    ).toEqual(["xmemo-memory"]);
+  });
+
+  it("merges plugins.entries and plugins.config keys without duplicates", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        plugins: {
+          entries: {
+            "xmemo-memory": {},
+          },
+          config: {
+            "xmemo-memory": {
+              apiKey: "old-key",
+            },
+            "legacy-plugin": {},
+          },
+        },
+      }),
+    ).toEqual(["legacy-plugin", "xmemo-memory"]);
+  });
+
   it("loads a plugin doctor contract when scoped by a contributed provider id", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
@@ -437,6 +469,9 @@ describe("doctor-contract-registry module loader", () => {
             entries: {
               "memory-wiki": {},
             },
+            config: {
+              "xmemo-memory": {},
+            },
           },
           models: {
             providers: {
@@ -450,11 +485,12 @@ describe("doctor-contract-registry module loader", () => {
         touchedPaths: [
           ["channels", "discord", "token"],
           ["plugins", "entries", "memory-wiki", "enabled"],
+          ["plugins", "config", "xmemo-memory", "apiKey"],
           ["models", "providers", "ollama-cloud", "baseUrl"],
           ["talk", "voiceId"],
         ],
       }),
-    ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud"]);
+    ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud", "xmemo-memory"]);
   });
 
   it("falls back to the full doctor-id set when touched paths are too broad", () => {
@@ -474,5 +510,75 @@ describe("doctor-contract-registry module loader", () => {
         touchedPaths: [["channels"]],
       }),
     ).toEqual(["discord", "memory-wiki", "telegram"]);
+  });
+
+  it("applies a plugin doctor migration discovered from plugins.config keys", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({
+        cfg,
+      }: {
+        cfg: { plugins?: { config?: Record<string, unknown>; entries?: Record<string, unknown> } };
+      }) => {
+        const plugins = cfg.plugins ?? {};
+        const legacy = plugins.config?.["xmemo-memory"];
+        if (!legacy || typeof legacy !== "object") {
+          return { config: cfg, changes: [] };
+        }
+        return {
+          config: {
+            ...cfg,
+            plugins: {
+              ...plugins,
+              entries: {
+                ...plugins.entries,
+                "xmemo-memory": {
+                  enabled: true,
+                  config: legacy,
+                },
+              },
+            },
+          },
+          changes: ["migrated xmemo-memory from plugins.config"],
+        };
+      },
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "xmemo-memory",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: [],
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const config = {
+      plugins: {
+        config: {
+          "xmemo-memory": {
+            apiKey: "legacy-key",
+          },
+        },
+      },
+    };
+
+    const pluginIds = collectRelevantDoctorPluginIds(config);
+    expect(pluginIds).toEqual(["xmemo-memory"]);
+
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds,
+    });
+
+    expect(result.changes).toEqual(["migrated xmemo-memory from plugins.config"]);
+    expect(result.config.plugins.entries["xmemo-memory"]).toEqual({
+      enabled: true,
+      config: { apiKey: "legacy-key" },
+    });
   });
 });

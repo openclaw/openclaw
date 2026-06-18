@@ -4,6 +4,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusMemoryValue,
   buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
@@ -303,5 +304,43 @@ describe("status.command-sections", () => {
       { key: "Status", header: "Status", minWidth: 8 },
       { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
     ]);
+  });
+
+  it("formats remote XMemo backend status without files/chunks", () => {
+    const value = buildStatusMemoryValue({
+      memory: {
+        agentId: "main",
+        backend: "xmemo",
+        provider: "xmemo-memory",
+        custom: { configured: true, connected: true },
+      } as never,
+      memoryPlugin: { enabled: true, slot: "xmemo-memory" },
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+      resolveMemoryVectorState: () => ({ state: "ok", tone: "ok" }),
+      resolveMemoryFtsState: () => ({ state: "ok", tone: "ok" }),
+      resolveMemoryCacheSummary: () => ({ text: "cache ok", tone: "ok" }),
+    });
+    expect(value).toBe("connected · plugin xmemo-memory");
+  });
+
+  it("shows last error for remote XMemo backend when probe failed", () => {
+    const value = buildStatusMemoryValue({
+      memory: {
+        agentId: "main",
+        backend: "xmemo",
+        provider: "xmemo-memory",
+        custom: { configured: true, connected: false, lastError: "timeout" },
+      } as never,
+      memoryPlugin: { enabled: true, slot: "xmemo-memory" },
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+      resolveMemoryVectorState: () => ({ state: "ok", tone: "ok" }),
+      resolveMemoryFtsState: () => ({ state: "ok", tone: "ok" }),
+      resolveMemoryCacheSummary: () => ({ text: "cache ok", tone: "ok" }),
+    });
+    expect(value).toBe("not connected · last error: timeout · plugin xmemo-memory");
   });
 });
