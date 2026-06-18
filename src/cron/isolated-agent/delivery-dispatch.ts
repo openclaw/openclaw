@@ -599,17 +599,25 @@ function canonicalizeDirectCronRouteSessionKey(params: {
   return `${canonicalBase}:thread:${thread.threadId}`;
 }
 
+type ResolvedDirectCronDeliverySession = {
+  sessionKey: string;
+  /** Whether the resolved session is a routed per-channel-peer session
+   *  (non-main, non-threaded-main). Mirror writes to such sessions can
+   *  race the embedded runner session lock (issue #84583). */
+  isRoutedPeerSession: boolean;
+};
+
 async function resolveDirectCronDeliverySessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
-}): Promise<string> {
+}): Promise<ResolvedDirectCronDeliverySession> {
   if (isCustomCronSessionTarget(params.job.sessionTarget)) {
     // Custom session targets are already caller-selected; do not remap them
     // through outbound routing or the explicit session identity would drift.
-    return params.agentSessionKey;
+    return { sessionKey: params.agentSessionKey, isRoutedPeerSession: false };
   }
 
   try {
@@ -626,7 +634,7 @@ async function resolveDirectCronDeliverySessionKey(params: {
     });
     const routeSessionKey = route?.sessionKey?.trim();
     if (!route || !routeSessionKey) {
-      return params.agentSessionKey;
+      return { sessionKey: params.agentSessionKey, isRoutedPeerSession: false };
     }
     const canonicalRouteSessionKey = canonicalizeDirectCronRouteSessionKey({
       cfg: params.cfg,
@@ -647,6 +655,19 @@ async function resolveDirectCronDeliverySessionKey(params: {
             sessionKey: canonicalRouteSessionKey,
             baseSessionKey: canonicalRouteBaseSessionKey,
           };
+    // Determine if the resolved session is a routed per-channel-peer session.
+    // Mirror writes to such sessions can race the embedded runner session lock
+    // and trigger EmbeddedAttemptSessionTakeoverError (issue #84583).
+    const mainSessionKey = resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const isMainSession = isSameSessionKey(canonicalRouteSessionKey, mainSessionKey);
+    const threadSuffix = parseThreadSessionSuffix(canonicalRouteSessionKey);
+    const isThreadedMainSession =
+      threadSuffix !== undefined && isSameSessionKey(threadSuffix.baseSessionKey, mainSessionKey);
+    const isRoutedPeerSession = !isMainSession && !isThreadedMainSession;
+
     // Bootstrap metadata for a cron-originated first contact so the resolved
     // outbound session is visible to session history before transcript append.
     await ensureOutboundSessionEntry({
@@ -655,12 +676,12 @@ async function resolveDirectCronDeliverySessionKey(params: {
       accountId: params.delivery.accountId,
       route: canonicalRoute,
     });
-    return canonicalRouteSessionKey;
+    return { sessionKey: canonicalRouteSessionKey, isRoutedPeerSession };
   } catch (err) {
     await logCronDeliveryWarn(
       `[cron:${params.job.id}] failed to resolve destination session for direct delivery mirror: ${formatErrorMessage(err)}`,
     );
-    return params.agentSessionKey;
+    return { sessionKey: params.agentSessionKey, isRoutedPeerSession: false };
   }
 }
 
@@ -911,7 +932,10 @@ export async function dispatchCronDelivery(
         delivered = true;
         return null;
       }
-      const deliverySessionKey = await resolveDirectCronDeliverySessionKey({
+      const {
+        sessionKey: deliverySessionKey,
+        isRoutedPeerSession: deliverySessionIsRoutedPeerSession,
+      } = await resolveDirectCronDeliverySessionKey({
         cfg: params.cfgWithAgentDefaults,
         job: params.job,
         agentId: params.agentId,
@@ -1021,8 +1045,13 @@ export async function dispatchCronDelivery(
         mirrorTargetsAwarenessMainSession &&
         params.job.sessionTarget === "isolated" &&
         delivery.mode !== "explicit";
+      // Mirror writes to routed per-channel-peer sessions can race the
+      // embedded runner session lock and trigger EmbeddedAttemptSessionTakeoverError,
+      // aborting in-flight user chat responses (issue #84583). Skip mirror for
+      // these sessions; the direct channel send already delivers the message.
       if (
         delivered &&
+        !deliverySessionIsRoutedPeerSession &&
         !deliveryWillReachAwarenessMainSession &&
         !mirrorWouldBypassIsolatedAwarenessPolicy
       ) {
