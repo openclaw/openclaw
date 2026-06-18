@@ -30,6 +30,7 @@ import {
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -2166,7 +2167,10 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
-      userMessage("older next-step anchor: keep the handoff checklist", Date.now()),
+      userMessage(
+        "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
+        Date.now(),
+      ),
     );
     sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
     sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
@@ -2201,6 +2205,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Opik default project context");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
+  });
+
+  it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage(
+        "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
+        Date.now(),
+      ),
+    );
+    for (let index = 0; index < 12; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `continuity block ${index}: ${"x".repeat(128_000)}`,
+          Date.now() + 1 + index,
+        ),
+      );
+    }
+    sessionManager.appendMessage(
+      assistantMessage("recent continuity anchor: resume the database migration", Date.now() + 20),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextTokenBudget = 300_000;
+    params.prompt = `current prompt survives ${"p".repeat(80_000)}`;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("recent continuity anchor: resume the database migration");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("current prompt survives");
+    expect(inputText).not.toContain("older next-step anchor: keep the handoff checklist");
   });
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
