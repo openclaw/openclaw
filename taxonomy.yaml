@@ -2842,9 +2842,9 @@ surfaces:
           - name: Image generation tool invocation
             coverageIds: [channels.qa-channel, media.image-generation, tools.image-generate, tools.native-image-generation]
             description: Covers Image generation tool invocation across `image_generate`, model selection, provider registration, provider capability listing, and related image generation tool and provider routing behavior.
-          - name: Provider and model selection
+          - name: Image generation provider routing
             coverageIds: [media.image-generation, tools.native-image-generation]
-            description: Covers Provider and model selection across `image_generate`, model selection, provider registration, provider capability listing, and related image generation tool and provider routing behavior.
+            description: Covers image generation provider and model routing across `image_generate`, provider registration, provider capability listing, and related image generation tool behavior.
           - name: Reference image editing
             coverageIds: [reference-image-editing]
             description: Covers Reference image editing across `image_generate`, model selection, provider registration, provider capability listing, and related image generation tool and provider routing behavior.
@@ -2857,9 +2857,9 @@ surfaces:
           - name: Music generation tool invocation
             coverageIds: [music-generation-tool-invocation]
             description: Covers Music generation tool invocation across `music_generate`, provider/model config, lyrics/instrumental/duration/format controls, image reference inputs where supported, and related music generation tool and provider routing behavior.
-          - name: Provider and model selection
-            coverageIds: [provider-and-model-selection-2]
-            description: Covers Provider and model selection across `music_generate`, provider/model config, lyrics/instrumental/duration/format controls, image reference inputs where supported, and related music generation tool and provider routing behavior.
+          - name: Music generation provider controls
+            coverageIds: [music-generation-provider-controls]
+            description: Covers music generation provider and model controls across `music_generate`, provider/model config, lyrics/instrumental/duration/format controls, image reference inputs where supported, and related music generation routing behavior.
           - name: Lyrics, instrumental, duration, and format controls
             coverageIds: [lyrics-instrumental-duration-and-format-controls]
             description: Covers Lyrics, instrumental, duration, and format controls across `music_generate`, provider/model config, lyrics/instrumental/duration/format controls, image reference inputs where supported, and related music generation tool and provider routing behavior.
@@ -2898,7 +2898,7 @@ surfaces:
           - docs/tools/video-generation.md
         search_anchors:
           - Image generation tool invocation
-          - Provider and model selection
+          - Image generation provider routing
           - Reference image editing
           - Generated image task lifecycle
           - Generated image persistence and delivery
@@ -2906,6 +2906,7 @@ surfaces:
           - Provider + CLI fallback
           - Mention detection in groups
           - Music generation tool invocation
+          - Music generation provider controls
           - Lyrics, instrumental, duration, and format controls
           - Reference inputs where supported
           - Music task lifecycle and duplicate status
@@ -6197,7 +6198,7 @@ surfaces:
           - name: Container update/rebuild/restart guidance for Docker
             coverageIds: [container-update-rebuild-restart-guidance-for-docker]
             description: Container update/rebuild/restart guidance for Docker and Podman hosts
-          - name: Docker Compose
+          - name: Docker Compose mounts and secrets
             coverageIds: [docker-compose]
             description: Docker Compose and Podman config/workspace/auth-profile secret mounts
           - name: Gateway token generation
@@ -6206,8 +6207,8 @@ surfaces:
           - name: Ownership
             coverageIds: [ownership]
             description: Ownership, permissions, SELinux mount behavior, and state survival across container replacement
-          - name: Docker Compose
-            coverageIds: [docker-compose-2]
+          - name: Docker Compose network access
+            coverageIds: [docker-compose-network-access]
             description: Docker Compose and Podman port publishing, bind mode, host local provider access, Bonjour, Tailscale, and Control UI origins
           - name: Container health endpoints
             coverageIds: [container-health-endpoints]
@@ -8500,85 +8501,77 @@ surfaces:
       - name: Channel Setup and Operations
         id: channel-setup-and-operations
         features:
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel]
-            description: Cli, Gateway Rpc, and Agent Tool
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel-2]
+          - name: Voice call CLI, RPC, and agent tool
+            coverageIds: [voice-call-cli-rpc-agent-tool]
+            description: CLI, Gateway RPC, and agent tool
+          - name: Voice call setup smoke
+            coverageIds: [voice-call-setup-smoke]
             description: Setup, Configuration, and Smoke
         docs:
           - docs/cli/voicecall.md
           - docs/plugins/voice-call.md
           - docs/gateway/protocol.md
         search_anchors:
-          - 'voice call channel voice call channel: cli, gateway rpc, and agent tool'
-          - 'voice call channel: cli, gateway rpc, and agent tool'
-          - 'voice call channel voice call channel: setup, configuration, and smoke'
-          - 'voice call channel: setup, configuration, and smoke'
+          - voice call CLI, RPC, and agent tool
+          - voice call setup smoke
         category_note: setup-configuration-and-smoke.md
         human_lts_override: false
       - name: Access and Identity
         id: access-and-identity
         features:
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel]
+          - name: Voice call webhook security
+            coverageIds: [voice-call-webhook-security]
             description: Webhook Exposure and Security
         docs:
           - docs/plugins/voice-call.md
           - docs/cli/voicecall.md
         search_anchors:
-          - 'voice call channel voice call channel: webhook exposure and security'
-          - 'voice call channel: webhook exposure and security'
+          - voice call webhook security
         category_note: webhook-exposure-and-security.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
         id: conversation-routing-and-delivery
         features:
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel]
+          - name: Voice call inbound routing
+            coverageIds: [voice-call-inbound-routing]
             description: Inbound Routing, Sessions, and Lifecycle
         docs:
           - docs/plugins/voice-call.md
         search_anchors:
-          - 'voice call channel voice call channel: inbound routing, sessions, and lifecycle'
-          - 'voice call channel: inbound routing, sessions, and lifecycle'
+          - voice call inbound routing, sessions, and lifecycle
         category_note: inbound-routing-sessions-and-lifecycle.md
         human_lts_override: false
       - name: Media and Rich Content
         id: media-and-rich-content
         features:
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel]
+          - name: Voice call provider transports
+            coverageIds: [voice-call-provider-transports]
             description: Provider Transports and Call Control
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel-2]
-            description: Telephony Tts, Playback, Dtmf, and Audio
+          - name: Voice call telephony audio
+            coverageIds: [voice-call-telephony-audio]
+            description: Telephony TTS, playback, DTMF, and audio
         docs:
           - docs/plugins/voice-call.md
           - docs/plugins/plugin-inventory.md
         search_anchors:
-          - 'voice call channel voice call channel: provider transports and call control'
-          - 'voice call channel: provider transports and call control'
-          - 'voice call channel voice call channel: telephony tts, playback, dtmf, and audio'
-          - 'voice call channel: telephony tts, playback, dtmf, and audio'
+          - voice call provider transports and call control
+          - voice call telephony TTS, playback, DTMF, and audio
         category_note: provider-transports-and-call-control.md
         human_lts_override: false
       - name: Realtime Voice and Calls
         id: realtime-voice-and-calls
         features:
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel]
+          - name: Voice call realtime consult
+            coverageIds: [voice-call-realtime-consult]
             description: Realtime Voice and Agent Consult
-          - name: Voice Call Channel
-            coverageIds: [voice-call-channel-2]
+          - name: Voice call streaming transcription
+            coverageIds: [voice-call-streaming-transcription]
             description: Streaming Transcription and Auto-response
         docs:
           - docs/plugins/voice-call.md
         search_anchors:
-          - 'voice call channel voice call channel: realtime voice and agent consult'
-          - 'voice call channel: realtime voice and agent consult'
-          - 'voice call channel voice call channel: streaming transcription and auto-response'
-          - 'voice call channel: streaming transcription and auto-response'
+          - voice call realtime voice and agent consult
+          - voice call streaming transcription and auto-response
         category_note: realtime-voice-and-agent-consult.md
         human_lts_override: false
     last_score_run:
@@ -9080,15 +9073,15 @@ surfaces:
           - name: Usage and stop reasons
             coverageIds: [usage-and-stop-reasons]
             description: 'Covers Usage and stop reasons across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
-          - name: Thought-signature replay
-            coverageIds: [thought-signature-replay]
-            description: 'Covers Thought-signature replay across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
+          - name: Direct Gemini transport payloads
+            coverageIds: [direct-gemini-transport-payloads]
+            description: 'Covers direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct Gemini API behavior.'
           - name: Thinking-level mapping
             coverageIds: [thinking-level-mapping]
             description: Covers Thinking-level mapping across Gemini thinking-level mapping, adaptive thinking request shape, `thoughtSignature` capture/replay/sanitization, Google replay policy, and related thinking and turn recovery behavior.
-          - name: Thought-signature replay
-            coverageIds: [thought-signature-replay-2]
-            description: Covers Thought-signature replay across Gemini thinking-level mapping, adaptive thinking request shape, `thoughtSignature` capture/replay/sanitization, Google replay policy, and related thinking and turn recovery behavior.
+          - name: Thought-signature replay policy
+            coverageIds: [thought-signature-replay]
+            description: Covers Gemini thinking-level mapping, adaptive thinking request shape, `thoughtSignature` capture/replay/sanitization, Google replay policy, and related thinking and turn recovery behavior.
           - name: Tool turn ordering
             coverageIds: [tool-turn-ordering]
             description: Covers Tool turn ordering across Gemini thinking-level mapping, adaptive thinking request shape, `thoughtSignature` capture/replay/sanitization, Google replay policy, and related thinking and turn recovery behavior.
@@ -9105,8 +9098,9 @@ surfaces:
           - Multimodal inputs
           - Tool-call streaming
           - Usage and stop reasons
-          - Thought-signature replay
+          - Direct Gemini transport payloads
           - Thinking-level mapping
+          - Thought-signature replay policy
           - Tool turn ordering
           - Incomplete-turn recovery
         category_note: direct-gemini-api-transport-streaming-and-multimodal-payloads.md
