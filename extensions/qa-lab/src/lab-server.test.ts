@@ -518,6 +518,14 @@ describe("qa-lab server", () => {
       },
     });
 
+    // A missing evidence path must return a controlled JSON error, not a reset connection
+    // (the model must build before any success header is written).
+    const missingEvidenceUrl = new URL("/api/evidence", lab.baseUrl);
+    missingEvidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/server/does-not-exist.json");
+    const missingEvidenceResponse = await fetchWithRetry(missingEvidenceUrl.toString());
+    expect(missingEvidenceResponse.status).toBe(404);
+    expect(await missingEvidenceResponse.text()).not.toBe("");
+
     const artifactUrl = new URL("/api/evidence/artifact", lab.baseUrl);
     artifactUrl.searchParams.set("evidencePath", ".artifacts/qa-e2e/server/qa-evidence.json");
     artifactUrl.searchParams.set("artifactPath", "artifact.log");

@@ -439,18 +439,15 @@ export async function startQaLabServer(
             res.end(JSON.stringify({ evidence: null }));
             return;
           }
+          // Build the model before sending any headers so a thrown QaEvidenceGalleryError
+          // still routes through writeQaLabServerError (writing headers first would make the
+          // error response throw ERR_HTTP_HEADERS_SENT and reset the connection).
+          const evidence = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
           res.writeHead(200, {
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
           });
-          res.end(
-            JSON.stringify({
-              evidence: await buildQaEvidenceGalleryModel({
-                evidencePath,
-                repoRoot,
-              }),
-            }),
-          );
+          res.end(JSON.stringify({ evidence }));
           return;
         }
         if (
