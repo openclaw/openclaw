@@ -205,8 +205,21 @@ describe("formatUpdateAvailableHint", () => {
       registry: { latestVersion },
     });
 
-    expect(formatUpdateAvailableHint(update)).toBe(
+    expect(formatUpdateAvailableHint(update, { isContainerEnvironment: false })).toBe(
       `Update available (git behind 2 · npm ${latestVersion}). Run: openclaw update`,
+    );
+  });
+
+  it("uses redeploy guidance instead of local update commands inside containers", () => {
+    const latestVersion = nextMajorVersion(VERSION);
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion },
+    });
+
+    expect(formatUpdateAvailableHint(update, { isContainerEnvironment: true })).toBe(
+      `Update available (npm ${latestVersion}). OpenClaw is running inside a container; pull a newer image version and redeploy the container.`,
     );
   });
 });

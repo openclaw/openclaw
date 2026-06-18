@@ -26,6 +26,9 @@ function detectContainerEnvironment(): boolean {
   if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
     return true;
   }
+  if (process.env.KUBERNETES_SERVICE_HOST?.trim()) {
+    return true;
+  }
 
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
     try {
