@@ -116,31 +116,32 @@ describe("QQBot token manager", () => {
       const p1 = { retryDelayMs: 1000, maxRetryDelayMs: 32000, circuitBreakerThreshold: 6, circuitBreakerCooldownMs: 300000, consecutiveRetries: 1 };
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(p1);
-        expect(r).toBeGreaterThan(700);   // 1000 * 0.7
-        expect(r).toBeLessThan(1300);      // 1000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(700);   // 1000 * 0.7
+        expect(r).toBeLessThanOrEqual(1300);      // 1000 * 1.3
       }
 
       const p2 = { ...p1, consecutiveRetries: 2 };
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(p2);
-        expect(r).toBeGreaterThan(1400);  // 2000 * 0.7
-        expect(r).toBeLessThan(2600);     // 2000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(1400);  // 2000 * 0.7
+        expect(r).toBeLessThanOrEqual(2600);     // 2000 * 1.3
       }
 
       const p3 = { ...p1, consecutiveRetries: 3 };
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(p3);
-        expect(r).toBeGreaterThan(2800);  // 4000 * 0.7
-        expect(r).toBeLessThan(5200);     // 4000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(2800);  // 4000 * 0.7
+        expect(r).toBeLessThanOrEqual(5200);     // 4000 * 1.3
       }
     });
 
     it("caps backoff at maxRetryDelayMs", () => {
-      const params = { retryDelayMs: 1000, maxRetryDelayMs: 5000, circuitBreakerThreshold: 6, circuitBreakerCooldownMs: 300000, consecutiveRetries: 10 };
+      const params = { retryDelayMs: 1000, maxRetryDelayMs: 5000, circuitBreakerThreshold: 10, circuitBreakerCooldownMs: 300000, consecutiveRetries: 8 };
+      // 8 < 10 threshold, so 1000 * 2^(8-1) = 128000, capped at 5000
       for (let i = 0; i < 50; i++) {
         const r = resolveRetryDelayMs(params);
-        expect(r).toBeGreaterThan(3500);  // 5000 * 0.7
-        expect(r).toBeLessThan(6500);     // 5000 * 1.3
+        expect(r).toBeGreaterThanOrEqual(3500);  // 5000 * 0.7
+        expect(r).toBeLessThanOrEqual(6500);     // 5000 * 1.3
       }
     });
 
