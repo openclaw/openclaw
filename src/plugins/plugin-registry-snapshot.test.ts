@@ -993,4 +993,38 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.source).toBe("derived");
     expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
+
+  it("refreshes registry for legacy no-code orphan diagnostics (upgrade from pre-code schema)", () => {
+    // Simulates an upgrade from current/released OpenClaw where SQLite
+    // diagnostics_json rows were written before PluginDiagnosticSchema gained
+    // the `.code` field. These rows have no pluginId and no code but an
+    // absolute source that doesn't exist — they are conceptually orphan
+    // diagnostics that should trigger a registry refresh instead of being
+    // silently reused (which would block Gateway startup).
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-path.js");
+    const index: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "error",
+          message: `plugin path not found: ${missingConfiguredPath}`,
+          source: missingConfiguredPath,
+          // Legacy row: no code field, no pluginId — exactly what current/released
+          // OpenClaw wrote before the code field was added.
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    // Legacy no-code orphan diagnostics with a missing source should also
+    // cause a re-derivation so the registry reflects the current state.
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+  });
 });

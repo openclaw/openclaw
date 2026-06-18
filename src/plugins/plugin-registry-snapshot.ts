@@ -434,6 +434,15 @@ function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolea
     if (diag.code === "orphan-source-path") {
       return true;
     }
+    // Legacy upgrade path: diagnostics persisted before the.code field was
+    // added to PluginDiagnosticSchema (released or current OpenClaw). Those
+    // rows have no pluginId and no code, but are conceptually orphan
+    // diagnostics if their absolute source path no longer exists. Without
+    // this, users upgrading from an older version with stale SQLite
+    // diagnostics_json rows would still hit a Gateway startup block.
+    if (!hasPluginId && sourceMissing && diag.code === undefined) {
+      return true;
+    }
     return false;
   });
 }
