@@ -69,7 +69,12 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-const { createGatewayCloseHandler } = await import("./server-close.js");
+const {
+  armGatewayPostShutdownExitWatchdog,
+  createGatewayCloseHandler,
+  isGatewayShuttingDown,
+  resetGatewayShuttingDownForTest,
+} = await import("./server-close.js");
 const { createChatRunState } = await import("./server-chat-state.js");
 const {
   finishGatewayRestartTrace,
@@ -137,6 +142,7 @@ function createGatewayCloseTestDeps(
       close: (cb: (err?: Error | null) => void) => cb(null),
       closeIdleConnections: vi.fn(),
     } as never,
+    armPostShutdownExitWatchdog: vi.fn(() => null),
     ...overrides,
   };
 }
@@ -161,6 +167,7 @@ describe("createGatewayCloseHandler", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetGatewayRestartTraceForTest();
+    resetGatewayShuttingDownForTest();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     } else {
@@ -1481,5 +1488,118 @@ describe("createGatewayCloseHandler", () => {
       reason: "upgrade",
       restartExpectedMs: null,
     });
+  });
+
+  it("flips the shutting-down flag before any close await", async () => {
+    let observedDuringShutdown: boolean | undefined;
+    const deps = createGatewayCloseTestDeps({
+      bonjourStop: async () => {
+        observedDuringShutdown = isGatewayShuttingDown();
+      },
+    });
+    const close = createGatewayCloseHandler(deps);
+    expect(isGatewayShuttingDown()).toBe(false);
+
+    await close({ reason: "test" });
+
+    expect(observedDuringShutdown).toBe(true);
+    expect(isGatewayShuttingDown()).toBe(true);
+  });
+
+  it("arms the post-shutdown exit watchdog with the clean reason and duration", async () => {
+    // Typed mock signature mirrors the production injection point so the
+    // `mock.calls[0][0]` access stays index-safe under tsgo's strict mode.
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    const result = await close({ reason: "test" });
+
+    expect(armPostShutdownExitWatchdog).toHaveBeenCalledTimes(1);
+    const armArgs = armPostShutdownExitWatchdog.mock.calls[0]?.[0];
+    expect(armArgs?.reason).toBe("test");
+    expect(armArgs?.shutdownDurationMs).toBe(result.durationMs);
+  });
+
+  // ClawSweeper #88908 review P1: the in-process restart path (SIGUSR1) closes
+  // and then immediately starts the next gateway iteration in the same node
+  // process. Arming the unref'd watchdog there would kill the restarted gateway
+  // ~5s into its next life. Restart reasons must skip the watchdog.
+  it("skips the post-shutdown exit watchdog on in-process restart close reasons", async () => {
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    await close({ reason: "gateway restarting" });
+
+    expect(armPostShutdownExitWatchdog).not.toHaveBeenCalled();
+  });
+
+  it("arms the watchdog for ordinary stop reasons even when other dep mocks differ", async () => {
+    // Sibling assertion to the restart-skip case above. Confirms the
+    // restart-aware gate only suppresses on restart-shaped reasons.
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    await close({ reason: "gateway stopping" });
+
+    expect(armPostShutdownExitWatchdog).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("armGatewayPostShutdownExitWatchdog", () => {
+  it("forces process.exit(0) when the node process is still alive after the timeout", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 25,
+      exitProcess,
+      reason: "gateway stopping",
+      shutdownDurationMs: 5,
+    });
+    expect(exitProcess).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(exitProcess).toHaveBeenCalledWith(0);
+    handle.cancel();
+    vi.useRealTimers();
+  });
+
+  it("does not call exit when the watchdog is cancelled before the timeout", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 50,
+      exitProcess,
+      reason: "test",
+      shutdownDurationMs: 1,
+    });
+    handle.cancel();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exitProcess).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("emits a zombie_detected warn log with handle summary when fired", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    mocks.logWarn.mockClear();
+    armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 10,
+      exitProcess,
+      reason: "telegram zombie",
+      shutdownDurationMs: 7,
+    });
+    await vi.advanceTimersByTimeAsync(15);
+    const warnMessages = mocks.logWarn.mock.calls.map(([message]) => String(message));
+    expect(warnMessages.some((message) => message.includes("still alive after 10ms"))).toBe(true);
+    expect(warnMessages.some((message) => message.includes("forcing process.exit(0)"))).toBe(true);
+    vi.useRealTimers();
   });
 });
