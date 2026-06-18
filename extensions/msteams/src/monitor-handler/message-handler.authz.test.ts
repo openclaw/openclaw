@@ -809,10 +809,12 @@ describe("msteams monitor handler authz", () => {
     );
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
-    const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please check the build"),
+    // The system event is now a notification label only (no body preview).
+    // Verify the label was enqueued for the active Teams message.
+    const labelCall = enqueueSystemEvent.mock.calls.find(
+      ([text]) => typeof text === "string" && text.startsWith("Teams message in"),
     );
-    if (!systemEventCall) {
+    if (!labelCall) {
       throw new Error("expected active Teams message system event");
     }
   });

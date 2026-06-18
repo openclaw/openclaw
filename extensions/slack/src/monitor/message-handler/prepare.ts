@@ -1131,7 +1131,12 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+  // Keep system events as notification labels only; the full message body is
+  // separately delivered in the inbound payload/context. Including a 160-char
+  // body preview here causes truncation, fusion into the metadata block, and
+  // redundant echo (same body appears 2-3 times per channel turn).
+  // See: Feishu handler which already logs previews instead of enqueuing them.
+  enqueueSystemEvent(inboundLabel, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });

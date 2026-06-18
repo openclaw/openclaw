@@ -507,8 +507,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
 
+    // Keep system events as notification labels only; the full message body is
+    // separately delivered in the inbound payload/context. Including a 160-char
+    // body preview here causes truncation, fusion into the metadata block, and
+    // redundant echo (same body appears 2-3 times per channel turn).
+    // See: Feishu handler which already logs previews instead of enqueuing them.
     const enqueuePrimaryMessageSystemEvent = () =>
-      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      core.system.enqueueSystemEvent(inboundLabel, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
       });
