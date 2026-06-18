@@ -1107,15 +1107,23 @@ describe("process tool action validation (#69582)", () => {
   type ProcessExecuteArgs = Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
   const tool = createProcessTool();
 
-  async function invoke(rawAction: unknown) {
-    return tool.execute(
-      "call-id",
-      { action: rawAction, sessionId: "anything" } as unknown as ProcessExecuteArgs,
-    );
+  async function invoke(rawAction: unknown, options?: { omitSessionId?: boolean }) {
+    return tool.execute("call-id", {
+      action: rawAction,
+      ...(options?.omitSessionId ? {} : { sessionId: "anything" }),
+    } as unknown as ProcessExecuteArgs);
   }
 
   it("rejects action: {} with a clear invalid-action error, not 'sessionId is required'", async () => {
     const result = await invoke({});
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(text).toContain("Invalid 'action' parameter");
+    expect(text).not.toContain("sessionId is required");
+    expect((result.details as { status?: string }).status).toBe("failed");
+  });
+
+  it("rejects action: {} before checking sessionId", async () => {
+    const result = await invoke({}, { omitSessionId: true });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
     expect(text).toContain("Invalid 'action' parameter");
     expect(text).not.toContain("sessionId is required");
