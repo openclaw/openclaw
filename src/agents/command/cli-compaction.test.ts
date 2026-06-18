@@ -1359,7 +1359,7 @@ describe("runCliTurnCompactionLifecycle", () => {
           };
         },
       }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -1426,7 +1426,7 @@ describe("runCliTurnCompactionLifecycle", () => {
           throw err;
         },
       }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
