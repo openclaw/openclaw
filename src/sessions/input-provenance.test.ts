@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
+  extendInputProvenanceVisitedAgentIds,
+  hasInputProvenanceVisitedAgent,
   isAgentMediatedCompletionSourceTool,
+  normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -78,6 +81,32 @@ describe("stripInterSessionPromptPrefixForDisplay", () => {
     });
 
     expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe("forwarded report");
+  });
+});
+
+describe("normalizeInputProvenance", () => {
+  it("normalizes visited agent chains for inter-session loop detection", () => {
+    const provenance = normalizeInputProvenance({
+      kind: "inter_session",
+      sourceTool: "sessions_send",
+      visitedAgentIds: ["Alpha", "beta", "alpha", "", "__"],
+    });
+
+    expect(provenance?.visitedAgentIds).toEqual(["alpha", "beta"]);
+    expect(hasInputProvenanceVisitedAgent(provenance, "ALPHA")).toBe(true);
+    expect(hasInputProvenanceVisitedAgent(provenance, "gamma")).toBe(false);
+  });
+
+  it("extends visited agent chains without duplicating existing agents", () => {
+    const visitedAgentIds = extendInputProvenanceVisitedAgentIds(
+      {
+        kind: "inter_session",
+        visitedAgentIds: ["alpha", "beta"],
+      },
+      ["Beta", "Gamma"],
+    );
+
+    expect(visitedAgentIds).toEqual(["alpha", "beta", "gamma"]);
   });
 });
 

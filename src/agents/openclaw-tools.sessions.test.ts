@@ -34,6 +34,7 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import {
   testing as embeddedRunsTesting,
   setActiveEmbeddedRun,
@@ -136,6 +137,7 @@ function installMessagingTestRegistry() {
 function createOpenClawTools(options?: {
   agentSessionKey?: string;
   agentChannel?: string;
+  inputProvenance?: InputProvenance;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
@@ -158,6 +160,7 @@ function createOpenClawTools(options?: {
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel as never,
+      inputProvenance: options?.inputProvenance,
       sandboxed: options?.sandboxed,
       config,
       callGateway: gatewayCall,
@@ -190,6 +193,7 @@ type AgentCallParams = {
     sourceSessionKey?: string;
     sourceChannel?: string;
     sourceTool?: string;
+    visitedAgentIds?: string[];
   };
 };
 
@@ -390,6 +394,77 @@ describe("sessions tools", () => {
     expect(agentCall).toBeDefined();
     expect(agentParams(agentCall ?? {}).message).toContain("Visible answer");
     expect(agentParams(agentCall ?? {}).message).not.toContain("internal plan");
+  });
+
+  it("sessions_send carries visited agent provenance to the target run", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-chain", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:beta:main",
+      agentChannel: "discord",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        visitedAgentIds: ["alpha"],
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-chain", {
+      sessionKey: "agent:gamma:main",
+      message: "continue the handoff",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details).status).toBe("accepted");
+    const agentCall = callGatewayMock.mock.calls
+      .map((call) => call[0] as GatewayCall)
+      .find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    expect(agentParams(agentCall ?? {}).inputProvenance?.visitedAgentIds).toEqual([
+      "alpha",
+      "beta",
+      "gamma",
+    ]);
+  });
+
+  it("sessions_send blocks delivery back to an agent already in the visited chain", async () => {
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:gamma:main",
+      agentChannel: "discord",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        visitedAgentIds: ["alpha", "beta"],
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-cycle", {
+      sessionKey: "agent:alpha:main",
+      message: "loop back",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("cyclic agent-to-agent route");
+    expect(details.error).toContain("alpha -> beta -> gamma -> alpha");
+    expect(
+      callGatewayMock.mock.calls
+        .map((call) => call[0] as GatewayCall)
+        .some((call) => call.method === "agent"),
+    ).toBe(false);
   });
 
   it("sessions_send prepares sanitized aliases without exposing alias keys", () => {

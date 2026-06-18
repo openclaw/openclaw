@@ -20,7 +20,13 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  extendInputProvenanceVisitedAgentIds,
+  hasInputProvenanceVisitedAgent,
+  normalizeInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -239,6 +245,17 @@ function shouldFallbackCronRunScopedActiveDelivery(
   );
 }
 
+function formatAgentCycleError(params: {
+  targetAgentId: string;
+  requesterAgentId: string;
+  visitedAgentIds: readonly string[];
+}): string {
+  const chain = [...params.visitedAgentIds, params.requesterAgentId, params.targetAgentId]
+    .filter(Boolean)
+    .join(" -> ");
+  return `sessions_send blocked a cyclic agent-to-agent route: agent "${params.targetAgentId}" already participated in this message chain (${chain}).`;
+}
+
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
   runId: string;
@@ -343,6 +360,7 @@ async function startAgentRun(params: {
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  inputProvenance?: InputProvenance;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -536,6 +554,23 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
+      const normalizedInputProvenance = normalizeInputProvenance(opts?.inputProvenance);
+      const currentInputProvenance =
+        normalizedInputProvenance?.kind === "inter_session" ? normalizedInputProvenance : undefined;
+      const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
+      if (hasInputProvenanceVisitedAgent(currentInputProvenance, targetAgentId)) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: formatAgentCycleError({
+            targetAgentId,
+            requesterAgentId,
+            visitedAgentIds: currentInputProvenance?.visitedAgentIds ?? [],
+          }),
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
 
       const ensuredSession = await ensureConfiguredAgentMainSession({
         cfg,
@@ -582,11 +617,16 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const visitedAgentIds = extendInputProvenanceVisitedAgentIds(currentInputProvenance, [
+        requesterAgentId,
+        targetAgentId,
+      ]);
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: opts?.agentSessionKey,
         sourceChannel: opts?.agentChannel,
         sourceTool: "sessions_send",
+        visitedAgentIds,
       };
       const sendParams = {
         message: annotateInterSessionPromptText(message, inputProvenance),
@@ -661,6 +701,7 @@ export function createSessionsSendTool(opts?: {
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
+          visitedAgentIds,
           baseline: baselineReply,
           roundOneReply,
           waitRunId,

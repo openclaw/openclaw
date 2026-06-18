@@ -80,6 +80,7 @@ export async function runSessionsSendA2AFlow(params: {
   maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
+  visitedAgentIds?: readonly string[];
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
@@ -172,6 +173,7 @@ export async function runSessionsSendA2AFlow(params: {
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
+          visitedAgentIds: params.visitedAgentIds,
         });
         if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
@@ -203,6 +205,7 @@ export async function runSessionsSendA2AFlow(params: {
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
+      visitedAgentIds: params.visitedAgentIds,
     });
     if (
       announceTarget &&

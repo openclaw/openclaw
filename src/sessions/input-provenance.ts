@@ -1,6 +1,7 @@
 // Input provenance helpers normalize source metadata for session messages.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 
 // Input provenance marks whether a user-role message actually came from an
 // external user, another session, or an internal system/tool handoff.
@@ -18,6 +19,7 @@ export type InputProvenance = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  visitedAgentIds?: string[];
 };
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
@@ -36,6 +38,32 @@ function isInputProvenanceKind(value: unknown): value is InputProvenanceKind {
   );
 }
 
+function normalizeInputProvenanceAgentId(value: unknown): string | undefined {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return undefined;
+  }
+  const agentId = normalizeAgentId(raw);
+  return isValidAgentId(agentId) ? agentId : undefined;
+}
+
+function normalizeInputProvenanceVisitedAgentIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const agentIds: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const agentId = normalizeInputProvenanceAgentId(item);
+    if (!agentId || seen.has(agentId)) {
+      continue;
+    }
+    seen.add(agentId);
+    agentIds.push(agentId);
+  }
+  return agentIds.length > 0 ? agentIds : undefined;
+}
+
 export function normalizeInputProvenance(value: unknown): InputProvenance | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -50,7 +78,35 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
     sourceChannel: normalizeOptionalString(record.sourceChannel),
     sourceTool: normalizeOptionalString(record.sourceTool),
+    visitedAgentIds: normalizeInputProvenanceVisitedAgentIds(record.visitedAgentIds),
   };
+}
+
+export function extendInputProvenanceVisitedAgentIds(
+  inputProvenance: InputProvenance | undefined,
+  agentIds: readonly (string | undefined | null)[],
+): string[] | undefined {
+  const next = [...(inputProvenance?.visitedAgentIds ?? [])];
+  const seen = new Set(next);
+  for (const item of agentIds) {
+    const agentId = normalizeInputProvenanceAgentId(item);
+    if (!agentId || seen.has(agentId)) {
+      continue;
+    }
+    seen.add(agentId);
+    next.push(agentId);
+  }
+  return next.length > 0 ? next : undefined;
+}
+
+export function hasInputProvenanceVisitedAgent(
+  inputProvenance: InputProvenance | undefined,
+  agentId: string | undefined | null,
+): boolean {
+  const normalizedAgentId = normalizeInputProvenanceAgentId(agentId);
+  return Boolean(
+    normalizedAgentId && inputProvenance?.visitedAgentIds?.includes(normalizedAgentId),
+  );
 }
 
 // Only attach provenance to user messages that do not already carry it. Existing
