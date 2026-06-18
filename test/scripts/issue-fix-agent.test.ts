@@ -12,6 +12,10 @@ import {
   formatScanResult,
   sortQualifiedCandidates,
 } from "../../scripts/issue-fix-agent-lib/candidates.ts";
+import {
+  classifyCheckSnapshots,
+  normalizePrCheckRollup,
+} from "../../scripts/issue-fix-agent-lib/checks.ts";
 import type { CommandRunner } from "../../scripts/issue-fix-agent-lib/command-runner.ts";
 import { fetchOpenIssueCandidates } from "../../scripts/issue-fix-agent-lib/github.ts";
 import {
@@ -275,6 +279,45 @@ describe("issue-fix-agent workflow", () => {
 
     expect(output.join("\n")).toContain("Execution stopped before push/PR");
   });
+
+  it("monitor prints failed relevant checks", async () => {
+    const calls: string[][] = [];
+    const output: string[] = [];
+    await runIssueFixAgentCommand({
+      args: { command: "monitor", execute: false, prNumber: 123, pushPr: false, yes: false },
+      out: (line) => output.push(line),
+      runCommand: async (command, args) => {
+        calls.push([command, ...args]);
+        return {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify([
+            {
+              conclusion: "FAILURE",
+              detailsUrl: "https://example.test/check",
+              name: "Test",
+              status: "COMPLETED",
+            },
+          ]),
+        };
+      },
+    });
+
+    expect(calls[0]).toEqual([
+      "gh",
+      "pr",
+      "view",
+      "123",
+      "--repo",
+      "openclaw/openclaw",
+      "--json",
+      "statusCheckRollup",
+      "--jq",
+      ".statusCheckRollup",
+    ]);
+    expect(output.join("\n")).toContain("PR #123 checks: failed");
+    expect(output.join("\n")).toContain("failed: Test https://example.test/check");
+  });
 });
 
 describe("issue-fix-agent pr rendering", () => {
@@ -292,5 +335,59 @@ describe("issue-fix-agent pr rendering", () => {
     expect(body).toContain("Closes: https://github.com/openclaw/openclaw/issues/12345");
     expect(body).toContain("Automation run: `ifr_1`");
     expect(body).toContain("node scripts/run-vitest.mjs src/commands/status.test.ts");
+  });
+});
+
+describe("issue-fix-agent checks", () => {
+  it("classifies all successful relevant checks as land ready", () => {
+    const snapshots = normalizePrCheckRollup([
+      {
+        conclusion: "SUCCESS",
+        detailsUrl: "https://example.test/check",
+        name: "Test",
+        status: "COMPLETED",
+      },
+    ]);
+
+    expect(classifyCheckSnapshots(snapshots)).toStrictEqual({
+      failed: [],
+      kind: "land_ready",
+      pending: [],
+    });
+  });
+
+  it("reports failed relevant checks", () => {
+    const snapshots = normalizePrCheckRollup([
+      {
+        conclusion: "FAILURE",
+        detailsUrl: "https://example.test/check",
+        name: "Test",
+        status: "COMPLETED",
+      },
+    ]);
+
+    expect(classifyCheckSnapshots(snapshots)).toMatchObject({
+      failed: [{ name: "Test" }],
+      kind: "failed",
+    });
+  });
+
+  it("ignores routine checks", () => {
+    const snapshots = normalizePrCheckRollup([
+      {
+        conclusion: "FAILURE",
+        detailsUrl: "https://example.test/labeler",
+        name: "Labeler",
+        status: "COMPLETED",
+      },
+      {
+        conclusion: "SUCCESS",
+        detailsUrl: "https://example.test/test",
+        name: "Test",
+        status: "COMPLETED",
+      },
+    ]);
+
+    expect(classifyCheckSnapshots(snapshots).kind).toBe("land_ready");
   });
 });

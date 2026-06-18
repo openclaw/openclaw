@@ -70,3 +70,25 @@ export async function fetchOpenIssueCandidates(params: {
     .map((entry) => normalizeIssue(entry as GitcrawlIssue))
     .filter((entry): entry is IssueCandidate => entry !== null);
 }
+
+export async function fetchPrCheckRollup(params: {
+  prNumber: number;
+  runCommand: CommandRunner;
+}): Promise<unknown[]> {
+  const result = await params.runCommand("gh", [
+    "pr",
+    "view",
+    String(params.prNumber),
+    "--repo",
+    "openclaw/openclaw",
+    "--json",
+    "statusCheckRollup",
+    "--jq",
+    ".statusCheckRollup",
+  ]);
+  if (result.code !== 0) {
+    throw new Error(`gh pr view failed: ${result.stderr || result.stdout}`);
+  }
+  const parsed = JSON.parse(result.stdout) as unknown;
+  return Array.isArray(parsed) ? parsed : [];
+}

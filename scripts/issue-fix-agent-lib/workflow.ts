@@ -1,7 +1,8 @@
 import path from "node:path";
 import { classifyIssueCandidate, formatScanResult, sortQualifiedCandidates } from "./candidates.js";
+import { classifyCheckSnapshots, normalizePrCheckRollup } from "./checks.js";
 import { runCommand as defaultRunCommand, type CommandRunner } from "./command-runner.js";
-import { fetchOpenIssueCandidates } from "./github.js";
+import { fetchOpenIssueCandidates, fetchPrCheckRollup } from "./github.js";
 import {
   createIssueFixAgentRun,
   getLatestOpenIssueFixAgentRun,
@@ -57,6 +58,21 @@ export async function runIssueFixAgentCommand(params: WorkflowParams): Promise<v
       );
     } finally {
       store.close();
+    }
+    return;
+  }
+  if (params.args.command === "monitor") {
+    const rawChecks = await fetchPrCheckRollup({
+      prNumber: params.args.prNumber,
+      runCommand: run,
+    });
+    const result = classifyCheckSnapshots(normalizePrCheckRollup(rawChecks));
+    out(`PR #${params.args.prNumber} checks: ${result.kind}`);
+    for (const failed of result.failed) {
+      out(`failed: ${failed.name} ${failed.detailsUrl ?? ""}`.trim());
+    }
+    for (const pending of result.pending) {
+      out(`pending: ${pending.name} ${pending.detailsUrl ?? ""}`.trim());
     }
     return;
   }
