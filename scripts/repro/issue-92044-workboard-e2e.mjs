@@ -1,8 +1,11 @@
 #!/usr/bin/env node
-// End-to-end real-plugin reproduction for #92044.
-// Loads the workboard plugin through the production loader, captures the
-// active plugin registry, then runs resolveRequiredOperatorScopeForMethod
-// against it. This exercises the same code path the gateway server uses.
+// Production-code-path resolver proof for #92044.
+// Builds a synthetic registry that mirrors the workboard plugin's
+// gatewayMethodDescriptor registration (handler + descriptor in the same
+// active surface), pushes it through setActivePluginRegistry, then runs
+// resolveRequiredOperatorScopeForMethod against the same code path the
+// gateway server uses at request time. Synthetic registry, but real
+// production resolver.
 //
 // Run: node --import tsx scripts/repro/issue-92044-workboard-e2e.mjs
 import assert from "node:assert/strict";
