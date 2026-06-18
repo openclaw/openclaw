@@ -480,8 +480,15 @@ export async function initSessionState(params: {
       mainKey,
       storePath,
     }));
+  const restartContinuationAllowed =
+    sessionCfg?.restartContinuation === true &&
+    entry?.abortedLastRun === true &&
+    canReuseExistingEntry &&
+    (entryFreshness?.fresh ?? false) &&
+    terminalMainTranscriptNewerThanRegistry;
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
+    restartContinuationAllowed ||
     (((entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
