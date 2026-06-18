@@ -147,7 +147,7 @@ describe("nodes-cli coverage", () => {
     const output = runtimeErrors.join("\n");
     expect(output).toContain("Unknown node pairing requestId: stale-request");
     expect(output).toContain("Pending requestIds: current-request");
-    expect(output).toContain("openclaw nodes pairing pending");
+    expect(output).toContain("openclaw nodes pending");
     expect(output).not.toContain("nodes approve failed: Error:");
     expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
   });

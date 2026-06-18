@@ -105,9 +105,7 @@ async function buildUnknownNodePairRequestIdMessage(
   } else {
     lines.push("No pending node pairing requests are currently visible.");
   }
-  lines.push(
-    `Run ${formatCliCommand("openclaw nodes pairing pending")} to inspect current requests.`,
-  );
+  lines.push(`Run ${formatCliCommand("openclaw nodes pending")} to inspect current requests.`);
   return lines.join("\n");
 }
 
