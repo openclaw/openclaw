@@ -6,7 +6,7 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { shouldOmitEmptyArrayItems } from "../plugins/provider-model-compat.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
-import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-projection.js";
+import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 
 /**
  * OpenAI strict-tool-schema normalization and diagnostics.
@@ -17,12 +17,6 @@ import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-pro
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
-};
-
-type ToolWithParameters = {
-  name?: unknown;
-  description?: unknown;
-  parameters: unknown;
 };
 
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
@@ -181,13 +175,6 @@ type OpenAIStrictToolSchemaDiagnostic = {
   violations: string[];
 };
 
-/** Returns strict-schema violation paths for each incompatible tool definition. */
-export function findOpenAIStrictToolSchemaDiagnostics(
-  tools: readonly ToolWithParameters[],
-): OpenAIStrictToolSchemaDiagnostic[] {
-  return findOpenAIStrictToolProjectionDiagnostics(projectOpenAITools(tools));
-}
-
 /** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
 export function findOpenAIStrictToolProjectionDiagnostics(
   projection: OpenAIToolProjection,
@@ -323,18 +310,6 @@ function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): st
   return violations;
 }
 
-/** Resolves the strict flag to advertise for a tool inventory after compatibility checks. */
-export function resolveOpenAIStrictToolFlagForInventory(
-  tools: readonly ToolWithParameters[],
-  strict: boolean | null | undefined,
-): boolean | undefined {
-  const projection = projectOpenAITools(tools);
-  if (strict === true && projection.diagnostics.length > 0) {
-    return false;
-  }
-  return resolveOpenAIStrictToolFlagForProjection(projection, strict);
-}
-
 /** Resolves the strict flag without reserializing an existing OpenAI tool projection. */
 export function resolveOpenAIStrictToolFlagForProjection(
   projection: OpenAIToolProjection,
@@ -342,6 +317,9 @@ export function resolveOpenAIStrictToolFlagForProjection(
 ): boolean | undefined {
   if (strict !== true) {
     return strict === false ? false : undefined;
+  }
+  if (projection.diagnostics.length > 0) {
+    return false;
   }
   return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
 }
