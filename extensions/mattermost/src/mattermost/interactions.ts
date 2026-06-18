@@ -1,5 +1,5 @@
 // Mattermost plugin module implements interactions behavior.
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -169,22 +169,35 @@ export function resolveInteractionCallbackUrl(
 }
 
 // ── HMAC token management ──────────────────────────────────────────────
-// Secret is derived from the bot token so it's stable across CLI and gateway processes.
 
 const interactionSecrets = new Map<string, string>();
 let defaultInteractionSecret: string | undefined;
 
-function deriveInteractionSecret(botToken: string): string {
-  return createHmac("sha256", "openclaw-mattermost-interactions").update(botToken).digest("hex");
+function createInteractionSecret(): string {
+  return randomBytes(32).toString("hex");
 }
 
-export function setInteractionSecret(accountIdOrBotToken: string, botToken?: string): void {
-  if (typeof botToken === "string") {
-    interactionSecrets.set(accountIdOrBotToken, deriveInteractionSecret(botToken));
+export function setInteractionSecret(accountIdOrSecret: string, secret?: string): void {
+  if (typeof secret === "string") {
+    interactionSecrets.set(accountIdOrSecret, secret);
     return;
   }
-  // Backward-compatible fallback for call sites/tests that only pass botToken.
-  defaultInteractionSecret = deriveInteractionSecret(accountIdOrBotToken);
+  defaultInteractionSecret = accountIdOrSecret;
+}
+
+export function ensureInteractionSecret(accountId: string, configuredSecret?: string): string {
+  const normalizedConfiguredSecret = normalizeStringifiedOptionalString(configuredSecret);
+  if (normalizedConfiguredSecret) {
+    interactionSecrets.set(accountId, normalizedConfiguredSecret);
+    return normalizedConfiguredSecret;
+  }
+  const existing = interactionSecrets.get(accountId);
+  if (existing) {
+    return existing;
+  }
+  const generated = createInteractionSecret();
+  interactionSecrets.set(accountId, generated);
+  return generated;
 }
 
 export function getInteractionSecret(accountId?: string): string {
@@ -203,7 +216,7 @@ export function getInteractionSecret(accountId?: string): string {
     }
   }
   throw new Error(
-    "Interaction secret not initialized — call setInteractionSecret(accountId, botToken) first",
+    "Interaction secret not initialized — call ensureInteractionSecret(accountId) or configure interactions.secret first",
   );
 }
 
