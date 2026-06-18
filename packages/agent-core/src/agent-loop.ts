@@ -332,6 +332,10 @@ async function runLoop(
       }
 
       await emit({ type: "turn_end", message, toolResults });
+      if (signal?.aborted) {
+        await emit({ type: "agent_end", messages: newMessages });
+        return;
+      }
 
       const nextTurnContext = {
         message,
