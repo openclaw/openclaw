@@ -87,6 +87,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[copilot-proxy](/plugins/reference/copilot-proxy)** (`@openclaw/copilot-proxy`) - included in OpenClaw. Adds Copilot Proxy model provider support to OpenClaw.
 
+- **[coreweave](/plugins/reference/coreweave)** (`@openclaw/coreweave-provider`) - included in OpenClaw. Adds CoreWeave model provider support to OpenClaw.
+
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support.
 
 - **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - included in OpenClaw. Adds DeepInfra model provider support to OpenClaw.
