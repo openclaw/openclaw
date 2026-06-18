@@ -382,6 +382,7 @@ type StdoutDiagnosticLogLine = {
   attributes?: Record<string, unknown>;
   trace_id?: string;
   span_id?: string;
+  trace_flags?: string;
 };
 
 function captureStdoutWrites() {
@@ -1106,6 +1107,61 @@ describe("diagnostics-otel service", () => {
     expect(logEmit).not.toHaveBeenCalled();
 
     await service.stop?.(ctx);
+  });
+
+  test("exports trusted security events as stdout JSONL logs", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("", { logs: true, logsExporter: "stdout" });
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "01",
+    });
+    const stdout = captureStdoutWrites();
+
+    try {
+      await service.start(ctx);
+      emitTrustedSecurityEvent({
+        eventId: "security-event-stdout",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        severity: "medium",
+        reason: "tools.deny",
+        attributes: {
+          secretish: "token sk-test-secret",
+          [PROTO_KEY]: "blocked",
+        },
+        trace,
+      });
+      await flushDiagnosticEvents();
+
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      expect(logEmit).not.toHaveBeenCalled();
+      const record = parseSingleStdoutDiagnosticLogLine(stdout.writes);
+      expect(record.body).toBe("openclaw.security.event");
+      expect(record.severityText).toBe("WARN");
+      expect(record.severityNumber).toBe(13);
+      expect(record.attributes).toMatchObject({
+        "openclaw.security.event_id": "security-event-stdout",
+        "openclaw.security.category": "tool",
+        "openclaw.security.action": "tool.execution.blocked",
+        "openclaw.security.outcome": "denied",
+        "openclaw.security.severity": "medium",
+        "openclaw.security.reason": "tools.deny",
+        "openclaw.security.attribute.secretish": "unknown",
+      });
+      expect(Object.hasOwn(record.attributes ?? {}, "openclaw.security.attribute.__proto__")).toBe(
+        false,
+      );
+      expect(record.trace_id).toBe(TRACE_ID);
+      expect(record.span_id).toBe(SPAN_ID);
+      expect(record.trace_flags).toBe("01");
+      expect(JSON.stringify(record)).not.toContain("sk-test-secret");
+    } finally {
+      stdout.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
   });
 
   test("records liveness warning diagnostics", async () => {

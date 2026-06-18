@@ -16,6 +16,8 @@ scenario:
     - The run emits low-cardinality telemetry without content or raw diagnostic identifiers.
   plugins:
     - diagnostics-otel
+  gatewayRuntime:
+    preserveDebugArtifacts: true
   gatewayConfigPatch:
     logging:
       file: .artifacts/qa-e2e/otel-smoke-gateway.jsonl

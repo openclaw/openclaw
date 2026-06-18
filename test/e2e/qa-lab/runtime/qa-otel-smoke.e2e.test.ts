@@ -342,6 +342,23 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.stdoutLogRecordCount).toBe(1);
   });
 
+  it("fails stdout diagnostic mode when no stdout log records are captured", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.logsExporter = "stdout";
+    input.bodyText = {};
+    input.logRecords = [];
+    input.requests = input.requests.filter((request) => request.signal !== "logs");
+    input.stdoutLogRecords = [];
+    input.stdoutLogLines = [];
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("no stdout diagnostic log records were captured");
+    expect(assertion.signalRequestCounts.logs).toBe(0);
+    expect(assertion.stdoutLogRecordCount).toBe(0);
+  });
+
   it("fails stdout diagnostic mode when OTLP log requests are still emitted", () => {
     const input = makePassingSmokeAssertionInput();
     input.logsExporter = "stdout";

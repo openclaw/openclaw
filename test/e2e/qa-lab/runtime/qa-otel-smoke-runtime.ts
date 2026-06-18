@@ -3,7 +3,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -1041,6 +1041,26 @@ function createStdoutDiagnosticLogCapture(maxLineBytes = MAX_STDOUT_DIAGNOSTIC_L
   };
 }
 
+async function appendGatewayStdoutArtifactLogs(params: {
+  capture: ReturnType<typeof createStdoutDiagnosticLogCapture>;
+  outputDir: string;
+}): Promise<void> {
+  const gatewayStdoutPath = path.join(
+    params.outputDir,
+    "artifacts",
+    "gateway-runtime",
+    "gateway.stdout.log",
+  );
+  try {
+    params.capture.append(await readFile(gatewayStdoutPath, "utf8"));
+    params.capture.flush();
+  } catch (error) {
+    if (!isErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+}
+
 async function stopDockerContainer(name: string): Promise<void> {
   await new Promise<void>((resolve) => {
     const child = spawn("docker", ["stop", name], {
@@ -1549,6 +1569,9 @@ function assertSmoke(params: {
   if (!expectsStdoutLogs && params.stdoutLogRecords.length > 0) {
     failures.push("stdout diagnostic log records were captured for OTLP logs exporter");
   }
+  if (expectsStdoutLogs && params.stdoutLogRecords.length === 0) {
+    failures.push("no stdout diagnostic log records were captured");
+  }
 
   const spanNames = new Set(params.spans.map((span) => span.name));
   for (const name of REQUIRED_SPAN_NAMES) {
@@ -1710,6 +1733,12 @@ async function main() {
     } finally {
       cleanupSignalRelay();
       stdoutDiagnosticLogs.flush();
+    }
+    if (stdoutDiagnosticLogs.records.length === 0) {
+      await appendGatewayStdoutArtifactLogs({
+        capture: stdoutDiagnosticLogs,
+        outputDir: options.outputDir,
+      });
     }
     if (childExitCode === 0) {
       await waitForExpectedTelemetry(receiver, options.logsExporter, 15_000);
