@@ -178,6 +178,18 @@ struct LowCoverageHelperTests {
             command: "node",
             fullCommand: "node /path/to/gateway-daemon",
             port: 18789, mode: .local) == true)
+
+        // Homebrew Node + git checkout: dist/index.js gateway
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/opt/homebrew/opt/node/bin/node /Users/user/openclaw/dist/index.js gateway --port 18789",
+            port: 18789, mode: .local) == true)
+
+        // openclaw + gateway anywhere in full command (covers npm global, pnpm dev)
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "node /usr/local/lib/node_modules/@anthropic/openclaw/dist/index.cjs gateway --port 18789",
+            port: 18789, mode: .local) == true)
     }
 
     @Test func `port guardian remote mode report accepts any listener`() {

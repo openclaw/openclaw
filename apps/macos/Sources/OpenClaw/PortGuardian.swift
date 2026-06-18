@@ -382,6 +382,15 @@ actor PortGuardian {
             {
                 return true
             }
+            // Homebrew Node + git checkout: /opt/homebrew/... /node /...openclaw/dist/index.js gateway
+            if full.contains("dist/index.js gateway") || full.contains("dist/index.cjs gateway") {
+                return true
+            }
+            // Any process whose full command references both openclaw and gateway
+            // (covers npm global, pnpm dev, and other install paths)
+            if full.contains("openclaw") && full.contains("gateway") {
+                return true
+            }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
