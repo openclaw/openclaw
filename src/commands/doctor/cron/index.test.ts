@@ -1042,6 +1042,33 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Unable to read cron job store at", "Cron");
     expectNoteContaining("later health checks will continue", "Cron");
   });
+
+  it("shows manual conversion warning without --fix prompt for unresolved shell tool prompt (#94655)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        name: "Shell-job",
+        payload: {
+          kind: "agentTurn",
+          message: "run a python script to process the daily report",
+        },
+      }),
+    ]);
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    // Warning is shown for informational purposes
+    expectNoteContaining("asks an isolated agent for shell/process tools", "Cron");
+    // Should NOT suggest --fix since this cannot be auto-repaired
+    expectNoNoteContaining("Repair with", "Cron");
+    // Should NOT prompt for repair
+    expect(prompter.confirm).not.toHaveBeenCalled();
+  });
 });
 
 describe("legacy WhatsApp crontab health check", () => {

@@ -368,18 +368,39 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
+  // Determine if there are issues that doctor --fix can actually repair.
+  // unresolvedAgentTurnShellToolPrompt is a manual-only warning that --fix
+  // cannot resolve, so it is excluded from this check.
+  const hasRepairableItems =
+    legacyStoreDetected ||
+    legacyRunLogDetected ||
+    sqliteProjectionBackfillCount > 0 ||
+    notifyCount > 0 ||
+    dreamingStaleCount > 0 ||
+    normalized.mutated;
+
   const noteHeading = legacyStoreDetected
     ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
-    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+    : `Cron store issues detected (logical store key: ${shortenHomePath(storePath)}, SQLite-backed).`;
 
-  note(
-    [
-      noteHeading,
-      ...previewLines,
+  const message: string[] = [noteHeading, ...previewLines];
+
+  if (hasRepairableItems) {
+    message.push(
       `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`,
-    ].join("\n"),
-    "Cron",
-  );
+    );
+  } else {
+    message.push(
+      `These warnings require manual conversion and cannot be resolved with ${formatCliCommand("openclaw doctor --fix")}.`,
+    );
+  }
+
+  note(message.join("\n"), "Cron");
+
+  // Only prompt for repair when there are repairable items
+  if (!hasRepairableItems) {
+    return;
+  }
 
   const shouldRepair = await params.prompter.confirm({
     message: "Repair legacy cron jobs now?",
