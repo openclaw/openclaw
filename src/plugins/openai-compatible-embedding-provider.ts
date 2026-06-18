@@ -37,7 +37,33 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  request?: {
+    allowPrivateNetwork?: boolean;
+  };
 };
+
+/**
+ * Build the SSRF policy for the configured OpenAI-compatible embedding endpoint.
+ * Defaults to allowlisting the exact configured hostname only (private/internal
+ * IPs stay blocked). When the backing provider explicitly opts in via
+ * `models.providers.<id>.request.allowPrivateNetwork`, honor that same transport
+ * trust for memory embeddings — mirroring the model-provider self-hosted path —
+ * so an operator-configured private endpoint is reachable without weakening the
+ * SSRF-safe default for everyone else.
+ */
+function buildEmbeddingSsrfPolicy(
+  baseUrl: string,
+  configuredProvider: ConfiguredEmbeddingProvider | undefined,
+): SsrFPolicy | undefined {
+  const base = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
+  if (!base) {
+    return base;
+  }
+  if (configuredProvider?.request?.allowPrivateNetwork === true) {
+    return { ...base, allowPrivateNetwork: true };
+  }
+  return base;
+}
 
 function normalizeBaseUrl(value: string | undefined): string {
   const baseUrl = value?.trim();
@@ -355,7 +381,7 @@ export async function createOpenAICompatibleEmbeddingClient(
         ...options.remote?.headers,
       },
     }),
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: buildEmbeddingSsrfPolicy(baseUrl, configuredProvider),
     model,
     ...(options.dimensions !== undefined
       ? { dimensions: normalizeDimensions(options.dimensions) }

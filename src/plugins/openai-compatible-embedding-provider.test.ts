@@ -331,6 +331,49 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
+  it("honors a configured provider request.allowPrivateNetwork for the embedding SSRF policy", async () => {
+    const { client } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai-compatible",
+        config: {
+          models: {
+            providers: {
+              "openai-compatible": {
+                api: "openai-compatible",
+                baseUrl: "https://llm.internal/v1",
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://llm.internal/v1" },
+      }),
+    );
+    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.allowPrivateNetwork).toBe(true);
+  });
+
+  it("keeps the SSRF-safe default (no allowPrivateNetwork) when the provider does not opt in", async () => {
+    const { client } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai-compatible",
+        config: {
+          models: {
+            providers: {
+              "openai-compatible": {
+                api: "openai-compatible",
+                baseUrl: "https://llm.internal/v1",
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://llm.internal/v1" },
+      }),
+    );
+    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it("resolves env-template API key strings before treating them as inline secrets", async () => {
     const token = "env-template-token";
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_TEMPLATE_KEY";
