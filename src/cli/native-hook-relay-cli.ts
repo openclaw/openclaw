@@ -288,7 +288,10 @@ function writeNativeHookRelayUnavailableResponse(params: {
   const response = renderNativeHookRelayUnavailableResponse({
     provider: params.provider,
     event: params.event,
-    preToolUseUnavailable: params.opts.preToolUseUnavailable,
+    preToolUseUnavailable:
+      params.event === "pre_tool_use"
+        ? (params.opts.preToolUseUnavailable ?? "noop")
+        : params.opts.preToolUseUnavailable,
     message: params.message ?? "Native hook relay unavailable",
   });
   writeText(params.stdout, response.stdout);

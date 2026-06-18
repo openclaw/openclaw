@@ -449,10 +449,7 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
-        preToolUseUnavailable:
-          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
-            ? "noop"
-            : undefined,
+        preToolUseUnavailable: event === "pre_tool_use" ? "noop" : undefined,
         nice: params.command?.nice,
         timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
           params.command?.timeoutMs,

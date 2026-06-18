@@ -393,7 +393,7 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("fails closed for PreToolUse when the gateway relay is unavailable", async () => {
+  it("defaults PreToolUse unavailable handling to observational noop", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");
     });
@@ -411,13 +411,7 @@ describe("native hook relay CLI", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout.text())).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "Native hook relay unavailable",
-      },
-    });
+    expect(stdout.text()).toBe("");
     expect(stderr.text()).toContain("native hook relay unavailable");
   });
 
