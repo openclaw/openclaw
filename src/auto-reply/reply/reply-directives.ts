@@ -1,5 +1,4 @@
 /** Parses inline reply directives such as media, reply targets, audio, and silence. */
-import { logWarn } from "../../logger.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -18,6 +17,14 @@ export type ReplyDirectiveParseResult = {
   replyToTag: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
+  /**
+   * True when at least one `MEDIA:` token was skipped because it sits inside a
+   * fenced code block (see #41966). This is a pure signal — the warning is
+   * emitted once at the outbound delivery boundary, never here, because
+   * `parseReplyDirectives` runs on comparison/planning paths that may parse the
+   * same payload multiple times.
+   */
+  mediaTokenSkippedInFence: boolean;
 };
 
 /** Options for extracting reply directives from model text. */
@@ -80,14 +87,12 @@ export function parseReplyDirectives(
   raw: string,
   options: ReplyDirectiveParseOptions = {},
 ): ReplyDirectiveParseResult {
+  let mediaTokenSkippedInFence = false;
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,
     extractMediaDirectives: options.extractMediaDirectives,
     onFencedMediaTokenSkipped: () => {
-      logWarn(
-        `media: MEDIA: token skipped — it is inside a fenced code block and will not be delivered. ` +
-          `Remove the surrounding backticks/fence to send this as media.`,
-      );
+      mediaTokenSkippedInFence = true;
     },
   });
   let text = split.text ?? "";
@@ -122,5 +127,6 @@ export function parseReplyDirectives(
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,
+    mediaTokenSkippedInFence,
   };
 }
