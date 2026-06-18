@@ -47,7 +47,9 @@ describe("Docker E2E seed scripts", () => {
   });
 
   it("keeps MCP code-mode gateway config wired to its fixture server artifacts", () => {
-    const source = readScript("scripts/e2e/mcp-code-mode-gateway-seed.ts");
+    const source =
+      readScript("scripts/e2e/mcp-code-mode-gateway-seed.ts") +
+      readScript("scripts/e2e/lib/mcp-code-mode-probe-server.ts");
 
     expect(source).toContain('const serverPath = path.join(stateDir, "mcp-code-mode-fixture"');
     expect(source).toContain('["alpha", "fixture-note-alpha"]');
