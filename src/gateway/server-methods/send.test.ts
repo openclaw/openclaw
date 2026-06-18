@@ -926,6 +926,45 @@ describe("gateway send mirroring", () => {
     expect(response?.[2]?.message).toContain("Use `chat.send`");
   });
 
+  // Regression for issue #92094: bundled channels (e.g. telegram) live in
+  // the static CHAT_CHANNEL_ALIASES table but are not registered in the
+  // active plugin registry, so `normalizeChannelId` would return null.
+  // `normalizeMessageChannel` consults the bundled alias table first.
+  it("normalizes bundled channel aliases via normalizeMessageChannel for send (fixes #92094)", async () => {
+    mockDeliverySuccess("m-telegram-send");
+    mocks.getChannelPlugin.mockReturnValue({
+      outbound: { send: async () => undefined },
+    } as never);
+
+    const { respond } = await runSend({
+      to: "248008339",
+      message: "hi",
+      channel: "telegram",
+      idempotencyKey: "idem-telegram",
+    });
+
+    // Channel should resolve to the canonical "telegram" id (not null),
+    // so delivery runs and the response is success — not "unsupported channel".
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(response?.[2]).toBeUndefined();
+  });
+
+  it("still rejects unknown channels that are neither bundled nor registered", async () => {
+    const { respond } = await runSend({
+      to: "x",
+      message: "hi",
+      channel: "definitely-not-a-real-channel-xyz",
+      idempotencyKey: "idem-unknown",
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toContain("unsupported channel");
+  });
+
   it("auto-picks the single configured channel for send", async () => {
     mockDeliverySuccess("m-single-send");
 

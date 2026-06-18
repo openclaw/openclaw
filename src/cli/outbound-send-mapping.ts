@@ -1,10 +1,10 @@
 // Maps CLI send dependency sources into outbound send dependencies with legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeChannelId } from "../channels/registry.js";
 import {
   resolveLegacyOutboundSendDepKeys,
   type OutboundSendDeps,
 } from "../infra/outbound/send-deps.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 /**
  * CLI-internal send function sources, keyed by channel ID.
@@ -49,7 +49,10 @@ function resolveChannelIdFromLegacyOutboundKey(key: string): string | undefined 
 }
 
 function resolveKnownChannelId(raw: string): string | undefined {
-  return normalizeChannelId(raw) ?? undefined;
+  // Use normalizeMessageChannel so bundled channels (e.g. telegram,
+  // discord) which live in CHAT_CHANNEL_ALIASES but are not in the
+  // active plugin registry still resolve. See issue #92094.
+  return normalizeMessageChannel(raw) ?? undefined;
 }
 
 /**

@@ -1,7 +1,7 @@
-// Default CLI dependency surface with lazy outbound channel send adapters.
-import { normalizeChannelId } from "../channels/registry.js";
 import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+// Default CLI dependency surface with lazy outbound channel send adapters.
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { CliDeps } from "./deps.types.js";
 import {
   CLI_OUTBOUND_SEND_FACTORY,
@@ -50,7 +50,10 @@ const NON_CHANNEL_DEP_KEYS = new Set([
 ]);
 
 function resolveKnownChannelId(raw: string): string | undefined {
-  return normalizeChannelId(raw) ?? undefined;
+  // Use normalizeMessageChannel so bundled channels (e.g. telegram,
+  // discord) which live in CHAT_CHANNEL_ALIASES but are not in the
+  // active plugin registry still resolve. See issue #92094.
+  return normalizeMessageChannel(raw) ?? undefined;
 }
 
 // Per-channel module caches for lazy loading.

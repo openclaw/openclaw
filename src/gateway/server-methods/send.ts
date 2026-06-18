@@ -15,7 +15,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -42,13 +41,14 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -177,7 +177,11 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  // Use normalizeMessageChannel rather than normalizeChannelId so that
+  // bundled channels (e.g. telegram, discord) which live in the static
+  // CHAT_CHANNEL_ALIASES table but are not registered in the active
+  // plugin registry still normalize correctly. See issue #92094.
+  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : null;
   if (channelInput && !normalizedChannel) {
     const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
     if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
@@ -190,6 +194,18 @@ async function resolveRequestedChannel(params: {
     }
     return {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
+    };
+  }
+  // `normalizeMessageChannel` resolves the internal "webchat" channel to
+  // INTERNAL_MESSAGE_CHANNEL; reject it explicitly here so the action
+  // gateway path still refuses outbound webchat sends (those should go
+  // through chat.send instead).
+  if (channelInput && normalizedChannel === "webchat" && params.rejectWebchatAsInternalOnly) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+      ),
     };
   }
   const sourceCfg = params.context.getRuntimeConfig();
