@@ -916,6 +916,92 @@ describe("codex conversation binding", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("keeps bound agent approval policy ahead of different-agent session overrides", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const storePath = path.join(tempDir, "sessions.json");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:session-1",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        execSecurity: "full",
+        execAsk: "off",
+      },
+    });
+    const request = vi.fn(async () => {
+      throw new Error("unexpected native turn");
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request,
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "agent:main:session-1",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "agent:main:session-1",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentId: "bot-a",
+          },
+        },
+      },
+      {
+        timeoutMs: 50,
+        config: {
+          session: { store: storePath },
+          tools: {
+            exec: {
+              mode: "full",
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "bot-a",
+                tools: {
+                  exec: {
+                    mode: "auto",
+                  },
+                },
+              },
+            ],
+          },
+        } as never,
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
     const resumeCodexCliSessionOnNode = vi.fn();
 

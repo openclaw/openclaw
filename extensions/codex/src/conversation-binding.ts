@@ -28,6 +28,7 @@ import {
   type CodexAppServerSandboxMode,
   type OpenClawExecPolicyForCodexAppServer,
 } from "./app-server/config.js";
+import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import type {
   CodexServiceTier,
   CodexThreadResumeResponse,
@@ -52,7 +53,6 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
-import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
@@ -71,6 +71,12 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_AGENT_ID = "main";
+const DEFAULT_MAIN_KEY = "main";
+const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
+const LEADING_DASH_PATTERN = /^-+/;
+const TRAILING_DASH_PATTERN = /-+$/;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
@@ -115,6 +121,7 @@ type BoundTurnResult = {
 type CodexConversationConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];
+type ResolvedCodexConversationConfig = NonNullable<CodexConversationConfig>;
 
 type CodexConversationGlobalState = {
   queues: Map<string, Promise<void>>;
@@ -524,21 +531,21 @@ async function attachExistingThread(
   try {
     // Codex applies network-proxy permission profiles at thread/start. Resuming
     // an arbitrary existing thread cannot prove that profile is active.
-    const response: CodexThreadResumeResponse | CodexThreadStartResponse =
-      resolved.runtime.networkProxy
-        ? await requestNewConversationBindingThread(params, resolved)
-        : await resolved.client.request(
-            CODEX_CONTROL_METHODS.resumeThread,
-            {
-              threadId: params.threadId,
-              ...(resolved.model ? { model: resolved.model } : {}),
-              ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-              personality: CODEX_NATIVE_PERSONALITY_NONE,
-              ...buildThreadRequestRuntimeOptions(params, resolved),
-              persistExtendedHistory: true,
-            },
-            { timeoutMs: resolved.runtime.requestTimeoutMs },
-          );
+    const response: CodexThreadResumeResponse | CodexThreadStartResponse = resolved.runtime
+      .networkProxy
+      ? await requestNewConversationBindingThread(params, resolved)
+      : await resolved.client.request(
+          CODEX_CONTROL_METHODS.resumeThread,
+          {
+            threadId: params.threadId,
+            ...(resolved.model ? { model: resolved.model } : {}),
+            ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+            personality: CODEX_NATIVE_PERSONALITY_NONE,
+            ...buildThreadRequestRuntimeOptions(params, resolved),
+            persistExtendedHistory: true,
+          },
+          { timeoutMs: resolved.runtime.requestTimeoutMs },
+        );
     await writeThreadBindingFromResponse(params, resolved, response);
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
@@ -650,7 +657,9 @@ async function runBoundTurn(params: {
           {
             cwd: workspaceDir,
             ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-            ...(modelSelection?.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
+            ...(modelSelection?.modelProvider
+              ? { modelProvider: modelSelection.modelProvider }
+              : {}),
             personality: CODEX_NATIVE_PERSONALITY_NONE,
             approvalPolicy,
             approvalsReviewer: modelScopedRuntime.approvalsReviewer,
@@ -675,7 +684,8 @@ async function runBoundTurn(params: {
           model: response.model ?? modelSelection?.model ?? binding.model,
           modelProvider: normalizeCodexAppServerBindingModelProvider({
             authProfileId: binding.authProfileId,
-            modelProvider: response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
+            modelProvider:
+              response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
             ...agentLookup,
           }),
           approvalPolicy: typeof approvalPolicy === "string" ? approvalPolicy : undefined,
@@ -862,6 +872,15 @@ function readSessionExecOverrides(params: {
   if (!params.config || !sessionKey) {
     return undefined;
   }
+  if (
+    !canReadSessionExecOverrides({
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey,
+    })
+  ) {
+    return undefined;
+  }
   const storePath = resolveStorePath(params.config.session?.store, { agentId: params.agentId });
   const entry = resolveSessionStoreEntry({
     store: loadSessionStore(storePath, { skipCache: true }),
@@ -874,6 +893,97 @@ function readSessionExecOverrides(params: {
     security: entry.execSecurity,
     ask: entry.execAsk,
   };
+}
+
+function canReadSessionExecOverrides(params: {
+  config: ResolvedCodexConversationConfig;
+  agentId?: string;
+  sessionKey: string;
+}): boolean {
+  const agentId = normalizeAgentIdOrDefault(params.agentId);
+  if (!agentId) {
+    return true;
+  }
+  const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
+  if (!sessionAgentId) {
+    return isDefaultSessionAliasForAgent({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId,
+    });
+  }
+  return sessionAgentId === agentId;
+}
+
+function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
+  const raw = sessionKey?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parts = raw.toLowerCase().split(":").filter(Boolean);
+  if (parts.length < 3 || parts[0] !== "agent" || !parts[2]) {
+    return undefined;
+  }
+  return normalizeAgentIdOrDefault(parts[1]);
+}
+
+function isDefaultSessionAliasForAgent(params: {
+  config: ResolvedCodexConversationConfig;
+  sessionKey: string;
+  agentId: string;
+}): boolean {
+  return (
+    normalizeAgentId(params.agentId) === resolveDefaultPolicyAgentId(params.config) &&
+    isDefaultSessionAlias({ config: params.config, sessionKey: params.sessionKey })
+  );
+}
+
+function isDefaultSessionAlias(params: {
+  config: ResolvedCodexConversationConfig;
+  sessionKey: string;
+}): boolean {
+  const raw = params.sessionKey.trim().toLowerCase();
+  const mainKey = params.config.session?.mainKey?.trim().toLowerCase() || DEFAULT_MAIN_KEY;
+  return (
+    raw === DEFAULT_MAIN_KEY ||
+    raw === mainKey ||
+    (params.config.session?.scope === "global" && raw === "global")
+  );
+}
+
+function resolveDefaultPolicyAgentId(config: ResolvedCodexConversationConfig): string {
+  const agents = (config.agents?.list ?? []).filter(
+    (
+      entry,
+    ): entry is NonNullable<
+      NonNullable<ResolvedCodexConversationConfig["agents"]>["list"]
+    >[number] => entry !== null && typeof entry === "object",
+  );
+  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
+  return normalizeAgentId(defaultEntry?.id);
+}
+
+function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
+  const normalized = normalizeAgentId(value);
+  return normalized === DEFAULT_AGENT_ID && !(value ?? "").trim() ? undefined : normalized;
+}
+
+function normalizeAgentId(value?: string | null): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return DEFAULT_AGENT_ID;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (VALID_AGENT_ID_PATTERN.test(trimmed)) {
+    return normalized;
+  }
+  return (
+    normalized
+      .replace(INVALID_AGENT_ID_CHARS_PATTERN, "-")
+      .replace(LEADING_DASH_PATTERN, "")
+      .replace(TRAILING_DASH_PATTERN, "")
+      .slice(0, 64) || DEFAULT_AGENT_ID
+  );
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
