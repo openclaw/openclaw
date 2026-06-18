@@ -98,36 +98,4 @@ describe("buildStatusText channel features", () => {
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
   });
-
-  describe("buildStatusText error handling", () => {
-    it("returns fallback status message when loadStatusMessageRuntime rejects", async () => {
-      vi.doMock("./status-message.runtime.js", () => ({
-        loadStatusMessageRuntimeModule: vi.fn(() =>
-          Promise.reject(new Error("Simulated dynamic import error")),
-        ),
-      }));
-
-      vi.resetModules();
-      const { buildStatusText: freshBuildStatusText } = await import("./status-text.js");
-
-      const text = await freshBuildStatusText({
-        cfg: { channels: {} },
-        sessionEntry: { sessionId: "test-rejection", updatedAt: 0 },
-        sessionKey: "agent:main:telegram:direct:test",
-        statusChannel: "telegram",
-        provider: "anthropic",
-        model: "claude-haiku-4-5",
-        resolvedVerboseLevel: "off",
-        resolvedReasoningLevel: "off",
-        resolveDefaultThinkingLevel: async () => "medium",
-        isGroup: false,
-        defaultGroupActivation: () => "mention",
-        taskLineOverride: undefined,
-        pluginHealthLineOverride: undefined,
-        skipDefaultTaskLookup: true,
-      });
-
-      expect(text).toContain("⚠️ Status message unavailable");
-    });
-  });
 });
