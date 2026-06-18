@@ -94,6 +94,34 @@ export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || isTrajectoryPointerArtifactName(fileName);
 }
 
+// Strip a `.<reason>.<ts>` archive suffix and return the live name it was
+// rotated from, or null when the name is not an archive. Lets archive-aware
+// classifiers reason about the underlying artifact (e.g. a trajectory runtime
+// file) instead of the timestamped wrapper.
+function stripSessionArchiveSuffix(fileName: string): string | null {
+  for (const reason of ["reset", "deleted", "bak"] as const) {
+    const marker = `.${reason}.`;
+    const index = fileName.lastIndexOf(marker);
+    if (index <= 0) {
+      continue;
+    }
+    if (ARCHIVE_TIMESTAMP_RE.test(fileName.slice(index + marker.length))) {
+      return fileName.slice(0, index);
+    }
+  }
+  return null;
+}
+
+// Reset preserves the trajectory sibling as `<sid>.trajectory.jsonl.reset.<ts>`
+// (#90707). That name carries a generic `.reset.<ts>` suffix, so without this
+// guard the usage/transcript classifiers below would treat it as a transcript
+// archive and parse a synthetic `<sid>.trajectory` session id — feeding tool
+// call args/results into transcript usage accounting and memory/search hits.
+export function isArchivedTrajectorySessionArtifactName(fileName: string): boolean {
+  const liveName = stripSessionArchiveSuffix(fileName);
+  return liveName !== null && isTrajectorySessionArtifactName(liveName);
+}
+
 /** Returns true for primary session transcript files that represent live session history. */
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
@@ -116,6 +144,9 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return true;
   }
+  if (isArchivedTrajectorySessionArtifactName(fileName)) {
+    return false;
+  }
   return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
 }
 
@@ -123,6 +154,9 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
 export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return fileName.slice(0, -".jsonl".length);
+  }
+  if (isArchivedTrajectorySessionArtifactName(fileName)) {
+    return null;
   }
   for (const reason of ["reset", "deleted"] as const) {
     const marker = `.jsonl.${reason}.`;
