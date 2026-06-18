@@ -1010,6 +1010,18 @@ function classifyFailoverClassificationFromMessage(
   if (isContextOverflowError(raw)) {
     return { kind: "context_overflow" };
   }
+  // [2026-06-18 PR] Content policy / new_sensitive errors should trigger fallback.
+  // Affected providers: MiniMax ("new_sensitive (1027)"), Anthropic ("content_filter" /
+  // "safety_block"), OpenAI ("content_policy_violation"), and other providers that
+  // reject prompts at the moderation layer. Classified as rate_limit so the failover
+  // signal can route to a fallback model instead of surfacing the error to the user.
+  if (
+    /\bnew_sensitive\b|\bcontent_filter\b|\bsafety[_ ]?block\b|\bcontent[_ ]?policy/i.test(
+      raw,
+    )
+  ) {
+    return toReasonClassification("rate_limit");
+  }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);

@@ -164,3 +164,49 @@ describe("server error status classification", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });
 });
+
+// [2026-06-18 PR] Content policy / new_sensitive moderation errors should trigger
+// failover by classifying as rate_limit. Without this, agent sessions fail hard
+// the first time a long-running batch hits provider-side content moderation.
+describe("content policy / new_sensitive fallback classification", () => {
+  it("classifies MiniMax new_sensitive (1027) as rate_limit", () => {
+    expect(
+      classifyFailoverReason("output new_sensitive (1027)", { provider: "minimax-portal" }),
+    ).toBe("rate_limit");
+  });
+
+  it("classifies Anthropic content_filter as rate_limit", () => {
+    expect(
+      classifyFailoverReason("content_filter triggered on prompt", { provider: "anthropic" }),
+    ).toBe("rate_limit");
+  });
+
+  it("classifies Anthropic safety_block as rate_limit", () => {
+    expect(
+      classifyFailoverReason("safety_block activated", { provider: "anthropic" }),
+    ).toBe("rate_limit");
+  });
+
+  it("classifies OpenAI content_policy_violation as rate_limit", () => {
+    expect(
+      classifyFailoverReason("content_policy_violation: prompt rejected", { provider: "openai" }),
+    ).toBe("rate_limit");
+  });
+
+  it("matches case-insensitively across providers", () => {
+    expect(
+      classifyFailoverReason("Output NEW_SENSITIVE (1027)", { provider: "minimax-portal" }),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason("CONTENT_FILTER", { provider: "anthropic" }),
+    ).toBe("rate_limit");
+  });
+
+  it("does not misclassify unrelated rate-limit-looking errors", () => {
+    // Plain 429 / quota text should still go through the normal rate_limit path
+    // and not be confused with content policy errors.
+    expect(
+      classifyFailoverReason("Too Many Requests (HTTP 429)"),
+    ).toBe("rate_limit");
+  });
+});
