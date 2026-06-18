@@ -1490,30 +1490,45 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // empty (gateway restart, session clear, token expiry), fetch the full
         // thread from the Mattermost server so the agent has context instead of
         // replying blind. Best-effort — never blocks inbound dispatch.
-        if (threadRootId && historyKey) {
+        // Only backfills when history is enabled (historyLimit > 0) to respect
+        // the existing disabled-history contract; bounded with a 10 s timeout
+        // so a slow Mattermost thread endpoint cannot stall the inbound turn.
+        if (threadRootId && historyKey && historyLimit > 0) {
           const existing = channelHistories.get(historyKey);
           if (!existing || existing.length === 0) {
             try {
-              const threadPosts = await fetchMattermostThreadPosts(client, threadRootId);
-              if (threadPosts.length > 0) {
-                const entries: HistoryEntry[] = [];
-                for (const p of threadPosts) {
-                  if (p.id === post.id) continue;
-                  const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
-                  const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
-                  entries.push({
-                    sender,
-                    body: p.message || "[attachment]",
-                    timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
-                    messageId: p.id ?? undefined,
-                  });
+              const abort = new AbortController();
+              const timeoutId = setTimeout(() => abort.abort(), 10_000);
+              try {
+                const threadPosts = await fetchMattermostThreadPosts(
+                  client,
+                  threadRootId,
+                  abort.signal,
+                );
+                if (threadPosts.length > 0) {
+                  const entries: HistoryEntry[] = [];
+                  for (const p of threadPosts) {
+                    if (p.id === post.id) {
+                      continue;
+                    }
+                    const user = await resolveUserInfo(p.user_id ?? "").catch(() => null);
+                    const sender = user?.username ? `@${user.username}` : (p.user_id ?? "unknown");
+                    entries.push({
+                      sender,
+                      body: p.message || "[attachment]",
+                      timestamp: typeof p.create_at === "number" ? p.create_at : undefined,
+                      messageId: p.id ?? undefined,
+                    });
+                  }
+                  if (entries.length > 0) {
+                    channelHistories.set(historyKey, entries.slice(-historyLimit));
+                  }
                 }
-                if (entries.length > 0) {
-                  channelHistories.set(historyKey, entries.slice(-historyLimit));
-                }
+              } finally {
+                clearTimeout(timeoutId);
               }
             } catch {
-              // best-effort: server fetch failure should not block the message
+              // best-effort: server fetch failure or timeout should not block
             }
           }
         }
