@@ -60,4 +60,22 @@ describe("shared/node-list-parse", () => {
       paired: [{ nodeId: "n1" }],
     });
   });
+
+  it("normalizes non-string scalars from malformed pairing rows", () => {
+    const { pending, paired } = parsePairingList({
+      pending: [{ requestId: 7, nodeId: {}, displayName: 42, remoteIp: 99, platform: true, ts: 1 }],
+      paired: [{ nodeId: 5, displayName: { x: 1 }, remoteIp: [], token: 3, lastSeenReason: 0 }],
+    });
+    // Required ids coerce to "", optional scalars normalize to undefined — no non-string survives
+    // for the CLI renderers that call .trim()/sanitizeTerminalText on these fields.
+    expect(pending[0]).toMatchObject({ requestId: "", nodeId: "" });
+    expect(pending[0].displayName).toBeUndefined();
+    expect(pending[0].remoteIp).toBeUndefined();
+    expect(pending[0].platform).toBeUndefined();
+    expect(paired[0]).toMatchObject({ nodeId: "" });
+    expect(paired[0].displayName).toBeUndefined();
+    expect(paired[0].remoteIp).toBeUndefined();
+    expect(paired[0].token).toBeUndefined();
+    expect(paired[0].lastSeenReason).toBeUndefined();
+  });
 });
