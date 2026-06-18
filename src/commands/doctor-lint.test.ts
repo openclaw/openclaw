@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";
-import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
@@ -73,6 +73,34 @@ describe("runDoctorLintCli", () => {
       expect(String(stdout.mock.calls[1]?.[0])).toBe("  no findings\n");
     } finally {
       Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTTY });
+      stdout.mockRestore();
+    }
+  });
+
+  it("renders plain-English explain output for visible findings", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        explain: true,
+        onlyIds: ["core/doctor/gateway-config"],
+      });
+
+      const output = stdout.mock.calls.map((call) => String(call[0])).join("");
+      expect(exitCode).toBe(1);
+      expect(output).toContain("doctor --explain:");
+      expect(output).toContain("What happened:");
+      expect(output).toContain("Why it matters:");
+      expect(output).toContain("Try this:");
+      expect(output).toContain("Automatic repair: This report is read-only.");
+      expect(output).toContain("core/doctor/gateway-config");
+    } finally {
       stdout.mockRestore();
     }
   });
@@ -196,5 +224,49 @@ describe("runDoctorLintCli", () => {
     await expect(runDoctorLintCli(runtime, { severityMin: "warnng" })).rejects.toThrow(
       "Invalid --severity-min value",
     );
+  });
+
+  it("does not run repair hooks while rendering explain output", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    const repair = vi.fn().mockResolvedValue({ changes: ["Ran repair."] });
+    registerHealthCheck({
+      id: "test/explain-read-only",
+      kind: "core",
+      description: "explain read only",
+      async detect() {
+        return [
+          {
+            checkId: "test/explain-read-only",
+            severity: "warning",
+            message: "Gateway mode is missing.",
+            path: "gateway.mode",
+            fixHint: "Run `openclaw doctor --fix`.",
+          },
+        ];
+      },
+      repair,
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        explain: true,
+        onlyIds: ["test/explain-read-only"],
+      });
+
+      expect(exitCode).toBe(1);
+      expect(repair).not.toHaveBeenCalled();
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
+      const output = stdout.mock.calls.map((call) => String(call[0])).join("");
+      expect(output).toContain("Automatic repair: This report is read-only.");
+      expect(output).toContain("openclaw doctor --fix");
+    } finally {
+      stdout.mockRestore();
+    }
   });
 });

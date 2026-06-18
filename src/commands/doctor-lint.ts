@@ -1,4 +1,4 @@
-/** CLI entrypoint for non-mutating doctor lint health checks. */
+/** CLI entrypoint for structured doctor lint and explain health checks. */
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
@@ -18,16 +18,31 @@ import {
   type HealthFinding,
 } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { formatDoctorExplainOutput } from "./doctor-explain.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
+  readonly explain?: boolean;
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly allowExec?: boolean;
 }
 
-function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
+type StructuredDoctorSetup =
+  | {
+      readonly kind: "invalid-config";
+      readonly findings: readonly HealthFinding[];
+    }
+  | {
+      readonly kind: "ready";
+      readonly ctx: HealthCheckContext;
+    };
+
+function detectMode(opts: DoctorLintCliOptions): "human" | "json" | "explain" {
+  if (opts.explain === true) {
+    return "explain";
+  }
   if (opts.json === true) {
     return "json";
   }
@@ -44,52 +59,50 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
-  registerCoreHealthChecks();
-
   const sevMin =
     opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
-  const snapshot = await readConfigFileSnapshot({ observe: false });
-  if (snapshot.exists && !snapshot.valid) {
-    const findings = configValidationIssuesToHealthFindings(snapshot.issues);
-    const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
-    if (detectMode(opts) === "json") {
+  const mode = detectMode(opts);
+  if (mode === "explain" && opts.json === true) {
+    throw new Error("doctor --explain cannot be combined with --json.");
+  }
+
+  const setup = await prepareStructuredDoctorSetup(runtime, opts.allowExec === true);
+  if (setup.kind === "invalid-config") {
+    const visible = setup.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
+    if (mode === "json") {
       writeJsonResult({
         ok: false,
         checksRun: 1,
         checksSkipped: 0,
         findings: visible,
       });
+    } else if (mode === "explain") {
+      process.stdout.write(
+        formatDoctorExplainOutput({
+          checksRun: 1,
+          findings: visible,
+        }),
+      );
     } else {
       runtime.error("doctor --lint: config file exists but does not parse cleanly.");
-      for (const issue of snapshot.issues) {
-        const path = issue.path || "<root>";
-        runtime.error(`- ${path}: ${issue.message}`);
+      for (const finding of visible) {
+        const path = finding.path || "<root>";
+        runtime.error(`- ${path}: ${finding.message}`);
       }
     }
-    return exitCodeFromFindings(findings, sevMin);
+    return exitCodeFromFindings(setup.findings, sevMin);
   }
-
-  const ctx: HealthCheckContext = {
-    mode: "lint",
-    runtime,
-    cfg: snapshot.config,
-    cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
-    allowExecSecretRefs: opts.allowExec === true,
-    ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
-  };
-  registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
 
   const runOpts: DoctorLintRunOptions = {
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
-  const result = await runDoctorLintChecks(ctx, runOpts);
+  const result = await runDoctorLintChecks(setup.ctx, runOpts);
   const visible = result.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
 
-  const mode = detectMode(opts);
   if (mode === "json") {
     writeJsonResult({
       ok: exitCodeFromFindings(result.findings, sevMin) === 0,
@@ -97,6 +110,13 @@ export async function runDoctorLintCli(
       checksSkipped: result.checksSkipped,
       findings: visible,
     });
+  } else if (mode === "explain") {
+    process.stdout.write(
+      formatDoctorExplainOutput({
+        checksRun: result.checksRun,
+        findings: visible,
+      }),
+    );
   } else {
     process.stdout.write(
       `doctor --lint: ran ${result.checksRun} check(s), ${visible.length} finding(s)\n`,
@@ -148,4 +168,30 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
   };
+}
+
+async function prepareStructuredDoctorSetup(
+  runtime: RuntimeEnv,
+  allowExec: boolean,
+): Promise<StructuredDoctorSetup> {
+  registerCoreHealthChecks();
+  const snapshot = await readConfigFileSnapshot({ observe: false });
+  if (snapshot.exists && !snapshot.valid) {
+    return {
+      kind: "invalid-config",
+      findings: configValidationIssuesToHealthFindings(snapshot.issues),
+    };
+  }
+
+  const cwd = resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config));
+  const ctx: HealthCheckContext = {
+    mode: "lint",
+    runtime,
+    cfg: snapshot.config,
+    cwd,
+    allowExecSecretRefs: allowExec,
+    ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
+  };
+  registerBundledHealthChecks({ cfg: snapshot.config, cwd });
+  return { kind: "ready", ctx };
 }

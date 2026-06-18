@@ -77,21 +77,24 @@ If you want to review changes before writing, open the config file first:
 cat ~/.openclaw/openclaw.json
 ```
 
-## Read-only lint mode
+## Read-only lint and explain modes
 
 `openclaw doctor --lint` is the automation-friendly sibling of
-`openclaw doctor --fix`. Both use doctor health checks, but their posture is
-different:
+`openclaw doctor --fix`. `openclaw doctor --explain` uses the same structured
+findings but renders them as plain-English guidance for people. These modes all
+use doctor health checks, but their posture is different:
 
-| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
-| ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
-| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status         |
-| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
-| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
+| Mode                        | Prompts   | Writes config/state     | Output                 | Use it for                      |
+| --------------------------- | --------- | ----------------------- | ---------------------- | ------------------------------- |
+| `openclaw doctor`           | yes       | no                      | friendly health report | a human checking status         |
+| `openclaw doctor --fix`     | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
+| `openclaw doctor --lint`    | no        | no                      | structured findings    | CI, preflight, and review gates |
+| `openclaw doctor --explain` | no        | no                      | plain-English findings | human setup troubleshooting     |
 
-Modernized health checks may provide an optional `repair()` implementation.
-`doctor --fix` applies those repairs when they exist and continues to use the
-existing doctor repair flow for checks that have not migrated yet.
+Modernized health checks may provide optional repair metadata. `doctor --fix`
+uses the existing doctor repair flow for checks that own mutations, while
+`doctor --explain` always stays read-only and prints plain-English guidance for
+operators.
 The structured repair contract also separates repair reporting from detection:
 `detect()` reports current findings, while `repair()` can report changes,
 config/file diffs, and non-file side effects. That keeps the migration path open
@@ -105,6 +108,7 @@ openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
 openclaw doctor --lint --only core/doctor/gateway-config --json
+openclaw doctor --explain --only core/doctor/gateway-config
 ```
 
 JSON output includes:
@@ -122,11 +126,10 @@ Exit codes:
 - `2`: command/runtime failure before lint findings could be emitted
 
 Use `--severity-min info|warning|error` to control both what is printed and what
-causes a non-zero lint exit. Use `--only <id>` for narrow preflight gates and
-`--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
-lint run active.
-Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
-must be paired with `--lint`; regular doctor and repair runs reject them.
+causes a non-zero lint or explain exit. Use `--only <id>` for narrow preflight
+gates and `--skip <id>` to temporarily exclude a noisy check while keeping the
+rest of the lint or explain run active. `--json` remains a lint and
+post-upgrade output mode.
 
 ## What it does (summary)
 

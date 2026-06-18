@@ -122,6 +122,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
       json: true,
+      explain: false,
       severityMin: "error",
       skipIds: ["a"],
       onlyIds: ["b"],
@@ -130,13 +131,46 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("rejects lint selectors outside doctor lint mode", async () => {
-    await runMaintenanceCli(["doctor", "--fix", "--only", "policy/channels-denied-provider"]);
+  it("runs doctor explain mode through the structured health path", async () => {
+    runDoctorLintCli.mockResolvedValue(1);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--explain",
+      "--severity-min",
+      "warning",
+      "--only",
+      "core/doctor/gateway-config",
+      "--non-interactive",
+    ]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-    );
+    expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+      json: false,
+      explain: true,
+      severityMin: "warning",
+      skipIds: [],
+      onlyIds: ["core/doctor/gateway-config"],
+      allowExec: false,
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects JSON explain output", async () => {
+    await runMaintenanceCli(["doctor", "--explain", "--json"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("doctor --explain cannot be combined with --json.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects combined lint and explain modes", async () => {
+    await runMaintenanceCli(["doctor", "--lint", "--explain"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("doctor --lint cannot be combined with --explain.");
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
@@ -155,7 +189,18 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+      "doctor structured health options require --lint or --explain.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects --fix with structured selectors", async () => {
+    await runMaintenanceCli(["doctor", "--fix", "--only", "core/doctor/skills-readiness"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor structured health options require --lint or --explain.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });

@@ -29,6 +29,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .option("--lint", "Run read-only health checks and report findings", false)
+    .option("--explain", "Explain structured health findings in plain English", false)
     .option(
       "--post-upgrade",
       "Emit plugin-compat findings only (machine-readable with --json)",
@@ -37,28 +38,44 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--json", "With --lint or --post-upgrade: emit machine-readable JSON output", false)
     .option(
       "--severity-min <level>",
-      "With --lint: drop findings below this severity (info|warning|error)",
+      "With --lint or --explain: drop findings below this severity (info|warning|error)",
     )
     .option(
       "--skip <id>",
-      "With --lint: skip a specific check id (repeatable)",
+      "With --lint or --explain: skip a specific check id (repeatable)",
       (v: string, prev: string[]) => [...prev, v],
       [],
     )
     .option(
       "--only <id>",
-      "With --lint: run only the specified check id (repeatable)",
+      "With --lint or --explain: run only the specified check id (repeatable)",
       (v: string, prev: string[]) => [...prev, v],
       [],
     )
     .action(async (opts) => {
-      if (opts.lint === true) {
+      if (opts.explain === true && opts.postUpgrade === true) {
+        defaultRuntime.error("doctor --explain cannot be combined with --post-upgrade.");
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.lint === true && opts.explain === true) {
+        defaultRuntime.error("doctor --lint cannot be combined with --explain.");
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.explain === true && opts.json === true) {
+        defaultRuntime.error("doctor --explain cannot be combined with --json.");
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.lint === true || opts.explain === true) {
         await runCommandWithRuntime(
           defaultRuntime,
           async () => {
             const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
             const exitCode = await runDoctorLintCli(defaultRuntime, {
               json: Boolean(opts.json),
+              explain: Boolean(opts.explain),
               severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
               skipIds: Array.isArray(opts.skip) ? opts.skip : [],
               onlyIds: Array.isArray(opts.only) ? opts.only : [],
@@ -73,10 +90,8 @@ export function registerMaintenanceCommands(program: Command) {
         );
         return;
       }
-      if (hasLintOnlyDoctorOptions(opts)) {
-        defaultRuntime.error(
-          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-        );
+      if (hasStructuredOnlyDoctorOptions(opts)) {
+        defaultRuntime.error("doctor structured health options require --lint or --explain.");
         defaultRuntime.exit(2);
         return;
       }
@@ -175,7 +190,7 @@ export function registerMaintenanceCommands(program: Command) {
     });
 }
 
-function hasLintOnlyDoctorOptions(opts: {
+function hasStructuredOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
   readonly severityMin?: unknown;
