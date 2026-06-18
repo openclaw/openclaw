@@ -139,10 +139,11 @@ describe("SessionHistorySseState", () => {
       messageSeq: 2,
     });
 
+    expect(appended).toBeDefined();
     expect(appended?.messageSeq).toBe(2);
     expect(
       (
-        appended?.message as {
+        appended!.message as {
           __openclaw?: { id?: string; idempotencyKey?: string; seq?: number };
         }
       )["__openclaw"],
