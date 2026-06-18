@@ -1,9 +1,13 @@
 export type MaybePromise<T> = T | Promise<T>;
 
+export type RouteHookOptions = {
+  shouldRun: () => boolean;
+};
+
 export type Page<TLoadContext = unknown, TRenderContext = unknown> = {
-  onEnter?: (context: TLoadContext) => MaybePromise<void>;
-  load?: (context: TLoadContext) => MaybePromise<void>;
-  onLeave?: (context: TLoadContext) => MaybePromise<void>;
+  onEnter?: (context: TLoadContext, options: RouteHookOptions) => MaybePromise<void>;
+  load?: (context: TLoadContext, options: RouteHookOptions) => MaybePromise<void>;
+  onLeave?: (context: TLoadContext, options: RouteHookOptions) => MaybePromise<void>;
   render: (context: TRenderContext) => unknown;
 };
 
@@ -18,6 +22,7 @@ export type RouteRecord<
 > = {
   id: TRouteId;
   path: string;
+  aliases?: readonly string[];
   parent?: string;
   page?: () => Promise<PageModule<TLoadContext, TRenderContext>>;
 };
