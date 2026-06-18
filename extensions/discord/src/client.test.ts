@@ -71,6 +71,58 @@ describe("createDiscordRestClient", () => {
     expect(result.rest.options.timeout).toBe(250);
   });
 
+  it("keeps the default REST timeout when apiTimeoutMs is unset", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({ cfg });
+
+    expect(rest.options.timeout).toBe(15_000);
+  });
+
+  it("uses configured top-level REST timeout", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          apiTimeoutMs: 45_000,
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest, account } = createDiscordRestClient({ cfg });
+
+    expect(account.config.apiTimeoutMs).toBe(45_000);
+    expect(rest.options.timeout).toBe(45_000);
+  });
+
+  it("uses per-account REST timeout overrides", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          apiTimeoutMs: 45_000,
+          accounts: {
+            ops: {
+              token: "Bot ops-token",
+              apiTimeoutMs: 60_000,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest, account } = createDiscordRestClient({ cfg, accountId: "ops" });
+
+    expect(account.accountId).toBe("ops");
+    expect(account.config.apiTimeoutMs).toBe(60_000);
+    expect(rest.options.timeout).toBe(60_000);
+  });
+
   it("still fails closed when no explicit token is provided and config token is unresolved", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {

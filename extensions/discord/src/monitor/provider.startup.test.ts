@@ -261,6 +261,35 @@ describe("createDiscordMonitorClient", () => {
     expect(Array.isArray(plugins)).toBe(true);
   });
 
+  it("uses configured apiTimeoutMs for internal Discord REST options", async () => {
+    const createClient = vi.fn(createClientWithPlugins);
+
+    await createDiscordMonitorClient({
+      accountId: "default",
+      applicationId: "app-1",
+      token: "token-1",
+      commands: [],
+      components: [],
+      modals: [],
+      voiceEnabled: false,
+      discordConfig: { apiTimeoutMs: 45_000 },
+      runtime: createRuntime(),
+      createClient,
+      createGatewayPlugin: () => ({ id: "gateway" }) as never,
+      createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
+      createAutoPresenceController: () => createAutoPresenceController() as never,
+      isDisallowedIntentsError: () => false,
+    });
+
+    expect(createClient).toHaveBeenCalledTimes(1);
+    const [options] = firstCreateClientCall(createClient);
+    expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
+      timeout: 45_000,
+      runtimeProfile: "persistent",
+      maxQueueSize: 1000,
+    });
+  });
+
   it("passes REST timeout options and fetch to internal Discord REST", async () => {
     const restFetch = vi.fn();
     const createClient = vi.fn(createClientWithPlugins);

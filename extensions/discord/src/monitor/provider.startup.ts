@@ -95,6 +95,7 @@ export async function createDiscordMonitorClient(params: {
   modals: Modal[];
   voiceEnabled: boolean;
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0] & {
+    apiTimeoutMs?: number;
     eventQueue?: Pick<
       DiscordEventQueueOptions,
       "listenerTimeout" | "maxQueueSize" | "maxConcurrency"
@@ -145,7 +146,7 @@ export async function createDiscordMonitorClient(params: {
         "command-deploy-cache.json",
       ),
       requestOptions: {
-        timeout: DISCORD_REST_TIMEOUT_MS,
+        timeout: params.discordConfig.apiTimeoutMs ?? DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",
         maxQueueSize: 1000,
         ...(params.restFetch ? { fetch: params.restFetch } : {}),

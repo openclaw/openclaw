@@ -342,6 +342,8 @@ export type DiscordAccountConfig = {
   gatewayReadyTimeoutMs?: number;
   /** Runtime reconnect wait for the gateway READY event before force-stopping the lifecycle. Default: 30000. */
   gatewayRuntimeReadyTimeoutMs?: number;
+  /** Timeout for Discord REST API calls in milliseconds. Default: 15000. Max: 120000. */
+  apiTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**

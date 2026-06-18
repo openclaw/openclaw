@@ -50,6 +50,23 @@ describe("createDiscordRestClient proxy support", () => {
     expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
   });
 
+  it("keeps the configured REST timeout when a Discord proxy is configured", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://127.0.0.1:8080",
+          apiTimeoutMs: 45_000,
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({ cfg });
+
+    expect(rest.options.timeout).toBe(45_000);
+    expect(rest.options.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
+  });
+
   it("does not inject fetch when no proxy is configured", () => {
     const cfg = {
       channels: {

@@ -1100,6 +1100,28 @@ describe("monitorDiscordProvider", () => {
     expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });
 
+  it("threads configured REST API timeout into internal native deploy", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        apiTimeoutMs: 45_000,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: createConfigWithDiscordAccount({ apiTimeoutMs: 45_000 }),
+      runtime: baseRuntime(),
+    });
+
+    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
+    expect(getConstructedClientOptions().requestOptions?.timeout).toBe(45_000);
+  });
+
   it("skips slash-command lifecycle REST when native commands are disabled", async () => {
     const runtime = baseRuntime();
     isNativeCommandsExplicitlyDisabledMock.mockReturnValue(true);
