@@ -432,15 +432,25 @@ export async function startQaLabServer(
           const evidencePath =
             url.searchParams.get("path")?.trim() || runnerSnapshot.artifacts?.evidencePath;
           if (!evidencePath) {
-            writeJson(res, 200, { evidence: null });
+            res.writeHead(200, {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+            });
+            res.end(JSON.stringify({ evidence: null }));
             return;
           }
-          writeJson(res, 200, {
-            evidence: await buildQaEvidenceGalleryModel({
-              evidencePath,
-              repoRoot,
-            }),
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
           });
+          res.end(
+            JSON.stringify({
+              evidence: await buildQaEvidenceGalleryModel({
+                evidencePath,
+                repoRoot,
+              }),
+            }),
+          );
           return;
         }
         if (

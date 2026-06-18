@@ -503,6 +503,21 @@ describe("qa-lab server", () => {
     cleanups.push(async () => {
       await lab.stop();
     });
+    const evidenceUrl = new URL("/api/evidence", lab.baseUrl);
+    evidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/server/qa-evidence.json");
+
+    const evidenceResponse = await fetchWithRetry(evidenceUrl.toString());
+    expect(evidenceResponse.status).toBe(200);
+    expect(evidenceResponse.headers.get("cache-control")).toBe("no-store");
+    expect((await evidenceResponse.json()) as unknown).toMatchObject({
+      evidence: {
+        counts: {
+          pass: 1,
+        },
+        entries: [{ id: "qa-lab.server-artifact" }],
+      },
+    });
+
     const artifactUrl = new URL("/api/evidence/artifact", lab.baseUrl);
     artifactUrl.searchParams.set("evidencePath", ".artifacts/qa-e2e/server/qa-evidence.json");
     artifactUrl.searchParams.set("artifactPath", "artifact.log");
