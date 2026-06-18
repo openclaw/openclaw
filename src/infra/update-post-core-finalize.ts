@@ -45,8 +45,9 @@ import type { UpdateRunResult } from "./update-runner.js";
 const FINALIZE_PROCESS_TIMEOUT_FLOOR_MS = 30 * 60_000;
 const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
 
-// Strip the running gateway's service identity from the finalizer child so it is
-// not mistaken for the managed service process (matches the CLI post-core spawn).
+// Strip the running gateway's service identity and stale finalizer handoff
+// context from the child; each finalize run must receive only this update's
+// source-config path and host-version context.
 // Also carry the effective update channel so convergence runs on the channel the
 // core update actually used (git/dev for an unconfigured source update) — passed
 // as the *effective* channel, never a *requested* one, so `update finalize` does
@@ -61,6 +62,8 @@ function buildFinalizeEnv(
   delete env.OPENCLAW_SERVICE_MARKER;
   delete env.OPENCLAW_SERVICE_KIND;
   delete env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+  delete env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+  delete env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV];
   env[UPDATE_EFFECTIVE_CHANNEL_ENV] = effectiveChannel;
   if (compatHostVersion) {
     env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatHostVersion;
