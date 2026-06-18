@@ -1009,4 +1009,93 @@ describe("Discord model picker interactions", () => {
     expect(payload).toContain(";a=back;v=providers;");
     expect(payload).toContain(";pb=");
   });
+
+  function seedBoundPickerContext() {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createModelsProviderData({
+      anthropic: ["claude-sonnet-4-5"],
+      lmstudio: ["unsloth/gemma-4-26b-a4b-it@iq4_xs"],
+    });
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(createModelCommandDefinition());
+    return { context, storePath };
+  }
+
+  async function seedCliAuthProfileOverride(storePath: string) {
+    // An auth profile override established by a non-picker source (e.g. a CLI flag).
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:worker:subagent:bound",
+      entry: {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+        authProfileOverride: "cli-profile",
+        authProfileOverrideSource: "user",
+      },
+    });
+  }
+
+  async function runBoundPickerSubmit(
+    context: ModelPickerContext,
+    dispatchCommandInteraction: DispatchDiscordCommandInteraction,
+  ) {
+    const button = createModelPickerFallbackButton(context, dispatchCommandInteraction);
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = { type: ChannelType.PublicThread, id: "thread-bound" };
+    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+      ...createModelsViewSubmitData(),
+      p: "lmstudio",
+      mi: "1",
+    });
+  }
+
+  it("preserves an auth profile override set by another source when picking a model", async () => {
+    const { context, storePath } = seedBoundPickerContext();
+    await seedCliAuthProfileOverride(storePath);
+
+    await runBoundPickerSubmit(context, createDispatchSpy());
+
+    const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    // The picker selected a model only; the unrelated auth profile override survives.
+    expect(entry?.authProfileOverride).toBe("cli-profile");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+  });
+
+  it("restores an auth profile override cleared by the hidden /model dispatch", async () => {
+    const { context, storePath } = seedBoundPickerContext();
+    await seedCliAuthProfileOverride(storePath);
+
+    // The hidden /model dispatch applies the model and, for a profile-less
+    // selection, clears the auth profile override via the shared directive path.
+    // This is the picker's primary persistence path, so the fallback persist is
+    // never reached and only the picker-level restore can save the override.
+    const dispatchSpy = vi.fn<DispatchDiscordCommandInteraction>().mockImplementation(async () => {
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: "agent:worker:subagent:bound",
+        entry: {
+          updatedAt: Date.now(),
+          sessionId: "bound-session",
+          providerOverride: "lmstudio",
+          modelOverride: "unsloth/gemma-4-26b-a4b-it@iq4_xs",
+        },
+      });
+      return { accepted: true };
+    });
+
+    await runBoundPickerSubmit(context, dispatchSpy);
+
+    const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    expect(entry?.authProfileOverride).toBe("cli-profile");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+  });
 });

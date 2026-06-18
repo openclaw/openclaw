@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  loadSessionStore,
+  patchSessionEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
 import {
@@ -79,6 +83,42 @@ async function persistDiscordModelPickerOverride(params: {
   return persisted;
 }
 
+// The model picker only selects a model; it never owns an auth profile. The
+// hidden /model dispatch routes through the shared directive path, which clears
+// authProfileOverride for a profile-less selection. Capture the override owned
+// by another source (CLI flag, session-level) so the picker can re-apply it.
+function captureAuthProfileOverride(cfg: OpenClawConfig, route: ResolvedAgentRoute) {
+  const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+  const entry = loadSessionStore(storePath, { skipCache: true })[route.sessionKey];
+  if (!entry?.authProfileOverride) {
+    return undefined;
+  }
+  return {
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+async function restoreAuthProfileOverride(
+  cfg: OpenClawConfig,
+  route: ResolvedAgentRoute,
+  preserved: NonNullable<ReturnType<typeof captureAuthProfileOverride>>,
+): Promise<void> {
+  const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+  await patchSessionEntry({
+    storePath,
+    sessionKey: route.sessionKey,
+    update: (entry) => {
+      // Re-apply only when the selection cleared it; intact override is a no-op.
+      if (entry.authProfileOverride === preserved.authProfileOverride) {
+        return null;
+      }
+      return preserved;
+    },
+  });
+}
+
 export async function applyDiscordModelPickerSelection(params: {
   interaction: ButtonInteraction | StringSelectMenuInteraction;
   selectionCommand: DiscordModelPickerSelectionCommand;
@@ -99,6 +139,7 @@ export async function applyDiscordModelPickerSelection(params: {
   settleMs: number;
   resolveCurrentModel: (route: ResolvedAgentRoute) => string;
 }): Promise<DiscordModelPickerApplyResult> {
+  const preservedAuthProfile = captureAuthProfileOverride(params.cfg, params.route);
   try {
     const dispatchResult = await withTimeout(
       params.dispatchCommandInteraction({
@@ -217,5 +258,12 @@ export async function applyDiscordModelPickerSelection(params: {
       status: "failed",
       noticeMessage: `❌ Failed to apply ${params.resolvedModelRef}. Try /model ${params.resolvedModelRef} directly.`,
     };
+  } finally {
+    // A model switch must never destroy an auth profile override the picker
+    // does not own, regardless of which apply path (hidden dispatch or direct
+    // persist) ran or whether it succeeded.
+    if (preservedAuthProfile) {
+      await restoreAuthProfileOverride(params.cfg, params.route, preservedAuthProfile);
+    }
   }
 }
