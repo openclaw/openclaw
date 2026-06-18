@@ -52,6 +52,7 @@ vi.mock("./doctor-config-audit-scrub.js", () => ({
 vi.mock("./doctor/cron/index.js", () => ({
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
+  repairLegacyCronStoreWithoutPrompt: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 
 vi.mock("./doctor-device-pairing.js", () => ({

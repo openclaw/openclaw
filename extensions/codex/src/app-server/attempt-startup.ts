@@ -11,6 +11,7 @@ import {
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
@@ -52,10 +53,8 @@ import {
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import {
-  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   clearSharedCodexAppServerClientIfCurrent,
   releaseLeasedSharedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import {
   startOrResumeThread,
@@ -136,7 +135,7 @@ export async function startCodexAttemptThread(params: {
         await releaseStartupResourcesOnTimeout?.();
         releaseSharedClientLease?.();
         releaseSharedClientLease = undefined;
-        await closeAbandonedStartupClient(startupClientForAbandonedRequestCleanup);
+        await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
         startupClientForAbandonedRequestCleanup = undefined;
       },
       operation: async () => {
@@ -188,7 +187,7 @@ export async function startCodexAttemptThread(params: {
                   // close any late-arriving client instead of leaking a lease.
                   startupClientForAbandonedRequestCleanup = client;
                   if (startupAbandoned || startupAbandonController.signal.aborted) {
-                    void closeAbandonedStartupClient(client);
+                    void closeCodexStartupClientBestEffort(client);
                   }
                 },
                 abandonSignal: startupAbandonController.signal,
@@ -346,7 +345,7 @@ export async function startCodexAttemptThread(params: {
                             activeStartupClient.request(method, requestParams, {
                               timeoutMs: params.appServer.requestTimeoutMs,
                               signal,
-                          }),
+                            }),
                           appCache: defaultCodexAppInventoryCache,
                           appCacheKey: pluginAppCacheKey,
                         }),
@@ -394,7 +393,7 @@ export async function startCodexAttemptThread(params: {
                 if (startupClientForAbandonedRequestCleanup === startupClient) {
                   startupClientForAbandonedRequestCleanup = undefined;
                 }
-                await closeAbandonedStartupClient(startupClient);
+                await closeCodexStartupClientBestEffort(startupClient);
               } else if (
                 shouldClearSharedClientAfterStartupRace(startupAttemptError) ||
                 shouldClearSharedClientAfterStartupFailure({
@@ -405,7 +404,7 @@ export async function startCodexAttemptThread(params: {
                 if (startupClientForAbandonedRequestCleanup === startupClient) {
                   startupClientForAbandonedRequestCleanup = undefined;
                 }
-                await evictFailedStartupClient(startupClient);
+                await closeCodexStartupClientBestEffort(startupClient);
               }
             }
           }
@@ -467,7 +466,7 @@ export async function startCodexAttemptThread(params: {
     if (params.signal.aborted || shouldClearSharedClientAfterStartupAbandon(error)) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
-      await closeAbandonedStartupClient(startupClientForAbandonedRequestCleanup);
+      await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
       startupClientForAbandonedRequestCleanup = undefined;
     } else if (
       shouldClearSharedClientAfterStartupRace(error) ||
@@ -478,87 +477,13 @@ export async function startCodexAttemptThread(params: {
     ) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
-      await evictFailedStartupClient(startupClientForAbandonedRequestCleanup);
+      await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
       startupClientForAbandonedRequestCleanup = undefined;
     }
     throw error;
   } finally {
     params.signal.removeEventListener("abort", abandonStartupAcquire);
   }
-}
-
-async function closeAbandonedStartupClient(
-  client: CodexAppServerClient | undefined,
-): Promise<void> {
-  if (!client) {
-    return;
-  }
-  const unclaimedSharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
-  if (unclaimedSharedClient.closed) {
-    await closeClientAndWaitIfAvailable(client);
-    return;
-  }
-  if (unclaimedSharedClient.found) {
-    const retired = retireSharedCodexAppServerClientIfCurrent(client);
-    if (retired?.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
-  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
-  if (retiredSharedClient) {
-    if (retiredSharedClient.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
-  if (clearSharedCodexAppServerClientIfCurrent(client)) {
-    await closeClientAndWaitIfAvailable(client);
-    return;
-  }
-  await closeClientAndWaitIfAvailable(client);
-}
-
-async function closeClientAndWaitIfAvailable(client: CodexAppServerClient): Promise<void> {
-  const closeable = client as {
-    close?: CodexAppServerClient["close"];
-    closeAndWait?: CodexAppServerClient["closeAndWait"];
-  };
-  if (typeof closeable.closeAndWait === "function") {
-    await closeable.closeAndWait();
-    return;
-  }
-  closeable.close?.();
-}
-
-async function evictFailedStartupClient(client: CodexAppServerClient | undefined): Promise<void> {
-  if (!client) {
-    return;
-  }
-  const unclaimedSharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
-  if (unclaimedSharedClient.closed) {
-    await closeClientAndWaitIfAvailable(client);
-    return;
-  }
-  if (unclaimedSharedClient.found) {
-    const retired = retireSharedCodexAppServerClientIfCurrent(client);
-    if (retired?.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
-  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
-  if (retiredSharedClient) {
-    if (retiredSharedClient.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
-  if (clearSharedCodexAppServerClientIfCurrent(client)) {
-    await closeClientAndWaitIfAvailable(client);
-    return;
-  }
-  await closeClientAndWaitIfAvailable(client);
 }
 
 function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
