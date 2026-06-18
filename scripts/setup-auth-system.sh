@@ -125,15 +125,15 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$SERVICE_TEMP" > "$SERVICE_RENDERED"
 
 if [ "$FOUND_EXEC_START" -ne 1 ]; then
-    echo "ERROR: ExecStart line not found in $SERVICE_TEMP" >&2
+    echo "ERROR: ExecStart line not found in $SERVICE_TEMPLATE" >&2
     exit 1
 fi
 if [ "$FOUND_NTFY" -ne 1 ]; then
-    echo "ERROR: NOTIFY_NTFY placeholder not found in $SERVICE_TEMP" >&2
+    echo "ERROR: NOTIFY_NTFY placeholder not found in $SERVICE_TEMPLATE" >&2
     exit 1
 fi
 if [ "$FOUND_PHONE" -ne 1 ]; then
-    echo "ERROR: NOTIFY_PHONE placeholder not found in $SERVICE_TEMP" >&2
+    echo "ERROR: NOTIFY_PHONE placeholder not found in $SERVICE_TEMPLATE" >&2
     exit 1
 fi
 
