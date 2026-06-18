@@ -55,6 +55,7 @@ import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
+const FTS_PATH_TABLE = `${MEMORY_INDEX_FTS_TABLE}_path`;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -703,7 +704,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       try {
         deleteMemoryFtsRows({
           db: this.db,
-          tableName: FTS_TABLE,
+          tableNames: [FTS_TABLE, FTS_PATH_TABLE],
           path: pathname,
           source,
           currentModel: this.provider?.model,
@@ -792,7 +793,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
                 ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(`${entry.path}\n${chunk.text}`, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+            .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+          this.db
+            .prepare(
+              `INSERT INTO ${FTS_PATH_TABLE} (path_text, text, id, path, source, model, start_line, end_line)\n` +
+                ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(entry.path, chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
         }
       }
       this.upsertFileRecord(entry, source);

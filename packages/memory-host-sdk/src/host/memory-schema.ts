@@ -370,27 +370,7 @@ export function ensureMemoryIndexSchema(params: {
     try {
       const tokenizer = params.ftsTokenizer ?? "unicode61";
       const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
-      params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTable} USING fts5(\n` +
-          `  text,\n` +
-          `  id UNINDEXED,\n` +
-          `  path UNINDEXED,\n` +
-          `  source UNINDEXED,\n` +
-          `  model UNINDEXED,\n` +
-          `  start_line UNINDEXED,\n` +
-          `  end_line UNINDEXED\n` +
-          `${tokenizeClause});`,
-      );
-      // The shipped generic-table migration and a later FTS enablement both
-      // create an empty derived table beside already-canonical chunk rows.
-      params.db.exec(`
-        INSERT INTO ${ftsTable} (
-          text, id, path, source, model, start_line, end_line
-        )
-        SELECT text, id, path, source, model, start_line, end_line
-        FROM ${MEMORY_INDEX_CHUNKS_TABLE}
-        WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
-      `);
+      ensureFtsSchema(params.db, ftsTable, `${ftsTable}_path`, tokenizeClause);
       ftsAvailable = true;
     } catch (err) {
       const message = formatErrorMessage(err);
@@ -400,4 +380,120 @@ export function ensureMemoryIndexSchema(params: {
   }
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
+}
+
+function ensureFtsSchema(
+  db: DatabaseSync,
+  textTableName: string,
+  pathTableName: string,
+  tokenizeClause: string,
+): void {
+  const createTextTable = () => {
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS ${textTableName} USING fts5(\n` +
+        `  text,\n` +
+        `  id UNINDEXED,\n` +
+        `  path UNINDEXED,\n` +
+        `  source UNINDEXED,\n` +
+        `  model UNINDEXED,\n` +
+        `  start_line UNINDEXED,\n` +
+        `  end_line UNINDEXED\n` +
+        `${tokenizeClause});`,
+    );
+  };
+  const createPathTable = () => {
+    db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS ${pathTableName} USING fts5(\n` +
+        `  path_text,\n` +
+        `  text UNINDEXED,\n` +
+        `  id UNINDEXED,\n` +
+        `  path UNINDEXED,\n` +
+        `  source UNINDEXED,\n` +
+        `  model UNINDEXED,\n` +
+        `  start_line UNINDEXED,\n` +
+        `  end_line UNINDEXED\n` +
+        `${tokenizeClause});`,
+    );
+  };
+
+  createTextTable();
+  const textColumns = db.prepare(`PRAGMA table_info(${textTableName})`).all() as Array<{
+    name: string;
+  }>;
+  if (textColumns.some((column) => column.name === "path_text")) {
+    db.exec(`DROP TABLE ${textTableName};`);
+    createTextTable();
+  }
+  createPathTable();
+
+  const textRows = db.prepare(`SELECT COUNT(*) AS count FROM ${textTableName}`).get() as
+    | { count?: number | bigint }
+    | undefined;
+  const pathRows = db.prepare(`SELECT COUNT(*) AS count FROM ${pathTableName}`).get() as
+    | { count?: number | bigint }
+    | undefined;
+  const shouldRebuildText = readCount(textRows) === 0;
+  const shouldRebuildPath = readCount(pathRows) === 0;
+  if (!shouldRebuildText && !shouldRebuildPath) {
+    return;
+  }
+
+  const chunks = db
+    .prepare(
+      `SELECT id, path, source, model, start_line, end_line, text\n` +
+        `  FROM ${MEMORY_INDEX_CHUNKS_TABLE}\n` +
+        ` ORDER BY rowid ASC`,
+    )
+    .all() as Array<{
+    id: string;
+    path: string;
+    source: string;
+    model: string;
+    start_line: number;
+    end_line: number;
+    text: string;
+  }>;
+  const insertText = db.prepare(
+    `INSERT INTO ${textTableName} (text, id, path, source, model, start_line, end_line)\n` +
+      ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertPath = db.prepare(
+    `INSERT INTO ${pathTableName} (path_text, text, id, path, source, model, start_line, end_line)\n` +
+      ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const chunk of chunks) {
+    if (shouldRebuildText) {
+      insertText.run(
+        chunk.text,
+        chunk.id,
+        chunk.path,
+        chunk.source,
+        chunk.model,
+        chunk.start_line,
+        chunk.end_line,
+      );
+    }
+    if (shouldRebuildPath) {
+      insertPath.run(
+        chunk.path,
+        chunk.text,
+        chunk.id,
+        chunk.path,
+        chunk.source,
+        chunk.model,
+        chunk.start_line,
+        chunk.end_line,
+      );
+    }
+  }
+}
+
+function readCount(row: { count?: number | bigint } | undefined): number {
+  if (typeof row?.count === "bigint") {
+    return Number(row.count);
+  }
+  if (typeof row?.count === "number") {
+    return row.count;
+  }
+  return 0;
 }

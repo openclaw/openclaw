@@ -5,14 +5,17 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 export function deleteMemoryFtsRows(params: {
   db: DatabaseSync;
   tableName?: string;
+  tableNames?: string[];
   path: string;
   source: MemorySource;
   currentModel?: string;
 }): void {
-  const tableName = params.tableName ?? "memory_index_chunks_fts";
+  const tableNames = params.tableNames ?? [params.tableName ?? "memory_index_chunks_fts"];
   // Lexical search is model-agnostic, so refreshed/deleted files must not
   // leave old-model FTS rows behind for the same path/source.
-  params.db
-    .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ?`)
-    .run(params.path, params.source);
+  for (const tableName of tableNames) {
+    params.db
+      .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ?`)
+      .run(params.path, params.source);
+  }
 }

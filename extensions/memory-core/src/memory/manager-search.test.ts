@@ -22,6 +22,8 @@ function insertKeywordFixture(
     model: string;
     startLine: number;
     endLine: number;
+    ftsText?: string;
+    pathText?: string;
   },
 ): void {
   db.prepare(
@@ -41,6 +43,18 @@ function insertKeywordFixture(
   db.prepare(
     "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
+    params.ftsText ?? params.text,
+    params.id,
+    params.path,
+    params.source,
+    params.model,
+    params.startLine,
+    params.endLine,
+  );
+  db.prepare(
+    "INSERT INTO chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    params.pathText ?? params.path,
     params.text,
     params.id,
     params.path,
@@ -334,6 +348,197 @@ describe("searchKeyword FTS MATCH fallback", () => {
       db.close();
     }
   });
+
+  itWithFts("keeps body BM25 ranking stable when paths are indexed separately", async () => {
+    const db = createFtsDb();
+    try {
+      const longPath = `memory/${Array.from({ length: 50 }, (_, index) => `segment${index}`).join(
+        "/",
+      )}/body-source.md`;
+      insertKeywordFixture(db, {
+        text: "alpha alpha alpha alpha",
+        ftsText: "alpha alpha alpha alpha",
+        id: "body-strong-long-path",
+        path: longPath,
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 3,
+      });
+      insertKeywordFixture(db, {
+        text: "alpha",
+        ftsText: "alpha",
+        id: "body-weak-short-path",
+        path: "memory/a.md",
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 1,
+      });
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "alpha",
+        ftsTokenizer: "unicode61",
+        limit: 10,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((row) => row.id)).toEqual([
+        "body-strong-long-path",
+        "body-weak-short-path",
+      ]);
+      expect(results[0]?.textScore).toBeGreaterThan(results[1]?.textScore ?? 0);
+    } finally {
+      db.close();
+    }
+  });
+
+  itWithFts("matches filename tokens from the separate FTS path column", async () => {
+    const db = createFtsDb();
+    try {
+      insertKeywordFixture(db, {
+        text: "OAuth token notes and Google testing mode details",
+        id: "target-memory",
+        path: "memory/2026-06-17-1649.md",
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 36,
+      });
+      insertKeywordFixture(db, {
+        text: "Calendar task todoist recurring details",
+        id: "nearby-memory",
+        path: "memory/2026-06-17-1701.md",
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 27,
+      });
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "2026-06-17-1649",
+        ftsTokenizer: "unicode61",
+        limit: 3,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target-memory"]);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  itWithFts(
+    "rebuilds legacy FTS tables so existing chunks become filename-searchable",
+    async () => {
+      const db = new DatabaseSync(":memory:");
+      try {
+        db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE chunks_fts USING fts5(
+          text,
+          id UNINDEXED,
+          path UNINDEXED,
+          source UNINDEXED,
+          model UNINDEXED,
+          start_line UNINDEXED,
+          end_line UNINDEXED
+        );
+      `);
+        db.prepare(
+          "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          "target-memory",
+          "memory/2026-06-17-1649.md",
+          "memory",
+          1,
+          36,
+          "target-memory:hash",
+          "mock-embed",
+          "OAuth token notes and Google testing mode details",
+          JSON.stringify([0]),
+          Date.now(),
+        );
+        db.prepare(
+          "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          "OAuth token notes and Google testing mode details",
+          "target-memory",
+          "memory/2026-06-17-1649.md",
+          "memory",
+          "mock-embed",
+          1,
+          36,
+        );
+
+        const result = ensureMemoryIndexSchema({
+          db,
+          embeddingCacheTable: "embedding_cache",
+          cacheEnabled: false,
+          ftsTable: "chunks_fts",
+          ftsEnabled: true,
+        });
+        if (!result.ftsAvailable) {
+          throw new Error(result.ftsError ?? "FTS unavailable");
+        }
+
+        const textColumns = db.prepare("PRAGMA table_info(chunks_fts)").all() as Array<{
+          name: string;
+        }>;
+        expect(textColumns.map((column) => column.name)).not.toContain("path_text");
+        const pathColumns = db.prepare("PRAGMA table_info(chunks_fts_path)").all() as Array<{
+          name: string;
+        }>;
+        expect(pathColumns.map((column) => column.name)).toContain("path_text");
+
+        const results = await searchKeyword({
+          db,
+          ftsTable: "chunks_fts",
+          query: "2026-06-17-1649",
+          ftsTokenizer: "unicode61",
+          limit: 3,
+          snippetMaxChars: 200,
+          sourceFilter: { sql: "", params: [] },
+          buildFtsQuery,
+          bm25RankToScore,
+        });
+
+        expect(results.map((row) => row.id)).toEqual(["target-memory"]);
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   itWithFts("applies source filter in LIKE fallback", async () => {
     const db = createFtsDb();

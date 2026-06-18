@@ -597,6 +597,25 @@ describe("memory index", () => {
     }
   });
 
+  it("searches memory filename date tokens after indexing", async () => {
+    await fs.writeFile(
+      path.join(memoryDir, "2026-06-17-1649.md"),
+      "# Log\nOAuth token notes and Google testing mode details.",
+    );
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-filename-token.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+      const results = await manager.search("2026-06-17-1649", { maxResults: 3 });
+      expect(results.map((row) => row.path)).toContain("memory/2026-06-17-1649.md");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
     const stateDir = path.join(workspaceDir, "managed-memory-state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

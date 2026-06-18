@@ -348,11 +348,21 @@ export async function searchKeyword(params: {
 
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
-  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
-  const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
-  const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
+  const pathFtsTable = `${params.ftsTable}_path`;
+  const buildLiveChunkClause = (tableName: string) =>
+    ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${tableName}.id)`;
+  const substringClause = plan.substringTerms
+    .map(() => " AND (text LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')")
+    .join("");
+  const pathSubstringClause = plan.substringTerms
+    .map(() => " AND (text LIKE ? ESCAPE '\\' OR path_text LIKE ? ESCAPE '\\')")
+    .join("");
+  const substringParams = plan.substringTerms.flatMap((term) => {
+    const pattern = `%${escapeLikePattern(term)}%`;
+    return [pattern, pattern];
+  });
 
-  let rows: Array<{
+  type KeywordRow = {
     id: string;
     path: string;
     source: SearchSource;
@@ -360,7 +370,9 @@ export async function searchKeyword(params: {
     end_line: number;
     text: string;
     rank: number;
-  }>;
+  };
+
+  let rows: KeywordRow[];
   let usedMatch = false;
 
   if (plan.matchQuery) {
@@ -370,7 +382,7 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       bm25(${params.ftsTable}) AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${buildLiveChunkClause(params.ftsTable)}${params.sourceFilter.sql}\n` +
             ` ORDER BY rank ASC\n` +
             ` LIMIT ?`,
         )
@@ -379,7 +391,30 @@ export async function searchKeyword(params: {
           ...substringParams,
           ...params.sourceFilter.params,
           params.limit,
-        ) as typeof rows;
+        ) as KeywordRow[];
+      const seen = new Set(rows.map((row) => row.id));
+      const pathRows = params.db
+        .prepare(
+          `SELECT id, path, source, start_line, end_line, text,\n` +
+            `       bm25(${pathFtsTable}) AS rank\n` +
+            `  FROM ${pathFtsTable}\n` +
+            ` WHERE ${pathFtsTable} MATCH ?${pathSubstringClause}${buildLiveChunkClause(pathFtsTable)}${params.sourceFilter.sql}\n` +
+            ` ORDER BY rank ASC\n` +
+            ` LIMIT ?`,
+        )
+        .all(
+          plan.matchQuery,
+          ...substringParams,
+          ...params.sourceFilter.params,
+          params.limit,
+        ) as KeywordRow[];
+      for (const row of pathRows) {
+        if (!seen.has(row.id)) {
+          rows.push(row);
+          seen.add(row.id);
+        }
+      }
+      rows = rows.slice(0, params.limit);
       usedMatch = true;
     } catch (matchErr) {
       // FTS5 MATCH can fail on certain token patterns depending on the
@@ -389,17 +424,42 @@ export async function searchKeyword(params: {
       console.warn(`memory search: FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`);
       const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
       const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
-      const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
-      const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
+      const fallbackLikeClause = allTerms
+        .map(() => " AND (text LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')")
+        .join("");
+      const fallbackPathLikeClause = allTerms
+        .map(() => " AND (text LIKE ? ESCAPE '\\' OR path_text LIKE ? ESCAPE '\\')")
+        .join("");
+      const fallbackLikeParams = allTerms.flatMap((term) => {
+        const pattern = `%${escapeLikePattern(term)}%`;
+        return [pattern, pattern];
+      });
       rows = params.db
         .prepare(
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${buildLiveChunkClause(params.ftsTable)}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
-        .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as typeof rows;
+        .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
+      const seen = new Set(rows.map((row) => row.id));
+      const pathRows = params.db
+        .prepare(
+          `SELECT id, path, source, start_line, end_line, text,\n` +
+            `       0 AS rank\n` +
+            `  FROM ${pathFtsTable}\n` +
+            ` WHERE 1=1${fallbackPathLikeClause}${buildLiveChunkClause(pathFtsTable)}${params.sourceFilter.sql}\n` +
+            ` LIMIT ?`,
+        )
+        .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
+      for (const row of pathRows) {
+        if (!seen.has(row.id)) {
+          rows.push(row);
+          seen.add(row.id);
+        }
+      }
+      rows = rows.slice(0, params.limit);
     }
   } else {
     rows = params.db
@@ -407,10 +467,27 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       0 AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE 1=1${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` WHERE 1=1${substringClause}${buildLiveChunkClause(params.ftsTable)}${params.sourceFilter.sql}\n` +
           ` LIMIT ?`,
       )
-      .all(...substringParams, ...params.sourceFilter.params, params.limit) as typeof rows;
+      .all(...substringParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
+    const seen = new Set(rows.map((row) => row.id));
+    const pathRows = params.db
+      .prepare(
+        `SELECT id, path, source, start_line, end_line, text,\n` +
+          `       0 AS rank\n` +
+          `  FROM ${pathFtsTable}\n` +
+          ` WHERE 1=1${pathSubstringClause}${buildLiveChunkClause(pathFtsTable)}${params.sourceFilter.sql}\n` +
+          ` LIMIT ?`,
+      )
+      .all(...substringParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
+    for (const row of pathRows) {
+      if (!seen.has(row.id)) {
+        rows.push(row);
+        seen.add(row.id);
+      }
+    }
+    rows = rows.slice(0, params.limit);
   }
 
   return rows.map((row) => {

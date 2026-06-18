@@ -147,6 +147,7 @@ const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
+const FTS_PATH_TABLE = `${MEMORY_INDEX_FTS_TABLE}_path`;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
@@ -1783,7 +1784,10 @@ export abstract class MemoryManagerSyncOps {
         : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        ? [
+            this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`),
+            this.db.prepare(`DELETE FROM ${FTS_PATH_TABLE} WHERE path = ? AND source = ?`),
+          ]
         : null;
 
     const files = await listMemoryFiles(
@@ -1835,9 +1839,11 @@ export abstract class MemoryManagerSyncOps {
         }
         deleteChunksByPathAndSource.run(stale.path, "memory");
         if (deleteFtsRowsByPathAndSource) {
-          try {
-            deleteFtsRowsByPathAndSource.run(stale.path, "memory");
-          } catch {}
+          for (const deleteFtsRows of deleteFtsRowsByPathAndSource) {
+            try {
+              deleteFtsRows.run(stale.path, "memory");
+            } catch {}
+          }
         }
       }
     };
@@ -1913,7 +1919,10 @@ export abstract class MemoryManagerSyncOps {
         : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        ? [
+            this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`),
+            this.db.prepare(`DELETE FROM ${FTS_PATH_TABLE} WHERE path = ? AND source = ?`),
+          ]
         : null;
 
     const targetSessionFiles = params.needsFullReindex
@@ -1974,9 +1983,11 @@ export abstract class MemoryManagerSyncOps {
           }
           deleteChunksByPathAndSource.run(stale.path, "sessions");
           if (deleteFtsRowsByPathAndSource) {
-            try {
-              deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
-            } catch {}
+            for (const deleteFtsRows of deleteFtsRowsByPathAndSource) {
+              try {
+                deleteFtsRows.run(stale.path, "sessions");
+              } catch {}
+            }
           }
         } finally {
           await yieldAfterStaleSessionRow();
