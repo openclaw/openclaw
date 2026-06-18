@@ -87,7 +87,7 @@ export async function runIssueFixAgentCommand(params: WorkflowParams): Promise<v
       transitionIssueFixAgentRun(store, created.runId, "claimed_local", {
         reason: "execute enabled",
       });
-      out("Execution stopped before branch creation in this first implementation slice.");
+      out("Execution stopped before push/PR. Branch and patch automation are not enabled yet.");
     } finally {
       store.close();
     }

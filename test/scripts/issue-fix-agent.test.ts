@@ -15,6 +15,10 @@ import {
 import type { CommandRunner } from "../../scripts/issue-fix-agent-lib/command-runner.ts";
 import { fetchOpenIssueCandidates } from "../../scripts/issue-fix-agent-lib/github.ts";
 import {
+  renderIssueFixAgentPrBody,
+  renderIssueFixAgentPrTitle,
+} from "../../scripts/issue-fix-agent-lib/pr.ts";
+import {
   appendIssueFixAgentEvent,
   createIssueFixAgentRun,
   getLatestOpenIssueFixAgentRun,
@@ -255,5 +259,38 @@ describe("issue-fix-agent workflow", () => {
       statePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-status-")), "state.sqlite"),
     });
     expect(output.join("\n")).toContain("No active issue-fix-agent run.");
+  });
+
+  it("execute mode stops before push and PR creation", async () => {
+    const output: string[] = [];
+    await runIssueFixAgentCommand({
+      args: { command: "run", execute: true, pushPr: false, yes: false },
+      out: (line) => output.push(line),
+      runCommand: async () => ({ code: 0, stderr: "", stdout: gitcrawlIssueStdout() }),
+      statePath: path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-execute-")),
+        "state.sqlite",
+      ),
+    });
+
+    expect(output.join("\n")).toContain("Execution stopped before push/PR");
+  });
+});
+
+describe("issue-fix-agent pr rendering", () => {
+  it("renders a draft PR title and body with verification evidence", () => {
+    expect(renderIssueFixAgentPrTitle({ issueNumber: 12345, scope: "status" })).toBe(
+      "fix(status): address issue #12345",
+    );
+    const body = renderIssueFixAgentPrBody({
+      issueNumber: 12345,
+      issueUrl: "https://github.com/openclaw/openclaw/issues/12345",
+      runId: "ifr_1",
+      touchedFiles: ["src/commands/status.ts", "src/commands/status.test.ts"],
+      verification: ["node scripts/run-vitest.mjs src/commands/status.test.ts"],
+    });
+    expect(body).toContain("Closes: https://github.com/openclaw/openclaw/issues/12345");
+    expect(body).toContain("Automation run: `ifr_1`");
+    expect(body).toContain("node scripts/run-vitest.mjs src/commands/status.test.ts");
   });
 });
