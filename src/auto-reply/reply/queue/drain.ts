@@ -24,6 +24,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { clearRestoredPendingDrainKey, persistFollowupQueues } from "./persist.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -44,6 +45,13 @@ export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  // Plain callback registration. Do NOT sweep restoredPendingDrainKeys here:
+  // enqueueFollowupRun calls this during an active turn (passing
+  // restartIfIdle=false from agent-runner.ts), and scheduling a drain at that
+  // point would race the active turn it should wait behind. The pending-restore
+  // sweep lives in kickFollowupDrainIfIdle, which enqueue only calls once it
+  // has confirmed `restartIfIdle && !queue.draining` — the same active-run
+  // idle guard the rest of the drain pipeline uses.
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
 }
 
@@ -51,13 +59,31 @@ export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
 
-/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+/**
+ * Restart the drain for `key` if it is currently idle, using the stored callback.
+ * Also clears `key` from the pending-restore set — restored items for this
+ * specific route are now scheduled to drain via the same idle-aware path.
+ *
+ * The sweep is intentionally limited to the current key: `kickFollowupDrainIfIdle`
+ * only has the active-run/idle guarantee for the route the caller passed in.
+ * Other restored routes whose callbacks were registered during their own active
+ * turns must wait for their own enqueue idle-kick — draining them from here
+ * would reintroduce the concurrent/out-of-order delivery race.
+ */
 export function kickFollowupDrainIfIdle(key: string): void {
+  clearRestoredPendingDrainKey(key);
   const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
   if (!cb) {
     return;
   }
   scheduleFollowupDrain(key, cb);
+}
+
+function persistDrainAcknowledgement(): void {
+  // A successful followup run means the message has been handed to the
+  // dispatcher. Persist the shortened queue immediately so a crash before the
+  // drain finally block cannot replay an already-delivered prompt.
+  persistFollowupQueues();
 }
 
 type OriginRoutingMetadata = Pick<
@@ -299,6 +325,10 @@ function collectRuntimeMetadata(
   };
 }
 
+function collectSummaryRuntimeMetadata(items: FollowupRun[]): FollowupRuntimeMetadata {
+  return collectRuntimeMetadata(items, items.length === 1 ? items[0] : undefined);
+}
+
 type FollowupQueueSummaryState = {
   dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
@@ -329,6 +359,70 @@ function completeFollowupQueueSummarySources(queue: { summarySources?: FollowupR
   }
   if (queue.summarySources) {
     queue.summarySources = [];
+  }
+}
+
+function previewRestorableQueueSummaryPrompt(params: {
+  state: {
+    dropPolicy: "summarize" | "old" | "new";
+    droppedCount: number;
+    summaryLines: string[];
+  };
+  noun: string;
+}): { prompt?: string; restore?: () => void } {
+  const snapshot = {
+    droppedCount: params.state.droppedCount,
+    summaryLines: [...params.state.summaryLines],
+  };
+  const prompt = previewQueueSummaryPrompt(params);
+  if (!prompt) {
+    return {};
+  }
+  return {
+    prompt,
+    restore: () => {
+      const currentLines = params.state.summaryLines;
+      const hasSnapshotPrefix =
+        params.state.droppedCount >= snapshot.droppedCount &&
+        snapshot.summaryLines.every((line, index) => currentLines[index] === line);
+      if (hasSnapshotPrefix) {
+        return;
+      }
+      params.state.droppedCount =
+        params.state.droppedCount >= snapshot.droppedCount
+          ? params.state.droppedCount
+          : params.state.droppedCount + snapshot.droppedCount;
+      params.state.summaryLines = [...snapshot.summaryLines, ...currentLines];
+    },
+  };
+}
+
+async function runWithSummarySourceCleanup(
+  queue: { summarySources?: FollowupRun[] },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    if (!isFollowupRunDeferredError(err)) {
+      completeFollowupQueueSummarySources(queue);
+    }
+    throw err;
+  }
+  completeFollowupQueueSummarySources(queue);
+}
+
+async function runWithDeferredSummaryRestore<T>(
+  restore: (() => void) | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (isFollowupRunDeferredError(err)) {
+      restore?.();
+    }
+    throw err;
   }
 }
 
@@ -697,6 +791,13 @@ export function scheduleFollowupDrain(
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         const droppedBeforeDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedBeforeDebounce > 0) {
+          // dropAbortedFollowups splices items out of the queue. If the gateway
+          // exits between that splice and the next persist call, the state file
+          // would still contain the aborted items and abortSignal is not
+          // serialized — so restart would replay items the source already canceled.
+          persistDrainAcknowledgement();
+        }
         if (droppedBeforeDebounce > 0 && queue.items.length === 0) {
           clearFollowupQueueSummaryState(queue);
         }
@@ -705,6 +806,9 @@ export function scheduleFollowupDrain(
         }
         await waitForQueueDebounce(queue);
         const droppedAfterDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedAfterDebounce > 0) {
+          persistDrainAcknowledgement();
+        }
         if (droppedAfterDebounce > 0 && queue.items.length === 0) {
           clearFollowupQueueSummaryState(queue);
         }
@@ -741,18 +845,65 @@ export function scheduleFollowupDrain(
             run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
+            const summaryOnly = previewRestorableQueueSummaryPrompt({
+              state: queue,
+              noun: "message",
+            });
+            const summaryOnlyPrompt = summaryOnly.prompt;
+            const run = queue.lastRun;
+            if (summaryOnlyPrompt && run) {
+              await runWithDeferredSummaryRestore(summaryOnly.restore, async () => {
+                await runWithSummarySourceCleanup(queue, async () => {
+                  await effectiveRunFollowup({
+                    prompt: summaryOnlyPrompt,
+                    run,
+                    enqueuedAt: Date.now(),
+                    ...collectSummaryRuntimeMetadata([]),
+                    ...collectQueuedImages(queue.items),
+                  });
+                });
+              });
+              clearFollowupQueueSummaryState(queue);
+              persistDrainAcknowledgement();
+              continue;
+            }
+            summaryOnly.restore?.();
             break;
           }
           if (collectDrainResult === "drained") {
+            persistDrainAcknowledgement();
             continue;
           }
 
           const items = queue.items.slice();
+          const summaryResult = previewRestorableQueueSummaryPrompt({
+            state: queue,
+            noun: "message",
+          });
+          const summary = summaryResult.prompt;
           const contextGroups = splitCollectItemsByDeliveryContext(items);
           if (contextGroups.length === 0) {
+            const run = queue.lastRun;
+            if (!summary || !run) {
+              summaryResult.restore?.();
+              break;
+            }
+            await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
+              await runWithSummarySourceCleanup(queue, async () => {
+                await effectiveRunFollowup({
+                  prompt: summary,
+                  run,
+                  enqueuedAt: Date.now(),
+                  ...collectSummaryRuntimeMetadata([]),
+                });
+              });
+            });
+            clearFollowupQueueSummaryState(queue);
+            persistDrainAcknowledgement();
             break;
           }
 
+          let pendingSummary = summary;
           for (const groupItems of contextGroups) {
             const groupSource = groupItems.at(-1);
             const run = groupSource?.run ?? queue.lastRun;
@@ -764,6 +915,7 @@ export function scheduleFollowupDrain(
             const prompt = buildCollectPrompt({
               title: "[Queued messages while agent was busy]",
               items: groupItems,
+              summary: pendingSummary,
               renderItem: renderCollectItem,
             });
             const drainGroup = async () => {
@@ -779,15 +931,64 @@ export function scheduleFollowupDrain(
                 ...collectQueuedImages(groupItems),
               });
             };
-            await drainGroup();
+            if (pendingSummary) {
+              await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
+                await runWithSummarySourceCleanup(queue, drainGroup);
+              });
+            } else {
+              await drainGroup();
+            }
             removeQueuedItemsByRef(queue.items, groupItems);
+            if (pendingSummary) {
+              clearFollowupQueueSummaryState(queue);
+              pendingSummary = undefined;
+            }
+            persistDrainAcknowledgement();
           }
+          continue;
+        }
+
+        const summaryResult = previewRestorableQueueSummaryPrompt({
+          state: queue,
+          noun: "message",
+        });
+        const summaryPrompt = summaryResult.prompt;
+        if (summaryPrompt) {
+          const run = queue.lastRun;
+          if (!run) {
+            summaryResult.restore?.();
+            break;
+          }
+          if (
+            !(await runWithDeferredSummaryRestore(summaryResult.restore, async () =>
+              drainNextQueueItem(queue.items, async (item) => {
+                await runWithSummarySourceCleanup(queue, async () => {
+                  await effectiveRunFollowup({
+                    prompt: summaryPrompt,
+                    run,
+                    enqueuedAt: Date.now(),
+                    originatingChannel: item.originatingChannel,
+                    originatingTo: item.originatingTo,
+                    originatingAccountId: item.originatingAccountId,
+                    originatingThreadId: item.originatingThreadId,
+                    ...collectSummaryRuntimeMetadata([item]),
+                    ...collectQueuedImages([item]),
+                  });
+                });
+              }),
+            ))
+          ) {
+            break;
+          }
+          clearFollowupQueueSummaryState(queue);
+          persistDrainAcknowledgement();
           continue;
         }
 
         if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
           break;
         }
+        persistDrainAcknowledgement();
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
@@ -809,7 +1010,9 @@ export function scheduleFollowupDrain(
           FOLLOWUP_QUEUES.delete(key);
           clearFollowupDrainCallback(key);
         }
+        persistFollowupQueues();
       } else {
+        persistFollowupQueues();
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }

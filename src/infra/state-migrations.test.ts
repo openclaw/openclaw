@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { loadFollowupQueueEntries, replaceFollowupQueueEntries } from "./followup-queue-sqlite.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
 vi.mock("../channels/plugins/bundled.js", () => {
@@ -399,6 +400,159 @@ describe("state migrations", () => {
     ]);
     await expectMissingPath(path.join(stateDir, "delivery-queue"));
     await expectMissingPath(path.join(stateDir, "session-delivery-queue"));
+  });
+
+  it("detects legacy followup queue JSON sidecars", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "live-chat-followup-queues.json"),
+      JSON.stringify({ version: 1, entries: [] }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.followupQueueSidecar.hasLegacy).toBe(true);
+    expect(detected.followupQueueSidecar.sourcePath).toBe(
+      path.join(stateDir, "live-chat-followup-queues.json"),
+    );
+  });
+
+  it("migrates legacy followup queue JSON sidecars into shared SQLite state", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const queueKey = "agent:main:dm:migration-test";
+    const legacyPath = path.join(stateDir, "live-chat-followup-queues.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: 100,
+        entries: [
+          [
+            queueKey,
+            {
+              items: [
+                {
+                  prompt: "doctor migrated prompt",
+                  enqueuedAt: 100,
+                  originatingChannel: "telegram",
+                  originatingTo: "999",
+                  run: {
+                    agentId: "main",
+                    sessionId: "sess-migrate",
+                    sessionKey: queueKey,
+                    provider: "anthropic",
+                    model: "claude",
+                  },
+                },
+              ],
+              mode: "steer",
+              lastEnqueuedAt: 100,
+              droppedCount: 0,
+              summaryLines: [],
+            },
+          ],
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.followupQueueSidecar.hasLegacy).toBe(true);
+
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 followup queue entry → shared SQLite state");
+    await expectMissingPath(legacyPath);
+
+    const entries = loadFollowupQueueEntries(stateDir);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.[0]).toBe(queueKey);
+    const queueData = entries[0]?.[1] as {
+      items?: Array<{ prompt?: string; originatingChannel?: string }>;
+    };
+    expect(queueData.items?.[0]?.prompt).toBe("doctor migrated prompt");
+    expect(queueData.items?.[0]?.originatingChannel).toBe("telegram");
+  });
+
+  it("removes empty legacy followup queue JSON sidecars without importing rows", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const legacyPath = path.join(stateDir, "live-chat-followup-queues.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(legacyPath, JSON.stringify({ version: 1, entries: [] }), "utf8");
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.changes).toContain(`Removed empty followup queue sidecar ${legacyPath}`);
+    await expectMissingPath(legacyPath);
+    expect(loadFollowupQueueEntries(stateDir)).toEqual([]);
+  });
+
+  it("keeps legacy followup queue JSON when shared SQLite already has conflicting data", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const queueKey = "agent:main:dm:conflict";
+    const legacyPath = path.join(stateDir, "live-chat-followup-queues.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    replaceFollowupQueueEntries({
+      stateDir,
+      entries: [
+        [
+          queueKey,
+          {
+            items: [{ prompt: "already in sqlite", enqueuedAt: 1, run: { agentId: "main" } }],
+            mode: "steer",
+            lastEnqueuedAt: 1,
+            droppedCount: 0,
+            summaryLines: [],
+          },
+        ],
+      ],
+    });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          [
+            queueKey,
+            {
+              items: [{ prompt: "stale json prompt", enqueuedAt: 2, run: { agentId: "main" } }],
+              mode: "steer",
+              lastEnqueuedAt: 2,
+              droppedCount: 0,
+              summaryLines: [],
+            },
+          ],
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toContain(
+      "Left followup queue sidecar in place because 1 entry already existed in shared state with different data: agent:main:dm:conflict",
+    );
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("stale json prompt");
+    const entries = loadFollowupQueueEntries(stateDir);
+    expect(entries).toHaveLength(1);
+    const sqliteQueue = entries[0][1] as { items?: Array<{ prompt?: string }> };
+    expect(sqliteQueue.items?.[0]?.prompt).toBe("already in sqlite");
   });
 
   it("keeps legacy delivery queue files when shared SQLite already has a conflicting row", async () => {

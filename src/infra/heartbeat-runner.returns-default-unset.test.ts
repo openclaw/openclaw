@@ -1443,7 +1443,9 @@ describe("runHeartbeatOnce", () => {
   async function runHeartbeatFileScenario(params: {
     fileState: HeartbeatFileState;
     reason?: "interval" | "wake";
+    wakeSource?: "hook" | "followup-queue-restore";
     queueCronEvent?: boolean;
+    queueRestoreEvent?: boolean;
     replyText?: string;
   }) {
     const tmpDir = await createCaseDir("openclaw-hb");
@@ -1531,6 +1533,12 @@ describe("runHeartbeatOnce", () => {
         contextKey: "cron:qmd-maintenance",
       });
     }
+    if (params.queueRestoreEvent) {
+      enqueueSystemEvent(
+        "Restored 1 pending followup message after gateway restart; they will drain on the next agent turn for this route.",
+        { sessionKey },
+      );
+    }
 
     const replySpy = vi.fn();
     replySpy.mockResolvedValue({ text: params.replyText ?? "Checked logs and PRs" });
@@ -1541,12 +1549,20 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
-      ...(params.reason === "wake"
-        ? { source: "hook" as const, intent: "immediate" as const }
-        : params.reason === "interval"
-          ? { source: "interval" as const, intent: "scheduled" as const }
-          : {}),
-      reason: params.reason,
+      ...(params.wakeSource === "followup-queue-restore"
+        ? {
+            source: "followup-queue-restore" as const,
+            intent: "immediate" as const,
+            reason: "restored-followup-queue",
+          }
+        : params.reason === "wake" || params.wakeSource === "hook"
+          ? { source: "hook" as const, intent: "immediate" as const }
+          : params.reason === "interval"
+            ? { source: "interval" as const, intent: "scheduled" as const }
+            : {}),
+      reason:
+        params.reason ??
+        (params.wakeSource === "followup-queue-restore" ? "restored-followup-queue" : undefined),
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
     return { res, replySpy, sendWhatsApp, workspaceDir };
@@ -1722,7 +1738,9 @@ tasks:
       name: string;
       fileState: HeartbeatFileState;
       reason?: "interval" | "wake";
+      wakeSource?: "hook" | "followup-queue-restore";
       queueCronEvent?: boolean;
+      queueRestoreEvent?: boolean;
       expectedStatus: "ran" | "skipped";
       expectedSkipReason?: "empty-heartbeat-file";
       expectedSendCalls: number;
@@ -1762,6 +1780,26 @@ tasks:
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
         replyText: "wake event processed",
+      },
+      {
+        name: "empty file + followup-queue-restore runs",
+        fileState: "empty",
+        wakeSource: "followup-queue-restore",
+        queueRestoreEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "restored followup processed",
+      },
+      {
+        name: "legacy comment-only + followup-queue-restore runs",
+        fileState: "legacy-comment-only",
+        wakeSource: "followup-queue-restore",
+        queueRestoreEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "restored followup processed",
       },
       {
         name: "empty file + queued cron interval runs",

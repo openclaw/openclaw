@@ -2,34 +2,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
+import { persistFollowupQueues, restoreFollowupQueues } from "./persist.js";
 import {
   completeFollowupRunLifecycle,
+  type FollowupQueueState,
   type FollowupRun,
   type QueueDropPolicy,
-  type QueueMode,
   type QueueSettings,
 } from "./types.js";
-
-export type FollowupQueueState = {
-  items: FollowupRun[];
-  draining: boolean;
-  lastEnqueuedAt: number;
-  mode: QueueMode;
-  debounceMs: number;
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-  droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
-  summaryElisions: Array<{
-    contextKey: string;
-    count: number;
-    source: FollowupRun;
-    sourceRefs: WeakSet<FollowupRun>;
-  }>;
-  evictedSummaryCount: number;
-  lastRun?: FollowupRun["run"];
-};
+export type { FollowupQueueState };
 
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
@@ -48,10 +29,22 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   if (!cleaned) {
     return undefined;
   }
-  return FOLLOWUP_QUEUES.get(cleaned);
+  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  if (!queue) {
+    return undefined;
+  }
+  ensureFollowupQueueSummaryState(queue);
+  return queue;
+}
+
+function ensureFollowupQueueSummaryState(queue: FollowupQueueState): void {
+  queue.summarySources ??= [];
+  queue.summaryElisions ??= [];
+  queue.evictedSummaryCount ??= 0;
 }
 
 function trimSummaryElisionsToCap(queue: FollowupQueueState): void {
+  ensureFollowupQueueSummaryState(queue);
   while (queue.summaryElisions.length > queue.cap) {
     const evicted = queue.summaryElisions.shift();
     if (!evicted) {
@@ -65,6 +58,7 @@ function trimSummaryElisionsToCap(queue: FollowupQueueState): void {
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
+    ensureFollowupQueueSummaryState(existing);
     applyQueueRuntimeSettings({
       target: existing,
       settings,
@@ -107,6 +101,7 @@ export function clearFollowupQueue(key: string): number {
   if (!queue) {
     return 0;
   }
+  ensureFollowupQueueSummaryState(queue);
   const cleared = queue.items.length + queue.droppedCount;
   for (const item of queue.items) {
     completeFollowupRunLifecycle(item);
@@ -126,6 +121,7 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
+  persistFollowupQueues();
   return cleared;
 }
 
@@ -208,4 +204,7 @@ export function refreshQueuedFollowupSession(params: {
   for (const entry of queue.summaryElisions) {
     rewriteRun(entry.source.run);
   }
+  persistFollowupQueues();
 }
+
+restoreFollowupQueues();

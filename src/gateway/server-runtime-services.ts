@@ -5,6 +5,7 @@ import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import { scheduleRestoredFollowupQueueRecovery } from "./server-followup-queue-recovery.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
   createNoopHeartbeatRunner,
@@ -174,6 +175,12 @@ function recoverPendingSessionDeliveries(params: {
   timer.unref?.();
 }
 
+function recoverRestoredFollowupQueues(params: { log: GatewayRuntimeServiceLogger }): void {
+  scheduleRestoredFollowupQueueRecovery({
+    log: params.log.child("followup-queue-recovery"),
+  });
+}
+
 function startGatewayModelPricingRefreshOnDemand(params: {
   config: OpenClawConfig;
   pluginLookUpTable?: PluginMetadataRegistryView;
@@ -242,6 +249,7 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
+  recoverRestoredFollowupQueues({ log: params.log });
   const stopModelPricingRefresh = !isVitestRuntimeEnv()
     ? startGatewayModelPricingRefreshOnDemand({
         config: params.cfgAtStart,

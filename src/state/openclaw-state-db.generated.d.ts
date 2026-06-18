@@ -490,6 +490,12 @@ export interface FlowRuns {
   wait_json: string | null;
 }
 
+export interface FollowupQueueEntries {
+  queue_json: string;
+  queue_key: string;
+  updated_at: number;
+}
+
 export interface GatewayRestartHandoff {
   created_at: number;
   expires_at: number;
@@ -974,6 +980,7 @@ export interface DB {
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
+  followup_queue_entries: FollowupQueueEntries;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;

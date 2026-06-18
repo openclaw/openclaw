@@ -61,6 +61,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { loadFollowupQueueEntries, replaceFollowupQueueEntries } from "./followup-queue-sqlite.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import {
@@ -133,6 +134,10 @@ export type LegacyStateDetection = {
   execApprovals: {
     sourcePath: string;
     targetPath: string;
+    hasLegacy: boolean;
+  };
+  followupQueueSidecar: {
+    sourcePath: string;
     hasLegacy: boolean;
   };
   preview: string[];
@@ -281,6 +286,12 @@ function detectLegacyExecApprovalsMigration(params: {
       fileExists(sourcePath) &&
       !fileExists(targetPath),
   };
+}
+
+const LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME = "live-chat-followup-queues.json";
+
+function resolveLegacyFollowupQueueStatePath(stateDir: string): string {
+  return path.join(stateDir, LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME);
 }
 
 function readLegacyPluginStateSidecarRows(sourcePath: string): LegacyPluginStateSidecarRow[] {
@@ -1483,6 +1494,107 @@ async function migrateLegacyDeliveryQueues(params: {
     }
     removeLegacyDeliveryQueueDir({ queueDir, label: queue.label, changes, warnings });
   }
+  return { changes, warnings };
+}
+
+async function migrateLegacyFollowupQueueSidecar(params: {
+  stateDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const sourcePath = resolveLegacyFollowupQueueStatePath(params.stateDir);
+  if (!fileExists(sourcePath)) {
+    return { changes, warnings };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
+  } catch (err) {
+    warnings.push(`Failed reading followup queue sidecar ${sourcePath}: ${String(err)}`);
+    return { changes, warnings };
+  }
+
+  const entriesRaw = (parsed as { entries?: unknown })?.entries;
+  if (!Array.isArray(entriesRaw)) {
+    warnings.push(`Skipped malformed followup queue sidecar ${sourcePath}`);
+    return { changes, warnings };
+  }
+
+  const jsonEntries = new Map<string, unknown>();
+  for (const entry of entriesRaw) {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      continue;
+    }
+    const key = typeof entry[0] === "string" ? entry[0] : undefined;
+    if (!key) {
+      continue;
+    }
+    jsonEntries.set(key, entry[1]);
+  }
+
+  if (jsonEntries.size === 0) {
+    try {
+      fs.rmSync(sourcePath, { force: true });
+      changes.push(`Removed empty followup queue sidecar ${sourcePath}`);
+    } catch (err) {
+      warnings.push(`Failed removing empty followup queue sidecar ${sourcePath}: ${String(err)}`);
+    }
+    return { changes, warnings };
+  }
+
+  let existingEntries: Array<[string, unknown]>;
+  try {
+    existingEntries = loadFollowupQueueEntries(params.stateDir);
+  } catch (err) {
+    warnings.push(`Failed reading shared SQLite followup queue state: ${String(err)}`);
+    return { changes, warnings };
+  }
+
+  const existingMap = new Map(existingEntries);
+  const conflicts: string[] = [];
+  const mergedEntries: Array<[string, unknown]> = [...existingEntries];
+  let imported = 0;
+
+  for (const [key, queueData] of jsonEntries) {
+    const existing = existingMap.get(key);
+    if (existing !== undefined) {
+      if (JSON.stringify(existing) !== JSON.stringify(queueData)) {
+        conflicts.push(key);
+      }
+      continue;
+    }
+    mergedEntries.push([key, queueData]);
+    imported++;
+  }
+
+  if (conflicts.length > 0) {
+    warnings.push(
+      `Left followup queue sidecar in place because ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} already existed in shared state with different data: ${conflicts[0]}`,
+    );
+    return { changes, warnings };
+  }
+
+  try {
+    replaceFollowupQueueEntries({ entries: mergedEntries, stateDir: params.stateDir });
+  } catch (err) {
+    warnings.push(`Failed migrating followup queue sidecar ${sourcePath}: ${String(err)}`);
+    return { changes, warnings };
+  }
+
+  try {
+    fs.rmSync(sourcePath, { force: true });
+    if (imported > 0) {
+      changes.push(
+        `Migrated ${imported} followup queue ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
+      );
+    } else {
+      changes.push(`Removed superseded followup queue sidecar ${sourcePath}`);
+    }
+  } catch (err) {
+    warnings.push(`Migrated followup queues but failed removing ${sourcePath}: ${String(err)}`);
+  }
+
   return { changes, warnings };
 }
 
@@ -2904,6 +3016,8 @@ export async function detectLegacyStateMigrations(params: {
     listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.outboundPath).length > 0 ||
     listLegacyDeliveryQueueFiles(deliveryQueuePaths.sessionPath).length > 0 ||
     listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.sessionPath).length > 0;
+  const followupQueueSidecarPath = resolveLegacyFollowupQueueStatePath(stateDir);
+  const hasFollowupQueueSidecar = fileExists(followupQueueSidecarPath);
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
@@ -2963,6 +3077,9 @@ export async function detectLegacyStateMigrations(params: {
   if (execApprovals.hasLegacy) {
     preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
   }
+  if (hasFollowupQueueSidecar) {
+    preview.push(`- Followup queue sidecar: ${followupQueueSidecarPath} → shared SQLite state`);
+  }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
   }
@@ -3019,6 +3136,10 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasDeliveryQueues,
     },
     execApprovals,
+    followupQueueSidecar: {
+      sourcePath: followupQueueSidecarPath,
+      hasLegacy: hasFollowupQueueSidecar,
+    },
     preview,
   };
 }
@@ -3533,6 +3654,9 @@ export async function runLegacyStateMigrations(params: {
     stateDir: detected.stateDir,
   });
   const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
+  const followupQueueSidecar = await migrateLegacyFollowupQueueSidecar({
+    stateDir: detected.stateDir,
+  });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -3562,6 +3686,7 @@ export async function runLegacyStateMigrations(params: {
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
       ...execApprovals.changes,
+      ...followupQueueSidecar.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
@@ -3576,6 +3701,7 @@ export async function runLegacyStateMigrations(params: {
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
       ...execApprovals.warnings,
+      ...followupQueueSidecar.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
@@ -3893,6 +4019,9 @@ export async function autoMigrateLegacyState(params: {
       stateDir: detected.stateDir,
     });
     const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
+    const followupQueueSidecar = await migrateLegacyFollowupQueueSidecar({
+      stateDir: detected.stateDir,
+    });
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
@@ -3910,6 +4039,7 @@ export async function autoMigrateLegacyState(params: {
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
       ...execApprovals.changes,
+      ...followupQueueSidecar.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
     ];
@@ -3923,6 +4053,7 @@ export async function autoMigrateLegacyState(params: {
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
       ...execApprovals.warnings,
+      ...followupQueueSidecar.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
@@ -3938,6 +4069,7 @@ export async function autoMigrateLegacyState(params: {
         taskStateSidecars.changes.length > 0 ||
         deliveryQueues.changes.length > 0 ||
         execApprovals.changes.length > 0 ||
+        followupQueueSidecar.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
       skipped: true,
@@ -3955,7 +4087,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.stateSchema.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy &&
-    !detected.execApprovals.hasLegacy
+    !detected.execApprovals.hasLegacy &&
+    !detected.followupQueueSidecar.hasLegacy
   ) {
     const changes = [
       ...stateDirResult.changes,
@@ -3996,6 +4129,9 @@ export async function autoMigrateLegacyState(params: {
     stateDir: detected.stateDir,
   });
   const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
+  const followupQueueSidecar = await migrateLegacyFollowupQueueSidecar({
+    stateDir: detected.stateDir,
+  });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -4025,6 +4161,7 @@ export async function autoMigrateLegacyState(params: {
     ...taskStateSidecars.changes,
     ...deliveryQueues.changes,
     ...execApprovals.changes,
+    ...followupQueueSidecar.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
     ...sessions.changes,
@@ -4042,6 +4179,7 @@ export async function autoMigrateLegacyState(params: {
     ...taskStateSidecars.warnings,
     ...deliveryQueues.warnings,
     ...execApprovals.warnings,
+    ...followupQueueSidecar.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
     ...sessions.warnings,

@@ -509,6 +509,7 @@ function resolveInfraShardName(file) {
     return "core-runtime-infra-provider-push";
   }
   if (
+    name.startsWith("followup-queue") ||
     name.startsWith("kysely") ||
     name.startsWith("session") ||
     name.startsWith("sqlite") ||
