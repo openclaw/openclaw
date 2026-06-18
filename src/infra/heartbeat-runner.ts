@@ -1849,38 +1849,6 @@ export async function runHeartbeatOnce(opts: {
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const responsePrefix = resolveHeartbeatResponsePrefix();
 
-    // When the response tool is expected but the model did not call it,
-    // treat the result as a silent heartbeat — the payload must not leak
-    // to the user-facing channel in message_tool_only mode.
-    // openclaw/openclaw#94053
-    if (usesHeartbeatResponseTool && !heartbeatToolResponse) {
-      await restoreHeartbeatUpdatedAt({
-        storePath,
-        sessionKey,
-        updatedAt: previousUpdatedAt,
-      });
-      const okSent = await maybeSendHeartbeatOk();
-      emitHeartbeatEvent({
-        status: "ok-token",
-        reason: opts.reason,
-        preview: replyPayload?.text?.slice(0, 200) ?? "",
-        durationMs: Date.now() - startedAt,
-        channel: delivery.channel !== "none" ? delivery.channel : void 0,
-        accountId: delivery.accountId,
-        silent: !okSent,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : void 0,
-      });
-      await markCommitmentsStatus({
-        cfg,
-        ids: dueCommitmentIds,
-        status: "dismissed",
-        nowMs: startedAt,
-      });
-      await updateTaskTimestamps();
-      consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
-    }
-
     if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -1926,6 +1894,38 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
+    // When the response tool was expected but the model did not call it,
+    // the payload must not leak to the user-facing channel.  Treat this
+    // as a silent heartbeat — same as the ok-empty path above.
+    // openclaw/openclaw#94053
+    if (usesHeartbeatResponseTool && !heartbeatToolResponse) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        preview: replyPayload?.text?.slice(0, 200) ?? "",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : void 0,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : void 0,
       });
       await markCommitmentsStatus({
         cfg,
