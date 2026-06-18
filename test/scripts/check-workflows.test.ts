@@ -149,4 +149,19 @@ describe("check-workflows", () => {
     expect(workflow).toContain('Write-Host "wsl_exec_exit=$($exec.Code)"');
     expect(workflow).not.toContain("wsl.exe --import UbuntuProbe");
   });
+
+  it("keeps the Windows probe CI shard opt-in and dependency-backed", () => {
+    const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
+
+    expect(workflow).toContain("run_windows_ci:");
+    expect(workflow).toContain('description: "Run the focused Windows-native CI test shard after probing"');
+    expect(workflow).toContain("default: false");
+    expect(workflow).toContain("if: ${{ inputs.run_windows_ci }}");
+    expect(workflow).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
+    expect(workflow).toContain("uses: ./.github/actions/setup-pnpm-store-cache");
+    expect(workflow).toContain("pnpm install --frozen-lockfile --prefer-offline");
+    expect(workflow).toContain("pnpm test:windows:ci");
+    expect(workflow).toContain("if: ${{ always() && !cancelled() }}");
+    expect(workflow).toContain("if: ${{ always() && !cancelled() && inputs.require_wsl2 }}");
+  });
 });

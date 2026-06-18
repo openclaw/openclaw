@@ -37,6 +37,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_windows_ci:
+        description: "Run the focused Windows-native CI test shard after probing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -168,7 +173,85 @@ jobs:
 
           exit 0
 
+      - name: Try to exclude workspace from Windows Defender (best-effort)
+        if: ${{ inputs.run_windows_ci }}
+        shell: pwsh
+        run: |
+          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+          if (-not $cmd) {
+            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+            exit 0
+          }
+
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            Write-Host "Defender exclusions applied."
+          } catch {
+            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+          }
+
+      - name: Setup Node.js
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          REQUESTED_NODE_VERSION: "22.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+      - name: Setup pnpm
+        if: ${{ inputs.run_windows_ci }}
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 22.x
+
+      - name: Runtime versions
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Capture node path
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        run: |
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          if command -v cygpath >/dev/null 2>&1; then
+            node_bin="$(cygpath -u "$node_bin")"
+          fi
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Run Windows CI tests
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          CI: true
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
+          OPENCLAW_VITEST_MAX_WORKERS: 1
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          pnpm test:windows:ci
+
       - name: Keep runner alive for SSH inspection
+        if: ${{ always() && !cancelled() }}
         env:
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
         run: |
@@ -185,7 +268,7 @@ jobs:
           }
 
       - name: Enforce WSL2 requirement
-        if: ${{ inputs.require_wsl2 }}
+        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
         run: |
           if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
             Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
