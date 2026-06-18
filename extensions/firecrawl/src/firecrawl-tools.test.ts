@@ -291,9 +291,32 @@ describe("firecrawl tools", () => {
       } as OpenClawConfig,
       url: "https://example.com/keyless-firecrawl",
       extractMode: "markdown",
+      access: "keyless",
     });
 
     expect(new Headers(capturedInit?.headers).has("Authorization")).toBe(false);
+  });
+
+  it("requires credentials for direct scrape requests", async () => {
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: "https://example.com/direct-scrape",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow("firecrawl_scrape needs a Firecrawl API key");
   });
 
   it("blocks private and non-http scrape targets before Firecrawl requests", () => {
@@ -505,6 +528,7 @@ describe("firecrawl tools", () => {
       cfg: { test: true },
       url: "https://docs.openclaw.ai",
       extractMode: "markdown",
+      access: "keyless",
       maxChars: 1500,
       proxy: "stealth",
       storeInCache: false,
@@ -529,6 +553,7 @@ describe("firecrawl tools", () => {
       cfg: { test: true },
       url: "https://docs.openclaw.ai",
       extractMode: "markdown",
+      access: "keyless",
       maxChars: 1500,
     });
     await expect(
