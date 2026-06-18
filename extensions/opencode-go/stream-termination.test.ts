@@ -18,7 +18,7 @@ interface FakeStreamController {
 function createFakeBaseStream(): {
   stream: StreamLike;
   controller: FakeStreamController;
-  getReturnCalls(): number;
+  getReturnCalls: () => number;
 } {
   const queued: IteratorResult<AnyEvent>[] = [];
   const waiters: ((result: IteratorResult<AnyEvent>) => void)[] = [];
@@ -80,6 +80,23 @@ function createFakeBaseStream(): {
   };
 
   return { stream, controller, getReturnCalls: () => returnCalls };
+}
+
+function disableAbortSignalAny(): PropertyDescriptor | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  Object.defineProperty(AbortSignal, "any", {
+    configurable: true,
+    value: undefined,
+  });
+  return descriptor;
+}
+
+function restoreAbortSignalAny(descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) {
+    Object.defineProperty(AbortSignal, "any", descriptor);
+  } else {
+    Reflect.deleteProperty(AbortSignal, "any");
+  }
 }
 
 describe("createOpencodeGoStalledStreamWrapper", () => {
@@ -189,8 +206,8 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     }
 
     const consumer = (async () => {
-      for await (const _event of downstream) {
-        // drain
+      for await (const event of downstream) {
+        void event;
       }
     })();
 
@@ -303,8 +320,8 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     }
 
     const consumer = (async () => {
-      for await (const _event of downstream) {
-        // drain
+      for await (const event of downstream) {
+        void event;
       }
     })();
 
@@ -379,7 +396,9 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
           abortCalled = true;
         });
       }
-      return new Promise<StreamLike>(() => undefined);
+      return new Promise<StreamLike>(() => {
+        // keep pending
+      });
     });
 
     const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
@@ -412,8 +431,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
   });
 
   it("aborts through the fallback combined signal when no first event arrives", async () => {
-    const originalAny = AbortSignal.any;
-    (AbortSignal as unknown as { any?: typeof AbortSignal.any }).any = undefined;
+    const abortSignalAnyDescriptor = disableAbortSignalAny();
     const { stream: baseStream } = createFakeBaseStream();
     let abortCalled = false;
 
@@ -445,8 +463,8 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       }
 
       const consumer = (async () => {
-        for await (const _event of downstream) {
-          // drain
+        for await (const event of downstream) {
+          void event;
         }
       })();
 
@@ -455,13 +473,12 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       expect(abortCalled).toBe(true);
       await consumer;
     } finally {
-      (AbortSignal as unknown as { any?: typeof AbortSignal.any }).any = originalAny;
+      restoreAbortSignalAny(abortSignalAnyDescriptor);
     }
   });
 
   it("cleans up fallback AbortSignal listeners after natural completion", async () => {
-    const originalAny = AbortSignal.any;
-    (AbortSignal as unknown as { any?: typeof AbortSignal.any }).any = undefined;
+    const abortSignalAnyDescriptor = disableAbortSignalAny();
     const sourceController = new AbortController();
     const addEventListener = vi.spyOn(sourceController.signal, "addEventListener");
     const removeEventListener = vi.spyOn(sourceController.signal, "removeEventListener");
@@ -505,7 +522,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
       expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
     } finally {
-      (AbortSignal as unknown as { any?: typeof AbortSignal.any }).any = originalAny;
+      restoreAbortSignalAny(abortSignalAnyDescriptor);
       addEventListener.mockRestore();
       removeEventListener.mockRestore();
     }
