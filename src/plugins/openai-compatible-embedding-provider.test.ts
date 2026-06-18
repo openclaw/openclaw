@@ -349,7 +349,7 @@ describe("openai-compatible generic embedding provider", () => {
         remote: { baseUrl: "https://llm.internal/v1" },
       }),
     );
-    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.hostnameAllowlist).toEqual(["llm.internal"]);
     expect(client.ssrfPolicy?.allowPrivateNetwork).toBe(true);
   });
 
@@ -370,8 +370,55 @@ describe("openai-compatible generic embedding provider", () => {
         remote: { baseUrl: "https://llm.internal/v1" },
       }),
     );
-    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.hostnameAllowlist).toEqual(["llm.internal"]);
     expect(client.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+  });
+
+  it("blocks configured provider private endpoints unless request.allowPrivateNetwork opts in", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-local",
+        config: {
+          models: {
+            providers: {
+              "configured-local": {
+                baseUrl: server.baseUrl,
+                models: [{ id: "text-embedding-bge-m3" }],
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("hello")).rejects.toThrow("Blocked");
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it("allows configured provider private endpoints when request.allowPrivateNetwork opts in", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-local",
+        config: {
+          models: {
+            providers: {
+              "configured-local": {
+                baseUrl: server.baseUrl,
+                models: [{ id: "text-embedding-bge-m3" }],
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests).toHaveLength(1);
   });
 
   it("resolves env-template API key strings before treating them as inline secrets", async () => {

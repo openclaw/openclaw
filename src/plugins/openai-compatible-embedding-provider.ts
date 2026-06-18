@@ -51,11 +51,25 @@ type ConfiguredEmbeddingProvider = {
  * so an operator-configured private endpoint is reachable without weakening the
  * SSRF-safe default for everyone else.
  */
+function ssrfPolicyFromHttpBaseUrlHostnameAllowlist(baseUrl: string): SsrFPolicy | undefined {
+  try {
+    const parsed = new URL(baseUrl.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { hostnameAllowlist: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
 function buildEmbeddingSsrfPolicy(
   baseUrl: string,
   configuredProvider: ConfiguredEmbeddingProvider | undefined,
 ): SsrFPolicy | undefined {
-  const base = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
+  const base = configuredProvider
+    ? ssrfPolicyFromHttpBaseUrlHostnameAllowlist(baseUrl)
+    : ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
   if (!base) {
     return base;
   }
