@@ -211,4 +211,77 @@ describe("memory manager FTS-only reindex", () => {
     );
     expect(memoryManager.status().provider).toBe("openai");
   });
+
+  it("rebuilds legacy FTS-only indexes that lack the path-prefixed text format (#94102)", async () => {
+    // Reproduce a clean pre-upgrade FTS-only index: build it once, then drop the
+    // ftsTextFormat marker and replace each FTS row with the legacy body-only payload.
+    // Without the identity gate the next non-forced sync would skip unchanged file
+    // hashes and leave filename/date queries broken; the gate must mark the index
+    // dirty so the rebuild restores path tokens in chunks_fts.text.
+    const filenameStem = "2026-06-17-1649";
+    const memoryFilePath = path.join(workspaceDir, "memory", `${filenameStem}.md`);
+    await fs.writeFile(
+      memoryFilePath,
+      "Legacy memory entry body that does not mention the date stem.",
+    );
+
+    let memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+    await memoryManager.sync({ force: true });
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    const downgradeDb = new DatabaseSync(indexPath);
+    try {
+      const metaRow = downgradeDb
+        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .get() as { value: string } | undefined;
+      const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
+      delete meta.ftsTextFormat;
+      downgradeDb
+        .prepare(`UPDATE meta SET value = ? WHERE key = 'memory_index_meta_v1'`)
+        .run(JSON.stringify(meta));
+      const ftsRows = downgradeDb.prepare(`SELECT id, text FROM chunks_fts`).all() as Array<{
+        id: string;
+        text: string;
+      }>;
+      const stripPrefix = downgradeDb.prepare(`UPDATE chunks_fts SET text = ? WHERE id = ?`);
+      const prefix = `memory/${filenameStem}.md\n`;
+      for (const row of ftsRows) {
+        const legacyText = row.text.startsWith(prefix) ? row.text.slice(prefix.length) : row.text;
+        stripPrefix.run(legacyText, row.id);
+      }
+    } finally {
+      downgradeDb.close();
+    }
+
+    await memoryManager.close();
+    manager = null;
+
+    memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+    expect(memoryManager.status().custom?.indexIdentity).toMatchObject({
+      status: "mismatched",
+    });
+
+    // Plain sync with reason "cli" (the path `openclaw memory search ...` takes) — the
+    // identity gate, not a force flag, must trigger the rebuild on upgrade.
+    await memoryManager.sync({ reason: "cli" });
+
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    const verifyDb = new DatabaseSync(indexPath);
+    try {
+      const metaRow = verifyDb
+        .prepare(`SELECT value FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .get() as { value: string } | undefined;
+      const meta = JSON.parse(metaRow?.value ?? "{}") as Record<string, unknown>;
+      expect(meta.ftsTextFormat).toBe("path-prefixed-v1");
+      // FTS5 unicode61 splits on hyphens; query each token individually to confirm
+      // the filename made it into chunks_fts.text after the rebuild.
+      const ftsHit = verifyDb
+        .prepare(`SELECT COUNT(*) AS c FROM chunks_fts WHERE chunks_fts MATCH ?`)
+        .get("1649") as { c: number } | undefined;
+      expect(ftsHit?.c ?? 0).toBeGreaterThan(0);
+    } finally {
+      verifyDb.close();
+    }
+  });
 });

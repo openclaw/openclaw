@@ -5,6 +5,13 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+// Stored FTS payload format identity. Bump when chunks_fts.text semantics change so
+// existing clean indexes from older builds get rebuilt instead of silently serving
+// stale rows. Current value: chunk text is prefixed with `${entry.path}\n` so filename/
+// date tokens participate in MATCH ranking; older indexes wrote chunk body only.
+export const MEMORY_FTS_TEXT_FORMAT_PATH_PREFIXED_V1 = "path-prefixed-v1";
+export const MEMORY_FTS_TEXT_FORMAT_CURRENT = MEMORY_FTS_TEXT_FORMAT_PATH_PREFIXED_V1;
+
 export type MemoryIndexMeta = {
   model: string;
   provider: string;
@@ -15,6 +22,7 @@ export type MemoryIndexMeta = {
   chunkOverlap: number;
   vectorDims?: number;
   ftsTokenizer?: string;
+  ftsTextFormat?: string;
 };
 
 export type MemoryIndexIdentityState =
@@ -137,6 +145,7 @@ export function isMemoryIndexIdentityDirty(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
+  ftsTextFormat?: string;
 }): boolean {
   return resolveMemoryIndexIdentityState(params).status !== "valid";
 }
@@ -154,6 +163,7 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
+  ftsTextFormat?: string;
 }): MemoryIndexIdentityState {
   const { meta } = params;
   if (!meta) {
@@ -219,6 +229,16 @@ export function resolveMemoryIndexIdentityState(params: {
     return {
       status: "mismatched",
       reason: "index FTS tokenizer changed",
+    };
+  }
+  // Old indexes wrote chunk body only into chunks_fts.text; the current format prefixes
+  // the path so filename/date tokens MATCH. Without rebuilding, filename queries on
+  // upgraded clean indexes would still return textScore: 0 — see issue #94102.
+  const expectedFtsTextFormat = params.ftsTextFormat ?? MEMORY_FTS_TEXT_FORMAT_CURRENT;
+  if ((meta.ftsTextFormat ?? "legacy-body-only") !== expectedFtsTextFormat) {
+    return {
+      status: "mismatched",
+      reason: "index FTS text format changed",
     };
   }
   return { status: "valid" };
