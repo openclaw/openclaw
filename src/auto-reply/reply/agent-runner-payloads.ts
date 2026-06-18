@@ -45,7 +45,7 @@ function hasNonEmptyStringArray(value: unknown): value is string[] {
 }
 
 function shouldMarkHeartbeatMessageToolDelivered(payload: ReplyPayload): boolean {
-  if (payload.isError || payload.isFallbackNotice) {
+  if (payload.isError || payload.isFallbackNotice || payload.isReasoning) {
     return false;
   }
   if (payload.interactive || payload.presentation || payload.channelData) {

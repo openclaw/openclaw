@@ -459,6 +459,29 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
   });
 
+  it("ignores reasoning payloads when marking heartbeat message-tool delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "reasoning notes", isReasoning: true }, { text: "fallback narration" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["message tool body"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", text: "message tool body" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]?.isReasoning).toBe(true);
+    expect(
+      getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute,
+    ).toBeUndefined();
+    expect(replyPayloads[1]?.text).toBe("fallback narration");
+    expect(getReplyPayloadMetadata(replyPayloads[1])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
   it("delivers distinct same-target replies when message tool target provider is generic", async () => {
     await expectSameTargetRepliesDelivered({ provider: "message", to: "ou_abc123" });
   });
