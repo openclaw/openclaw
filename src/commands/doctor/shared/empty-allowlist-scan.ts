@@ -66,7 +66,20 @@ export function scanEmptyAllowlistPolicyWarnings(
           shouldSkipGroupWarning ?? params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
-    if (params.extraWarningsForAccount) {
+    // Suppress plugin extra warnings for the top-level record when
+    // all enabled accounts have their own allowlists (issue #92684).
+    const skipExtras =
+      shouldSkipGroupWarning
+        ? shouldSkipGroupWarning({
+            account,
+            channelName,
+            dmPolicy,
+            effectiveAllowFrom,
+            parent,
+            prefix,
+          } as Parameters<NonNullable<typeof shouldSkipGroupWarning>>[0])
+        : false;
+    if (params.extraWarningsForAccount && !skipExtras) {
       warnings.push(
         ...params.extraWarningsForAccount({
           account,
@@ -90,17 +103,19 @@ export function scanEmptyAllowlistPolicyWarnings(
       continue;
     }
     const accounts = asObjectRecord(channelConfig.accounts);
-    // When the top-level groupAllowFrom is empty but every real account
+    // When the top-level groupAllowFrom is empty but every enabled account
     // has its own populated groupAllowFrom/allowFrom, the parent scope is
-    // never reached at runtime — suppress the false-positive warning
-    // (issue #92684).
-    const allAccountsHaveAllowlists =
-      accounts &&
-      Object.keys(accounts).length > 0 &&
-      Object.values(accounts).every((entry) => {
-        if (!entry || typeof entry !== "object" || isDisabledRecord(entry)) {
-          return true;
-        }
+    // never reached at runtime — suppress the false-positive warning and
+    // plugin extra warnings for the top-level record (issue #92684).
+    const enabledAccounts =
+      accounts
+        ? Object.values(accounts).filter(
+            (entry) => entry && typeof entry === "object" && !isDisabledRecord(entry),
+          )
+        : [];
+    const allEnabledAccountsHaveAllowlists =
+      enabledAccounts.length > 0 &&
+      enabledAccounts.every((entry) => {
         const rec = entry as DoctorAccountRecord;
         return (
           ((rec.groupAllowFrom as DoctorAllowFromList | undefined)?.length ?? 0) > 0 ||
@@ -108,7 +123,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         );
       });
     const skipForTopLevel =
-      allAccountsHaveAllowlists ? () => true : undefined;
+      allEnabledAccountsHaveAllowlists ? () => true : undefined;
 
     checkAccount(
       channelConfig,
