@@ -376,31 +376,31 @@ describe("recoverAllStaleChannelIngressClaims", () => {
     });
   });
 
-  it("preserves claims owned by the current process", async () => {
+  it("recovers stale claims owned by the current process PID", async () => {
     await withTempState(async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
       const queue = createChannelIngressQueue<{ text: string }>({
         channelId: "test",
-        accountId: "live",
+        accountId: "reused-pid",
         stateDir,
         now: () => 100,
       });
 
-      await queue.enqueue("live-event", { text: "active" });
-      // claim() defaults ownerId to process.pid, which is alive.
-      const claimed = await queue.claim("live-event");
-      expect(claimed).toBeTruthy();
+      await queue.enqueue("reused-pid-event", { text: "stuck" });
+      await queue.claim("reused-pid-event", { ownerId: `${process.pid}:old-instance` });
 
-      const recovered = await recoverAllStaleChannelIngressClaims({ env, now: () => 200 });
-      expect(recovered).toBe(0);
-
-      // Claim should still be held.
-      expect((await queue.listClaims()).map((r) => r.id)).toEqual(["live-event"]);
+      const recovered = await recoverAllStaleChannelIngressClaims({
+        env,
+        now: () => 200,
+        staleMs: 0,
+      });
+      expect(recovered).toBe(1);
+      expect((await queue.listPending()).map((r) => r.id)).toEqual(["reused-pid-event"]);
     });
   });
 
-  it("preserves live compound claim owners (Telegram spool `pid:uuid`)", async () => {
+  it("preserves live sibling compound claim owners (Telegram spool `pid:uuid`)", async () => {
     await withTempState(async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
@@ -412,9 +412,9 @@ describe("recoverAllStaleChannelIngressClaims", () => {
       });
 
       await queue.enqueue("spooled", { text: "active" });
-      // Telegram spool owners are `${process.pid}:${uuid}`; the live PID prefix
-      // must be parsed so the sweep does not release this active claim.
-      const claimed = await queue.claim("spooled", { ownerId: `${process.pid}:abc-123` });
+      // Telegram spool owners are `${pid}:${uuid}`. A live sibling PID must be
+      // preserved, while current-PID leftovers are recovered as PID reuse.
+      const claimed = await queue.claim("spooled", { ownerId: `${process.ppid}:abc-123` });
       expect(claimed).toBeTruthy();
 
       const recovered = await recoverAllStaleChannelIngressClaims({ env, now: () => 200 });
@@ -442,11 +442,11 @@ describe("recoverAllStaleChannelIngressClaims", () => {
       }
       // A live worker re-claims the same event (new claim_token + live owner)
       // before the sweep writes. Even though the re-claim is old enough to pass
-      // the staleMs age window, the live owner and the claim_token guard keep
+      // the staleMs age window, the sibling owner and the claim_token guard keep
       // the sweep from releasing this fresh claim into duplicate processing.
       await queue.release(stale);
       clock = 9999;
-      expect(await queue.claim("evt", { ownerId: `${process.pid}` })).toBeTruthy();
+      expect(await queue.claim("evt", { ownerId: `${process.ppid}` })).toBeTruthy();
 
       const recovered = await recoverAllStaleChannelIngressClaims({
         env,
@@ -505,6 +505,29 @@ describe("recoverAllStaleChannelIngressClaims", () => {
       });
       expect(recovered).toBe(1);
       expect((await queue.listPending()).map((r) => r.id)).toEqual(["orphan"]);
+    });
+  });
+
+  it("recovers claims with malformed PID owners", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        stateDir,
+        now: () => 100,
+      });
+
+      await queue.enqueue("malformed", { text: "bad-owner" });
+      await queue.claim("malformed", { ownerId: `${process.pid}abc` });
+
+      const recovered = await recoverAllStaleChannelIngressClaims({
+        env,
+        now: () => 200,
+        staleMs: 0,
+      });
+      expect(recovered).toBe(1);
+      expect((await queue.listPending()).map((r) => r.id)).toEqual(["malformed"]);
     });
   });
 
