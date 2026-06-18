@@ -408,34 +408,63 @@ export function renderStreamingGroup(
   `;
 }
 
-export function renderMessageGroup(
+type RenderMessageGroupOptions = {
+  onOpenSidebar?: (content: SidebarContent) => void;
+  sessionKey?: string;
+  agentId?: string;
+  showReasoning: boolean;
+  showToolCalls?: boolean;
+  autoExpandToolCalls?: boolean;
+  isToolMessageExpanded?: (messageId: string) => boolean | undefined;
+  onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
+  isToolExpanded?: (toolCardId: string) => boolean;
+  onToggleToolExpanded?: (toolCardId: string) => void;
+  onRequestUpdate?: () => void;
+  assistantName?: string;
+  assistantAvatar?: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
+  basePath?: string;
+  localMediaPreviewRoots?: readonly string[];
+  assistantAttachmentAuthToken?: string | null;
+  canvasPluginSurfaceUrl?: string | null;
+  embedSandboxMode?: EmbedSandboxMode;
+  allowExternalEmbedUrls?: boolean;
+  contextWindow?: number | null;
+  onDelete?: () => void;
+};
+
+type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
+
+function buildGroupedMessageRenderOptions(
   group: MessageGroup,
-  opts: {
-    onOpenSidebar?: (content: SidebarContent) => void;
-    sessionKey?: string;
-    agentId?: string;
-    showReasoning: boolean;
-    showToolCalls?: boolean;
-    autoExpandToolCalls?: boolean;
-    isToolMessageExpanded?: (messageId: string) => boolean | undefined;
-    onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
-    isToolExpanded?: (toolCardId: string) => boolean;
-    onToggleToolExpanded?: (toolCardId: string) => void;
-    onRequestUpdate?: () => void;
-    assistantName?: string;
-    assistantAvatar?: string | null;
-    userName?: string | null;
-    userAvatar?: string | null;
-    basePath?: string;
-    localMediaPreviewRoots?: readonly string[];
-    assistantAttachmentAuthToken?: string | null;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    contextWindow?: number | null;
-    onDelete?: () => void;
-  },
-) {
+  item: MessageGroup["messages"][number],
+  index: number,
+  opts: RenderMessageGroupOptions,
+): GroupedMessageRenderOptions {
+  return {
+    isStreaming: group.isStreaming && index === group.messages.length - 1,
+    sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
+    duplicateCount: item.duplicateCount ?? 1,
+    showReasoning: opts.showReasoning,
+    showToolCalls: opts.showToolCalls ?? true,
+    autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+    isToolMessageExpanded: opts.isToolMessageExpanded,
+    onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+    isToolExpanded: opts.isToolExpanded,
+    onToggleToolExpanded: opts.onToggleToolExpanded,
+    onRequestUpdate: opts.onRequestUpdate,
+    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+    basePath: opts.basePath,
+    localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+    embedSandboxMode: opts.embedSandboxMode,
+    allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+  };
+}
+
+export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
@@ -539,26 +568,7 @@ export function renderMessageGroup(
                       renderGroupedMessage(
                         item.message,
                         item.key,
-                        {
-                          isStreaming: group.isStreaming && index === group.messages.length - 1,
-                          sessionKey: opts.sessionKey,
-                          agentId: opts.agentId,
-                          duplicateCount: item.duplicateCount ?? 1,
-                          showReasoning: opts.showReasoning,
-                          showToolCalls: opts.showToolCalls ?? true,
-                          autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-                          isToolMessageExpanded: opts.isToolMessageExpanded,
-                          onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
-                          isToolExpanded: opts.isToolExpanded,
-                          onToggleToolExpanded: opts.onToggleToolExpanded,
-                          onRequestUpdate: opts.onRequestUpdate,
-                          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                          basePath: opts.basePath,
-                          localMediaPreviewRoots: opts.localMediaPreviewRoots,
-                          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-                          embedSandboxMode: opts.embedSandboxMode,
-                          allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-                        },
+                        buildGroupedMessageRenderOptions(group, item, index, opts),
                         opts.onOpenSidebar,
                       ),
                     )}
@@ -596,26 +606,7 @@ export function renderMessageGroup(
           renderGroupedMessage(
             item.message,
             item.key,
-            {
-              isStreaming: group.isStreaming && index === group.messages.length - 1,
-              sessionKey: opts.sessionKey,
-              agentId: opts.agentId,
-              duplicateCount: item.duplicateCount ?? 1,
-              showReasoning: opts.showReasoning,
-              showToolCalls: opts.showToolCalls ?? true,
-              autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-              isToolMessageExpanded: opts.isToolMessageExpanded,
-              onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
-              isToolExpanded: opts.isToolExpanded,
-              onToggleToolExpanded: opts.onToggleToolExpanded,
-              onRequestUpdate: opts.onRequestUpdate,
-              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-              basePath: opts.basePath,
-              localMediaPreviewRoots: opts.localMediaPreviewRoots,
-              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-              embedSandboxMode: opts.embedSandboxMode,
-              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-            },
+            buildGroupedMessageRenderOptions(group, item, index, opts),
             opts.onOpenSidebar,
           ),
         )}
