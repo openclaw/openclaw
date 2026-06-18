@@ -180,6 +180,38 @@ struct LowCoverageHelperTests {
             port: 18789, mode: .local) == true)
     }
 
+    @Test func `port guardian local mode accepts launchd node gateway`() {
+        // Homebrew Node + git checkout build
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/opt/homebrew/opt/node/bin/node /Users/test/openclaw/dist/index.js gateway --port 18789",
+            port: 18789, mode: .local) == true)
+
+        // Node + openclaw.mjs entrypoint
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/usr/local/bin/node /Users/test/openclaw.mjs gateway --port 18789",
+            port: 18789, mode: .local) == true)
+
+        // bun + openclaw directory path
+        #expect(PortGuardian._testIsExpected(
+            command: "bun",
+            fullCommand: "bun /home/user/openclaw/dist/index.js gateway --port 18789",
+            port: 18789, mode: .local) == true)
+
+        // Negative: node with gateway but no openclaw path
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "node /some/other/gateway.js --port 18789",
+            port: 18789, mode: .local) == false)
+
+        // Negative: node with openclaw path but no gateway subcommand
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/opt/homebrew/opt/node/bin/node /Users/test/openclaw/dist/index.js --help",
+            port: 18789, mode: .local) == false)
+    }
+
     @Test func `port guardian remote mode report accepts any listener`() {
         let dockerReport = PortGuardian._testBuildReport(
             port: 18789, mode: .remote,

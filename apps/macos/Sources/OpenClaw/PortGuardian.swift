@@ -384,6 +384,16 @@ actor PortGuardian {
             }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
+            // Recognize a launchd-managed Gateway where ps/lsof report the runtime
+            // (node/bun/tsx) but the full command line contains an OpenClaw
+            // entrypoint and the gateway subcommand.  Examples:
+            //   /opt/homebrew/opt/node/bin/node .../openclaw/dist/index.js gateway --port 18789
+            //   /usr/local/bin/node openclaw.mjs gateway --port 18789
+            if full.contains("gateway"),
+               full.contains("/openclaw/") || full.contains("openclaw/dist") || full.contains("openclaw.mjs")
+            {
+                return true
+            }
             return false
         case .unconfigured:
             return false
