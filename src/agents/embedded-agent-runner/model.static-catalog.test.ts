@@ -236,6 +236,36 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       env,
       workspaceDir: undefined,
     });
+  it("canonicalizes Azure manifest aliases without configured endpoints back to OpenAI", () => {
+    const plugin = {
+      id: "openai",
+      providers: ["openai"],
+      modelCatalog: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            models: [{ id: "gpt-5.5", name: "gpt-5.5" }],
+          },
+        },
+        aliases: {
+          "azure-openai-responses": {
+            provider: "openai",
+            api: "azure-openai-responses",
+          },
+        },
+        discovery: { openai: "runtime" },
+      },
+    };
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [plugin] });
+
+    expect(
+      canonicalizeManifestModelCatalogProviderAlias({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.5",
+        cfg: {},
+      }),
+    ).toBe("openai");
   });
 });
 
