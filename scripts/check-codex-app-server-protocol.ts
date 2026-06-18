@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 // Check Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -93,6 +94,7 @@ async function main(): Promise<void> {
 
   try {
     await compareGeneratedProtocolMirror(source.jsonRoot);
+    await checkMaintainedProtocolTypes(source.typescriptRoot);
 
     for (const check of checks) {
       const filePath = path.join(source.typescriptRoot, check.file);
@@ -127,6 +129,103 @@ async function main(): Promise<void> {
   console.log(
     `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
   );
+}
+
+async function checkMaintainedProtocolTypes(sourceRoot: string): Promise<void> {
+  // Turn responses are normalized into a uniform projector shape before their
+  // checked-in JSON schemas validate them. Probe only raw contracts consumed directly.
+  const probePath = path.join(sourceRoot, "openclaw-protocol-compatibility.ts");
+  const protocolPath = path.resolve(process.cwd(), "extensions/codex/src/app-server/protocol.ts");
+  const protocolImport = relativeTypeScriptImport(probePath, protocolPath);
+  const generatedImport = (file: string) =>
+    relativeTypeScriptImport(probePath, path.join(sourceRoot, file));
+  const probe = `
+import type {
+  CodexDynamicToolSpec,
+  CodexDynamicToolCallParams,
+  CodexErrorNotification,
+  CodexModelListResponse,
+  CodexThreadForkParams,
+  CodexThreadForkResponse,
+  CodexThreadResumeParams,
+  CodexThreadResumeResponse,
+  CodexThreadStartParams,
+  CodexThreadStartResponse,
+  CodexTurnEnvironmentParams,
+  CodexTurnInterruptParams,
+  CodexTurnStartParams,
+} from ${JSON.stringify(protocolImport)};
+import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
+import type { DynamicToolSpec } from ${JSON.stringify(generatedImport("v2/DynamicToolSpec.ts"))};
+import type { ErrorNotification } from ${JSON.stringify(generatedImport("v2/ErrorNotification.ts"))};
+import type { ModelListResponse } from ${JSON.stringify(generatedImport("v2/ModelListResponse.ts"))};
+import type { ThreadForkParams } from ${JSON.stringify(generatedImport("v2/ThreadForkParams.ts"))};
+import type { ThreadForkResponse } from ${JSON.stringify(generatedImport("v2/ThreadForkResponse.ts"))};
+import type { ThreadResumeParams } from ${JSON.stringify(generatedImport("v2/ThreadResumeParams.ts"))};
+import type { ThreadResumeResponse } from ${JSON.stringify(generatedImport("v2/ThreadResumeResponse.ts"))};
+import type { ThreadStartParams } from ${JSON.stringify(generatedImport("v2/ThreadStartParams.ts"))};
+import type { ThreadStartResponse } from ${JSON.stringify(generatedImport("v2/ThreadStartResponse.ts"))};
+import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/TurnEnvironmentParams.ts"))};
+import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
+import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
+
+type Assert<T extends true> = T;
+type Assignable<From, To> = [From] extends [To] ? true : false;
+
+type ProtocolCompatibilityChecks = [
+  Assert<Assignable<CodexDynamicToolSpec, DynamicToolSpec>>,
+  Assert<Assignable<CodexTurnEnvironmentParams, TurnEnvironmentParams>>,
+  Assert<Assignable<CodexThreadStartParams, ThreadStartParams>>,
+  Assert<Assignable<CodexThreadResumeParams, ThreadResumeParams>>,
+  Assert<Assignable<CodexThreadForkParams, ThreadForkParams>>,
+  Assert<Assignable<CodexTurnInterruptParams, TurnInterruptParams>>,
+  Assert<Assignable<CodexTurnStartParams, TurnStartParams>>,
+  Assert<
+    Assignable<
+      Omit<DynamicToolCallParams, "arguments">,
+      Omit<CodexDynamicToolCallParams, "arguments">
+    >
+  >,
+  Assert<Assignable<ErrorNotification, CodexErrorNotification>>,
+  Assert<Assignable<ModelListResponse, CodexModelListResponse>>,
+  Assert<Assignable<ThreadForkResponse, CodexThreadForkResponse>>,
+  Assert<Assignable<ThreadResumeResponse, CodexThreadResumeResponse>>,
+  Assert<Assignable<ThreadStartResponse, CodexThreadStartResponse>>,
+];
+
+export type { ProtocolCompatibilityChecks };
+`;
+  await fs.writeFile(probePath, probe);
+  const result = spawnSync(
+    process.execPath,
+    [
+      "scripts/run-tsgo.mjs",
+      "--ignoreConfig",
+      "--noEmit",
+      "--allowImportingTsExtensions",
+      "--strict",
+      "--skipLibCheck",
+      "--module",
+      "nodenext",
+      "--moduleResolution",
+      "nodenext",
+      probePath,
+    ],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  if (result.error) {
+    failures.push(`maintained protocol types: failed to start tsgo (${result.error.message})`);
+    return;
+  }
+  if (result.status !== 0) {
+    const output = `${result.stdout}${result.stderr}`.trim();
+    failures.push(`maintained protocol types differ from generated Codex types\n${output}`);
+  }
+}
+
+function relativeTypeScriptImport(fromFile: string, toFile: string): string {
+  const relative = path.relative(path.dirname(fromFile), toFile).replaceAll(path.sep, "/");
+  return relative.startsWith(".") ? relative : `./${relative}`;
 }
 
 async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<void> {

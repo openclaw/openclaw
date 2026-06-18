@@ -20,6 +20,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexPluginsPolicy,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
@@ -27,6 +28,20 @@ type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerR
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
 }
+
+describe("withMcpElicitationsApprovalPolicy", () => {
+  it("returns a complete granular policy for Codex", () => {
+    expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
+      granular: {
+        mcp_elicitations: true,
+        request_permissions: false,
+        rules: false,
+        sandbox_approval: false,
+        skill_approval: false,
+      },
+    });
+  });
+});
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
