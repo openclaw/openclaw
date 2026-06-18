@@ -424,6 +424,28 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
+  it("resolves npm-installed CLI backend commands to .cmd shims on Windows", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 4444,
+      argv: ["claude", "-p", "hello"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "claude.cmd -p hello",
+    ]);
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.options?.windowsHide).toBe(true);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
   it("wraps Linux child spawns and strips shell-init env", async () => {
     const originalBashEnv = process.env.BASH_ENV;
     const originalEnv = process.env.ENV;
