@@ -31,6 +31,7 @@ describe("delivery-queue policy", () => {
       "socket hang up",
       "rate limited",
       "500 Internal Server Error",
+      "message is too long",
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });
