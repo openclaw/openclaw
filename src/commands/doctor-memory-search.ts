@@ -433,6 +433,13 @@ function formatGatewayDreamingStatusNote(
     .join("\n");
 }
 
+function noteGatewayDreamingStatus(dreaming: MemorySearchHealthGatewayProbe["dreaming"]): void {
+  const dreamingMessage = formatGatewayDreamingStatusNote(dreaming);
+  if (dreamingMessage) {
+    note(dreamingMessage, "Memory dreaming");
+  }
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
@@ -454,10 +461,7 @@ export async function noteMemorySearchHealth(
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
-    const dreamingMessage = formatGatewayDreamingStatusNote(opts?.gatewayMemoryProbe?.dreaming);
-    if (dreamingMessage) {
-      note(dreamingMessage, "Memory dreaming");
-    }
+    noteGatewayDreamingStatus(opts?.gatewayMemoryProbe?.dreaming);
     return;
   }
   const provider =
@@ -471,10 +475,7 @@ export async function noteMemorySearchHealth(
       return;
     }
     note("No active memory plugin is registered for the current config.", "Memory search");
-    const dreamingMessage = formatGatewayDreamingStatusNote(opts?.gatewayMemoryProbe?.dreaming);
-    if (dreamingMessage) {
-      note(dreamingMessage, "Memory dreaming");
-    }
+    noteGatewayDreamingStatus(opts?.gatewayMemoryProbe?.dreaming);
     return;
   }
   if (backendConfig.backend === "qmd") {
