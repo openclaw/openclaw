@@ -169,7 +169,10 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
-    expect(loadBootstrapMock).toHaveBeenCalledWith(host, { applyIdentity: false });
+    expect(loadBootstrapMock).toHaveBeenCalledWith(host, {
+      applyIdentity: false,
+      skipWithoutAuthCandidate: true,
+    });
     expect(
       (host as typeof host & { controlUiBootstrapReady?: Promise<void> }).controlUiBootstrapReady,
     ).toBe(bootstrap);

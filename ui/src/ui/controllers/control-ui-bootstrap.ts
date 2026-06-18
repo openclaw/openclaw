@@ -112,7 +112,7 @@ function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
 
 export async function loadControlUiBootstrapConfig(
   state: ControlUiBootstrapState,
-  opts?: { applyIdentity?: boolean },
+  opts?: { applyIdentity?: boolean; skipWithoutAuthCandidate?: boolean },
 ) {
   if (typeof window === "undefined") {
     return;
@@ -130,6 +130,9 @@ export async function loadControlUiBootstrapConfig(
     const resolvedUrl = new URL(url, window.location.origin);
     const sameOrigin = resolvedUrl.origin === window.location.origin;
     const authCandidates = sameOrigin ? resolveControlUiAuthCandidates(state) : [];
+    if (opts?.skipWithoutAuthCandidate && sameOrigin && authCandidates.length === 0) {
+      return;
+    }
     // If credentials are available, try them in priority order; on 401/403
     // retry with the next candidate — recovers from a stale `settings.token`
     // when the live session is authenticated via `password` (or vice versa).
