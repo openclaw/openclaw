@@ -41,6 +41,7 @@ const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 let suiteTempMediaRootDir = "";
 let tempMediaDirCounter = 0;
 let sharedTempMediaCacheDir = "";
@@ -367,6 +368,20 @@ describe("applyMediaUnderstanding", () => {
     suiteTempMediaRootDir = "";
     sharedTempMediaCacheDir = "";
     tempMediaFileCache.clear();
+  });
+
+  it("uses SHA-256 content hashes for cached media fixtures", async () => {
+    const mediaPath = await createTempMediaFile({
+      fileName: "fixture.txt",
+      content: "cached fixture",
+    });
+    const cachedPath = await createTempMediaFile({
+      fileName: "fixture.txt",
+      content: "cached fixture",
+    });
+
+    expect(cachedPath).toBe(mediaPath);
+    expect(path.basename(path.dirname(mediaPath))).toMatch(SHA256_HEX_PATTERN);
   });
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
