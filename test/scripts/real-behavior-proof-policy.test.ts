@@ -2,14 +2,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
-  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  NEEDS_PR_CONTEXT_LABEL,
   PROOF_OVERRIDE_LABEL,
-  PROOF_SUPPLIED_LABEL,
   evaluateClawSweeperExactHeadProof,
-  evaluateRealBehaviorProof,
+  evaluatePullRequestContext,
   hasClawSweeperExactHeadProof,
   isMaintainerTeamMember,
-  labelsForRealBehaviorProof,
+  labelsForPullRequestContext,
   readBoundedGitHubApiJson,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
 
@@ -110,16 +109,16 @@ describe("real-behavior-proof-policy", () => {
       "\n",
     ),
   ])("passes external PRs with evidence: %s", (evidence) => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody(evidence)),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("passes CRLF-formatted external PRs with screenshot proof", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
           /\n/g,
@@ -129,11 +128,11 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("requires authored problem content instead of template comments", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
           "The gateway dropped the configured Discord channel during startup.",
@@ -147,7 +146,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("does not accept the untouched current template", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(blankTemplateBody),
     });
 
@@ -156,7 +155,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("does not accept sections hidden by an unclosed HTML comment", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(`<!--\n${proofBody("pnpm test passed.")}`),
     });
 
@@ -165,7 +164,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("accepts literal HTML comments inside fenced evidence", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         proofBody(["```html", "<!-- captured fragment", "<p>ready</p>", "```"].join("\n")),
       ),
@@ -175,7 +174,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("accepts nested Markdown headings inside Evidence", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         proofBody(["### Focused tests", "", "`pnpm test` passed."].join("\n")),
       ),
@@ -185,7 +184,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("rejects None as evidence", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("None")),
     });
 
@@ -194,7 +193,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("rejects Markdown separators as context and evidence", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("---", { problem: "***" })),
     });
 
@@ -203,7 +202,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("does not accept legacy fields hidden by HTML comments", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         [
           "## Real behavior proof",
@@ -221,7 +220,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("accepts legacy behavior fields while open PRs still use the old template", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         [
           "## Real behavior proof",
@@ -259,12 +258,12 @@ describe("real-behavior-proof-policy", () => {
         "```",
       ].join("\n"),
     );
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("uses the latest Evidence section when duplicates exist", () => {
@@ -280,12 +279,12 @@ describe("real-behavior-proof-policy", () => {
     );
     const testEvidence = proofBody("Focused tests passed: 2 files, 36 tests.");
 
-    const laterValid = evaluateRealBehaviorProof({
+    const laterValid = evaluatePullRequestContext({
       pullRequest: externalPr(
         [testEvidence, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
       ),
     });
-    const laterInvalid = evaluateRealBehaviorProof({
+    const laterInvalid = evaluatePullRequestContext({
       pullRequest: externalPr(
         [validProof, "## Evidence", "<!-- Add the most useful validation evidence. -->"].join(
           "\n\n",
@@ -294,7 +293,7 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(laterValid.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(laterValid)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(laterValid)).toEqual([]);
     expect(laterInvalid.status).toBe("missing");
     expect(laterInvalid.missingSections).toEqual(["Evidence"]);
   });
@@ -322,12 +321,12 @@ describe("real-behavior-proof-policy", () => {
       "- No live systemd cron schedule was tested.",
       "- No real Google provider request was sent.",
     ].join("\n");
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
@@ -356,49 +355,49 @@ describe("real-behavior-proof-policy", () => {
       "- No catalog refresh or provider model-list behavior is changed in this PR.",
       "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
     ].join("\n");
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("fails external PRs without required context and evidence", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),
     });
 
     expect(evaluation.status).toBe("missing");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
   it("fails external PRs that say the changed behavior was not tested", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("not tested")),
     });
 
     expect(evaluation.status).toBe("missing");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
   it("accepts focused test and CI evidence", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("pnpm test passed and CI is green.")),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("passes maintainer, bot, and override cases", () => {
+  it("skips maintainer and bot PRs but requires context from external PRs", () => {
     expect(
-      evaluateRealBehaviorProof({
+      evaluatePullRequestContext({
         pullRequest: externalPr("", { author_association: "MEMBER" }),
       }).status,
     ).toBe("skipped");
     expect(
-      evaluateRealBehaviorProof({
+      evaluatePullRequestContext({
         pullRequest: externalPr("", {
           user: {
             login: "renovate[bot]",
@@ -408,10 +407,10 @@ describe("real-behavior-proof-policy", () => {
       }).status,
     ).toBe("skipped");
     expect(
-      evaluateRealBehaviorProof({
+      evaluatePullRequestContext({
         pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
       }).status,
-    ).toBe("override");
+    ).toBe("missing");
   });
 
   it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {

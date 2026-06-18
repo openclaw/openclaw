@@ -1,19 +1,14 @@
 // Barnacle owns deterministic GitHub triage and auto-response behavior.
 
 import {
-  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
-  PROOF_OVERRIDE_LABEL,
+  NEEDS_PR_CONTEXT_LABEL,
   PROOF_SUFFICIENT_LABEL,
-  PROOF_SUPPLIED_LABEL,
-  evaluateRealBehaviorProof,
+  evaluatePullRequestContext,
   hasAuthoredPullRequestSection,
-  hasClawSweeperExactHeadProof,
-  labelsForRealBehaviorProof,
+  labelsForPullRequestContext,
 } from "./real-behavior-proof-policy.mjs";
 
 const activePrLimit = 20;
-// Clear labels emitted by the retired field-level proof policy during transition.
-const legacyMockOnlyProofLabel = "triage: mock-only-proof";
 
 const thirdPartyExtensionMessage =
   "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/clawhub";
@@ -158,21 +153,9 @@ export const managedLabelSpecs = {
     color: "C5DEF5",
     description: "Candidate: PR template appears mostly untouched.",
   },
-  [NEEDS_REAL_BEHAVIOR_PROOF_LABEL]: {
+  [NEEDS_PR_CONTEXT_LABEL]: {
     color: "C5DEF5",
     description: "Candidate: external PR body lacks required problem context or evidence.",
-  },
-  [PROOF_SUPPLIED_LABEL]: {
-    color: "C2E0C6",
-    description: "External PR includes problem context and evidence.",
-  },
-  [PROOF_SUFFICIENT_LABEL]: {
-    color: "0E8A16",
-    description: "ClawSweeper judged the PR evidence convincing.",
-  },
-  [PROOF_OVERRIDE_LABEL]: {
-    color: "C2E0C6",
-    description: "Maintainer override for the external PR context and evidence gate.",
   },
   "triage: dirty-candidate": {
     color: "C5DEF5",
@@ -194,7 +177,7 @@ export const candidateLabels = {
   docsDiscoverability: "triage: docs-discoverability",
   testOnlyNoBug: "triage: test-only-no-bug",
   refactorOnly: "triage: refactor-only",
-  needsRealBehaviorProof: NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  needsPrContext: NEEDS_PR_CONTEXT_LABEL,
   dirtyCandidate: "triage: dirty-candidate",
   riskyInfra: "triage: risky-infra",
   externalPluginCandidate: "triage: external-plugin-candidate",
@@ -237,17 +220,13 @@ const maintainerAuthorLabel = "maintainer";
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
-const structuralProofLabelValues = [
-  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
-  legacyMockOnlyProofLabel,
-  PROOF_SUPPLIED_LABEL,
-];
+const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
 const candidateActionRules = [
   {
-    label: candidateLabels.needsRealBehaviorProof,
+    label: candidateLabels.needsPrContext,
     close: true,
     message:
       "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
@@ -504,8 +483,8 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
   }
 
   labelsToAdd.push(
-    ...labelsForRealBehaviorProof(
-      evaluateRealBehaviorProof({
+    ...labelsForPullRequestContext(
+      evaluatePullRequestContext({
         pullRequest,
       }),
     ),
@@ -772,15 +751,6 @@ async function listPullRequestFiles(github, context, pullRequest) {
   });
 }
 
-async function listIssueComments(github, context, issueNumber) {
-  return github.paginate(github.rest.issues.listComments, {
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    issue_number: issueNumber,
-    per_page: 100,
-  });
-}
-
 async function addMissingLabels(github, context, core, issueNumber, labels, labelSet) {
   const missingLabels = labels.filter((label) => !labelSet.has(label));
   if (missingLabels.length === 0) {
@@ -802,90 +772,19 @@ function isClawSweeperOwnedLabel(label) {
   return label === "clawsweeper" || label.startsWith("clawsweeper:");
 }
 
-function isActiveClawSweeperWork(pullRequest, labelSet) {
-  const authorLogin = pullRequest.user?.login ?? "";
-  const headRef = pullRequest.head?.ref ?? "";
-  return (
-    /clawsweeper/i.test(authorLogin) ||
-    headRef.startsWith("clawsweeper/") ||
-    [...labelSet].some(isClawSweeperOwnedLabel)
-  );
-}
-
-function shouldRemoveProofSufficientLabel(
-  context,
-  pullRequest,
-  labelSet,
-  proofEvaluation,
-  hasExactHeadClawSweeperProof,
-) {
-  if (hasExactHeadClawSweeperProof) {
-    return false;
-  }
-  if (proofEvaluation.status === "override") {
-    return false;
-  }
-  if (isActiveClawSweeperWork(pullRequest, labelSet)) {
-    return false;
-  }
-  if (!["edited", "synchronize"].includes(context.payload.action)) {
-    return false;
-  }
-  if (proofEvaluation.status !== "passed") {
-    return true;
-  }
-  return true;
-}
-
-const negativeProofLabels = new Set([NEEDS_REAL_BEHAVIOR_PROOF_LABEL, legacyMockOnlyProofLabel]);
-
-function shouldPreserveClawSweeperProofJudgment(context, labelSet) {
-  return (
-    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
-    !["edited", "synchronize"].includes(context.payload.action)
-  );
-}
-
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
   const files = await listPullRequestFiles(github, context, pullRequest);
-  const hasExactHeadClawSweeperProof =
-    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
-    hasClawSweeperExactHeadProof({
-      pullRequest,
-      comments: await listIssueComments(github, context, pullRequest.number),
-    });
-  const proofEvaluation = evaluateRealBehaviorProof({
-    pullRequest: {
-      ...pullRequest,
-      labels: [...labelSet].map((name) => ({ name })),
-    },
-  });
-  const classifiedLabels = classifyPullRequestCandidateLabels(
+  const candidateLabelsToApply = classifyPullRequestCandidateLabels(
     {
       ...pullRequest,
       labels: [...labelSet].map((name) => ({ name })),
     },
     files,
   );
-  const candidateLabelsToApply = shouldPreserveClawSweeperProofJudgment(context, labelSet)
-    ? classifiedLabels.filter((label) => !negativeProofLabels.has(label))
-    : classifiedLabels;
-  const staleProofLabels = structuralProofLabelValues.filter(
+  const staleContextLabels = structuralContextLabelValues.filter(
     (label) => labelSet.has(label) && !candidateLabelsToApply.includes(label),
   );
-  if (
-    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
-    shouldRemoveProofSufficientLabel(
-      context,
-      pullRequest,
-      labelSet,
-      proofEvaluation,
-      hasExactHeadClawSweeperProof,
-    )
-  ) {
-    staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
-  }
-  await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
+  await removeLabels(github, context, pullRequest.number, staleContextLabels, labelSet);
   await addMissingLabels(
     github,
     context,

@@ -62,8 +62,6 @@ redacted log, or artifact link. The body provides intent and useful validation;
 reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
-Maintainers can apply `proof: override` only when the proof gate should not
-apply to that PR.
 
 ## Scope and routing
 

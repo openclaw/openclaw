@@ -1,11 +1,10 @@
 // Shared PR context and evidence policy for GitHub checks and label decisions.
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** Label that lets maintainers override PR context and evidence requirements. */
+/** ClawSweeper-owned labels that OpenClaw preserves but does not mutate. */
 export const PROOF_OVERRIDE_LABEL = "proof: override";
-export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
-export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
+export const NEEDS_PR_CONTEXT_LABEL = "triage: needs-pr-context";
 export const MAINTAINER_TEAM_SLUG = "maintainer";
 export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 export const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
@@ -167,14 +166,6 @@ function stripHtmlComments(text) {
   return maskHtmlComments(text);
 }
 
-function labelNames(labels) {
-  return new Set(
-    (labels ?? [])
-      .map((label) => (typeof label === "string" ? label : label?.name))
-      .filter((label) => typeof label === "string"),
-  );
-}
-
 function isAutomationUser(user = {}, fallbackLogin = "") {
   const login = user?.login ?? fallbackLogin;
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
@@ -191,10 +182,6 @@ export function isExternalPullRequest(pullRequest) {
     pullRequest.author_association ?? pullRequest.authorAssociation ?? "",
   ).toUpperCase();
   return !privilegedAuthorAssociations.has(authorAssociation);
-}
-
-export function hasProofOverride(labels) {
-  return labelNames(labels).has(PROOF_OVERRIDE_LABEL);
 }
 
 export async function isMaintainerTeamMember({
@@ -385,8 +372,8 @@ function result(status, reason, details = {}) {
   return {
     status,
     reason,
-    applies: ["passed", "missing", "insufficient", "override"].includes(status),
-    passed: ["passed", "skipped", "override", CLAWSWEEPER_PROOF_VERDICT_STATUS].includes(status),
+    applies: ["passed", "missing", "insufficient"].includes(status),
+    passed: ["passed", "skipped", CLAWSWEEPER_PROOF_VERDICT_STATUS].includes(status),
     ...details,
   };
 }
@@ -444,11 +431,7 @@ export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] }
   return result("insufficient", "No exact-head ClawSweeper proof verdict was found.");
 }
 
-export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
-  const currentLabels = labels ?? pullRequest?.labels ?? [];
-  if (hasProofOverride(currentLabels)) {
-    return result("override", `Maintainer override label ${PROOF_OVERRIDE_LABEL} is present.`);
-  }
+export function evaluatePullRequestContext({ pullRequest } = {}) {
   if (!isExternalPullRequest(pullRequest)) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
   }
@@ -480,12 +463,9 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   return result("passed", "External PR includes problem context and evidence.");
 }
 
-export function labelsForRealBehaviorProof(evaluation) {
-  if (evaluation.status === "passed") {
-    return [PROOF_SUPPLIED_LABEL];
-  }
+export function labelsForPullRequestContext(evaluation) {
   if (evaluation.status === "missing" || evaluation.status === "insufficient") {
-    return [NEEDS_REAL_BEHAVIOR_PROOF_LABEL];
+    return [NEEDS_PR_CONTEXT_LABEL];
   }
   return [];
 }
