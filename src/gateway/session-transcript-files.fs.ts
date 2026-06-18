@@ -17,6 +17,10 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../trajectory/paths.js";
 
 type ArchiveFileReason = SessionArchiveReason;
 type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
@@ -372,6 +376,33 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   return archived;
 }
 
+// Rename the trajectory runtime file and its pointer sidecar next to a reset
+// transcript into `.reset.<ts>` archives. A reset preserves the transcript as
+// `.jsonl.reset.<ts>`, but the sibling trajectory (assistant tool calls/results)
+// is otherwise lost — overwritten when the session file path is reused, or left
+// dangling and reclaimed as an orphan — which makes post-incident forensics on
+// outbound actions impossible (#90707). The shared `.reset.<ts>` suffix is what
+// the retention sweep keys on, so these archives ride the existing
+// reset-archive cleanup instead of growing unbounded. Best-effort: a missing or
+// locked sibling must not fail the transcript reset that already succeeded.
+function archiveResetTrajectorySiblings(transcriptPath: string, sessionId: string): void {
+  const ts = formatSessionArchiveTimestamp();
+  const siblings = [
+    resolveTrajectoryFilePath({ env: {}, sessionFile: transcriptPath, sessionId }),
+    resolveTrajectoryPointerFilePath(transcriptPath),
+  ];
+  for (const sibling of siblings) {
+    try {
+      if (fs.existsSync(sibling)) {
+        fs.renameSync(sibling, `${sibling}.reset.${ts}`);
+      }
+    } catch {
+      // Ignore: the transcript reset is the source of truth; a trajectory
+      // sibling that cannot be archived just falls back to prior behavior.
+    }
+  }
+}
+
 export function archiveSessionTranscripts(opts: {
   sessionId: string;
   storePath: string | undefined;
@@ -427,10 +458,13 @@ export function archiveSessionTranscriptsDetailed(opts: {
       continue;
     }
     try {
-      archived.push({
-        sourcePath: candidatePath,
-        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
-      });
+      const archivedPath = archiveFileOnDisk(candidatePath, opts.reason);
+      archived.push({ sourcePath: candidatePath, archivedPath });
+      // Only a reset preserves the transcript; a deleted/pruned session still
+      // hands its trajectory to the existing removal path, so keep that as-is.
+      if (opts.reason === "reset") {
+        archiveResetTrajectorySiblings(candidatePath, opts.sessionId);
+      }
     } catch (err) {
       opts.onArchiveError?.(err, candidatePath);
     }

@@ -134,6 +134,69 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
     }
   });
 
+  it("preserves the sibling trajectory and pointer on reset", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-trajectory-reset-"));
+    try {
+      const sessionId = "44444444-4444-4444-8444-444444444444";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      const trajectoryFile = path.join(tmpDir, `${sessionId}.trajectory.jsonl`);
+      const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+      fs.writeFileSync(trajectoryFile, '{"traceSchema":"openclaw-trajectory"}\n');
+      fs.writeFileSync(pointerFile, `{"runtimeFile":${JSON.stringify(trajectoryFile)}}\n`);
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      expect(archived).toHaveLength(1);
+      // The live trajectory artifacts are renamed, not deleted, so post-reset
+      // forensics can still read the assistant's tool calls/results (#90707).
+      expect(fs.existsSync(trajectoryFile)).toBe(false);
+      expect(fs.existsSync(pointerFile)).toBe(false);
+      const remaining = fs.readdirSync(tmpDir);
+      expect(remaining.some((name) => /\.trajectory\.jsonl\.reset\.\d/.test(name))).toBe(true);
+      expect(remaining.some((name) => /\.trajectory-path\.json\.reset\.\d/.test(name))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not archive trajectory siblings for a deleted session", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-trajectory-deleted-"));
+    try {
+      const sessionId = "55555555-5555-4555-8555-555555555555";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      const trajectoryFile = path.join(tmpDir, `${sessionId}.trajectory.jsonl`);
+      const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+      fs.writeFileSync(trajectoryFile, '{"traceSchema":"openclaw-trajectory"}\n');
+      fs.writeFileSync(pointerFile, `{"runtimeFile":${JSON.stringify(trajectoryFile)}}\n`);
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "deleted",
+      });
+
+      expect(archived).toHaveLength(1);
+      // A deleted/pruned session still owns the trajectory removal path, so the
+      // archive step must leave the live siblings untouched.
+      expect(fs.existsSync(trajectoryFile)).toBe(true);
+      expect(fs.existsSync(pointerFile)).toBe(true);
+      const remaining = fs.readdirSync(tmpDir);
+      expect(remaining.some((name) => /\.trajectory\.jsonl\.reset\./.test(name))).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces real chmod archive failures through onArchiveError", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) {
       return;
