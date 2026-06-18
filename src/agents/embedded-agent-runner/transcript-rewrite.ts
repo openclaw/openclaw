@@ -444,6 +444,9 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
     sessionLock = await acquireSessionWriteLock({
       sessionFile: target.sessionFile,
       ...resolveSessionWriteLockOptions(params.config),
+      // See allowReentrant note in tool-result-truncation.ts. Transcript
+      // rewrites can be invoked mid-attempt and must share the outer lock.
+      allowReentrant: true,
     });
     const state = await readTranscriptFileState(target.sessionFile);
     const result = rewriteTranscriptEntriesInState({
