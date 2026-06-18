@@ -4686,10 +4686,9 @@ describe("active wake failure fallback", () => {
           reason: "no_active_run",
         }) as EmbeddedAgentQueueMessageOutcome,
     );
-    const callGateway = createGatewayMock({
-      status: "error",
-      error: "session_file_locked",
-    });
+    const callGateway = vi.fn(async () => {
+      throw new Error("SessionWriteLockTimeoutError: session file locked");
+    }) as unknown as typeof runtimeCallGateway;
 
     testing.setDepsForTest({
       sendMessage,
@@ -4721,7 +4720,7 @@ describe("active wake failure fallback", () => {
       targetRequesterSessionKey: "agent:main:telegram:123456789",
       triggerMessage: "child done",
       steerMessage: "child done",
-      requesterIsSubagent: true,
+      requesterIsSubagent: false,
       expectsCompletionMessage: true,
       directIdempotencyKey: "wake-fail-test",
       requesterOrigin: {
@@ -4779,10 +4778,9 @@ describe("active wake failure fallback", () => {
           reason: "no_active_run",
         }) as EmbeddedAgentQueueMessageOutcome,
     );
-    const callGateway = createGatewayMock({
-      status: "error",
-      error: "session_file_locked",
-    });
+    const callGateway = vi.fn(async () => {
+      throw new Error("SessionWriteLockTimeoutError: session file locked");
+    }) as unknown as typeof runtimeCallGateway;
 
     testing.setDepsForTest({
       sendMessage,
@@ -4814,7 +4812,7 @@ describe("active wake failure fallback", () => {
       targetRequesterSessionKey: "agent:main:telegram:123456789",
       triggerMessage: "child done",
       steerMessage: "child done",
-      requesterIsSubagent: true,
+      requesterIsSubagent: false,
       expectsCompletionMessage: true,
       directIdempotencyKey: "locked-test",
       requesterOrigin: {
@@ -4865,10 +4863,9 @@ describe("active wake failure fallback", () => {
           reason: "no_active_run",
         }) as EmbeddedAgentQueueMessageOutcome,
     );
-    const callGateway = createGatewayMock({
-      status: "error",
-      error: "session_file_locked",
-    });
+    const callGateway = vi.fn(async () => {
+      throw new Error("SessionWriteLockTimeoutError: session file locked");
+    }) as unknown as typeof runtimeCallGateway;
 
     testing.setDepsForTest({
       sendMessage,
@@ -4901,7 +4898,7 @@ describe("active wake failure fallback", () => {
       targetRequesterSessionKey: "agent:main:telegram:123456789",
       triggerMessage: "child done",
       steerMessage: "child done",
-      requesterIsSubagent: true,
+      requesterIsSubagent: false,
       expectsCompletionMessage: true,
       directIdempotencyKey: "long-output-test",
       requesterOrigin: {
