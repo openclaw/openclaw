@@ -179,9 +179,17 @@ export type CodexTurnInterruptParams = JsonObject & {
   turnId: string;
 };
 
+export type CodexAdditionalContextKind = "untrusted" | "application";
+
+export type CodexAdditionalContextEntry = JsonObject & {
+  value: string;
+  kind: CodexAdditionalContextKind;
+};
+
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   input?: CodexUserInput[];
+  additionalContext?: Record<string, CodexAdditionalContextEntry> | null;
   cwd?: string;
   model?: string;
   approvalPolicy?: string | JsonObject;

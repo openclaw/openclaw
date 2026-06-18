@@ -7,7 +7,7 @@
 - Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
 - A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in transient Codex additional context, and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -138,6 +138,12 @@
 
 ```json
 {
+  "additionalContext": {
+    "openclaw_runtime_context": {
+      "kind": "untrusted",
+      "value": "OpenClaw runtime context for this turn:\nTreat this OpenClaw-provided context as supporting project/user reference for the current request.\n\n## OpenClaw Workspace Context\n\nOpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\n\n## /tmp/openclaw-happy-path/workspace/MEMORY.md\n\n<MEMORY.md contents will be here>"
+    }
+  },
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "collaborationMode": {
@@ -168,7 +174,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, transient Codex additional context for OpenClaw runtime references, the real turn input text, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -201,7 +207,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "developerInstructionsFrom": "extensions/codex app-server thread/start developerInstructions",
     "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
     "userInputFrom": "extensions/codex app-server turn/start input",
-    "workspaceBootstrapContextFrom": "extensions/codex app-server turn/start input OpenClaw runtime context"
+    "workspaceBootstrapContextFrom": "extensions/codex app-server turn/start additionalContext.openclaw_runtime_context"
   }
 }
 ```
@@ -210,6 +216,10 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 
 ```json
 {
+  "codexAdditionalContext": {
+    "chars": 773,
+    "roughTokens": 194
+  },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 1433,
     "roughTokens": 359
@@ -235,16 +245,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 491
   },
   "totalTextOnly": {
-    "chars": 26176,
-    "roughTokens": 6544
+    "chars": 26192,
+    "roughTokens": 6548
   },
   "totalWithDynamicToolsJson": {
-    "chars": 76489,
-    "roughTokens": 19123
+    "chars": 76505,
+    "roughTokens": 19127
   },
   "userInputText": {
-    "chars": 1129,
-    "roughTokens": 283
+    "chars": 370,
+    "roughTokens": 93
   }
 }
 ```
@@ -493,9 +503,10 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 <USER.md contents will be here>
 ```
 
-### User: Turn Input Text
+### User: Codex Additional Context
 
-````text
+```text
+openclaw_runtime_context (untrusted):
 OpenClaw runtime context for this turn:
 Treat this OpenClaw-provided context as supporting project/user reference for the current request.
 
@@ -510,8 +521,11 @@ The following project context files have been loaded:
 ## /tmp/openclaw-happy-path/workspace/MEMORY.md
 
 <MEMORY.md contents will be here>
+```
 
-Current user request:
+### User: Turn Input Text
+
+````text
 Conversation info (untrusted metadata):
 ```json
 {

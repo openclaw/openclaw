@@ -22,10 +22,10 @@ import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   buildCodexOpenClawPromptContext,
+  buildCodexOpenClawTurnPromptSubmission,
   buildCodexSystemPromptReport,
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
-  prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
@@ -120,6 +120,15 @@ function expectResumeRequest(
   for (const [key, value] of Object.entries(params)) {
     expect(requestParams?.[key]).toEqual(value);
   }
+}
+
+type TestCodexAdditionalContext = Record<string, { kind?: string; value?: string }>;
+
+function readTestAdditionalContextValue(
+  context: TestCodexAdditionalContext | undefined,
+  key: string,
+): string {
+  return context?.[key]?.value ?? "";
 }
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
@@ -273,7 +282,7 @@ async function buildCodexTurnContextForTest(
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
   });
-  const codexTurnPromptText = prependCodexOpenClawPromptContext(
+  const codexTurnSubmission = buildCodexOpenClawTurnPromptSubmission(
     params.prompt,
     openClawPromptContext,
   );
@@ -281,7 +290,8 @@ async function buildCodexTurnContextForTest(
     threadId: "thread-1",
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
-    promptText: codexTurnPromptText,
+    promptText: codexTurnSubmission.promptText,
+    additionalContext: codexTurnSubmission.additionalContext,
     turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
     memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
     heartbeatCollaborationInstructions:
@@ -300,6 +310,7 @@ async function buildCodexTurnContextForTest(
     tools: dynamicTools,
   });
   return {
+    additionalContext: turnStartParams.additionalContext,
     collaborationInstructions,
     inputText,
     systemPromptReport,
@@ -1344,15 +1355,23 @@ describe("runCodexAppServerAttempt", () => {
 
       const turnStart = harness.requests.find((request) => request.method === "turn/start");
       const turnStartParams = turnStart?.params as {
+        additionalContext?: TestCodexAdditionalContext;
         input?: Array<{ text?: string }>;
       };
       const inputText = turnStartParams.input?.[0]?.text ?? "";
-      expect(inputText).toContain("OpenClaw delivery metadata:");
-      expect(inputText).toContain(
+      const deliveryContext = readTestAdditionalContextValue(
+        turnStartParams.additionalContext,
+        "openclaw_delivery_metadata",
+      );
+      expect(inputText).toBe("hello");
+      expect(deliveryContext).toContain("OpenClaw delivery metadata:");
+      expect(deliveryContext).toContain(
         "This delivery metadata is runtime routing guidance, not the user's request.",
       );
-      expect(inputText).toContain(deliveryHint);
-      expect(inputText).toContain("Current user request:\nhello");
+      expect(deliveryContext).toContain(deliveryHint);
+      expect(inputText).not.toContain(deliveryHint);
+      expect(inputText).not.toContain("OpenClaw delivery metadata:");
+      expect(inputText).not.toContain("Current user request:");
       expect(inputText).not.toContain("Current user request:\nDelivery:");
     }
   });
@@ -2707,7 +2726,7 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("injects bounded MEMORY.md when memory tools are unavailable", async () => {
+  it("passes bounded MEMORY.md as Codex additional context when memory tools are unavailable", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const memorySummary = "Memory summary goes here.";
@@ -2725,12 +2744,22 @@ describe("runCodexAppServerAttempt", () => {
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
+      additionalContext?: TestCodexAdditionalContext;
       input?: Array<{ text?: string }>;
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
+    const runtimeContext = readTestAdditionalContextValue(
+      turnStartParams.additionalContext,
+      "openclaw_runtime_context",
+    );
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain("memory_search");
-    expect(inputText).toContain(memorySummary);
+    expect(inputText).not.toContain(memorySummary);
+    expect(inputText).toBe("hello");
+    expect(runtimeContext).toContain("OpenClaw runtime context for this turn:");
+    expect(runtimeContext).toContain("OpenClaw Workspace Context");
+    expect(runtimeContext).toContain(memorySummary);
+    expect(turnStartParams.additionalContext?.openclaw_runtime_context?.kind).toBe("untrusted");
 
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
@@ -2853,11 +2882,16 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("memory_get"),
     ]);
 
-    const { collaborationInstructions, inputText, systemPromptReport } =
+    const { additionalContext, collaborationInstructions, inputText, systemPromptReport } =
       await buildCodexTurnContextForTest(params, workspaceDir);
+    const runtimeContext = readTestAdditionalContextValue(
+      additionalContext,
+      "openclaw_runtime_context",
+    );
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain(memorySummary);
-    expect(inputText).toContain(hookContext);
+    expect(inputText).not.toContain(hookContext);
+    expect(runtimeContext).toContain(hookContext);
     expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
     expect(collaborationInstructions).not.toContain(memorySummary);
 
@@ -2908,11 +2942,16 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
-    const { collaborationInstructions, inputText, systemPromptReport } =
+    const { additionalContext, collaborationInstructions, inputText, systemPromptReport } =
       await buildCodexTurnContextForTest(params, workspaceDir);
+    const runtimeContext = readTestAdditionalContextValue(
+      additionalContext,
+      "openclaw_runtime_context",
+    );
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain(rootMemory);
-    expect(inputText).toContain(nestedMemory);
+    expect(inputText).not.toContain(nestedMemory);
+    expect(runtimeContext).toContain(nestedMemory);
     expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
     expect(collaborationInstructions).not.toContain(rootMemory);
     expect(collaborationInstructions).not.toContain(nestedMemory);
@@ -2950,12 +2989,17 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, path.join(tempDir, "memory-workspace"));
 
-    const { collaborationInstructions, inputText, systemPromptReport } =
+    const { additionalContext, collaborationInstructions, inputText, systemPromptReport } =
       await buildCodexTurnContextForTest(params, workspaceDir);
+    const runtimeContext = readTestAdditionalContextValue(
+      additionalContext,
+      "openclaw_runtime_context",
+    );
     expect(collaborationInstructions).not.toContain("## Memory Recall");
     expect(collaborationInstructions).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
-    expect(inputText).toContain(memorySummary);
+    expect(inputText).not.toContain(memorySummary);
+    expect(runtimeContext).toContain(memorySummary);
 
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),

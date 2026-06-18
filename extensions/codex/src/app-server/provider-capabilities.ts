@@ -53,6 +53,13 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
+  const modelProviderOverride = params.modelProviderOverride?.trim().toLowerCase();
+  if (modelProviderOverride === "openai") {
+    return "supported";
+  }
+  if (modelProviderOverride) {
+    return "unsupported";
+  }
   let client: CodexAppServerClient | undefined;
   try {
     client = await params.clientFactory(

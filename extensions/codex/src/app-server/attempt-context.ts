@@ -17,7 +17,12 @@ import {
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import type {
+  CodexAdditionalContextEntry,
+  CodexDynamicToolFunctionSpec,
+  CodexDynamicToolSpec,
+  JsonValue,
+} from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -42,6 +47,8 @@ const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
 ]);
 const CODEX_HEARTBEAT_CONTEXT_BASENAME = "heartbeat.md";
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
+const CODEX_OPENCLAW_RUNTIME_CONTEXT_KEY = "openclaw_runtime_context";
+const CODEX_OPENCLAW_DELIVERY_METADATA_CONTEXT_KEY = "openclaw_delivery_metadata";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
@@ -75,6 +82,11 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   turnScopedDeveloperInstructions?: string;
   memoryCollaborationInstructions?: string;
   heartbeatCollaborationInstructions?: string;
+};
+type CodexOpenClawAdditionalContext = Record<string, CodexAdditionalContextEntry>;
+export type CodexOpenClawTurnPromptSubmission = {
+  promptText: string;
+  additionalContext?: CodexOpenClawAdditionalContext;
 };
 
 /** Reads mirrored Codex session history for harness hooks. */
@@ -559,31 +571,50 @@ export function renderCodexSkillsCollaborationInstructions(params: {
 }
 
 /**
- * Prepends OpenClaw context while preserving leading delivery metadata as
- * routing guidance instead of user request text.
+ * Sends OpenClaw runtime context through Codex's transient additionalContext
+ * lane so native user history only stores the real turn text.
  */
-export function prependCodexOpenClawPromptContext(
+export function buildCodexOpenClawTurnPromptSubmission(
   prompt: string,
   context: string | undefined,
   options: { preservePromptWithoutContext?: boolean } = {},
-): string {
+): CodexOpenClawTurnPromptSubmission {
   const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
   if (!context?.trim() && (!deliveryHint || options.preservePromptWithoutContext)) {
-    return prompt;
+    return { promptText: prompt };
   }
-  const promptSection = promptWithoutDeliveryHint.startsWith(
-    "OpenClaw assembled context for this turn:",
-  )
-    ? promptWithoutDeliveryHint
-    : ["Current user request:", promptWithoutDeliveryHint].join("\n");
-  const deliverySection = deliveryHint
-    ? [
+  const additionalContext = buildCodexOpenClawAdditionalContext({
+    promptContext: context,
+    deliveryHint,
+  });
+  return {
+    promptText: promptWithoutDeliveryHint,
+    ...(additionalContext ? { additionalContext } : {}),
+  };
+}
+
+function buildCodexOpenClawAdditionalContext(params: {
+  promptContext?: string;
+  deliveryHint?: string;
+}): CodexOpenClawAdditionalContext | undefined {
+  const additionalContext: CodexOpenClawAdditionalContext = {};
+  if (params.promptContext?.trim()) {
+    additionalContext[CODEX_OPENCLAW_RUNTIME_CONTEXT_KEY] = {
+      kind: "untrusted",
+      value: params.promptContext.trim(),
+    };
+  }
+  if (params.deliveryHint?.trim()) {
+    additionalContext[CODEX_OPENCLAW_DELIVERY_METADATA_CONTEXT_KEY] = {
+      kind: "untrusted",
+      value: [
         "OpenClaw delivery metadata:",
         "This delivery metadata is runtime routing guidance, not the user's request.",
-        deliveryHint,
-      ].join("\n")
-    : undefined;
-  return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
+        params.deliveryHint,
+      ].join("\n"),
+    };
+  }
+  return Object.keys(additionalContext).length > 0 ? additionalContext : undefined;
 }
 
 function splitLeadingCodexDeliveryHint(prompt: string): {

@@ -1398,6 +1398,7 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    additionalContext?: CodexTurnStartParams["additionalContext"];
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
@@ -1420,6 +1421,7 @@ export function buildTurnStartParams(
   return {
     threadId: options.threadId,
     input: buildUserInput(params, options.promptText),
+    ...(options.additionalContext ? { additionalContext: options.additionalContext } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
