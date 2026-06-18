@@ -325,7 +325,12 @@ function buildStatusUptimeLine(): string {
 async function resolveRuntimePluginHealthLine(): Promise<string> {
   try {
     const { collectRuntimePluginHealthSnapshot } = (await loadStatusPluginHealthRuntime()) ?? {};
-    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot?.() ?? ({} as any));
+    return formatCompactPluginHealthLine(
+      collectRuntimePluginHealthSnapshot?.() ??
+        (() => {
+          throw new TypeError();
+        })(),
+    );
   } catch {
     return "⚠️ Plugins: health unavailable";
   }
@@ -563,7 +568,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
-    const subagentsRuntime = await loadStatusSubagentsRuntime().catch(() => undefined);
+    const subagentsRuntime = await loadStatusSubagentsRuntime();
     const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
       subagentsRuntime ?? {
         buildSubagentsStatusLine: () => undefined,
