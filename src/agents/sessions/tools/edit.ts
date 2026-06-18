@@ -405,8 +405,9 @@ export function createEditToolDefinition(
       void ctx;
       // Normalize: unwrap {item: {oldText, newText}} entries from XML-RPC transport
       // (duplicated here so direct execute() calls also benefit, not just agent-prepared calls)
+      let resolvedInput = input;
       if (Array.isArray(input.edits)) {
-        input = {
+        resolvedInput = {
           ...input,
           edits: input.edits.map((edit: unknown) => {
             if (edit && typeof edit === "object" && !Array.isArray(edit)) {
@@ -427,7 +428,7 @@ export function createEditToolDefinition(
           }) as Edit[],
         };
       }
-      const { path, edits } = validateEditInput(input);
+      const { path, edits } = validateEditInput(resolvedInput);
       const absolutePath = resolveToCwd(path, cwd);
 
       return withFileMutationQueue(absolutePath, async () => {
