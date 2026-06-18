@@ -79,6 +79,24 @@ function writeFixtureServerShims(binDir: string, pidPath: string): void {
   writeFileSync(pidPath, "");
 }
 
+function writeStubbornFixtureServerShims(binDir: string, pidPath: string): void {
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    path.join(binDir, "node"),
+    [
+      "#!/bin/bash",
+      'printf "%s\\n" "$$" >"$OPENCLAW_TEST_FIXTURE_SERVER_PID"',
+      "trap ':' TERM",
+      "while true; do /bin/sleep 1; done",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(path.join(binDir, "sleep"), "#!/bin/bash\nexit 0\n");
+  chmodSync(path.join(binDir, "node"), 0o755);
+  chmodSync(path.join(binDir, "sleep"), 0o755);
+  writeFileSync(pidPath, "");
+}
+
 function writeCrashingFixtureServerShim(binDir: string): void {
   mkdirSync(binDir, { recursive: true });
   writeFileSync(
@@ -322,6 +340,51 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       expect(Number.isInteger(pid)).toBe(true);
       waitForDead(pid);
       expect(readFileSync(cleanupPath, "utf8")).toBe("caller-cleanup");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("force-kills stubborn npm fixture registry children during cleanup", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-kill-"));
+    try {
+      const binDir = path.join(root, "bin");
+      const fixtureDir = path.join(root, "fixture");
+      const pidPath = path.join(root, "server.pid");
+      mkdirSync(fixtureDir);
+      writeStubbornFixtureServerShims(binDir, pidPath);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            "source scripts/e2e/lib/plugins/fixtures.sh",
+            "set +e",
+            `( start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
+            'status="$?"',
+            "set -e",
+            '[ "$status" != "0" ]',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+            OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "0.05",
+            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      const pid = Number(readFileSync(pidPath, "utf8"));
+      expect(Number.isInteger(pid)).toBe(true);
+      waitForDead(pid);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

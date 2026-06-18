@@ -50,13 +50,6 @@ export function appendSerializedJsonlEntrySync(
   return content;
 }
 
-export function appendJsonlEntriesSync(filePath: string, entries: readonly unknown[]): void {
-  if (entries.length === 0) {
-    return;
-  }
-  appendFileSync(filePath, serializeJsonlEntries(entries), "utf-8");
-}
-
 export async function writeJsonlEntry(
   filePath: string,
   entry: unknown,

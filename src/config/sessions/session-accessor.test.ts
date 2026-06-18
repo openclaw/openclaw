@@ -3,9 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
+  applySessionEntryLifecycleMutation,
+  applySessionPatchProjection,
   cleanupSessionLifecycleArtifacts,
   createSessionEntryWithTranscript,
   listSessionEntries,
@@ -14,11 +17,13 @@ import {
   loadTranscriptEvents,
   patchSessionEntry,
   persistSessionTranscriptTurn,
+  purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
+  trimSessionTranscriptForManualCompact,
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
@@ -76,6 +81,39 @@ describe("session accessor file-backed seam", () => {
       model: "sonnet-4.6",
       sessionId: "session-1",
       updatedAt: expect.any(Number),
+    });
+  });
+
+  it("purges deleted-agent entries from the current locked store", async () => {
+    const cfg = {
+      session: { store: storePath },
+      agents: {
+        list: [
+          { id: "main", workspace: path.join(tempDir, "main") },
+          { id: "ops", workspace: path.join(tempDir, "ops") },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const now = Date.now();
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        main: { sessionId: "main-legacy", updatedAt: now },
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: now },
+      }),
+      "utf8",
+    );
+
+    const result = await purgeDeletedAgentSessionEntries({
+      cfg,
+      agentId: "ops",
+      storeAgentId: "main",
+      storePath,
+    });
+
+    expect(result.removedSessionKeys).toEqual(["agent:ops:main"]);
+    expect(loadSessionStore(storePath)).toEqual({
+      main: expect.objectContaining({ sessionId: "main-legacy" }),
     });
   });
 
@@ -323,6 +361,93 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("applies projected session patches after migrating legacy candidate keys", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "canonical-session",
+          updatedAt: 10,
+        },
+        "AGENT:MAIN:MAIN": {
+          sessionId: "legacy-session",
+          updatedAt: 20,
+        },
+      }),
+      "utf8",
+    );
+
+    const projected = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: () => ({
+        primaryKey: "agent:main:main",
+        candidateKeys: ["agent:main:main"],
+      }),
+      project: ({ entries, existingEntry, primaryKey }) => {
+        expect(primaryKey).toBe("agent:main:main");
+        expect(existingEntry?.sessionId).toBe("legacy-session");
+        expect(entries.map((entry) => entry.sessionKey)).toEqual(["agent:main:main"]);
+        return {
+          ok: true as const,
+          entry: {
+            ...existingEntry,
+            label: "Projected",
+          } as SessionEntry,
+        };
+      },
+    });
+
+    expect(projected).toMatchObject({
+      ok: true,
+      entry: {
+        label: "Projected",
+        sessionId: "legacy-session",
+      },
+    });
+    expect(loadSessionStore(storePath)).toEqual({
+      "agent:main:main": expect.objectContaining({
+        label: "Projected",
+        sessionId: "legacy-session",
+      }),
+    });
+  });
+
+  it("persists legacy key pruning when projected session patches fail validation", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "canonical-session",
+          updatedAt: 10,
+        },
+        "AGENT:MAIN:MAIN": {
+          sessionId: "legacy-session",
+          updatedAt: 20,
+        },
+      }),
+      "utf8",
+    );
+
+    const projected = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: () => ({
+        primaryKey: "agent:main:main",
+        candidateKeys: ["agent:main:main"],
+      }),
+      project: () => ({
+        ok: false as const,
+        error: "invalid patch",
+      }),
+    });
+
+    expect(projected).toEqual({ ok: false, error: "invalid patch" });
+    expect(loadSessionStore(storePath)).toEqual({
+      "agent:main:main": expect.objectContaining({
+        sessionId: "legacy-session",
+      }),
+    });
+  });
+
   it("cleans scoped lifecycle entries and unreferenced transcript artifacts", async () => {
     const nowMs = Date.now();
     const oldDate = new Date(nowMs - 600_000);
@@ -437,6 +562,152 @@ describe("session accessor file-backed seam", () => {
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
   });
 
+  it("applies keyed lifecycle removals and artifact cleanup from the final store", async () => {
+    const removedTranscriptPath = path.join(tempDir, "removed-session.jsonl");
+    const sharedTranscriptPath = path.join(tempDir, "shared-session.jsonl");
+    const orphanTranscriptPath = path.join(tempDir, "orphan-session.jsonl");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:removed": {
+            sessionId: "removed-session",
+          },
+          "agent:main:shared-remove": {
+            sessionId: "shared-session",
+          },
+          "agent:main:shared-keep": {
+            sessionId: "shared-session",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(removedTranscriptPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(sharedTranscriptPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(orphanTranscriptPath, "orphan", "utf-8");
+    const oldDate = new Date(Date.now() - 60_000);
+    fs.utimesSync(orphanTranscriptPath, oldDate, oldDate);
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        { sessionKey: "agent:main:removed", archiveRemovedTranscript: true },
+        { sessionKey: "agent:main:shared-remove", archiveRemovedTranscript: true },
+      ],
+      upserts: [
+        {
+          sessionKey: "agent:main:new",
+          entry: { sessionId: "new-session", updatedAt: 123 },
+        },
+      ],
+      skipMaintenance: true,
+      restrictArchivedTranscriptsToStoreDir: true,
+      pruneUnreferencedArtifacts: { olderThanMs: 1 },
+    });
+
+    expect(result.removedEntries).toBe(2);
+    expect(result.unreferencedArtifacts?.removedFiles).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+      "agent:main:shared-keep": {
+        sessionId: "shared-session",
+      },
+      "agent:main:new": {
+        sessionId: "new-session",
+        updatedAt: 123,
+      },
+    });
+    expect(fs.existsSync(removedTranscriptPath)).toBe(false);
+    expect(fs.existsSync(sharedTranscriptPath)).toBe(true);
+    expect(fs.existsSync(orphanTranscriptPath)).toBe(false);
+    expect(
+      fs.readdirSync(tempDir).filter((file) => file.startsWith("removed-session.jsonl.deleted.")),
+    ).toHaveLength(1);
+  });
+
+  it("does not apply stale lifecycle removal plans to changed entries", async () => {
+    const stalePlanEntry: SessionEntry = {
+      sessionId: "planned-session",
+      updatedAt: 1,
+    };
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:planned": {
+            sessionId: "planned-session",
+            updatedAt: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        {
+          sessionKey: "agent:main:planned",
+          expectedEntry: stalePlanEntry,
+          archiveRemovedTranscript: true,
+        },
+      ],
+      skipMaintenance: true,
+    });
+
+    expect(result.removedEntries).toBe(0);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+      "agent:main:planned": {
+        sessionId: "planned-session",
+        updatedAt: 2,
+      },
+    });
+  });
+
+  it("builds lifecycle upsert entries from the locked store snapshot", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:existing": {
+            sessionId: "current-session",
+            updatedAt: 10,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      upserts: [
+        {
+          sessionKey: "agent:main:existing",
+          buildEntry: ({ currentEntry }) => ({
+            ...currentEntry,
+            sessionId: currentEntry?.sessionId ?? "missing",
+            updatedAt: 20,
+          }),
+        },
+      ],
+      skipMaintenance: true,
+    });
+
+    expect(result.afterCount).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
+      "agent:main:existing": {
+        sessionId: "current-session",
+        updatedAt: 20,
+      },
+    });
+  });
+
   it("appends to an explicit transcript artifact without a session key", async () => {
     const scope = {
       sessionFile: transcriptPath,
@@ -453,6 +724,102 @@ describe("session accessor file-backed seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
     // Explicit-artifact writes never touch entry metadata: no entry appears.
     expect(listSessionEntries({ storePath })).toEqual([]);
+  });
+
+  it("trims a manual compact transcript and clears stale token metadata", async () => {
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const manualTranscriptPath = path.join(tempDir, `${sessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const contextBudgetStatus: NonNullable<SessionEntry["contextBudgetStatus"]> = {
+      schemaVersion: 1,
+      source: "pre-prompt-estimate",
+      updatedAt: 90,
+      provider: "openai",
+      model: "gpt-5.5",
+      route: "fits",
+      shouldCompact: false,
+      estimatedPromptTokens: 10,
+      contextTokenBudget: 100,
+      promptBudgetBeforeReserve: 80,
+      reserveTokens: 20,
+      effectiveReserveTokens: 20,
+      remainingPromptBudgetTokens: 70,
+      overflowTokens: 0,
+      toolResultReducibleChars: 0,
+      messageCount: 1,
+      unwindowedMessageCount: 1,
+    };
+    await upsertSessionEntry(scope, {
+      contextBudgetStatus,
+      inputTokens: 10,
+      outputTokens: 20,
+      sessionFile: manualTranscriptPath,
+      sessionId,
+      totalTokens: 30,
+      totalTokensFresh: true,
+      updatedAt: 100,
+    });
+    fs.writeFileSync(manualTranscriptPath, "line 1\n\nline 2\nline 3\nline 4\n", "utf-8");
+    const updates: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+
+    const result = await trimSessionTranscriptForManualCompact(scope, {
+      maxLines: 2,
+      nowMs: 500,
+    });
+
+    unsubscribe();
+    expect(result).toMatchObject({ compacted: true, kept: 2 });
+    const archived = result.compacted ? result.archived : "";
+    expect(path.basename(archived)).toMatch(new RegExp(`^${sessionId}\\.jsonl\\.bak\\.`));
+    expect(fs.readFileSync(archived, "utf-8")).toBe("line 1\n\nline 2\nline 3\nline 4\n");
+    expect(fs.readFileSync(manualTranscriptPath, "utf-8")).toBe("line 3\nline 4\n");
+    const updatedEntry = loadSessionEntry(scope);
+    expect(updatedEntry).toMatchObject({
+      sessionFile: manualTranscriptPath,
+      sessionId,
+      updatedAt: 500,
+    });
+    expect(updatedEntry?.contextBudgetStatus).toBeUndefined();
+    expect(updatedEntry?.inputTokens).toBeUndefined();
+    expect(updatedEntry?.outputTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokens).toBeUndefined();
+    expect(updatedEntry?.totalTokensFresh).toBeUndefined();
+    expect(updates).toEqual([{ sessionFile: archived }]);
+  });
+
+  it("prefers the current generated transcript over a stale generated sessionFile", async () => {
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionId = "22222222-2222-4222-8222-222222222222";
+    const currentTranscriptPath = path.join(tempDir, `${currentSessionId}.jsonl`);
+    const staleTranscriptPath = path.join(tempDir, `${staleSessionId}.jsonl`);
+    const scope = {
+      agentId: "main",
+      sessionId: currentSessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionFile: staleTranscriptPath,
+      sessionId: currentSessionId,
+      updatedAt: 100,
+    });
+    fs.writeFileSync(currentTranscriptPath, "current one\ncurrent two\n", "utf-8");
+    fs.writeFileSync(staleTranscriptPath, "stale one\nstale two\n", "utf-8");
+
+    const result = await trimSessionTranscriptForManualCompact(scope, {
+      maxLines: 1,
+      sessionFile: staleTranscriptPath,
+    });
+
+    expect(result).toMatchObject({ compacted: true, kept: 1 });
+    expect(fs.readFileSync(currentTranscriptPath, "utf-8")).toBe("current two\n");
+    expect(fs.readFileSync(staleTranscriptPath, "utf-8")).toBe("stale one\nstale two\n");
   });
 
   it("rejects transcript writes without a session key or explicit file", async () => {

@@ -692,6 +692,8 @@ export async function verifyBetaRelease(
           pluginSelection: args.pluginSelection,
           openclawNpmIntegrity: openclawNpm.integrity,
           openclawNpmTarball: openclawNpm.tarball,
+          npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
+          npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
           githubReleaseUrl: releaseUrl ?? null,
           pluginNpmPackageCount: npmPlugins.length,
           clawHubPackageCount: clawHubPlugins.length,

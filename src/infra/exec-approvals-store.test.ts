@@ -19,6 +19,7 @@ let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
+let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecision"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
@@ -42,6 +43,7 @@ beforeAll(async () => {
     ensureExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
+    persistAllowAlwaysDecision,
     persistAllowAlwaysPatterns,
     readExecApprovalsSnapshot,
     recordAllowlistMatchesUse,
@@ -715,6 +717,30 @@ describe("exec approvals store helpers", () => {
     expect(allowlist[0]).not.toHaveProperty("commandText");
   });
 
+  it("persists exact-command allow-always decisions as durable command approvals", () => {
+    const dir = createHomeDir();
+    vi.spyOn(Date, "now").mockReturnValue(321_000);
+
+    const approvals = ensureExecApprovals();
+    persistAllowAlwaysDecision({
+      approvals,
+      agentId: "worker",
+      decision: {
+        kind: "exact-command",
+        commandText: 'printenv API_KEY="secret-value"',
+      },
+    });
+
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(1);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      source: "allow-always",
+      lastUsedAt: 321_000,
+    });
+    expect(allowlist[0]?.pattern).toMatch(/^=command:[0-9a-f]{16}$/i);
+    expect(allowlist[0]).not.toHaveProperty("commandText");
+  });
+
   it("strips legacy plaintext command text during normalization", () => {
     const normalized = normalizeExecApprovals({
       version: 1,
@@ -956,12 +982,8 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    const echoPattern = partialPatterns[0]?.pattern;
-    expect(echoPattern).toMatch(/\/echo$/);
+    expect(partialPatterns).toEqual([]);
     allowlist = allowlistEntries(dir, "worker");
-    expect(
-      allowlist.map((entry) => entry.pattern).filter((pattern) => pattern === echoPattern),
-    ).toHaveLength(1);
     expect(
       allowlist.some(
         (entry) =>

@@ -3,6 +3,9 @@
   "activation": {
     "onStartup": false
   },
+  "contracts": {
+    "webSearchProviders": ["qa-lab-search"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

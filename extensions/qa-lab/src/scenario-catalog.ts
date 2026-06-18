@@ -73,6 +73,10 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
 const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
   qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
   qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("script"),
+    args: z.array(z.string()).optional(),
+  }),
 ]);
 
 const qaScenarioExecutionSchema = z.union([
