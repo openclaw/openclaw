@@ -1,9 +1,6 @@
 // Control UI active route lifecycle and refresh orchestration.
 import { t } from "../i18n/index.ts";
-import { createRouteModules } from "../routes/route-modules.ts";
-import { ROUTE_RECORDS, type RouteId } from "../routes/route-registry.ts";
-import { createRouteTree } from "../routes/route-tree.ts";
-import type { RouteRefresh, RouteRefreshOptions } from "../routes/route-types.ts";
+import type { RouteId } from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   refreshChat,
@@ -59,9 +56,16 @@ import { isMonitoredAuthProvider } from "../ui/model-auth-helpers.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
 import { resetChatViewState } from "../ui/views/chat.ts";
 import type { SettingsAppHost, SettingsHost } from "./app-host.ts";
+import { controlUiRouter, type ActiveRouteLoadOptions } from "./control-ui-router.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "./operator-access.ts";
 
-const refreshSettingsRoute: RouteRefresh = async ({ host, app }) => {
+type ActiveRouteLoader = (context: {
+  host: SettingsHost;
+  app: SettingsAppHost;
+  opts?: ActiveRouteLoadOptions;
+}) => void | Promise<void>;
+
+const refreshSettingsRoute: ActiveRouteLoader = async ({ host, app }) => {
   const primaryRefresh = loadConfig(app);
   loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
   await primaryRefresh;
@@ -152,13 +156,7 @@ const ACTIVE_ROUTE_REFRESHERS = {
     await loadLogs(app, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   },
-} satisfies Record<AppRefreshRouteId, RouteRefresh>;
-
-const ACTIVE_ROUTE_TREE = createRouteTree({
-  records: ROUTE_RECORDS,
-  routeModules: createRouteModules(),
-  refreshers: ACTIVE_ROUTE_REFRESHERS,
-});
+} satisfies Record<AppRefreshRouteId, ActiveRouteLoader>;
 
 export function applyActiveRouteTransition(
   host: SettingsHost,
@@ -196,12 +194,15 @@ export function applyActiveRouteTransition(
 
 export async function refreshActiveRoute(
   host: SettingsHost,
-  opts?: RouteRefreshOptions,
+  opts?: ActiveRouteLoadOptions,
 ): Promise<void> {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.routeId);
   try {
-    await ACTIVE_ROUTE_TREE.get(host.routeId)?.refresh?.({ host, app, opts });
+    if (host.routeId !== "skill-workshop") {
+      await ACTIVE_ROUTE_REFRESHERS[host.routeId]?.({ host, app, opts });
+    }
+    await controlUiRouter.getRoute(host.routeId)?.load?.({ host, app, opts });
     finishControlUiRefresh(host, refreshRun, "ok");
   } catch (err) {
     finishControlUiRefresh(host, refreshRun, "error");

@@ -2,23 +2,21 @@
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { controlUiRouter } from "../app/control-ui-router.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { createRouteModules } from "../routes/route-modules.ts";
 import {
   iconForRoute,
   isSettingsRoute,
   normalizeBasePath,
   pathForRoute,
   ROUTE_GROUPS,
-  ROUTE_RECORDS,
   SETTINGS_ROUTES,
   subtitleForRoute,
   titleForRoute,
   type RouteId,
 } from "../routes/route-registry.ts";
-import { createRouteTree } from "../routes/route-tree.ts";
 import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
@@ -625,10 +623,6 @@ const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyL
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyUsage = createLazyView(() => import("./views/usage.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
-const routeTree = createRouteTree({
-  records: ROUTE_RECORDS,
-  routeModules: createRouteModules({ notifyLazyViewChanged }),
-});
 
 type ChatWorkspaceFilesState = {
   activeId: string | null;
@@ -1345,7 +1339,12 @@ export function renderApp(state: AppViewState) {
       ? t("chat.archivedSessionDisabled")
       : null;
   const isChat = state.routeId === "chat";
-  const activeRoute = routeTree.get(state.routeId);
+  const activeRoute = controlUiRouter.getRoute(state.routeId);
+  const routedPage =
+    activeRoute?.render({
+      state,
+      invalidate: notifyLazyViewChanged,
+    }) ?? null;
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
@@ -2631,9 +2630,7 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.routeId === "logs"
           ? "content--logs"
-          : ""} ${state.routeId === "workboard"
-          ? "content--workboard"
-          : ""} ${activeRoute?.contentClass?.(state) ?? ""}"
+          : ""} ${state.routeId === "workboard" ? "content--workboard" : ""}"
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
@@ -2667,7 +2664,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.routeId === "config" || isChat
+        ${state.routeId === "config" || isChat || routedPage
           ? nothing
           : html`<section
               class=${chatHeaderHidden
@@ -2681,7 +2678,6 @@ export function renderApp(state: AppViewState) {
                 <div class="page-sub">${subtitleForRoute(state.routeId)}</div>
               </div>
               <div class="page-meta">
-                ${activeRoute?.renderHeaderControls?.(state) ?? nothing}
                 ${state.routeId === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
@@ -3540,7 +3536,7 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${activeRoute?.renderView?.(state) ?? nothing}
+        ${routedPage ?? nothing}
         ${state.routeId === "nodes"
           ? renderLazyView(lazyNodes, (m) =>
               m.renderNodes({

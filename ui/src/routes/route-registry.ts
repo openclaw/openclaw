@@ -2,9 +2,14 @@
 import { t } from "../i18n/index.ts";
 import type { IconName } from "../ui/icons.js";
 import { normalizeLowercaseStringOrEmpty } from "../ui/string-coerce.ts";
-import type { RouteRecord } from "./route-types.ts";
 
-export type { RouteModule, RouteRecord, RouteRefresh, RouteRefreshOptions } from "./route-types.ts";
+export interface RouteRecord<TRouteId extends string = string> {
+  path: string;
+  icon: IconName;
+  titleKey: string;
+  subtitleKey: string;
+  parent?: TRouteId;
+}
 
 function defineRouteRecords<
   const TRouteRecords extends Record<string, RouteRecord<Extract<keyof TRouteRecords, string>>>,

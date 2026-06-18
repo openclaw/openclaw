@@ -1,8 +1,6 @@
-// Skill Workshop feature owns its Control UI render glue and page preferences.
+// Skill Workshop page owns its Control UI render glue.
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
-import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { RouteModule } from "../../routes/route-types.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { switchChatSessionAndWait } from "../../ui/chat-session-switch.ts";
@@ -10,7 +8,6 @@ import { loadChatHistory } from "../../ui/controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "../../ui/controllers/sessions.ts";
 import {
   countSkillWorkshopProposals,
-  loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
@@ -20,46 +17,15 @@ import { normalizeAgentId } from "../../ui/session-key.ts";
 import { normalizeOptionalString } from "../../ui/string-coerce.ts";
 import type { GatewaySessionRow } from "../../ui/types.ts";
 
-const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
-const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
-  "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
-
-export function loadSkillWorkshopMode(): "board" | "today" {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY);
-    return raw === "board" ? "board" : "today";
-  } catch {
-    return "today";
-  }
-}
-
-export function loadSkillWorkshopUseCurrentChatForRevisions(): boolean {
-  try {
-    return getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
+type SkillWorkshopViewModule = typeof import("../../ui/views/skill-workshop.ts");
+type LazySkillWorkshopView = ReturnType<typeof createLazyView<SkillWorkshopViewModule>>;
 
 function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
-  state.skillWorkshopUseCurrentChatForRevisions = enabled;
-  try {
-    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY, String(enabled));
-  } catch {
-    // Preference persistence is optional; the active toggle still controls this handoff.
-  }
+  state.setSkillWorkshopUseCurrentChatForRevisions(enabled);
 }
 
-function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): void {
-  if (state.skillWorkshopMode === mode) {
-    return;
-  }
-  state.skillWorkshopMode = mode;
-  try {
-    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_MODE_KEY, mode);
-  } catch {
-    // Mode persistence is a convenience; the in-memory switch still works.
-  }
+function setSkillWorkshopMode(state: AppViewState, mode: AppViewState["skillWorkshopMode"]): void {
+  state.setSkillWorkshopMode(mode);
 }
 
 function findSkillWorkshopRevisionSessionRow(
@@ -228,22 +194,38 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
   `;
 }
 
-export function createSkillWorkshopFeature(notifyLazyViewChanged: () => void) {
-  const lazySkillWorkshop = createLazyView(
+const lazySkillWorkshopViews = new WeakMap<() => void, LazySkillWorkshopView>();
+
+function getLazySkillWorkshopView(notifyLazyViewChanged: () => void): LazySkillWorkshopView {
+  const current = lazySkillWorkshopViews.get(notifyLazyViewChanged);
+  if (current) {
+    return current;
+  }
+  const next = createLazyView<SkillWorkshopViewModule>(
     () => import("../../ui/views/skill-workshop.ts"),
     notifyLazyViewChanged,
   );
+  lazySkillWorkshopViews.set(notifyLazyViewChanged, next);
+  return next;
+}
 
-  return {
-    routeId: "skill-workshop" as const,
-    contentClass(state: AppViewState) {
-      return state.skillWorkshopMode === "today"
-        ? "content--skill-workshop content--skill-workshop-today"
-        : "content--skill-workshop";
-    },
-    renderHeaderControls: renderSkillWorkshopHeaderControls,
-    renderView(state: AppViewState) {
-      return renderLazyView(lazySkillWorkshop, (m) => {
+export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChanged: () => void) {
+  const lazySkillWorkshop = getLazySkillWorkshopView(notifyLazyViewChanged);
+  const pageClass =
+    state.skillWorkshopMode === "today"
+      ? "content--skill-workshop content--skill-workshop-today"
+      : "content--skill-workshop";
+
+  return html`
+    <section class=${pageClass}>
+      <section class="content-header">
+        <div>
+          <div class="page-title">${t("tabs.skillWorkshop")}</div>
+          <div class="page-sub">${t("subtitles.skillWorkshop")}</div>
+        </div>
+        <div class="page-meta">${renderSkillWorkshopHeaderControls(state)}</div>
+      </section>
+      ${renderLazyView(lazySkillWorkshop, (m) => {
         const visibleProposals = m.filterSkillWorkshopProposals(
           state.skillWorkshopProposals,
           state.skillWorkshopStatusFilter,
@@ -343,20 +325,7 @@ export function createSkillWorkshopFeature(notifyLazyViewChanged: () => void) {
             state.skillWorkshopFilePreviewQuery = "";
           },
         });
-      });
-    },
-  };
-}
-
-export function createSkillWorkshopRoute(
-  notifyLazyViewChanged: () => void = () => undefined,
-): RouteModule<"skill-workshop"> {
-  const feature = createSkillWorkshopFeature(notifyLazyViewChanged);
-  return {
-    id: "skill-workshop",
-    refresh: ({ app }) => loadSkillWorkshopProposals(app, { force: true }),
-    contentClass: feature.contentClass,
-    renderHeaderControls: feature.renderHeaderControls,
-    renderView: feature.renderView,
-  } as const;
+      })}
+    </section>
+  `;
 }

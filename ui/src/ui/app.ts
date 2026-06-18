@@ -6,10 +6,6 @@ import {
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
 } from "../app/active-route.ts";
-import {
-  loadSkillWorkshopMode,
-  loadSkillWorkshopUseCurrentChatForRevisions,
-} from "../features/skill-workshop/skill-workshop.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import type { RouteId } from "../routes/route-registry.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
@@ -139,7 +135,15 @@ import {
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
+import {
+  loadLocalUserIdentity,
+  loadSettings,
+  loadSkillWorkshopMode,
+  loadSkillWorkshopUseCurrentChatForRevisions,
+  saveSkillWorkshopMode,
+  saveSkillWorkshopUseCurrentChatForRevisions,
+  type UiSettings,
+} from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -1151,6 +1155,22 @@ export class OpenClawApp extends LitElement {
       textScale: value as typeof this.settings.textScale,
     });
     this.requestUpdate();
+  }
+
+  setSkillWorkshopMode(mode: SkillWorkshopState["skillWorkshopMode"]) {
+    if (this.skillWorkshopMode === mode) {
+      return;
+    }
+    this.skillWorkshopMode = mode;
+    saveSkillWorkshopMode(mode);
+  }
+
+  setSkillWorkshopUseCurrentChatForRevisions(enabled: boolean) {
+    if (this.skillWorkshopUseCurrentChatForRevisions === enabled) {
+      return;
+    }
+    this.skillWorkshopUseCurrentChatForRevisions = enabled;
+    saveSkillWorkshopUseCurrentChatForRevisions(enabled);
   }
 
   announceSessionSwitch(sessionKey: string, label: string) {
