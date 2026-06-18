@@ -5,8 +5,8 @@ import { styleMap } from "lit/directives/style-map.js";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { createRouteModules } from "../routes/route-modules.ts";
 import {
-  createRouteModules,
   iconForRoute,
   isSettingsRoute,
   normalizeBasePath,

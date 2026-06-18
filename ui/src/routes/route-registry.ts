@@ -1,9 +1,8 @@
 // Control UI route registry defines route ids, paths, and navigation metadata.
-import { createSkillWorkshopRoute } from "../features/skill-workshop/skill-workshop.ts";
 import { t } from "../i18n/index.ts";
 import type { IconName } from "../ui/icons.js";
 import { normalizeLowercaseStringOrEmpty } from "../ui/string-coerce.ts";
-import type { RouteModule, RouteRecord } from "./route-types.ts";
+import type { RouteRecord } from "./route-types.ts";
 
 export type { RouteModule, RouteRecord, RouteRefresh, RouteRefreshOptions } from "./route-types.ts";
 
@@ -156,12 +155,6 @@ export const ROUTE_RECORDS = defineRouteRecords({
 });
 
 export type RouteId = keyof typeof ROUTE_RECORDS & string;
-
-export function createRouteModules(
-  options: { notifyLazyViewChanged?: () => void } = {},
-): readonly RouteModule<RouteId>[] {
-  return [createSkillWorkshopRoute(options.notifyLazyViewChanged)];
-}
 
 export const ROUTE_GROUPS = [
   { label: "chat", routes: ["chat"] },

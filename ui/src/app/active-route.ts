@@ -1,6 +1,7 @@
 // Control UI active route lifecycle and refresh orchestration.
 import { t } from "../i18n/index.ts";
-import { createRouteModules, ROUTE_RECORDS, type RouteId } from "../routes/route-registry.ts";
+import { createRouteModules } from "../routes/route-modules.ts";
+import { ROUTE_RECORDS, type RouteId } from "../routes/route-registry.ts";
 import { createRouteTree } from "../routes/route-tree.ts";
 import type { RouteRefresh, RouteRefreshOptions } from "../routes/route-types.ts";
 import {
