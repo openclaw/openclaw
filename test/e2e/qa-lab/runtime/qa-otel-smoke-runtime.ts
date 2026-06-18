@@ -140,6 +140,7 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.tool_call_id",
 ]);
 const DISALLOWED_BODY_NEEDLES = ["OTEL-QA-SECRET", "OTEL-QA-OK"];
+const QA_OTEL_SMOKE_QA_CHANNEL_SESSION_KEY = "qa-agent:direct:dm:qa-operator";
 const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
 const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/u;
 const MAX_OTLP_COMPRESSED_BODY_BYTES = readPositiveIntegerEnv(
@@ -253,6 +254,7 @@ function parseArgs(argv: string[]): CliOptions {
 function disallowedBodyNeedles(options: CliOptions): string[] {
   const scenarioId = options.scenarioId.trim();
   const needles = new Set(DISALLOWED_BODY_NEEDLES);
+  needles.add(QA_OTEL_SMOKE_QA_CHANNEL_SESSION_KEY);
   if (scenarioId) {
     needles.add(`agent:qa:${scenarioId}`);
     needles.add(`Agent:qa:${scenarioId}`);
@@ -1919,6 +1921,7 @@ export const testing = {
   createBoundedTextAccumulator,
   decodeTraceRequest,
   decodeRequestBody,
+  disallowedBodyNeedles,
   parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,

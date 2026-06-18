@@ -204,6 +204,12 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
   });
 
+  it("checks the qa-channel smoke session key for raw OTLP leaks", () => {
+    expect(testing.disallowedBodyNeedles(testing.parseArgs([]))).toEqual(
+      expect.arrayContaining(["agent:qa:otel-trace-smoke", "qa-agent:direct:dm:qa-operator"]),
+    );
+  });
+
   it("parses body-size limit env values as strict positive integers", () => {
     expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
     expect(
@@ -497,6 +503,21 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.passed).toBe(false);
     expect(assertion.failures).toContain("OTLP logs payload leaked content: OTEL-QA-SECRET");
     expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
+  });
+
+  it("still fails when OTLP raw payload text leaks the qa-channel session key", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.disallowedBodyNeedles = testing.disallowedBodyNeedles(testing.parseArgs([]));
+    input.bodyText = {
+      traces: ["trace payload leaked qa-agent:direct:dm:qa-operator"],
+    };
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain(
+      "OTLP traces payload leaked content: qa-agent:direct:dm:qa-operator",
+    );
   });
 
   it("still requires OTLP log records to carry trace correlation", () => {
