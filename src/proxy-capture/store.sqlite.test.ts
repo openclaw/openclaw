@@ -1,8 +1,8 @@
 // Proxy capture SQLite store tests cover persisted capture reads and writes.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -19,23 +19,16 @@ afterEach(() => {
   closeDebugProxyCaptureStore();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
-  while (cleanupDirs.length > 0) {
-    const dir = cleanupDirs.pop();
-    if (dir) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
+  cleanupTempDirs(cleanupDirs);
 });
 
 function makeStore() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
-  cleanupDirs.push(root);
+  const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-");
   return new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
 }
 
 function makeStateEnv(prefix: string): NodeJS.ProcessEnv {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  cleanupDirs.push(root);
+  const root = makeTempDir(cleanupDirs, prefix);
   return { OPENCLAW_STATE_DIR: root };
 }
 
@@ -80,8 +73,7 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("preserves the shipped path-based Plugin SDK overloads", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-legacy-sdk-"));
-    cleanupDirs.push(root);
+    const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-legacy-sdk-");
     const dbPath = path.join(root, "capture.sqlite");
     const blobDir = path.join(root, "blobs");
     const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);

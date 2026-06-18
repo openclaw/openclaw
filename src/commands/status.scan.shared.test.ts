@@ -1,14 +1,19 @@
 // Status scan shared tests cover gateway probe snapshots, Tailscale URLs, and shared scan helpers.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
@@ -574,7 +579,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
   });
 
   it("recognizes shipped memory tables before the manager migrates them", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-memory-"));
+    const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
     const db = new DatabaseSync(databasePath);
     db.exec(`
@@ -616,25 +621,21 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     };
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
-    try {
-      const result = await resolveSharedMemoryStatusSnapshot({
-        cfg: {},
-        agentStatus: { defaultId: "main" },
-        memoryPlugin: { enabled: true, slot: "memory-core" },
-        resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
-        getMemorySearchManager,
-        requireDefaultDatabasePath: () => databasePath,
-      });
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {},
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () => databasePath,
+    });
 
-      expect(getMemorySearchManager).toHaveBeenCalledOnce();
-      expect(result?.files).toBe(1);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(result?.files).toBe(1);
   });
 
   it("does not initialize memory status for an agent database owned by another feature", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-memory-"));
+    const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
     const db = new DatabaseSync(databasePath);
     db.exec(`
@@ -649,20 +650,16 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     db.close();
     const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
 
-    try {
-      const result = await resolveSharedMemoryStatusSnapshot({
-        cfg: {},
-        agentStatus: { defaultId: "main" },
-        memoryPlugin: { enabled: true, slot: "memory-core" },
-        resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
-        getMemorySearchManager,
-        requireDefaultDatabasePath: () => databasePath,
-      });
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {},
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () => databasePath,
+    });
 
-      expect(result).toBeNull();
-      expect(getMemorySearchManager).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(result).toBeNull();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 });
