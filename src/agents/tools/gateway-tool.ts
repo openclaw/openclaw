@@ -34,6 +34,7 @@ import {
   readNonNegativeIntegerParam,
   readStringArrayParam,
   readStringParam,
+  textResult,
 } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -499,7 +500,11 @@ export function createGatewayTool(opts?: {
 
       if (action === "config.get") {
         const result = await callGatewayTool("config.get", gatewayOpts, {});
-        return jsonResult({ ok: true, result });
+        // The full config snapshot as details exceeds the middleware size limit
+        // (100KB). Keep the JSON text in content but send a minimal details
+        // payload so the middleware validator does not reject the result.
+        const text = JSON.stringify({ ok: true, result }, null, 2);
+        return textResult(text, { ok: true });
       }
       if (action === "config.schema.lookup") {
         const path = readStringParam(params, "path", {
