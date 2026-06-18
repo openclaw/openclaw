@@ -316,6 +316,22 @@ describe("gateway-status local target scheme", () => {
     const hints = buildNetworkHints(cfg as never);
     expect(hints.localLoopbackUrl).toBe("wss://127.0.0.1:18789");
   });
+
+  it("uses a local port override for loopback targets and network hints", () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        port: 18789,
+      },
+    };
+
+    const targets = resolveTargets(cfg as never, undefined, 19080);
+    const localLoopbackTarget = targets.find((target) => target.id === "localLoopback");
+    expect(localLoopbackTarget?.url).toBe("ws://127.0.0.1:19080");
+
+    const hints = buildNetworkHints(cfg as never, 19080);
+    expect(hints.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
+  });
 });
 
 describe("resolveProbeBudgetMs", () => {

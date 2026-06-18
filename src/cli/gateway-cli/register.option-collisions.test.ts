@@ -68,6 +68,7 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 }));
 
 vi.mock("../../commands/health.js", () => ({
+  emitReachableGatewayAuthDiagnostic: vi.fn(async () => false),
   formatHealthChannelLines: () => [],
 }));
 
@@ -169,6 +170,32 @@ describe("gateway register option collisions", () => {
         const [opts, runtime] = firstGatewayStatusCall();
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
         expect(runtime).toBe(defaultRuntime);
+      },
+    },
+    {
+      name: "forwards --port to gateway probe",
+      argv: ["gateway", "probe", "--port", "19080", "--json"],
+      assert: () => {
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts] = firstGatewayStatusCall();
+        expect((opts as { port?: string } | undefined)?.port).toBe("19080");
+      },
+    },
+    {
+      name: "projects gateway health --port into local config",
+      argv: ["gateway", "health", "--port", "19081", "--json"],
+      assert: () => {
+        expect(defaultRuntime.error.mock.calls).toEqual([]);
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("health");
+        const gatewayOpts = opts as
+          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
+          | undefined;
+        expect(gatewayOpts?.localPortOverride).toBe(19081);
+        expect(gatewayOpts?.config).toEqual({
+          gateway: { mode: "local", port: 19081 },
+        });
       },
     },
     {

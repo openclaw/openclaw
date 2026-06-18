@@ -165,9 +165,14 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 
 ```bash
 openclaw gateway health --url ws://127.0.0.1:18789
+openclaw gateway health --port 18789
 ```
 
 The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
+
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port.
+</ParamField>
 
 ### `gateway usage-cost`
 
@@ -340,7 +345,12 @@ If multiple probe targets are reachable, it prints all of them. An SSH tunnel, T
 ```bash
 openclaw gateway probe
 openclaw gateway probe --json
+openclaw gateway probe --port 18789
 ```
+
+<ParamField path="--port <port>" type="number">
+  Use this port for the local loopback probe target and SSH tunnel remote port.
+</ParamField>
 
 <AccordionGroup>
   <Accordion title="Interpretation">

@@ -626,6 +626,29 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
+  it("lets an explicit local port override bypass gateway env URL and port", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_PORT = "19001";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
