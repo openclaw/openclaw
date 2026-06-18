@@ -257,6 +257,48 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects provider plugins from documented external provider aliases", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "gmi",
+        providerId: "gmi",
+        providerAliases: ["gmi-cloud", "gmicloud"],
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "gmi-cloud/google/gemini-3.1-flash-lite",
+          },
+        },
+        auth: {
+          profiles: {
+            gmi: {
+              provider: "gmi-cloud",
+              mode: "api_key",
+            },
+          },
+        },
+        models: {
+          providers: {
+            gmicloud: {
+              baseUrl: "https://api.gmi-serving.com/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["gmi"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");

@@ -386,27 +386,6 @@ export type ClawHubSkillSecurityVerdictsResponse = {
   items: ClawHubSkillSecurityVerdictItem[];
 };
 
-export type ClawHubSkillListResponse = {
-  items: Array<{
-    slug: string;
-    displayName: string;
-    summary?: string;
-    tags?: Record<string, string>;
-    latestVersion?: {
-      version: string;
-      createdAt: number;
-      changelog?: string;
-    } | null;
-    metadata?: {
-      os?: string[] | null;
-      systems?: string[] | null;
-    } | null;
-    createdAt: number;
-    updatedAt: number;
-  }>;
-  nextCursor?: string | null;
-};
-
 export type ClawHubDownloadResult = {
   archivePath: string;
   integrity: string;
@@ -821,13 +800,18 @@ export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
 function buildVersionOrTagSearch(params: {
   version?: string;
   tag?: string;
-}): { version?: string; tag?: string } | undefined {
+  ownerHandle?: string;
+}): { version?: string; tag?: string; ownerHandle?: string } | undefined {
   const version = normalizeOptionalString(params.version);
+  const ownerHandle = normalizeOptionalString(params.ownerHandle);
   if (version) {
-    return { version };
+    return { version, ...(ownerHandle ? { ownerHandle } : {}) };
   }
   const tag = normalizeOptionalString(params.tag);
-  return tag ? { tag } : undefined;
+  if (tag) {
+    return { tag, ...(ownerHandle ? { ownerHandle } : {}) };
+  }
+  return ownerHandle ? { ownerHandle } : undefined;
 }
 
 function buildGitHubZipUrl(repo: string, commit: string): string {
@@ -1046,6 +1030,7 @@ export async function searchClawHubSkills(params: {
 
 export async function fetchClawHubSkillDetail(params: {
   slug: string;
+  ownerHandle?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1057,11 +1042,13 @@ export async function fetchClawHubSkillDetail(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
 }
 
 export async function fetchClawHubSkillInstallResolution(params: {
   slug: string;
+  ownerHandle?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1075,6 +1062,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     search: {
+      ownerHandle: params.ownerHandle,
       forceInstall: params.forceInstall ? "1" : undefined,
     },
   });
@@ -1091,6 +1079,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
 
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1130,6 +1119,7 @@ export async function fetchClawHubSkillSecurityVerdicts(params: {
 
 export async function fetchClawHubSkillCard(params: {
   slug?: string;
+  ownerHandle?: string;
   url?: string;
   version?: string;
   tag?: string;
@@ -1169,25 +1159,6 @@ export async function fetchClawHubSkillCard(params: {
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
   return new TextDecoder().decode(bytes);
-}
-
-export async function listClawHubSkills(params: {
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-  limit?: number;
-}): Promise<ClawHubSkillListResponse> {
-  return await fetchJson<ClawHubSkillListResponse>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/skills",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1318,6 +1289,7 @@ export async function downloadClawHubPackageArchive(params: {
 
 export async function downloadClawHubSkillArchive(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1333,6 +1305,7 @@ export async function downloadClawHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
     search: {
       slug: params.slug,
+      ownerHandle: params.ownerHandle,
       version: params.version,
       tag: params.version ? undefined : params.tag,
     },
@@ -1507,14 +1480,6 @@ function formatTelemetryRootLabel(root: string): string {
 /** Resolves the preferred latest package version from detail metadata. */
 export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): string | null {
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
-}
-
-/** Detects package or skill detail payloads that represent skill-family packages. */
-export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
-  if ("package" in detail) {
-    return detail.package?.family === "skill";
-  }
-  return Boolean(detail.skill);
 }
 
 /** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */

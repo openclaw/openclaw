@@ -33,6 +33,7 @@ export type OfficialExternalProviderAuthChoice = {
 
 export type OfficialExternalProviderCatalogProvider = {
   id?: string;
+  aliases?: readonly string[];
   name?: string;
   docs?: string;
   categories?: readonly string[];

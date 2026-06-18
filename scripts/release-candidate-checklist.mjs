@@ -641,7 +641,7 @@ function validatePreflightManifest(manifest, params) {
   }
 }
 
-function validateFullManifest(manifest, params) {
+export function validateFullManifest(manifest, params) {
   if (manifest.workflowName !== "Full Release Validation") {
     throw new Error(`full validation workflow mismatch: ${manifest.workflowName}`);
   }
@@ -657,6 +657,17 @@ function validateFullManifest(manifest, params) {
   }
   if (manifest.rerunGroup !== "all") {
     throw new Error(`full validation must use rerun_group=all, got ${manifest.rerunGroup}`);
+  }
+  if (
+    (params.releaseProfile === "stable" || params.releaseProfile === "full") &&
+    manifest.runReleaseSoak !== "true"
+  ) {
+    throw new Error(
+      `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
+    );
+  }
+  if (manifest.controls?.performanceBlocking !== true) {
+    throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
 
@@ -746,7 +757,8 @@ async function main() {
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,
-      run_release_soak: options.releaseProfile === "full" ? "true" : "false",
+      run_release_soak:
+        options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
       rerun_group: "all",
     });
     options.fullReleaseRunId =
@@ -846,6 +858,7 @@ async function main() {
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
+    fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
     artifacts: {
       npmPreflight: npmArtifactName,

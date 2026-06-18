@@ -620,6 +620,43 @@ describe("provider install catalog", () => {
     });
   });
 
+  it("preserves official external provider aliases for configured-plugin repair", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/gmi-provider",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "gmi", label: "GMI Cloud" },
+          providers: [
+            {
+              id: "gmi",
+              aliases: ["gmi-cloud", "gmicloud"],
+              name: "GMI Cloud",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "gmi-api-key",
+                  choiceLabel: "GMI Cloud API key",
+                },
+              ],
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/gmi-provider",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("gmi-api-key")).toMatchObject({
+      pluginId: "gmi",
+      providerId: "gmi",
+      providerAliases: ["gmi-cloud", "gmicloud"],
+    });
+  });
+
   it("surfaces provider-index ClawHub install metadata as the preferred source", () => {
     loadOpenClawProviderIndex.mockReturnValue({
       version: 1,

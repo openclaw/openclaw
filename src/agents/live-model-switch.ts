@@ -3,13 +3,7 @@
  */
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  abortEmbeddedAgentRun,
-  consumeEmbeddedRunModelSwitch,
-  requestEmbeddedRunModelSwitch,
-  type EmbeddedRunModelSwitchRequest,
-} from "./embedded-agent-runner/runs.js";
+import type { EmbeddedRunModelSwitchRequest } from "./embedded-agent-runner/runs.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -75,28 +69,6 @@ export function resolveLiveSessionModelSelection(params: {
   };
 }
 
-export function requestLiveSessionModelSwitch(params: {
-  sessionEntry?: Pick<SessionEntry, "sessionId">;
-  selection: LiveSessionModelSelection;
-}): boolean {
-  const sessionId = normalizeOptionalString(params.sessionEntry?.sessionId);
-  if (!sessionId) {
-    return false;
-  }
-  const aborted = abortEmbeddedAgentRun(sessionId);
-  if (!aborted) {
-    return false;
-  }
-  requestEmbeddedRunModelSwitch(sessionId, params.selection);
-  return true;
-}
-
-export function consumeLiveSessionModelSwitch(
-  sessionId: string,
-): LiveSessionModelSelection | undefined {
-  return consumeEmbeddedRunModelSwitch(sessionId);
-}
-
 function isAlreadyAppliedOpenAICodexRuntimePromotion(
   current: { provider: string; model: string },
   next: LiveSessionModelSelection,
@@ -131,18 +103,6 @@ export function hasDifferentLiveSessionModelSelection(
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
   );
-}
-
-export function shouldTrackPersistedLiveSessionModelSelection(
-  current: {
-    provider: string;
-    model: string;
-    authProfileId?: string;
-    authProfileIdSource?: string;
-  },
-  persisted: LiveSessionModelSelection | null | undefined,
-): boolean {
-  return !hasDifferentLiveSessionModelSelection(current, persisted);
 }
 
 /**

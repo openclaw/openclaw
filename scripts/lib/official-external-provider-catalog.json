@@ -114,6 +114,90 @@
       }
     },
     {
+      "name": "@openclaw/gmi-provider",
+      "description": "OpenClaw GMI Cloud provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "gmi",
+          "label": "GMI Cloud"
+        },
+        "providers": [
+          {
+            "id": "gmi",
+            "aliases": ["gmi-cloud", "gmicloud"],
+            "name": "GMI Cloud",
+            "docs": "/providers/gmi",
+            "categories": ["cloud", "llm"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "gmi-api-key",
+                "choiceLabel": "GMI Cloud API key",
+                "choiceHint": "OpenAI-compatible GMI Cloud endpoint.",
+                "groupId": "gmi",
+                "groupLabel": "GMI Cloud",
+                "groupHint": "OpenAI-compatible GMI Cloud endpoint",
+                "optionKey": "gmiApiKey",
+                "cliFlag": "--gmi-api-key",
+                "cliOption": "--gmi-api-key <key>",
+                "cliDescription": "GMI Cloud API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/gmi-provider",
+          "npmSpec": "@openclaw/gmi-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/cohere-provider",
+      "description": "OpenClaw Cohere provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "cohere",
+          "label": "Cohere"
+        },
+        "providers": [
+          {
+            "id": "cohere",
+            "name": "Cohere",
+            "docs": "/providers/cohere",
+            "categories": ["cloud", "llm"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "cohere-api-key",
+                "choiceLabel": "Cohere API key",
+                "groupId": "cohere",
+                "groupLabel": "Cohere",
+                "groupHint": "OpenAI-compatible inference",
+                "optionKey": "cohereApiKey",
+                "cliFlag": "--cohere-api-key",
+                "cliOption": "--cohere-api-key <key>",
+                "cliDescription": "Cohere API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cohere-provider",
+          "npmSpec": "@openclaw/cohere-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/pixverse-provider",
       "description": "OpenClaw PixVerse video provider plugin",
       "source": "official",

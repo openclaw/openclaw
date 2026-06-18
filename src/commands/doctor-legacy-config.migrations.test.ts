@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: () => undefined,

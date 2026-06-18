@@ -30,7 +30,9 @@ const PUBLIC_EXTENSION_CONTRACT_RE =
  */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
+  "apps/android/CHANGELOG.md",
   "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/ios/Config/Version.xcconfig",

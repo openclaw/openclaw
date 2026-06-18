@@ -62,7 +62,6 @@ import {
 import { VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { formatFastModeLabel } from "./status-labels.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -957,7 +956,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Execution: ${execution.label}`,
     `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
-    formatFastModeLabel(fastMode),
+    `Fast: ${fastMode ? "on" : "off"}`,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
