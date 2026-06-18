@@ -179,6 +179,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         });
       }
       await startTelegramWebhook({
+        channelOutbound: opts.channelOutbound,
         token,
         accountId: account.accountId,
         config: cfg,
@@ -283,6 +284,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       const telegramTransport = createTelegramTransportForPolling();
 
       pollingSession = new TelegramPollingSession({
+        channelOutbound: opts.channelOutbound,
         token,
         config: cfg,
         accountId: account.accountId,

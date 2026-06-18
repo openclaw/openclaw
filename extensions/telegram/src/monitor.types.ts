@@ -3,11 +3,14 @@ import type {
   ChannelAccountSnapshot,
   ChannelRuntimeSurface,
 } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelOutboundRegistrar } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotInfo } from "./bot-info.js";
 
 export type MonitorTelegramOpts = {
+  /** Host-issued, owner-bound registrar (bound to the authenticated channel id). */
+  channelOutbound?: ChannelOutboundRegistrar;
   token?: string;
   accountId?: string;
   config?: OpenClawConfig;

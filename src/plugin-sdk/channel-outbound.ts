@@ -4,16 +4,8 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
-import {
-  registerChannelEchoAdmission,
-  unregisterChannelEchoAdmission,
-  type ChannelEchoAdmission,
-} from "../infra/outbound/channel-admission.js";
-import {
-  registerChannelMirrorDispatcher,
-  unregisterChannelMirrorDispatcher,
-  type MirrorDispatcher,
-} from "../infra/outbound/mirror-dispatch.js";
+import type { ChannelEchoAdmission } from "../infra/outbound/channel-admission.js";
+import type { MirrorDispatcher } from "../infra/outbound/mirror-dispatch.js";
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
 type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
 
@@ -58,52 +50,15 @@ export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
-// Pin-from-here mirror-dispatcher + echo-admission registries. A channel registers
-// per account (last-wins for the SAME owner, unregister on stop, fail closed) so a
-// mirrored turn renders through the target's own dispatch and a revoked destination
-// stops receiving the mirror AND the echo fallback. Registration is OWNER-SCOPED:
-// obtain a registrar bound to your plugin identity via createChannelOutboundRegistrar
-// — entries you create cannot be replaced or removed by another owner. The raw
-// register/unregister functions are intentionally NOT part of the public SDK surface.
+// Pin-from-here mirror-dispatcher + echo-admission registries. Registration is
+// OWNER-SCOPED and HOST-BOUND: the gateway issues each channel plugin a registrar
+// bound to its authenticated channel id (delivered via the channel gateway context),
+// so a plugin cannot choose its own owner or touch another channel/account's mirror
+// or admission handler. The factory is host-internal (createChannelOutboundRegistrar
+// in infra/outbound) — plugins only ever RECEIVE a bound registrar, never create one.
 // Contract: docs/plugins/sdk-overview.md#channel-mirror-dispatcher.
 export type { MirrorDispatcher, ChannelEchoAdmission };
-
-export type ChannelOutboundRegistrar = {
-  registerMirrorDispatcher: (
-    channel: string,
-    accountId: string,
-    dispatcher: MirrorDispatcher,
-  ) => void;
-  unregisterMirrorDispatcher: (channel: string, accountId: string) => void;
-  registerEchoAdmission: (
-    channel: string,
-    accountId: string,
-    admission: ChannelEchoAdmission,
-  ) => void;
-  unregisterEchoAdmission: (channel: string, accountId: string) => void;
-};
-
-/**
- * Create an owner-scoped registrar for the pin-from-here mirror-dispatcher and
- * echo-admission registries. `owner` is the registering plugin's STABLE identity
- * (e.g. its plugin id); the registrar binds it so a plugin can only register,
- * replace, or unregister entries it owns and can never touch another channel or
- * account's mirror/admission handler. This is the only public entrypoint to the
- * registries — it replaces the previously-global caller-keyed register/unregister
- * functions so an installed plugin cannot hijack another account's delivery.
- */
-export function createChannelOutboundRegistrar(owner: string): ChannelOutboundRegistrar {
-  return {
-    registerMirrorDispatcher: (channel, accountId, dispatcher) =>
-      registerChannelMirrorDispatcher(owner, channel, accountId, dispatcher),
-    unregisterMirrorDispatcher: (channel, accountId) =>
-      unregisterChannelMirrorDispatcher(owner, channel, accountId),
-    registerEchoAdmission: (channel, accountId, admission) =>
-      registerChannelEchoAdmission(owner, channel, accountId, admission),
-    unregisterEchoAdmission: (channel, accountId) =>
-      unregisterChannelEchoAdmission(owner, channel, accountId),
-  };
-}
+export type { ChannelOutboundRegistrar } from "../infra/outbound/channel-outbound-registrar.js";
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {
   ChannelRunQueue,

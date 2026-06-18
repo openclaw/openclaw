@@ -231,6 +231,7 @@ const resolvePollingStallThresholdMs = (value: number | undefined): number => {
 };
 
 type TelegramPollingSessionOpts = {
+  channelOutbound?: Parameters<typeof createTelegramBot>[0]["channelOutbound"];
   token: string;
   config: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
   accountId: string;
@@ -491,6 +492,7 @@ export class TelegramPollingSession {
     };
     try {
       return createTelegramBot({
+        channelOutbound: this.opts.channelOutbound,
         token: this.opts.token,
         runtime: this.opts.runtime,
         proxyFetch: this.opts.proxyFetch,

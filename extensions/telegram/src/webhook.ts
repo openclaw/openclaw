@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import { InputFile } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelOutboundRegistrar } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
@@ -235,6 +236,7 @@ function resolveTelegramWebhookRateLimitKey(
 }
 
 export async function startTelegramWebhook(opts: {
+  channelOutbound?: ChannelOutboundRegistrar;
   token: string;
   accountId?: string;
   config?: OpenClawConfig;
@@ -269,6 +271,7 @@ export async function startTelegramWebhook(opts: {
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const bot = createTelegramBot({
+    channelOutbound: opts.channelOutbound,
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,

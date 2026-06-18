@@ -11,6 +11,7 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
+import type { ChannelOutboundRegistrar } from "../../infra/outbound/channel-outbound-registrar.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
@@ -250,6 +251,13 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
+  /**
+   * Host-issued, owner-bound registrar for the pin-from-here mirror-dispatcher and
+   * echo-admission registries. The gateway binds it to THIS channel's authenticated
+   * id, so a channel plugin can register/unregister only its own mirror/admission
+   * handlers and cannot spoof or hijack another channel.
+   */
+  channelOutbound: ChannelOutboundRegistrar;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *

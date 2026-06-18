@@ -178,21 +178,18 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 ### Channel mirror dispatcher
 
 The pin-from-here **mirror dispatcher** and **echo-admission** registries are
-reached through an **owner-scoped registrar** from
-`openclaw/plugin-sdk/channel-outbound`:
+reached through an **owner-bound registrar the host hands you** on the channel
+gateway context — `ChannelGatewayContext.channelOutbound`. A channel plugin never
+constructs the registrar itself: the gateway issues it already bound to your
+plugin's **authenticated channel id**.
 
 ```ts
-import { createChannelOutboundRegistrar } from "openclaw/plugin-sdk/channel-outbound";
-
-// `owner` is your plugin's stable identity; entries you register can only be
-// replaced or removed by this same owner.
-const outbound = createChannelOutboundRegistrar(myPluginId);
-
-outbound.registerMirrorDispatcher("telegram", accountId, dispatcher);
-outbound.registerEchoAdmission("telegram", accountId, admission);
+// inside your channel plugin's gateway.startAccount(ctx):
+ctx.channelOutbound.registerMirrorDispatcher("telegram", accountId, dispatcher);
+ctx.channelOutbound.registerEchoAdmission("telegram", accountId, admission);
 // on account stop:
-outbound.unregisterMirrorDispatcher("telegram", accountId);
-outbound.unregisterEchoAdmission("telegram", accountId);
+ctx.channelOutbound.unregisterMirrorDispatcher("telegram", accountId);
+ctx.channelOutbound.unregisterEchoAdmission("telegram", accountId);
 ```
 
 A channel registers **per account** (last-wins **for the same owner**,
@@ -203,12 +200,12 @@ gates the channel-agnostic prompt/post-hoc echo path on the destination's live
 enablement, so a revoked group/topic/DM stops receiving **both** the native
 mirror and the echo fallback.
 
-> **Ownership:** registration is owner-scoped. The registrar binds your plugin
-> identity, and a `(channel, account)` entry can only be replaced or unregistered
-> by the owner that created it — an installed plugin cannot hijack or remove
-> another plugin/account's mirror or admission handler. The previously-global,
-> caller-keyed `register*`/`unregister*` functions are no longer part of the
-> public SDK surface; use the registrar instead.
+> **Ownership is host-bound, not caller-declared.** The registrar's owner is the
+> gateway's authenticated channel id, so a `(channel, account)` entry can only be
+> replaced or unregistered by the channel that created it. A plugin cannot choose
+> its own owner string, so it cannot spoof or hijack another channel/account's
+> mirror or admission handler. There is no public factory for constructing a
+> registrar — you only ever receive the host-bound one from the gateway context.
 
 ### Host hooks for workflow plugins
 

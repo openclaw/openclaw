@@ -1,4 +1,3 @@
-import { createChannelOutboundRegistrar } from "openclaw/plugin-sdk/channel-outbound";
 // Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
@@ -396,10 +395,12 @@ export function createTelegramBotCore(
   // Pin-from-here: re-home a mirrored turn onto THIS account through its own
   // dispatch (drafts/streaming/persistence per this account's config). Keyed by
   // accountId so a multi-account install mirrors through the target's own bot.
-  // Owner-scoped to the telegram plugin so no other plugin can replace or remove
-  // this account's mirror/admission entries.
-  const channelOutbound = createChannelOutboundRegistrar("telegram");
-  channelOutbound.registerMirrorDispatcher(
+  // Host-issued, owner-bound registrar (bound to the authenticated "telegram" channel
+  // id by the gateway). A plugin can only manage its OWN mirror/admission entries —
+  // it cannot pick the owner itself, so it cannot spoof another channel. Absent only
+  // in unit tests that construct the bot directly; registration is skipped then.
+  const channelOutbound = opts.channelOutbound;
+  channelOutbound?.registerMirrorDispatcher(
     "telegram",
     account.accountId,
     ({ target, replyResolver }) => processMessage.dispatchMirror({ target, replyResolver }),
@@ -412,7 +413,7 @@ export function createTelegramBotCore(
   // (`groups[id].enabled` / topic `enabled`), direct chats (resolveTelegram-
   // GroupConfig returns the direct config for a positive chat id, so its
   // `enabled: false` is caught here), and a DM policy later set to `disabled`.
-  channelOutbound.registerEchoAdmission(
+  channelOutbound?.registerEchoAdmission(
     "telegram",
     account.accountId,
     async (cfgForAdmission, target) => {
@@ -516,8 +517,8 @@ export function createTelegramBotCore(
     // Drop this account's mirror dispatcher so a stopped account never keeps a
     // stale dispatcher (a reload re-registers a fresh one; a removal just clears it).
     // Same telegram owner, so it can unregister the entries it registered above.
-    channelOutbound.unregisterMirrorDispatcher("telegram", account.accountId);
-    channelOutbound.unregisterEchoAdmission("telegram", account.accountId);
+    channelOutbound?.unregisterMirrorDispatcher("telegram", account.accountId);
+    channelOutbound?.unregisterEchoAdmission("telegram", account.accountId);
     return originalStop(...args);
   }) as typeof bot.stop;
 

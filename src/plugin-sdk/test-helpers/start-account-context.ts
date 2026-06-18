@@ -36,5 +36,11 @@ export function createStartAccountContext<TAccount extends { accountId: string }
       Object.assign(snapshot, next);
       params.statusPatchSink?.(snapshot);
     },
+    channelOutbound: {
+      registerMirrorDispatcher: vi.fn(),
+      unregisterMirrorDispatcher: vi.fn(),
+      registerEchoAdmission: vi.fn(),
+      unregisterEchoAdmission: vi.fn(),
+    },
   };
 }
