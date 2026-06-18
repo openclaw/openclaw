@@ -163,9 +163,16 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     accountId: plan.resolvedAccountId,
     mode: plan.deliveryTargetMode ?? "explicit",
   });
-  if (!normalizedTarget.ok) {
+  // Reserved-literal errors are not fatal for explicit delivery: the async
+  // session-route resolver (resolveChannelTarget → resolveMessagingTarget)
+  // does directory-first lookup before rejecting reserved literals, so a
+  // configured directory entry named like a reserved word still resolves.
+  const isReservedLiteralError =
+    !normalizedTarget.ok && normalizedTarget.error.message.includes("Reserved target");
+  if (!normalizedTarget.ok && !isReservedLiteralError) {
     return { ...plan, targetResolutionError: normalizedTarget.error };
   }
+  const sessionRouteTarget = normalizedTarget.ok ? normalizedTarget.to : (plan.resolvedTo ?? "");
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""
       ? params.explicitThreadId
@@ -177,7 +184,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         channel: plan.resolvedChannel as ChannelId,
         agentId: params.agentId,
         accountId: plan.resolvedAccountId,
-        target: normalizedTarget.to,
+        target: sessionRouteTarget,
         currentSessionKey: params.currentSessionKey,
         threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
       });

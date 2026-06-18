@@ -313,14 +313,13 @@ describe("agent delivery helpers", () => {
     expect(plan.resolvedTo).toBe("1470130713209602050");
   });
 
-  it("carries explicit target resolution errors from session-route preparation", async () => {
-    const targetResolutionError = new Error('reserved target "current"');
+  it("defers reserved-literal errors to async session-route resolution", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       messaging: { resolveOutboundSessionRoute: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: false,
-      error: targetResolutionError,
+      error: new Error('Reserved target "current" for Telegram'),
     });
 
     const plan = await resolveAgentDeliveryPlanWithSessionRoute({
@@ -333,9 +332,12 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
 
-    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    // Reserved-literal errors do not block session route resolution; the
+    // async resolver (resolveMessagingTarget) does directory-first lookup
+    // before rejecting reserved literals.
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalled();
     expect(plan.resolvedTo).toBe("current");
-    expect(plan.targetResolutionError).toBe(targetResolutionError);
+    expect(plan.targetResolutionError).toBeUndefined();
   });
 
   it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
