@@ -50,26 +50,19 @@ describe("qa scenario catalog", () => {
     expect(
       scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
     ).toEqual(requiredScenarioIds);
-    expect(
-      pack.scenarios
-        .filter((scenario) => scenario.execution?.kind !== "flow")
-        .map((scenario) => scenario.id)
-        .toSorted(),
-    ).toStrictEqual(
-      [
-        "channel-message-flows",
-        "control-ui-chat-flow-playwright",
-        "gateway-smoke",
-        "openai-compatible-chat-tools",
-        "openai-web-search-minimal",
-        "openai-web-search-native-assertions",
-        "openwebui-openai-compatible",
-        "package-openclaw-for-docker",
-        "plugin-lifecycle-probe",
-        "qa-otel-smoke",
-        "ux-matrix-evidence-dashboard",
-      ].toSorted(),
+    const nativeExecutionScenarios = pack.scenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
     );
+    expect(nativeExecutionScenarios.length).toBeGreaterThan(0);
+    for (const scenario of nativeExecutionScenarios) {
+      const execution = scenario.execution;
+      if (execution.kind === "flow") {
+        throw new Error(`expected native execution scenario: ${scenario.id}`);
+      }
+      expect(["playwright", "script", "vitest"]).toContain(execution.kind);
+      expect(fs.existsSync(execution.path), `${scenario.id} execution.path exists`).toBe(true);
+      expect(execution.flow).toBeUndefined();
+    }
     expect(
       pack.scenarios
         .filter((scenario) => scenario.execution.kind === "flow")
