@@ -135,6 +135,21 @@ function renderUsageEmptyState(onRefresh: () => void) {
   `;
 }
 
+function closeDetailsOnOutsideClick(e: Event) {
+  const el = e.currentTarget as HTMLDetailsElement;
+  if (!el.open) {
+    return;
+  }
+  const onClick = (ev: MouseEvent) => {
+    const path = ev.composedPath();
+    if (!path.includes(el)) {
+      el.open = false;
+      window.removeEventListener("click", onClick, true);
+    }
+  };
+  window.addEventListener("click", onClick, true);
+}
+
 export function renderUsage(props: UsageProps) {
   const { data, filters, display, detail, callbacks } = props;
   const filterActions = callbacks.filters;
@@ -368,23 +383,7 @@ export function renderUsage(props: UsageProps) {
       options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
     const selectedCount = selected.length;
     return html`
-      <details
-        class="usage-filter-select"
-        @toggle=${(e: Event) => {
-          const el = e.currentTarget as HTMLDetailsElement;
-          if (!el.open) {
-            return;
-          }
-          const onClick = (ev: MouseEvent) => {
-            const path = ev.composedPath();
-            if (!path.includes(el)) {
-              el.open = false;
-              window.removeEventListener("click", onClick, true);
-            }
-          };
-          window.addEventListener("click", onClick, true);
-        }}
-      >
+      <details class="usage-filter-select" @toggle=${closeDetailsOnOutsideClick}>
         <summary>
           <span>${label}</span>
           ${selectedCount > 0
@@ -517,23 +516,7 @@ export function renderUsage(props: UsageProps) {
             >
               ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
             </button>
-            <details
-              class="usage-export-menu"
-              @toggle=${(e: Event) => {
-                const el = e.currentTarget as HTMLDetailsElement;
-                if (!el.open) {
-                  return;
-                }
-                const onClick = (ev: MouseEvent) => {
-                  const path = ev.composedPath();
-                  if (!path.includes(el)) {
-                    el.open = false;
-                    window.removeEventListener("click", onClick, true);
-                  }
-                };
-                window.addEventListener("click", onClick, true);
-              }}
-            >
+            <details class="usage-export-menu" @toggle=${closeDetailsOnOutsideClick}>
               <summary class="btn btn--sm">${t("usage.export.label")} ▾</summary>
               <div class="usage-export-popover">
                 <div class="usage-export-list">
