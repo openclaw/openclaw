@@ -2566,6 +2566,48 @@ describe("handleSendChat", () => {
     expect(host.chatQueueBySession?.["agent:a"]).toBeUndefined();
   });
 
+  it("rolls back cached optimistic messages after switching sessions before reconnect", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry from session A",
+      sessionKey: "agent:a:main",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "retry from session A" }],
+      __openclaw: { kind: "submitted-send" },
+    });
+
+    host.chatMessagesBySession = new Map([["agent:a:main", [...host.chatMessages]]]);
+    host.chatQueueBySession = { "agent:a:main": [...host.chatQueue] };
+    host.chatMessages = [];
+    host.chatQueue = [];
+    host.sessionKey = "agent:b:main";
+
+    sent.reject(new Error("gateway closed (1006): network lost"));
+    await send;
+
+    expect(host.sessionKey).toBe("agent:b:main");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessagesBySession?.get("agent:a:main") ?? []).toStrictEqual([]);
+    expect(host.chatQueueBySession?.["agent:a:main"]?.[0]).toMatchObject({
+      text: "retry from session A",
+      sendState: "waiting-reconnect",
+    });
+  });
+
   it("keeps a pre-ack socket close recoverable with the same run id", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.send") {

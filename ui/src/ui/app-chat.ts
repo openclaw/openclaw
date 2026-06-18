@@ -24,7 +24,12 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
-import { clearChatMessagesFromCache, type ChatMessageCache } from "./chat/session-message-cache.ts";
+import {
+  cacheChatMessages,
+  clearChatMessagesFromCache,
+  readChatMessagesFromCache,
+  type ChatMessageCache,
+} from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import {
@@ -1045,11 +1050,30 @@ async function sendQueuedChatMessage(
   recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   host.chatSending = true;
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
+  const submittedSessionTarget = { sessionKey, agentId: prepared.agentId };
+  const readSubmittedSessionChatMessages = (): ChatState["chatMessages"] => {
+    if (isVisibleSession()) {
+      return host.chatMessages;
+    }
+    return host.chatMessagesBySession
+      ? readChatMessagesFromCache(host.chatMessagesBySession, host, submittedSessionTarget)
+      : [];
+  };
+  const writeSubmittedSessionChatMessages = (messages: ChatState["chatMessages"]) => {
+    if (isVisibleSession()) {
+      host.chatMessages = messages;
+      return;
+    }
+    if (host.chatMessagesBySession) {
+      cacheChatMessages(host.chatMessagesBySession, host, submittedSessionTarget, messages);
+      host.requestUpdate?.();
+    }
+  };
   let previousChatMessages: ChatState["chatMessages"] | null = null;
   let appendedUserMessage = false;
   const rollbackAppendedUserMessage = () => {
-    if (appendedUserMessage && previousChatMessages && isVisibleSession()) {
-      host.chatMessages = previousChatMessages;
+    if (appendedUserMessage && previousChatMessages) {
+      writeSubmittedSessionChatMessages(previousChatMessages);
     }
     appendedUserMessage = false;
   };
@@ -1057,16 +1081,19 @@ async function sendQueuedChatMessage(
     if (!appendedUserMessage) {
       return;
     }
-    host.chatMessages = host.chatMessages.map((entry) => {
-      const record = entry as Record<string, unknown>;
-      const marker = record.__openclaw as Record<string, unknown> | undefined;
-      if (marker?.kind !== "submitted-send" || marker.id !== id) {
-        return entry;
-      }
-      const next = { ...record };
-      delete next.__openclaw;
-      return next;
-    });
+    const messages = readSubmittedSessionChatMessages();
+    writeSubmittedSessionChatMessages(
+      messages.map((entry) => {
+        const record = entry as Record<string, unknown>;
+        const marker = record.__openclaw as Record<string, unknown> | undefined;
+        if (marker?.kind !== "submitted-send" || marker.id !== id) {
+          return entry;
+        }
+        const next = { ...record };
+        delete next.__openclaw;
+        return next;
+      }),
+    );
   };
   if (isVisibleSession()) {
     setChatError(host, null);
