@@ -1982,6 +1982,8 @@ export type PluginCommandContext = {
   gatewayClientScopes?: string[];
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
+  /** Host-resolved agent id bound to this command invocation when available. */
+  agentId?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
   /** Transcript file for the active OpenClaw session when available. */

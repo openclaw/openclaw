@@ -307,6 +307,11 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const resolvedAgentId = resolveBoundAgentIdForSession({
+    config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
   const senderIsOwnerForCommand =
     canExposeSenderIsOwner(command) ||
     (isTrustedReservedCommandOwner(command) &&
@@ -355,11 +360,12 @@ export async function executePluginCommand(params: {
     accountId: effectiveAccountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
+    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
     diagnosticsSessions: params.diagnosticsSessions,
     runtimeContext: buildPluginCommandRuntimeContext({
       command,
       config,
-      agentId: params.agentId,
+      agentId: resolvedAgentId ?? params.agentId,
       sessionKey: params.sessionKey,
       authProfileId: params.authProfileId,
     }),

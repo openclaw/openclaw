@@ -1265,6 +1265,61 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.sessionId).toBe("session-123");
   });
 
+  it("resolves ctx.agentId from an agent-scoped session key", async () => {
+    let receivedAgentId: string | undefined;
+    const handler = async (ctx: { agentId?: string }) => {
+      receivedAgentId = ctx.agentId;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "agentcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "whatsapp",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "agent:wea-29927:whatsapp:direct:123",
+      commandBody: "/agentcheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedAgentId).toBe("wea-29927");
+  });
+
+  it("exposes the host-resolved agentId for non-agent-shaped session keys", async () => {
+    let receivedAgentId: string | undefined;
+    const handler = async (ctx: { agentId?: string }) => {
+      receivedAgentId = ctx.agentId;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "agentcheckexplicit",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "whatsapp",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      agentId: "wea-29927",
+      sessionKey: "plugin-owned-session",
+      commandBody: "/agentcheckexplicit",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedAgentId).toBe("wea-29927");
+  });
+
   it("passes a host-bound llm runtime through to plugin command handlers", async () => {
     let receivedCtx:
       | {
