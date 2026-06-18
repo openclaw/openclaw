@@ -15,6 +15,7 @@ const {
   getPendingDevicePairingMock,
   listDevicePairingMock,
   removePairedDeviceMock,
+  renamePairedDeviceMock,
   rejectDevicePairingMock,
   revokeDeviceTokenMock,
   rotateDeviceTokenMock,
@@ -24,6 +25,7 @@ const {
   getPendingDevicePairingMock: vi.fn(),
   listDevicePairingMock: vi.fn(),
   removePairedDeviceMock: vi.fn(),
+  renamePairedDeviceMock: vi.fn(),
   rejectDevicePairingMock: vi.fn(),
   revokeDeviceTokenMock: vi.fn(),
   rotateDeviceTokenMock: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock("../../infra/device-pairing.js", async () => {
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,
     removePairedDevice: removePairedDeviceMock,
+    renamePairedDevice: renamePairedDeviceMock,
     rejectDevicePairing: rejectDevicePairingMock,
     revokeDeviceToken: revokeDeviceTokenMock,
     rotateDeviceToken: rotateDeviceTokenMock,
@@ -257,6 +260,104 @@ describe("deviceHandlers", () => {
     expect(removePairedDeviceMock).not.toHaveBeenCalled();
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing removal denied");
+  });
+
+  it("renames a paired device label without disconnecting clients", async () => {
+    renamePairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      publicKey: "pk-1",
+      label: "Kitchen iPad",
+      displayName: "Client iPad",
+      approvedScopes: ["operator.admin"],
+      approvedAtMs: 100,
+      createdAtMs: 50,
+    });
+    const opts = createOptions("device.pair.rename", {
+      deviceId: " device-1 ",
+      label: "Kitchen iPad",
+    });
+    const captured = captureSecurityEvents();
+
+    try {
+      await deviceHandlers["device.pair.rename"](opts);
+    } finally {
+      captured.stop();
+    }
+
+    expect(renamePairedDeviceMock).toHaveBeenCalledWith("device-1", "Kitchen iPad");
+    expect(opts.context.invalidateClientsForDevice).not.toHaveBeenCalled();
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        device: {
+          deviceId: "device-1",
+          publicKey: "pk-1",
+          label: "Kitchen iPad",
+          displayName: "Client iPad",
+          approvedAtMs: 100,
+          createdAtMs: 50,
+          tokens: undefined,
+        },
+      },
+      undefined,
+    );
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "device.pairing.renamed",
+      outcome: "success",
+      severity: "low",
+      policy: { id: "gateway.device-pairing", decision: "allow" },
+      control: { id: "device.pair.rename", family: "auth" },
+      attributes: { label_set: true },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain("Kitchen iPad");
+  });
+
+  it("rejects renaming another device from a non-admin device session", async () => {
+    const opts = createOptions(
+      "device.pair.rename",
+      { deviceId: "device-2", label: "Other device" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(renamePairedDeviceMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing rename denied");
+  });
+
+  it("allows paired device sessions to rename their own device", async () => {
+    renamePairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      publicKey: "pk-1",
+      label: "Desk browser",
+      approvedAtMs: 100,
+      createdAtMs: 50,
+    });
+    const opts = createOptions(
+      "device.pair.rename",
+      { deviceId: " device-1 ", label: "Desk browser" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(renamePairedDeviceMock).toHaveBeenCalledWith("device-1", "Desk browser");
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        device: {
+          deviceId: "device-1",
+          publicKey: "pk-1",
+          label: "Desk browser",
+          approvedAtMs: 100,
+          createdAtMs: 50,
+          tokens: undefined,
+        },
+      },
+      undefined,
+    );
   });
 
   it("disconnects active clients after revoking a device token", async () => {

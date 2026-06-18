@@ -54,7 +54,7 @@ If the browser retries pairing with changed auth details (role/scopes/public key
 
 If the browser is already paired and you change it from read access to write/admin access, this is treated as an approval upgrade, not a silent reconnect. OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly.
 
-Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation and revocation.
+Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. If several browsers or devices look the same, set a human-friendly label with `openclaw devices rename <deviceId> --name "<label>"`; labels do not change device ids, approved roles, scopes, or tokens. See [Devices CLI](/cli/devices) for labels, token rotation, and revocation.
 
 Paperclip agents that connect through the `openclaw_gateway` adapter use the same first-run approval flow. After the initial connection attempt, run `openclaw devices approve --latest` to preview the pending request, then rerun the printed `openclaw devices approve <requestId>` command to approve it. Pass explicit `--url` and `--token` values for a remote gateway. To keep approvals stable across restarts, configure a persistent `adapterConfig.devicePrivateKeyPem` in Paperclip instead of letting it generate a new ephemeral device identity each run.
 
@@ -117,7 +117,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   <Accordion title="Cron, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
-    - Nodes: list + caps (`node.list`).
+    - Nodes: list + caps (`node.list`) plus paired-device labels, approvals, and token actions (`device.pair.*`, `device.token.*`).
     - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>

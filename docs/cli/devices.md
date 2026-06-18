@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw devices` (device pairing + token rotation/revocation)"
+summary: "CLI reference for `openclaw devices` (device pairing, labels, token rotation/revocation)"
 read_when:
   - You are approving device pairing requests
+  - You want to label paired devices
   - You need to rotate or revoke device tokens
 title: "Devices"
 ---
@@ -37,6 +38,25 @@ remove only **their own** device entry. Removing some other device requires
 openclaw devices remove <deviceId>
 openclaw devices remove <deviceId> --json
 ```
+
+### `openclaw devices rename <deviceId> --name <name>`
+
+Set a human-friendly label for one paired device.
+
+The label is operator-owned metadata stored on the paired-device record. It
+does not change the device id, public key, approved roles, scopes, or tokens.
+Lists prefer the label first, then the client-supplied display name, then the
+raw device id.
+
+```
+openclaw devices rename <deviceId> --name "Kitchen iPad"
+openclaw devices rename <deviceId> --clear
+openclaw devices rename <deviceId> --name "Kitchen iPad" --json
+```
+
+When you are authenticated with a paired device token, non-admin callers can
+rename only **their own** paired-device entry. Renaming some other device
+requires `operator.admin`.
 
 ### `openclaw devices clear --yes [--pending]`
 
@@ -182,7 +202,7 @@ When you set `--url`, the CLI does not fall back to config or environment creden
   approved scope baseline for that device. A stray cached token entry does not
   grant a token-management target.
 - For paired-device token sessions, cross-device management is admin-only:
-  `remove`, `rotate`, and `revoke` are self-only unless the caller has
+  `remove`, `rename`, `rotate`, and `revoke` are self-only unless the caller has
   `operator.admin`.
 - Token mutation is also caller-scope contained: a pairing-only session cannot
   rotate or revoke a token that currently carries `operator.admin` or

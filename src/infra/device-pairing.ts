@@ -91,6 +91,7 @@ export type RevokeDeviceTokenResult =
 export type PairedDevice = {
   deviceId: string;
   publicKey: string;
+  label?: string;
   displayName?: string;
   platform?: string;
   deviceFamily?: string;
@@ -223,6 +224,11 @@ async function persistState(
 
 function normalizeDeviceId(deviceId: string) {
   return deviceId.trim();
+}
+
+function normalizePairedDeviceLabel(label: string | null): string | null {
+  const trimmed = label?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function normalizeRole(role: string | undefined): string | null {
@@ -477,6 +483,7 @@ function buildApprovedPairedDevice(params: {
   return {
     deviceId: params.pending.deviceId,
     publicKey: params.pending.publicKey,
+    label: params.existing?.label,
     displayName: params.accessMetadata?.displayName ?? params.pending.displayName,
     platform: params.pending.platform,
     deviceFamily: params.pending.deviceFamily,
@@ -906,6 +913,35 @@ export async function removePairedDevice(
     }
     await persistState(state, baseDir, "both");
     return { deviceId: normalized };
+  });
+}
+
+/** Set or clear the operator-owned display label for a paired device. */
+export async function renamePairedDevice(
+  deviceId: string,
+  label: string | null,
+  baseDir?: string,
+): Promise<PairedDevice | null> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeDeviceId(deviceId);
+    if (!normalized) {
+      return null;
+    }
+    const existing = state.pairedByDeviceId[normalized];
+    if (!existing) {
+      return null;
+    }
+    const normalizedLabel = normalizePairedDeviceLabel(label);
+    const next = { ...existing };
+    if (normalizedLabel) {
+      next.label = normalizedLabel;
+    } else {
+      delete next.label;
+    }
+    state.pairedByDeviceId[normalized] = next;
+    await persistState(state, baseDir, "paired");
+    return next;
   });
 }
 

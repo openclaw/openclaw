@@ -167,16 +167,20 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
 }
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = normalizeOptionalString(device.displayName) || device.deviceId;
+  const label = normalizeOptionalString(device.label);
+  const displayName = normalizeOptionalString(device.displayName);
+  const name = label || displayName || device.deviceId;
+  const clientDisplay = label && displayName ? ` · client: ${displayName}` : "";
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;
   const tokens = Array.isArray(device.tokens) ? device.tokens : [];
+  const deviceId = normalizeOptionalString(device.deviceId) ?? "";
   return html`
     <div class="list-item">
       <div class="list-main">
         <div class="list-title">${name}</div>
-        <div class="list-sub">${device.deviceId}${ip}</div>
+        <div class="list-sub">${device.deviceId}${clientDisplay}${ip}</div>
         <div class="muted" style="margin-top: 6px;">${roles} · ${scopes}</div>
         ${tokens.length === 0
           ? html` <div class="muted" style="margin-top: 6px">Tokens: none</div> `
@@ -187,8 +191,30 @@ function renderPairedDevice(device: PairedDevice, props: NodesProps) {
               </div>
             `}
       </div>
+      <div class="list-meta">
+        <button
+          class="btn btn--sm"
+          ?disabled=${!deviceId}
+          @click=${() => promptPairedDeviceLabel(device, props)}
+        >
+          Rename
+        </button>
+      </div>
     </div>
   `;
+}
+
+function promptPairedDeviceLabel(device: PairedDevice, props: NodesProps) {
+  const deviceId = normalizeOptionalString(device.deviceId);
+  if (!deviceId) {
+    return;
+  }
+  const current = normalizeOptionalString(device.label) ?? "";
+  const next = window.prompt("Device label", current);
+  if (next === null) {
+    return;
+  }
+  props.onDeviceRename(deviceId, normalizeOptionalString(next) ?? null);
 }
 
 function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {

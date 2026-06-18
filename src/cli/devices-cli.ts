@@ -14,6 +14,8 @@ type DevicesRpcOpts = {
   device?: string;
   role?: string;
   scope?: string[];
+  name?: string;
+  clear?: boolean;
 };
 
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
@@ -60,6 +62,19 @@ export function registerDevicesCli(program: Command) {
       .action(async (deviceId: string, opts: DevicesRpcOpts) => {
         const { runDevicesRemoveCommand } = await loadDevicesRuntime();
         await runDevicesRemoveCommand(deviceId, opts);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
+      .command("rename")
+      .description("Set or clear a paired device label")
+      .argument("<deviceId>", "Paired device id")
+      .option("--name <name>", "Human-friendly device label")
+      .option("--clear", "Clear the device label", false)
+      .action(async (deviceId: string, opts: DevicesRpcOpts) => {
+        const { runDevicesRenameCommand } = await loadDevicesRuntime();
+        await runDevicesRenameCommand(deviceId, opts);
       }),
   );
 

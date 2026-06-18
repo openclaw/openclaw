@@ -193,6 +193,20 @@ Stored under `~/.openclaw/devices/`:
 - `pending.json` (short-lived; pending requests expire)
 - `paired.json` (paired devices + tokens)
 
+### Label a paired device
+
+Use labels when multiple devices report the same client display name or when a
+raw device id is hard to recognize:
+
+```bash
+openclaw devices rename <deviceId> --name "Kitchen iPad"
+openclaw devices rename <deviceId> --clear
+```
+
+Labels are operator-owned display metadata on the paired-device record. They do
+not change the device id, public key, approved roles, scopes, or tokens. Device
+lists prefer `label`, then the client-supplied `displayName`, then `deviceId`.
+
 ### Notes
 
 - The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) is a

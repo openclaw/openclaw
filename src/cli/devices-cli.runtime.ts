@@ -54,6 +54,8 @@ type DevicesRpcOpts = {
   device?: string;
   role?: string;
   scope?: string[];
+  name?: string;
+  clear?: boolean;
 };
 
 type DeviceTokenSummary = {
@@ -80,6 +82,7 @@ type PendingDevice = {
 type PairedDevice = {
   deviceId: string;
   publicKey?: string;
+  label?: string;
   displayName?: string;
   roles?: string[];
   scopes?: string[];
@@ -575,6 +578,18 @@ function formatPendingDeviceIdentity(request: PendingDevice): string {
   return sanitizeForLog(normalizeOptionalString(request.deviceId) ?? "");
 }
 
+function formatPairedDeviceIdentity(device: PairedDevice): string {
+  const label = normalizeOptionalString(device.label);
+  if (label) {
+    return sanitizeForLog(label);
+  }
+  const displayName = normalizeOptionalString(device.displayName);
+  if (displayName) {
+    return sanitizeForLog(displayName);
+  }
+  return sanitizeForLog(normalizeOptionalString(device.deviceId) ?? "");
+}
+
 function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
   if (!access) {
     return "none";
@@ -756,7 +771,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
           { key: "IP", header: "IP", minWidth: 12 },
         ],
         rows: list.paired.map((device) => ({
-          Device: sanitizeForLog(device.displayName || device.deviceId),
+          Device: formatPairedDeviceIdentity(device),
           Roles: device.roles?.length
             ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
             : "",
@@ -792,6 +807,44 @@ export async function runDevicesRemoveCommand(
     return;
   }
   defaultRuntime.log(`${theme.warn("Removed")} ${theme.command(trimmed)}`);
+}
+
+export async function runDevicesRenameCommand(
+  deviceId: string,
+  opts: DevicesRpcOpts,
+): Promise<void> {
+  const trimmed = deviceId.trim();
+  if (!trimmed) {
+    defaultRuntime.error(
+      `deviceId is required. Run ${formatCliCommand("openclaw devices list")} to choose a paired device.`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  const name = normalizeStringifiedOptionalString(opts.name);
+  if (opts.clear && name) {
+    defaultRuntime.error("Use either --name or --clear, not both.");
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (!opts.clear && !name) {
+    defaultRuntime.error("Set a label with --name <name> or clear it with --clear.");
+    defaultRuntime.exit(1);
+    return;
+  }
+  const label = opts.clear ? null : name;
+  const result = await callGatewayCli("device.pair.rename", opts, { deviceId: trimmed, label });
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  if (label) {
+    defaultRuntime.log(
+      `${theme.heading("Renamed")} ${theme.command(trimmed)} ${theme.muted("as")} ${sanitizeForLog(label)}`,
+    );
+    return;
+  }
+  defaultRuntime.log(`${theme.heading("Cleared label")} ${theme.command(trimmed)}`);
 }
 
 export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void> {

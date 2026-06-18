@@ -292,6 +292,7 @@ openclaw [--dev] [--profile <name>] <command>
   devices
     list
     remove
+    rename
     clear
     approve
     reject

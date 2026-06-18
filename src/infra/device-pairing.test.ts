@@ -14,6 +14,7 @@ import {
   listEffectivePairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
+  renamePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
   revokeDeviceToken,
@@ -790,6 +791,27 @@ describe("device pairing tokens", () => {
     });
   });
 
+  test("paired-device labels can be set and cleared without changing identity fields", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+
+    const renamed = await renamePairedDevice(" node-1 ", " Kitchen iPad ", baseDir);
+    expectRecordFields(renamed, "renamed device", {
+      deviceId: "node-1",
+      publicKey: "public-key-node-1",
+      label: "Kitchen iPad",
+      role: "node",
+    });
+    await expect(renamePairedDevice("missing", "Other", baseDir)).resolves.toBeNull();
+
+    const cleared = await renamePairedDevice("node-1", null, baseDir);
+    expect(cleared?.label).toBeUndefined();
+    const paired = await getPairedDevice("node-1", baseDir);
+    expect(paired?.label).toBeUndefined();
+    expect(paired?.publicKey).toBe("public-key-node-1");
+    expect(paired?.role).toBe("node");
+  });
+
   test("approval access metadata initializes paired device last-seen fields", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
@@ -856,6 +878,43 @@ describe("device pairing tokens", () => {
     expectRecordFields(paired, "paired device", {
       lastSeenAtMs: 1234,
       lastSeenReason: "bg_app_refresh",
+    });
+  });
+
+  test("repair approvals preserve paired-device labels while refreshing client display name", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    await renamePairedDevice("node-1", "Kitchen iPad", baseDir);
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+        displayName: "Client iPad",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(
+      repair.request.requestId,
+      {
+        callerScopes: [],
+        accessMetadata: {
+          displayName: "Client iPad",
+          lastSeenAtMs: 1234,
+          lastSeenReason: "connect",
+        },
+      },
+      baseDir,
+    );
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      label: "Kitchen iPad",
+      displayName: "Client iPad",
+      lastSeenAtMs: 1234,
+      lastSeenReason: "connect",
     });
   });
 
