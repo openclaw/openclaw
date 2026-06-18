@@ -78,6 +78,25 @@ describe("ports helpers", () => {
     });
   });
 
+  it("ensurePortAvailable rejects an IPv4-only occupant on a dual-stack host", async () => {
+    // A bare listen binds the IPv6 wildcard and would miss this 127.0.0.1-only
+    // occupant; the preflight must probe all address families (regression for
+    // the misleading Chrome CDP 401 collision).
+    const blocker = net.createServer();
+    const address = await listenServer(blocker, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+    try {
+      await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
+    } finally {
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
+    }
+  });
+
   it("handlePortError exits nicely on EADDRINUSE", async () => {
     const runtime = {
       error: vi.fn(),

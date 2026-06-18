@@ -5,8 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
-import { inspectPortUsage } from "./ports-inspect.js";
-import { tryListenOnPort } from "./ports-probe.js";
+import { checkPortInUse, inspectPortUsage } from "./ports-inspect.js";
 import type {
   PortConnection,
   PortConnections,
@@ -37,14 +36,11 @@ export async function describePortOwner(port: number): Promise<string | undefine
 }
 
 export async function ensurePortAvailable(port: number): Promise<void> {
-  // Detect EADDRINUSE early with a friendly message.
-  try {
-    await tryListenOnPort({ port });
-  } catch (err) {
-    if (isErrno(err) && err.code === "EADDRINUSE") {
-      throw new PortInUseError(port);
-    }
-    throw err;
+  // Probe every address family: a bare listen binds the IPv6 wildcard on
+  // dual-stack hosts and misses an IPv4-only occupant, letting Chrome later
+  // collide on 127.0.0.1 and surface a misleading CDP 401.
+  if ((await checkPortInUse(port)) === "busy") {
+    throw new PortInUseError(port);
   }
 }
 
