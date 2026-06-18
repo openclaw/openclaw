@@ -32,6 +32,7 @@ export function createProcessSessionFixture(params: {
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
     aggregated: "",
+    outputText: "",
     tail: "",
     exited: false,
     exitCode: undefined,

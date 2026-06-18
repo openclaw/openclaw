@@ -135,6 +135,8 @@ export type ExecProcessOutcome =
       exitSignal: NodeJS.Signals | number | null;
       durationMs: number;
       aggregated: string;
+      /** stdout-only output (stderr excluded) for user-facing display */
+      outputText?: string;
       timedOut: false;
     }
   | {
@@ -143,6 +145,8 @@ export type ExecProcessOutcome =
       exitSignal: NodeJS.Signals | number | null;
       durationMs: number;
       aggregated: string;
+      /** stdout-only output (stderr excluded) for user-facing display */
+      outputText?: string;
       timedOut: boolean;
       failureKind: ExecProcessFailureKind;
       reason: string;
@@ -476,6 +480,7 @@ export function formatExecFailureReason(params: {
 export function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
+  outputText?: string;
   durationMs: number;
   timeoutSec: number | null | undefined;
 }): ExecProcessOutcome {
@@ -486,12 +491,14 @@ export function buildExecExitOutcome(params: {
     isNormalExit && !isShellFailure ? "completed" : "failed";
   if (status === "completed") {
     const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+    const outputText = params.outputText !== undefined ? params.outputText + exitMsg : undefined;
     return {
       status: "completed",
       exitCode,
       exitSignal: params.exit.exitSignal,
       durationMs: params.durationMs,
       aggregated: params.aggregated + exitMsg,
+      outputText,
       timedOut: false,
     };
   }
@@ -512,6 +519,7 @@ export function buildExecExitOutcome(params: {
     exitSignal: params.exit.exitSignal,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
+    outputText: params.outputText,
     timedOut: params.exit.timedOut,
     failureKind,
     reason: joinExecFailureOutput(params.aggregated, reason),
@@ -522,6 +530,7 @@ export function buildExecExitOutcome(params: {
 export function buildExecRuntimeErrorOutcome(params: {
   error: unknown;
   aggregated: string;
+  outputText?: string;
   durationMs: number;
 }): ExecProcessOutcome {
   return {
@@ -530,6 +539,7 @@ export function buildExecRuntimeErrorOutcome(params: {
     exitSignal: null,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
+    outputText: params.outputText,
     timedOut: false,
     failureKind: "runtime-error",
     reason: joinExecFailureOutput(params.aggregated, String(params.error)),
@@ -640,6 +650,7 @@ export async function runExecProcess(opts: {
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
     aggregated: "",
+    outputText: "",
     tail: "",
     exited: false,
     exitCode: undefined as number | null | undefined,
@@ -867,6 +878,7 @@ export async function runExecProcess(opts: {
           outcome: buildExecRuntimeErrorOutcome({
             error: retryErr,
             aggregated: session.aggregated.trim(),
+            outputText: session.outputText.trim(),
             durationMs: Date.now() - startedAt,
           }),
           sessionKey: opts.sessionKey,
@@ -883,6 +895,7 @@ export async function runExecProcess(opts: {
         outcome: buildExecRuntimeErrorOutcome({
           error: err,
           aggregated: session.aggregated.trim(),
+          outputText: session.outputText.trim(),
           durationMs: Date.now() - startedAt,
         }),
         sessionKey: opts.sessionKey,
@@ -906,6 +919,7 @@ export async function runExecProcess(opts: {
       const outcome = buildExecExitOutcome({
         exit,
         aggregated: session.aggregated.trim(),
+        outputText: session.outputText.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
       });
@@ -939,6 +953,7 @@ export async function runExecProcess(opts: {
       const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
+        outputText: session.outputText.trim(),
         durationMs: Date.now() - startedAt,
       });
       emitExecProcessCompleted({

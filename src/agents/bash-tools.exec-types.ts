@@ -122,6 +122,8 @@ export type ExecToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      /** stdout-only output (stderr excluded) for user-facing display */
+      outputText?: string;
       timedOut?: boolean;
       cwd?: string;
     }

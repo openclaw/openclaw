@@ -75,6 +75,8 @@ export interface ProcessSession {
   pendingStdoutChars: number;
   pendingStderrChars: number;
   aggregated: string;
+  /** stdout-only output (stderr excluded) for user-facing display */
+  outputText: string;
   tail: string;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
@@ -99,6 +101,8 @@ interface FinishedSession {
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
   aggregated: string;
+  /** stdout-only output (stderr excluded) for user-facing display */
+  outputText: string;
   tail: string;
   truncated: boolean;
   totalOutputChars: number;
@@ -168,6 +172,10 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
+  // Only stdout contributes to user-facing output text
+  if (stream === "stdout") {
+    session.outputText = trimWithCap(session.outputText + chunk, session.maxOutputChars);
+  }
   session.tail = tail(session.aggregated, 2000);
 }
 
@@ -252,6 +260,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     exitSignal: session.exitSignal,
     exitReason: session.exitReason,
     aggregated: session.aggregated,
+    outputText: session.outputText,
     tail: session.tail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,

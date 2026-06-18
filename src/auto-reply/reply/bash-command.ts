@@ -277,7 +277,7 @@ export async function handleBashChatCommand(params: {
         text: [
           `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
           `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
+          formatOutputBlock(finished.outputText || finished.aggregated || finished.tail),
         ].join("\n"),
       };
     }
@@ -394,7 +394,7 @@ export async function handleBashChatCommand(params: {
     const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
     const output =
       result.details?.status === "completed"
-        ? result.details.aggregated
+        ? (result.details.outputText || result.details.aggregated)
         : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
     return {
       text: [
