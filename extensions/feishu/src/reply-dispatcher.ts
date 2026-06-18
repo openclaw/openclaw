@@ -500,7 +500,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     );
     for (const [index, chunk] of chunks.entries()) {
       if (index > 0 && sendIntervalMs && sendIntervalMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, sendIntervalMs));
+        await new Promise((resolve) => { setTimeout(resolve, sendIntervalMs); });
       }
       await paramsLocal.sendChunk({
         chunk,

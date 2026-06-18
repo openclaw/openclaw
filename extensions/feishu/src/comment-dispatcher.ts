@@ -81,7 +81,7 @@ export function createFeishuCommentReplyDispatcher(
         let chunkIndex = 0;
         for (const chunk of chunks) {
           if (chunkIndex > 0 && sendIntervalMs && sendIntervalMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, sendIntervalMs));
+            await new Promise((resolve) => { setTimeout(resolve, sendIntervalMs); });
           }
           await deliverCommentThreadText(client, {
             file_token: params.fileToken,
