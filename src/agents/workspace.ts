@@ -318,6 +318,12 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
           continue;
         }
       }
+      // .agents is a standard config directory (agent-level skills, etc.)
+      // — not user-created workspace content. Treat it like .openclaw.
+      // openclaw/openclaw#94425
+      if (entry.name === ".agents" && entry.isDirectory()) {
+        continue;
+      }
       return true;
     }
   } catch (err) {
