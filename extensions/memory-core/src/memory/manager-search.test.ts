@@ -439,6 +439,55 @@ describe("searchKeyword FTS MATCH fallback", () => {
     }
   });
 
+  itWithFts("keeps filename hits when body matches fill the requested limit", async () => {
+    const db = createFtsDb();
+    try {
+      insertKeywordFixture(db, {
+        text: "project alpha release notes",
+        id: "body-hit-1",
+        path: "memory/body-1.md",
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 3,
+      });
+      insertKeywordFixture(db, {
+        text: "project alpha roadmap",
+        id: "body-hit-2",
+        path: "memory/body-2.md",
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 3,
+      });
+      insertKeywordFixture(db, {
+        text: "unrelated body text",
+        id: "filename-hit",
+        path: "memory/project-alpha-filename.md",
+        source: "memory",
+        model: "mock-embed",
+        startLine: 1,
+        endLine: 3,
+      });
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "project alpha",
+        ftsTokenizer: "unicode61",
+        limit: 2,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((row) => row.id)).toContain("filename-hit");
+    } finally {
+      db.close();
+    }
+  });
+
   itWithFts(
     "rebuilds legacy FTS tables so existing chunks become filename-searchable",
     async () => {
@@ -539,6 +588,149 @@ describe("searchKeyword FTS MATCH fallback", () => {
       }
     },
   );
+
+  itWithFts("repairs path FTS drift when the text FTS table already has rows", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE chunks_fts USING fts5(
+          text,
+          id UNINDEXED,
+          path UNINDEXED,
+          source UNINDEXED,
+          model UNINDEXED,
+          start_line UNINDEXED,
+          end_line UNINDEXED
+        );
+        CREATE VIRTUAL TABLE chunks_fts_path USING fts5(
+          path_text,
+          text UNINDEXED,
+          id UNINDEXED,
+          path UNINDEXED,
+          source UNINDEXED,
+          model UNINDEXED,
+          start_line UNINDEXED,
+          end_line UNINDEXED
+        );
+      `);
+      db.prepare(
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "target-memory",
+        "memory/2026-06-17-1649.md",
+        "memory",
+        1,
+        36,
+        "target-memory:hash",
+        "mock-embed",
+        "OAuth token notes and Google testing mode details",
+        JSON.stringify([0]),
+        Date.now(),
+      );
+      db.prepare(
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "nearby-memory",
+        "memory/2026-06-17-1701.md",
+        "memory",
+        1,
+        27,
+        "nearby-memory:hash",
+        "mock-embed",
+        "Calendar task todoist recurring details",
+        JSON.stringify([0]),
+        Date.now(),
+      );
+      db.prepare(
+        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "OAuth token notes and Google testing mode details",
+        "target-memory",
+        "memory/2026-06-17-1649.md",
+        "memory",
+        "mock-embed",
+        1,
+        36,
+      );
+      db.prepare(
+        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "Calendar task todoist recurring details",
+        "nearby-memory",
+        "memory/2026-06-17-1701.md",
+        "memory",
+        "mock-embed",
+        1,
+        27,
+      );
+      db.prepare(
+        "INSERT INTO chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "memory/2026-06-17-1701.md",
+        "Calendar task todoist recurring details",
+        "nearby-memory",
+        "memory/2026-06-17-1701.md",
+        "memory",
+        "mock-embed",
+        1,
+        27,
+      );
+
+      const result = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+      });
+      if (!result.ftsAvailable) {
+        throw new Error(result.ftsError ?? "FTS unavailable");
+      }
+
+      const counts = db
+        .prepare(
+          "SELECT (SELECT COUNT(*) FROM chunks_fts) AS text_count, (SELECT COUNT(*) FROM chunks_fts_path) AS path_count",
+        )
+        .get() as { text_count: number; path_count: number };
+      expect(counts).toEqual({ text_count: 2, path_count: 2 });
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "2026-06-17-1649",
+        ftsTokenizer: "unicode61",
+        limit: 3,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target-memory"]);
+    } finally {
+      db.close();
+    }
+  });
 
   itWithFts("adds legacy chunk source before rebuilding path FTS", async () => {
     const db = new DatabaseSync(":memory:");

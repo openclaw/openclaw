@@ -453,10 +453,20 @@ function ensureFtsSchema(
   const pathRows = db.prepare(`SELECT COUNT(*) AS count FROM ${pathTableName}`).get() as
     | { count?: number | bigint }
     | undefined;
-  const shouldRebuildText = readCount(textRows) === 0;
-  const shouldRebuildPath = readCount(pathRows) === 0;
+  const chunkRows = db.prepare(`SELECT COUNT(*) AS count FROM chunks`).get() as
+    | { count?: number | bigint }
+    | undefined;
+  const chunkCount = readCount(chunkRows);
+  const shouldRebuildText = readCount(textRows) !== chunkCount;
+  const shouldRebuildPath = readCount(pathRows) !== chunkCount;
   if (!shouldRebuildText && !shouldRebuildPath) {
     return;
+  }
+  if (shouldRebuildText) {
+    db.exec(`DELETE FROM ${textTableName};`);
+  }
+  if (shouldRebuildPath) {
+    db.exec(`DELETE FROM ${pathTableName};`);
   }
 
   const chunks = db

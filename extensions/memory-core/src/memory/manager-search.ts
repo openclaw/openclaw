@@ -371,6 +371,18 @@ export async function searchKeyword(params: {
     text: string;
     rank: number;
   };
+  const mergeKeywordRows = (textRows: KeywordRow[], pathRows: KeywordRow[]) => {
+    const byId = new Map<string, KeywordRow>();
+    for (const row of [...textRows, ...pathRows]) {
+      const previous = byId.get(row.id);
+      if (!previous || row.rank < previous.rank) {
+        byId.set(row.id, row);
+      }
+    }
+    return Array.from(byId.values())
+      .sort((left, right) => left.rank - right.rank)
+      .slice(0, params.limit);
+  };
 
   let rows: KeywordRow[];
   let usedMatch = false;
@@ -392,7 +404,6 @@ export async function searchKeyword(params: {
           ...params.sourceFilter.params,
           params.limit,
         ) as KeywordRow[];
-      const seen = new Set(rows.map((row) => row.id));
       const pathRows = params.db
         .prepare(
           `SELECT id, path, source, start_line, end_line, text,\n` +
@@ -408,13 +419,7 @@ export async function searchKeyword(params: {
           ...params.sourceFilter.params,
           params.limit,
         ) as KeywordRow[];
-      for (const row of pathRows) {
-        if (!seen.has(row.id)) {
-          rows.push(row);
-          seen.add(row.id);
-        }
-      }
-      rows = rows.slice(0, params.limit);
+      rows = mergeKeywordRows(rows, pathRows);
       usedMatch = true;
     } catch (matchErr) {
       // FTS5 MATCH can fail on certain token patterns depending on the
@@ -443,7 +448,6 @@ export async function searchKeyword(params: {
             ` LIMIT ?`,
         )
         .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
-      const seen = new Set(rows.map((row) => row.id));
       const pathRows = params.db
         .prepare(
           `SELECT id, path, source, start_line, end_line, text,\n` +
@@ -453,13 +457,7 @@ export async function searchKeyword(params: {
             ` LIMIT ?`,
         )
         .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
-      for (const row of pathRows) {
-        if (!seen.has(row.id)) {
-          rows.push(row);
-          seen.add(row.id);
-        }
-      }
-      rows = rows.slice(0, params.limit);
+      rows = mergeKeywordRows(rows, pathRows);
     }
   } else {
     rows = params.db
@@ -471,7 +469,6 @@ export async function searchKeyword(params: {
           ` LIMIT ?`,
       )
       .all(...substringParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
-    const seen = new Set(rows.map((row) => row.id));
     const pathRows = params.db
       .prepare(
         `SELECT id, path, source, start_line, end_line, text,\n` +
@@ -481,13 +478,7 @@ export async function searchKeyword(params: {
           ` LIMIT ?`,
       )
       .all(...substringParams, ...params.sourceFilter.params, params.limit) as KeywordRow[];
-    for (const row of pathRows) {
-      if (!seen.has(row.id)) {
-        rows.push(row);
-        seen.add(row.id);
-      }
-    }
-    rows = rows.slice(0, params.limit);
+    rows = mergeKeywordRows(rows, pathRows);
   }
 
   return rows.map((row) => {
