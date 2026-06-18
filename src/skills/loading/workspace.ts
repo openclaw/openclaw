@@ -30,11 +30,7 @@ import type {
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import {
-  resolveOpenClawMetadata,
-  resolveSkillInvocationPolicy,
-  resolveSkillKey,
-} from "./frontmatter.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy, resolveSkillKey } from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
@@ -68,8 +64,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
-    Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
+    (home): home is string => Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -115,15 +111,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
+  return uniqueStrings([
+    resolvedNativeHome,
+    ...(realNativeHome ? [realNativeHome] : []),
+  ]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return (
-    home === "/data" &&
-    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
-  );
+  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
 }
 
 function shouldPreservePromptSkillPath(
