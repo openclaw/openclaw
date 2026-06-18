@@ -5,11 +5,10 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope", "qwen-oauth", "qwen-portal", "qwen-cli", "qwen-token-plan", "bailian-token-plan"],
+  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope", "qwen-oauth", "qwen-portal", "qwen-cli", "qwen-token-plan"],
   "providerAuthAliases": {
     "qwen-portal": "qwen-oauth",
-    "qwen-cli": "qwen-oauth",
-    "bailian-token-plan": "qwen-token-plan"
+    "qwen-cli": "qwen-oauth"
   },
   "providerEndpoints": [
     {
@@ -53,9 +52,6 @@
       },
       "qwen-token-plan": {
         "family": "modelstudio"
-      },
-      "bailian-token-plan": {
-        "family": "modelstudio"
       }
     }
   },
@@ -66,9 +62,6 @@
       },
       "qwen-cli": {
         "provider": "qwen-oauth"
-      },
-      "bailian-token-plan": {
-        "provider": "qwen-token-plan"
       }
     },
     "suppressions": [

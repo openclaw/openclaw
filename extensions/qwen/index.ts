@@ -283,9 +283,6 @@ export default defineSingleProviderPluginEntry({
       id: QWEN_TOKEN_PLAN_PROVIDER_ID,
       label: "Qwen Token Plan",
       docsPath: "/providers/qwen",
-      // Alibaba's recommended OpenClaw config names this provider
-      // `bailian-token-plan`; keep it as an alias so that config resolves.
-      aliases: ["bailian-token-plan"],
       envVars: ["QWEN_TOKEN_PLAN_API_KEY"],
       auth: [createQwenTokenPlanAuthMethod("global"), createQwenTokenPlanAuthMethod("cn")],
       catalog: {

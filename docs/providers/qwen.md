@@ -178,8 +178,7 @@ Choose your plan type and follow the setup steps.
     (`/compatible-mode/v1`) and an Anthropic-compatible base (`/apps/anthropic`).
     This provider uses the **OpenAI-compatible** base so it shares the same
     transport, thinking handling, and stream wrapper as the rest of the qwen
-    provider. Alibaba's reference config names the provider `bailian-token-plan`;
-    that id keeps working as a compatibility alias for `qwen-token-plan`.
+    provider.
     </Note>
 
   </Tab>

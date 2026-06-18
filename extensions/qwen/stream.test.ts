@@ -128,21 +128,6 @@ describe("wrapQwenProviderStream", () => {
     ).toBeUndefined();
   });
 
-  it("registers for the bailian-token-plan alias", () => {
-    const streamFn = wrapQwenProviderStream({
-      provider: "bailian-token-plan",
-      modelId: "qwen3.6-plus",
-      model: {
-        api: "openai-completions",
-        provider: "bailian-token-plan",
-        id: "qwen3.6-plus",
-        reasoning: true,
-      } as Model<"openai-completions">,
-      streamFn: undefined,
-    } as never);
-    expect(streamFn).toBeTypeOf("function");
-  });
-
   it("passes qwen-chat-template format to the Qwen wrapper", () => {
     let captured: Record<string, unknown> = {};
     const baseStreamFn: StreamFn = (_model, _context, options) => {

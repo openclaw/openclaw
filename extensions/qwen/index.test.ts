@@ -70,7 +70,7 @@ describe("qwen provider plugin", () => {
     expect(catalogProvider.models?.map((model) => model.id)).toContain("qwen3.5-plus");
   });
 
-  it("registers qwen-token-plan with the bailian alias and manifest-backed auth choices", async () => {
+  it("registers qwen-token-plan with manifest-backed auth choices", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: qwenPlugin,
       id: "qwen",
@@ -78,7 +78,7 @@ describe("qwen provider plugin", () => {
     });
     const provider = requireRegisteredProvider(providers, "qwen-token-plan");
 
-    expect(provider.aliases).toEqual(["bailian-token-plan"]);
+    expect(provider.aliases ?? []).toEqual([]);
     expect(provider.envVars).toEqual(["QWEN_TOKEN_PLAN_API_KEY"]);
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "api-key-cn"]);
 
