@@ -4,11 +4,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),
+  sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "jid" })),
   sendTypingWhatsApp: vi.fn(async () => undefined),
 }));
 
 vi.mock("./send.js", () => ({
   sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
+  sendPollWhatsApp: hoisted.sendPollWhatsApp,
   sendTypingWhatsApp: hoisted.sendTypingWhatsApp,
 }));
 
