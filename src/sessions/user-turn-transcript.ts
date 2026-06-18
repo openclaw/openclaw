@@ -139,12 +139,13 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
   };
 }
 
+// FIX #94255: Preserve index alignment across parallel Media* arrays by not
+// filtering falsy values. The writer (alignedStrings) pads holes with "" to
+// keep indexes stable; filtering those pads breaks the parallel-array contract.
 function normalizeOptionalTextArray(
   values: readonly (string | null | undefined)[] | null | undefined,
-): string[] {
-  return (
-    values?.map(normalizeOptionalText).filter((value): value is string => Boolean(value)) ?? []
-  );
+): (string | undefined)[] {
+  return values?.map(normalizeOptionalText) ?? [];
 }
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
