@@ -1,4 +1,7 @@
 // Issue Fix Agent tests cover local maintainer automation behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseIssueFixAgentArgs,
@@ -9,6 +12,13 @@ import {
   formatScanResult,
   sortQualifiedCandidates,
 } from "../../scripts/issue-fix-agent-lib/candidates.ts";
+import {
+  appendIssueFixAgentEvent,
+  createIssueFixAgentRun,
+  getLatestOpenIssueFixAgentRun,
+  openIssueFixAgentState,
+  transitionIssueFixAgentRun,
+} from "../../scripts/issue-fix-agent-lib/state.sqlite.ts";
 import type { IssueCandidate } from "../../scripts/issue-fix-agent-lib/types.ts";
 
 function issue(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
@@ -97,5 +107,47 @@ describe("issue-fix-agent candidates", () => {
     });
     expect(output).toContain("#12345 status crashes with TypeError score=5");
     expect(output).toContain("skipped #99: high-risk label: security");
+  });
+});
+
+describe("issue-fix-agent sqlite state", () => {
+  it("creates a run and resumes the latest non-terminal run", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-agent-state-"));
+    const store = openIssueFixAgentState(path.join(root, "issue-fix-agent.sqlite"));
+    const run = createIssueFixAgentRun(store, {
+      issueNumber: 12345,
+      issueTitle: "status crashes",
+      issueUrl: "https://github.com/openclaw/openclaw/issues/12345",
+      source: "test",
+    });
+    transitionIssueFixAgentRun(store, run.runId, "qualified", {
+      reason: "candidate passed gates",
+    });
+    appendIssueFixAgentEvent(store, run.runId, "note", { message: "verified source repro" });
+
+    expect(getLatestOpenIssueFixAgentRun(store)).toMatchObject({
+      issueNumber: 12345,
+      state: "qualified",
+    });
+    store.close();
+  });
+
+  it("rejects invalid backward transitions", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-agent-transition-"));
+    const store = openIssueFixAgentState(path.join(root, "issue-fix-agent.sqlite"));
+    const run = createIssueFixAgentRun(store, {
+      issueNumber: 12345,
+      issueTitle: "status crashes",
+      issueUrl: "https://github.com/openclaw/openclaw/issues/12345",
+      source: "test",
+    });
+    transitionIssueFixAgentRun(store, run.runId, "qualified", {
+      reason: "candidate passed gates",
+    });
+
+    expect(() =>
+      transitionIssueFixAgentRun(store, run.runId, "discovered", { reason: "backward" }),
+    ).toThrow("invalid issue-fix-agent transition");
+    store.close();
   });
 });

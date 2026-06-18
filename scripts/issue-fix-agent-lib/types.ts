@@ -54,3 +54,20 @@ export type QualifiedCandidate = IssueCandidate & {
 export type SkippedCandidate = IssueCandidate & {
   readonly reason: string;
 };
+
+export type IssueFixAgentRun = {
+  readonly runId: string;
+  readonly issueNumber: number;
+  readonly issueTitle: string;
+  readonly issueUrl: string;
+  readonly source: string;
+  readonly state: IssueFixAgentState;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly branchName: string | null;
+  readonly worktreePath: string | null;
+  readonly commitSha: string | null;
+  readonly prNumber: number | null;
+  readonly prUrl: string | null;
+  readonly terminalReason: string | null;
+};
