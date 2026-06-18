@@ -195,6 +195,14 @@ function getConfiguredMemoryEmbeddingProvider(
   if (directAdapter) {
     return directAdapter;
   }
+  // Fall back to the generic embedding provider registry used by plugins
+  // that register via api.registerEmbeddingProvider() (e.g., llama-cpp).
+  // Without this fallback, plugin-registered providers like "local" are
+  // invisible to memory-search config resolution.
+  const genericAdapter = getEmbeddingProvider(providerId, cfg);
+  if (genericAdapter) {
+    return genericAdapter as ReturnType<typeof getMemoryEmbeddingProvider>;
+  }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
   const ownerApi = providerConfig?.api?.trim();
   if (!ownerApi) {
