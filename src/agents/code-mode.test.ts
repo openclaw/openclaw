@@ -814,6 +814,36 @@ describe("Code Mode", () => {
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
 
+  it("uses tools recovery guidance when no generic Code Mode suggestion matches", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: codeModeTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("missing_tool", {});
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+  });
+
   it("exposes MCP tools only through the MCP namespace", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = mcpTool({
@@ -917,8 +947,10 @@ describe("Code Mode", () => {
       },
       searchHits: [],
       allHasMcp: false,
-      directDescribe: "Unknown tool id: github__create_issue",
-      directCall: "Unknown tool id: github__create_issue",
+      directDescribe:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+      directCall:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),

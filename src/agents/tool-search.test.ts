@@ -1318,6 +1318,36 @@ describe("Tool Search", () => {
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
 
+  it("keeps raw Tool Search recovery guidance when no suggestion matches", async () => {
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const writeTool = fakeTool("write", "Write a file to the workspace");
+    applyToolSearchCatalog({
+      tools: [callTool, searchTool, describeTool, writeTool],
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+      sessionId: "session-missing-raw-tool",
+      sessionKey: "agent:main:main",
+    });
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-missing-raw-tool",
+      sessionKey: "agent:main:main",
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+    });
+    const runtimeCallTool = runtimeTools[3];
+
+    await expect(
+      runtimeCallTool.execute("call-missing-raw-tool", {
+        id: "missing_tool",
+        args: {},
+      }),
+    ).rejects.toThrow(
+      "Unknown tool id: missing_tool. Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
   it("preserves code-mode bridge recovery guidance for guessed tool ids", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const writeTool = fakeTool("write", "Write a file to the workspace");
@@ -1363,7 +1393,9 @@ describe("Tool Search", () => {
       runtimeCodeTool.execute("call-missing-tool", {
         code: `return await openclaw.tools.call("missing_tool", {});`,
       }),
-    ).rejects.toThrow("Unknown tool id: missing_tool");
+    ).rejects.toThrow(
+      "Unknown tool id: missing_tool. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+    );
   });
 
   it("does not expose host-realm bridge result objects to model-authored code", async () => {
