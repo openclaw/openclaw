@@ -93,6 +93,15 @@ export function createPluginRecord(
   };
 }
 
+export function createBundledPluginRecord(id: string): PluginRecord {
+  return createPluginRecord({
+    id,
+    source: `bundled:${id}`,
+    rootDir: `/bundled/${id}`,
+    origin: "bundled",
+  });
+}
+
 export function createTypedHook(params: {
   pluginId: string;
   hookName: PluginHookName;

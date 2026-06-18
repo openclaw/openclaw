@@ -157,18 +157,6 @@ export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | 
   return readLegacyGrokFallbackAuth(cfg);
 }
 
-export function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  const plugin = readPluginXaiWebSearchApiKeyResult(cfg);
-  if (plugin.status === "available") {
-    return plugin.value;
-  }
-  if (plugin.status === "blocked") {
-    return undefined;
-  }
-  const legacy = readLegacyGrokApiKeyResult(cfg);
-  return legacy.status === "available" ? legacy.value : undefined;
-}
-
 export function resolveXaiToolApiKey(params: {
   runtimeConfig?: OpenClawConfig;
   sourceConfig?: OpenClawConfig;

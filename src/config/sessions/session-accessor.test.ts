@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
+  applyRestartRecoveryLifecycle,
   appendTranscriptMessage,
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
@@ -445,6 +446,62 @@ describe("session accessor file-backed seam", () => {
       "agent:main:main": expect.objectContaining({
         sessionId: "legacy-session",
       }),
+    });
+  });
+
+  it("applies restart recovery replacements without exposing mutable store rows", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "session-1",
+            status: "running",
+            updatedAt: 10,
+          },
+          "agent:main:other": {
+            sessionId: "session-2",
+            status: "running",
+            updatedAt: 20,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await applyRestartRecoveryLifecycle({
+      storePath,
+      update: (entries) => {
+        const main = entries.find((entry) => entry.sessionKey === "agent:main:main");
+        const other = entries.find((entry) => entry.sessionKey === "agent:main:other");
+        if (other) {
+          other.entry.status = "failed";
+        }
+        if (!main) {
+          return { result: { replaced: false } };
+        }
+        main.entry.abortedLastRun = true;
+        main.entry.updatedAt = 30;
+        return {
+          result: { replaced: true },
+          replacements: [{ sessionKey: main.sessionKey, entry: main.entry }],
+        };
+      },
+    });
+
+    expect(result).toEqual({ replaced: true });
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:main"]).toMatchObject({
+      abortedLastRun: true,
+      sessionId: "session-1",
+      updatedAt: 30,
+    });
+    expect(store["agent:main:other"]).toMatchObject({
+      sessionId: "session-2",
+      status: "running",
+      updatedAt: 20,
     });
   });
 

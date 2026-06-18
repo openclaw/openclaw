@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/parallel-plugin",
+  "version": "2026.6.8",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/parallel-plugin",
+      "version": "2026.6.8"
+    }
+  }
+}

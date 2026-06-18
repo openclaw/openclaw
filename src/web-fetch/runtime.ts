@@ -75,6 +75,28 @@ function hasEntryCredential(
   });
 }
 
+function hasAutoDetectCredential(
+  provider: Pick<
+    PluginWebFetchProviderEntry,
+    | "envVars"
+    | "getConfiguredCredentialFallback"
+    | "getConfiguredCredentialValue"
+    | "getCredentialValue"
+    | "requiresCredential"
+  >,
+  config: OpenClawConfig | undefined,
+  fetch: WebFetchConfig | undefined,
+): boolean {
+  return hasEntryCredential(
+    {
+      ...provider,
+      requiresCredential: true,
+    },
+    config,
+    fetch,
+  );
+}
+
 /** Reports whether a web_fetch provider has usable credentials. */
 export function isWebFetchProviderConfigured(params: {
   provider: Pick<
@@ -125,6 +147,9 @@ function resolveWebFetchProviderId(params: {
 
   for (const provider of providers) {
     if (!providerRequiresCredential(provider)) {
+      if (!hasAutoDetectCredential(provider, params.config, params.fetch)) {
+        continue;
+      }
       logVerbose(
         `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected keyless provider "${provider.id}"`,
       );
@@ -168,7 +193,7 @@ export function resolveWebFetchDefinition(
     options?.sandboxed
       ? resolvePluginWebFetchProviders({
           config: options?.config,
-          origin: "bundled",
+          sandboxed: true,
         })
       : options?.preferRuntimeProviders
         ? resolveRuntimeWebFetchProviders({
