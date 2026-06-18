@@ -100,9 +100,9 @@ describe("ci workflow guards", () => {
     expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.base");
 
     expect(clawsweeperDispatch.on.pull_request_target.types).toContain("edited");
+    expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.title");
     expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.body");
     expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.base");
-    expect(clawsweeperDispatch.jobs.dispatch.if).not.toContain("github.event.changes.title");
 
     expect(realBehaviorProof.on.pull_request_target.types).toContain("edited");
     expect(realBehaviorProof.jobs["real-behavior-proof"].if).toContain("github.event.changes.body");
