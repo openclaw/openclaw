@@ -74,6 +74,27 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     });
   });
 
+  it("keeps the channel wait alive for Matrix missing-key decryption errors", async () => {
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    client.emit(
+      "sync.unexpected_error",
+      new Error(
+        "Error decrypting event (id=$event type=m.room.encrypted): DecryptionError[msg: The sender's device has not sent us the keys for this message.]",
+      ),
+    );
+    await Promise.resolve();
+
+    expect(
+      statusCalls(setStatus).some(
+        (status) => status.accountId === "default" && status.healthState === "error",
+      ),
+    ).toBe(false);
+    lifecycle.dispose();
+    await expect(waitPromise).resolves.toBeUndefined();
+  });
+
   it("ignores STOPPED emitted during intentional shutdown", async () => {
     const { client, lifecycle, setStatus, setStopping } = createSyncLifecycleHarness({
       withStopping: true,
