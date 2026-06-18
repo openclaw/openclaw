@@ -61,8 +61,8 @@ type UpsertSessionEntryParams = SessionStoreReadParams & {
 };
 
 function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
-  // Preserve the public SDK object-parameter shape while hiding internal seam
-  // options such as borrowed reads from exported plugin types.
+  // Maintainer note: keep this adapter narrow so plugin callers retain the
+  // object-parameter API while internal accessor-only options stay private.
   return {
     sessionKey: params.sessionKey,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
@@ -76,17 +76,18 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
 
 /**
  * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. Whole-store helpers keep
- * the legacy mutable sessions.json shape only for pre-SQLite compatibility.
+ * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
+ * kept only during the transition before SQLite migration. Callers must
+ * migrate away from reading sessions.json directly.
  */
 export const loadSessionStore = loadSessionStoreImpl;
 
-/** Loads one session entry through the accessor seam. */
+/** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   return loadSessionEntry(toSessionAccessScope(params));
 }
 
-/** Lists session entries through the accessor seam. */
+/** Lists session entries for one agent. */
 export function listSessionEntries(
   params: SessionStoreListParams = {},
 ): SessionStoreEntrySummary[] {
@@ -100,7 +101,7 @@ export function listSessionEntries(
   });
 }
 
-/** Patches one session entry through the accessor seam. */
+/** Patches one session entry by agent/session identity. */
 export async function patchSessionEntry(
   params: PatchSessionEntryParams,
 ): Promise<SessionEntry | null> {
@@ -112,12 +113,12 @@ export async function patchSessionEntry(
   });
 }
 
-/** Reads a session activity timestamp through the accessor seam. */
+/** Reads the last activity timestamp for one session entry. */
 export function readSessionUpdatedAt(params: ReadSessionUpdatedAtParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
 }
 
-/** Updates an existing session entry through the accessor seam. */
+/** Updates an existing session entry by store path and session key. */
 export async function updateSessionStoreEntry(
   params: UpdateSessionStoreEntryParams,
 ): Promise<SessionEntry | null> {
@@ -135,7 +136,7 @@ export async function updateSessionStoreEntry(
   );
 }
 
-/** Replaces or creates one session entry through the accessor seam. */
+/** Replaces or creates one session entry by agent/session identity. */
 export async function upsertSessionEntry(params: UpsertSessionEntryParams): Promise<void> {
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
@@ -144,14 +145,16 @@ export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
 /**
  * @deprecated Use getSessionEntry to read session metadata by agent/session
- * identity instead of resolving transcript file paths. This file-shaped API is
- * a deprecated pre-SQLite compatibility adapter, not a runtime storage path.
+ * identity instead of resolving transcript file paths. This file-path helper
+ * is kept only during the transition before SQLite migration. Callers must
+ * migrate away from resolving transcript file paths directly.
  */
 export { resolveSessionFilePath } from "../config/sessions/paths.js";
 /**
  * @deprecated Use patchSessionEntry/upsertSessionEntry to persist session
- * metadata by agent/session identity. This file-shaped API is a deprecated
- * pre-SQLite compatibility adapter, not a runtime storage path.
+ * metadata by agent/session identity. This file-path helper is kept only during
+ * the transition before SQLite migration. Callers must migrate away from
+ * persisting transcript file paths directly.
  */
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
@@ -164,14 +167,14 @@ export {
   updateLastRoute,
 } from "../config/sessions/store.js";
 /**
- * @deprecated Use patchSessionEntry/upsertSessionEntry for storage-neutral
- * writes. Keep this whole-store adapter as one compatibility operation: the
- * file backend owns the sessions.json writer, and a future SQLite bridge must
- * diff before/after store shapes, apply changed/deleted rows in one write
- * transaction, then publish updates after commit. Do not route this through
- * independent per-entry accessors or make it a permanent storage path.
+ * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. These
+ * whole-store helpers are kept only during the transition before SQLite
+ * migration. Callers must migrate away from reading or writing sessions.json.
  */
 export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+// Maintainer note: keep saveSessionStore/updateSessionStore grouped as one
+// compatibility operation. A SQLite bridge must diff before/after store shapes,
+// apply changed/deleted rows in one write transaction, and publish after commit.
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

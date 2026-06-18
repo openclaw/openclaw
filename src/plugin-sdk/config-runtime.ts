@@ -16,8 +16,9 @@ export {
 
 /**
  * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. Whole-store helpers keep
- * the legacy mutable sessions.json shape and are compatibility escape hatches.
+ * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
+ * kept only during the transition before SQLite migration. Callers must
+ * migrate away from reading sessions.json directly.
  */
 export const loadSessionStore = loadSessionStoreImpl;
 

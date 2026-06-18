@@ -130,8 +130,8 @@ async function patchSessionEntry(
 async function updateSessionStoreEntry(
   params: RuntimeSessionStoreEntryUpdateParams,
 ): Promise<SessionEntry | null> {
-  // Preserve the plugin runtime's object-parameter API while routing the
-  // mutation through the storage-neutral session accessor seam.
+  // Maintainer note: keep the legacy object-parameter API here, but route
+  // mutations through the session accessor boundary.
   return await updateSessionEntry(
     {
       sessionKey: params.sessionKey,
@@ -147,8 +147,8 @@ async function updateSessionStoreEntry(
 }
 
 async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Promise<void> {
-  // The public runtime helper historically replaced the full entry. Use the
-  // replace seam so removed fields do not survive as merge leftovers.
+  // Maintainer note: this compatibility helper has full-entry replacement
+  // semantics, so removed fields must not survive as merge leftovers.
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
