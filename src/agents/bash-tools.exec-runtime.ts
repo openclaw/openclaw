@@ -420,53 +420,6 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
   return Math.floor(value);
 }
 
-/** Emits an exec system event and wakes the routed session when appropriate. */
-export function emitExecSystemEvent(
-  text: string,
-  opts: {
-    sessionKey?: string;
-    contextKey?: string;
-    deliveryContext?: DeliveryContext;
-    /** `session.mainKey` from the runtime config; pass-through of `undefined`
-     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
-    mainKey?: string;
-    /** `session.scope` from the runtime config; needed so global-scope
-     *  agents route cron-run events to the "global" queue. */
-    sessionScope?: "per-sender" | "global";
-    eventRouting?: EventSessionRoutingPolicy;
-  },
-) {
-  const sessionKey = opts.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-  const eventRouting = opts.eventRouting ?? {
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
-  };
-  enqueueSystemEvent(text, {
-    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-    contextKey: opts.contextKey,
-    deliveryContext: opts.deliveryContext,
-  });
-  // Subagent sessions receive exec results via process poll and announce flow;
-  // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        sessionKey,
-        {
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        },
-        eventRouting,
-      ),
-    );
-  }
-}
-
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 
 function joinExecFailureOutput(aggregated: string, reason: string) {
