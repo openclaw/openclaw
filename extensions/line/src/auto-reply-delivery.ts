@@ -180,6 +180,7 @@ export async function deliverLineAutoReply(params: {
         accountId,
         replyMessageLine: deps.replyMessageLine,
         pushMessageLine: deps.pushMessageLine,
+        pushMessagesLine: deps.pushMessagesLine,
         pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
         createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
         onReplyError: deps.onReplyError,
