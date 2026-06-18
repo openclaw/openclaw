@@ -11,7 +11,9 @@ const outboundAttachmentMockState = vi.hoisted(() => {
       ) => {
         const delayMs = delayByFilename.get(options?.filename ?? "") ?? 0;
         if (delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         return {
           path: `/tmp/openclaw/media/outbound/${options?.filename ?? "mcp-attachment"}`,
