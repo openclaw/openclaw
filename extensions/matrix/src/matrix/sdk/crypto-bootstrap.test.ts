@@ -436,7 +436,8 @@ describe("MatrixCryptoBootstrapper", () => {
     // called only for the post-cross-signing second pass, not with forceNewSecretStorage.
     expect(
       deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey.mock.calls.some(
-        ([, opts]: [unknown, Record<string, unknown>]) => opts.forceNewSecretStorage === true,
+        (call: unknown[]) =>
+          (call as [unknown, Record<string, unknown>])[1]?.forceNewSecretStorage === true,
       ),
     ).toBe(false);
   });
