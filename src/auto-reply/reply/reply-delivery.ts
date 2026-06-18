@@ -1,6 +1,7 @@
 /** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { logWarn } from "../../logger.js";
 import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -42,6 +43,17 @@ export function normalizeReplyPayloadDirectives(params: {
         extractMediaDirectives: params.extractMediaDirectives,
       })
     : undefined;
+
+  // Emit the fenced-MEDIA skip warning exactly once, here at the actual
+  // outbound delivery boundary (#41966). parseReplyDirectives only carries the
+  // signal because it also runs on comparison/planning paths that may parse the
+  // same payload multiple times — warning there would log duplicates.
+  if (parsed?.mediaTokenSkippedInFence) {
+    logWarn(
+      `media: MEDIA: token skipped — it is inside a fenced code block and will not be delivered. ` +
+        `Remove the surrounding backticks/fence to send this as media.`,
+    );
+  }
 
   let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
   if (params.trimLeadingWhitespace && text) {
