@@ -31,10 +31,12 @@ out of this repo. If a score needs private evidence, use the redacted
 - `taxonomy.yaml` is the hand-edited source of truth for surfaces, levels,
   QA profiles, categories, feature coverage IDs, docs refs, LTS overrides, and
   completeness-instruction paths.
-- Feature `coverageIds` are proof targets, not aliases. Keep one coverage ID
-  per feature row; split multi-proof features into distinct behavior-named rows.
-- Do not preserve old group names as `Parent - child` feature names, or repeat
-  the same coverage ID within one category.
+- Feature `coverageIds` are ANDed proof targets, not aliases. A feature may
+  list multiple IDs when each ID proves part of one capability.
+- Keep categories and feature names unique, product-shaped, and broader than raw
+  coverage IDs. Do not promote generic IDs into standalone feature names.
+- Avoid duplicate coverage-ID bundles under different feature names in one
+  category.
 - `docs/maturity-scores.yaml` is the aggregate score source committed in this
   repo. It is the only committed score data; do not add generated inventory
   directories.
@@ -66,11 +68,6 @@ Render an evidence-enriched docs artifact from downloaded QA artifacts:
 pnpm maturity:render -- --evidence-dir .artifacts/maturity-evidence --output-dir .artifacts/maturity-docs
 ```
 
-For taxonomy-only changes in a checkout where the maturity render/check commands
-are not present yet, validate the root taxonomy plus QA scenario evidence join
-directly with the QA Lab scorecard tests and a taxonomy/scenario coverage ID
-audit.
-
 ## Scoring Workflow
 
 When asked to score or refresh a surface:
@@ -86,8 +83,6 @@ When asked to score or refresh a surface:
    public or redacted artifact evidence.
 6. Run `pnpm maturity:render`.
 7. Run `pnpm maturity:check`.
-8. For taxonomy or coverage-ID changes, also run the QA Lab scorecard tests and
-   a taxonomy/scenario coverage ID audit.
 
 For subjective score changes, make the smallest defensible edit and leave the
 evidence path in the PR or task summary. The deterministic renderer owns
