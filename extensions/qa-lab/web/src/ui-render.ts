@@ -1009,10 +1009,6 @@ function statusTone(status: string): string {
   return status;
 }
 
-function statusDotTone(status: string): string {
-  return statusTone(status);
-}
-
 function badgeHtml(status: string): string {
   const tone = statusTone(status);
   return `<span class="badge badge-${esc(tone)}">${esc(status)}</span>`;
@@ -1645,7 +1641,7 @@ function renderEvidenceEntryButton(entry: EvidenceEntryView, selected: boolean):
       : '<span class="text-dimmed text-sm">No artifacts</span>';
   return `<button class="evidence-entry-card${selected ? " selected" : ""}" data-evidence-entry-id="${esc(entry.id)}" type="button">
     <div class="evidence-entry-card-top">
-      <span class="result-card-dot scenario-item-dot-${statusDotTone(entry.status)}"></span>
+      <span class="result-card-dot scenario-item-dot-${statusTone(entry.status)}"></span>
       <div>
         <div class="evidence-entry-title">${esc(entry.title)}</div>
         <div class="evidence-entry-meta">${esc(entry.kind)} · ${esc(entry.id)}</div>
@@ -1665,16 +1661,11 @@ function renderEvidenceArtifactBody(artifact: EvidenceArtifactView): string {
   if (isInlineScreenshot) {
     return `<a href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer"><img src="${esc(artifact.href)}" alt="${esc(artifact.kind)} artifact" loading="lazy" /></a>`;
   }
-  if (artifact.mediaKind === "image") {
+  if (artifact.mediaKind === "image" || artifact.mediaKind === "video") {
+    const noun = artifact.mediaKind === "video" ? "Video" : "Media";
     return `<div class="evidence-artifact-deferred">
-      <span>Media preview is deferred to keep the evidence view responsive.</span>
-      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open media artifact</a>
-    </div>`;
-  }
-  if (artifact.mediaKind === "video") {
-    return `<div class="evidence-artifact-deferred">
-      <span>Video preview is deferred to keep the evidence view responsive.</span>
-      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open video artifact</a>
+      <span>${noun} preview is deferred to keep the evidence view responsive.</span>
+      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open ${noun.toLowerCase()} artifact</a>
     </div>`;
   }
   if (artifact.preview !== null) {
@@ -1914,14 +1905,13 @@ function renderEvidenceProducerContext(producer: EvidenceProducerContext | null)
       ${renderProducerContextFile({ title: "Manifest", file: producer.manifest })}
       ${renderProducerContextFile({ title: "Release ledger", file: producer.releaseLedger })}
     </div>
-    <div class="evidence-producer-links">
-      ${matrix ? `<span class="ref-tag">${esc(matrix.path)}</span>` : ""}
-      ${producer.releaseLedger ? `<span class="ref-tag">${esc(producer.releaseLedger.path)}</span>` : ""}
-      ${producer.scorecard ? `<span class="ref-tag">${esc(producer.scorecard.path)}</span>` : ""}
-      ${producer.commands ? `<span class="ref-tag">${esc(producer.commands.path)}</span>` : ""}
-      ${producer.preflight.memory ? `<span class="ref-tag">${esc(producer.preflight.memory.path)}</span>` : ""}
-      ${producer.preflight.adbDevices ? `<span class="ref-tag">${esc(producer.preflight.adbDevices.path)}</span>` : ""}
-    </div>
+    ${
+      matrix
+        ? `<div class="evidence-producer-links">
+      <span class="ref-tag">${esc(matrix.path)}</span>
+    </div>`
+        : ""
+    }
     ${renderEvidenceMatrixMiniGrid(matrix)}
   </section>`;
 }
@@ -1995,6 +1985,7 @@ function renderEvidenceView(state: UiState): string {
             <span class="capture-mono">${esc(evidence.evidencePath)}</span>
             <span>schema v${evidence.schemaVersion}</span>
             <span>${esc(evidence.evidenceMode)}</span>
+            ${evidence.profile ? `<span>profile ${esc(evidence.profile)}</span>` : ""}
             <span>${esc(formatIso(evidence.generatedAt))}</span>
           </div>
           <div class="evidence-workspace">

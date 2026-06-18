@@ -116,21 +116,25 @@ export async function resolveQaEvidenceArtifactFile(params: {
   evidencePath: string;
   repoRoot: string;
 }): Promise<string> {
-  const evidencePath = await resolveQaEvidenceFile({
-    inputPath: params.evidencePath,
-    repoRoot: params.repoRoot,
-  });
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const evidencePath = await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot });
+  if (!params.artifactPath.trim()) {
+    throw evidenceError("Artifact path is required.", 400);
+  }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
-  const artifactFile = await resolveExistingQaEvidenceArtifactFile({
+  const artifactFile = await resolveArtifactFileWithinRoots({
     artifactPath: params.artifactPath,
-    evidencePath,
-    repoRoot: params.repoRoot,
+    evidenceDir: path.dirname(evidencePath),
+    repoRoot,
   });
+  if (!artifactFile) {
+    throw evidenceError("Evidence artifact not found.", 404);
+  }
   const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
     evidencePath,
-    repoRoot: params.repoRoot,
+    repoRoot,
     summaryEntries: summary.entries,
   });
   if (allowedArtifactFiles.has(artifactFile)) {
@@ -144,40 +148,35 @@ function isExplicitRepoRootArtifactPath(raw: string): boolean {
   return normalized.startsWith(".artifacts/");
 }
 
-async function resolveExistingQaEvidenceArtifactFile(params: {
+// Resolve an artifact path against pre-resolved roots without re-reading the evidence file.
+// Returns null when the path is missing or escapes both roots; callers map that to an error.
+async function resolveArtifactFileWithinRoots(params: {
   artifactPath: string;
-  evidencePath: string;
+  evidenceDir: string;
   repoRoot: string;
-}): Promise<string> {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
-  const evidenceDir = path.dirname(
-    await resolveQaEvidenceFile({
-      inputPath: params.evidencePath,
-      repoRoot,
-    }),
-  );
+}): Promise<string | null> {
   const raw = params.artifactPath.trim();
   if (!raw) {
-    throw evidenceError("Artifact path is required.", 400);
+    return null;
   }
-  const candidates = path.isAbsolute(raw) ? [raw] : [path.resolve(evidenceDir, raw)];
+  const candidates = path.isAbsolute(raw) ? [raw] : [path.resolve(params.evidenceDir, raw)];
   if (!path.isAbsolute(raw) && isExplicitRepoRootArtifactPath(raw)) {
-    candidates.push(path.resolve(repoRoot, raw));
+    candidates.push(path.resolve(params.repoRoot, raw));
   }
   for (const candidate of candidates) {
     const realCandidate = await realpathIfExists(candidate);
     if (!realCandidate) {
       continue;
     }
-    if (!isInside(repoRoot, realCandidate) && !isInside(evidenceDir, realCandidate)) {
+    if (!isInside(params.repoRoot, realCandidate) && !isInside(params.evidenceDir, realCandidate)) {
       continue;
     }
-    const stats = await fs.stat(realCandidate);
-    if (stats.isFile()) {
+    const stats = await fs.stat(realCandidate).catch(() => null);
+    if (stats?.isFile()) {
       return realCandidate;
     }
   }
-  throw evidenceError("Evidence artifact not found.", 404);
+  return null;
 }
 
 async function collectDeclaredQaEvidenceArtifactFiles(params: {
@@ -185,14 +184,16 @@ async function collectDeclaredQaEvidenceArtifactFiles(params: {
   repoRoot: string;
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }): Promise<Set<string>> {
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const evidenceDir = path.dirname(params.evidencePath);
   const allowed = new Set<string>();
   for (const entry of params.summaryEntries) {
     for (const artifact of entry.execution?.artifacts ?? []) {
-      const artifactPath = await resolveExistingQaEvidenceArtifactFile({
+      const artifactPath = await resolveArtifactFileWithinRoots({
         artifactPath: artifact.path,
-        evidencePath: params.evidencePath,
-        repoRoot: params.repoRoot,
-      }).catch(() => null);
+        evidenceDir,
+        repoRoot,
+      });
       if (artifactPath) {
         allowed.add(artifactPath);
       }
@@ -318,34 +319,24 @@ async function buildProducerContextFile(params: {
 }
 
 async function buildArtifactView(params: {
+  allowedArtifactFiles: ReadonlySet<string>;
   artifact: QaEvidenceArtifact;
-  evidencePath: string;
+  evidenceDir: string;
   hrefEvidencePath: string;
   repoRoot: string;
 }): Promise<QaEvidenceArtifactView> {
   const mediaKind = classifyArtifact(params.artifact.kind, params.artifact.path);
-  try {
-    const artifactPath = await resolveQaEvidenceArtifactFile({
-      artifactPath: params.artifact.path,
-      evidencePath: params.evidencePath,
-      repoRoot: params.repoRoot,
-    });
-    return {
-      exists: true,
-      error: null,
-      href: artifactHref(params.hrefEvidencePath, params.artifact.path),
-      kind: params.artifact.kind,
-      mediaKind,
-      path: params.artifact.path,
-      preview: await readPreview(artifactPath, mediaKind).catch(
-        (error: unknown) => `Preview unavailable: ${formatErrorMessage(error)}`,
-      ),
-      source: params.artifact.source,
-    };
-  } catch (error) {
+  const realFile = await resolveArtifactFileWithinRoots({
+    artifactPath: params.artifact.path,
+    evidenceDir: params.evidenceDir,
+    repoRoot: params.repoRoot,
+  }).catch(() => null);
+  if (!realFile || !params.allowedArtifactFiles.has(realFile)) {
     return {
       exists: false,
-      error: formatErrorMessage(error),
+      error: realFile
+        ? "Evidence artifact is not declared by this evidence summary."
+        : "Evidence artifact not found.",
       href: null,
       kind: params.artifact.kind,
       mediaKind,
@@ -354,6 +345,18 @@ async function buildArtifactView(params: {
       source: params.artifact.source,
     };
   }
+  return {
+    exists: true,
+    error: null,
+    href: artifactHref(params.hrefEvidencePath, params.artifact.path),
+    kind: params.artifact.kind,
+    mediaKind,
+    path: params.artifact.path,
+    preview: await readPreview(realFile, mediaKind).catch(
+      (error: unknown) => `Preview unavailable: ${formatErrorMessage(error)}`,
+    ),
+    source: params.artifact.source,
+  };
 }
 
 function readString(value: unknown): string | null {
@@ -485,14 +488,15 @@ async function candidateProducerRoots(params: {
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }) {
   const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
-  const roots = new Set<string>([path.dirname(params.evidencePath)]);
+  const evidenceDir = path.dirname(params.evidencePath);
+  const roots = new Set<string>([evidenceDir]);
   for (const entry of params.summaryEntries) {
     for (const artifact of entry.execution?.artifacts ?? []) {
-      const artifactPath = await resolveExistingQaEvidenceArtifactFile({
+      const artifactPath = await resolveArtifactFileWithinRoots({
         artifactPath: artifact.path,
-        evidencePath: params.evidencePath,
+        evidenceDir,
         repoRoot,
-      }).catch(() => null);
+      });
       if (!artifactPath) {
         continue;
       }
@@ -653,6 +657,14 @@ export async function buildQaEvidenceGalleryModel(params: {
     blocked: 0,
     skipped: 0,
   };
+  // Resolve the declared-artifact allowlist once; buildArtifactView then only checks membership
+  // instead of re-reading the evidence file and re-collecting the allowlist per artifact.
+  const evidenceDir = path.dirname(evidencePath);
+  const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
+    evidencePath,
+    repoRoot,
+    summaryEntries: summary.entries,
+  });
   const limitArtifactView = createConcurrencyLimit(ARTIFACT_VIEW_CONCURRENCY);
   const entries = await Promise.all(
     summary.entries.map(async (entry): Promise<QaEvidenceGalleryEntryView> => {
@@ -661,7 +673,13 @@ export async function buildQaEvidenceGalleryModel(params: {
         artifacts: await Promise.all(
           (entry.execution?.artifacts ?? []).map((artifact) =>
             limitArtifactView(() =>
-              buildArtifactView({ artifact, evidencePath, hrefEvidencePath, repoRoot }),
+              buildArtifactView({
+                allowedArtifactFiles,
+                artifact,
+                evidenceDir,
+                hrefEvidencePath,
+                repoRoot,
+              }),
             ),
           ),
         ),

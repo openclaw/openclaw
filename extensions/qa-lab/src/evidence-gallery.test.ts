@@ -23,6 +23,37 @@ async function writeJson(filePath: string, value: unknown) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function vitestArtifactEvidence(params: {
+  id: string;
+  title: string;
+  artifact: { kind: string; path: string };
+}) {
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-06-17T12:00:00.000Z",
+    evidenceMode: "full",
+    entries: [
+      {
+        test: { kind: "vitest-test", id: params.id, title: params.title },
+        coverage: [{ id: "qa.artifact", role: "primary" }],
+        execution: {
+          runner: "vitest",
+          environment: { ref: "gallery-test", os: "darwin", nodeVersion: "v24.0.0" },
+          provider: {
+            id: "mock-openai",
+            live: false,
+            model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+          },
+          packageSource: { kind: "source-checkout" },
+          artifacts: [{ ...params.artifact, source: "vitest" }],
+        },
+        result: { status: "pass" },
+      },
+    ],
+  };
+}
+
 describe("evidence gallery", () => {
   it("builds a generic gallery model for non-UX QA Lab evidence", async () => {
     const repoRoot = await createTempRepo();
@@ -397,38 +428,14 @@ describe("evidence gallery", () => {
     await fs.writeFile(path.join(repoRoot, "package.json"), '{"private":true}\n', "utf8");
     await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(path.join(outputDir, "artifact.log"), "ok\n", "utf8");
-    await writeJson(evidencePath, {
-      kind: "openclaw.qa.evidence-summary",
-      schemaVersion: 2,
-      generatedAt: "2026-06-17T12:00:00.000Z",
-      evidenceMode: "full",
-      entries: [
-        {
-          test: {
-            kind: "vitest-test",
-            id: "qa-lab.declared-artifact",
-            title: "Declared artifact",
-          },
-          coverage: [{ id: "qa.artifact", role: "primary" }],
-          execution: {
-            runner: "vitest",
-            environment: {
-              ref: "gallery-test",
-              os: "darwin",
-              nodeVersion: "v24.0.0",
-            },
-            provider: {
-              id: "mock-openai",
-              live: false,
-              model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
-            },
-            packageSource: { kind: "source-checkout" },
-            artifacts: [{ kind: "log", path: "artifact.log", source: "vitest" }],
-          },
-          result: { status: "pass" },
-        },
-      ],
-    });
+    await writeJson(
+      evidencePath,
+      vitestArtifactEvidence({
+        id: "qa-lab.declared-artifact",
+        title: "Declared artifact",
+        artifact: { kind: "log", path: "artifact.log" },
+      }),
+    );
 
     await expect(resolveQaEvidenceFile({ inputPath: outputDir, repoRoot })).resolves.toBe(
       await fs.realpath(evidencePath),
@@ -448,38 +455,11 @@ describe("evidence gallery", () => {
       '{"from":"evidence"}\n',
       "utf8",
     );
-    const collisionEvidence = {
-      kind: "openclaw.qa.evidence-summary",
-      schemaVersion: 2,
-      generatedAt: "2026-06-17T12:00:00.000Z",
-      evidenceMode: "full",
-      entries: [
-        {
-          test: {
-            kind: "vitest-test",
-            id: "qa-lab.colliding-artifact",
-            title: "Colliding artifact",
-          },
-          coverage: [{ id: "qa.artifact", role: "primary" }],
-          execution: {
-            runner: "vitest",
-            environment: {
-              ref: "gallery-test",
-              os: "darwin",
-              nodeVersion: "v24.0.0",
-            },
-            provider: {
-              id: "mock-openai",
-              live: false,
-              model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
-            },
-            packageSource: { kind: "source-checkout" },
-            artifacts: [{ kind: "runner-result", path: "runner/result.json", source: "vitest" }],
-          },
-          result: { status: "pass" },
-        },
-      ],
-    };
+    const collisionEvidence = vitestArtifactEvidence({
+      id: "qa-lab.colliding-artifact",
+      title: "Colliding artifact",
+      artifact: { kind: "runner-result", path: "runner/result.json" },
+    });
     await writeJson(evidencePath, collisionEvidence);
     await expect(
       resolveQaEvidenceArtifactFile({
