@@ -206,6 +206,50 @@ describe("feishu_doc image fetch hardening", () => {
     return (await tool.execute("tool-call", params)) as ToolResultWithDetails;
   }
 
+  it("list_blocks follows Feishu document block pagination", async () => {
+    blockListMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            { block_id: "root", block_type: 1 },
+            { block_id: "page_1_text", block_type: 2 },
+          ],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ block_id: "page_2_text", block_type: 2 }],
+          has_more: false,
+        },
+      });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "list_blocks",
+      doc_token: "doc_1",
+    });
+
+    expect(blockListMock).toHaveBeenCalledTimes(2);
+    expect(blockListMock).toHaveBeenNthCalledWith(1, {
+      path: { document_id: "doc_1" },
+      params: { page_size: 500, page_token: undefined },
+    });
+    expect(blockListMock).toHaveBeenNthCalledWith(2, {
+      path: { document_id: "doc_1" },
+      params: { page_size: 500, page_token: "page-2" },
+    });
+    expect(result.details.blocks).toEqual([
+      { block_id: "root", block_type: 1 },
+      { block_id: "page_1_text", block_type: 2 },
+      { block_id: "page_2_text", block_type: 2 },
+    ]);
+  });
+
   it("inserts blocks sequentially to preserve document order", async () => {
     const blocks = [
       { block_type: 3, block_id: "h1" },

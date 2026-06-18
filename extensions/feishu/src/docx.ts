@@ -123,6 +123,27 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
 
 /** Max blocks per documentBlockChildren.create request */
 const MAX_CONVERT_RETRY_DEPTH = 8;
+const DOCX_BLOCK_LIST_PAGE_SIZE = 500;
+
+async function listAllDocumentBlocks(client: Lark.Client, docToken: string) {
+  const blocks: FeishuDocxBlock[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await client.docx.documentBlock.list({
+      path: { document_id: docToken },
+      params: { page_size: DOCX_BLOCK_LIST_PAGE_SIZE, page_token: pageToken },
+    });
+    if (res.code !== 0) {
+      throw new Error(res.msg);
+    }
+
+    blocks.push(...(res.data?.items ?? []));
+    pageToken = res.data?.has_more === true ? res.data?.page_token : undefined;
+  } while (pageToken);
+
+  return blocks;
+}
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
   const res = await client.docx.document.convert({
@@ -455,17 +476,11 @@ async function insertBlocksWithDescendant(
 }
 
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
-  const existing = await client.docx.documentBlock.list({
-    path: { document_id: docToken },
-  });
-  if (existing.code !== 0) {
-    throw new Error(existing.msg);
-  }
+  const existing = await listAllDocumentBlocks(client, docToken);
 
-  const childIds =
-    existing.data?.items
-      ?.filter((b) => b.parent_id === docToken && b.block_type !== 1)
-      .map((b) => b.block_id) ?? [];
+  const childIds = existing
+    .filter((b) => b.parent_id === docToken && b.block_type !== 1)
+    .map((b) => b.block_id);
 
   if (childIds.length > 0) {
     const res = await client.docx.documentBlockChildren.batchDelete({
@@ -847,17 +862,15 @@ async function uploadFileBlock(
 const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32]);
 
 async function readDoc(client: Lark.Client, docToken: string) {
-  const [contentRes, infoRes, blocksRes] = await Promise.all([
+  const [contentRes, infoRes, blocks] = await Promise.all([
     client.docx.document.rawContent({ path: { document_id: docToken } }),
     client.docx.document.get({ path: { document_id: docToken } }),
-    client.docx.documentBlock.list({ path: { document_id: docToken } }),
+    listAllDocumentBlocks(client, docToken),
   ]);
 
   if (contentRes.code !== 0) {
     throw new Error(contentRes.msg);
   }
-
-  const blocks = blocksRes.data?.items ?? [];
   const blockCounts: Record<string, number> = {};
   const structuredTypes: string[] = [];
 
@@ -1322,15 +1335,8 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
 }
 
 async function listBlocks(client: Lark.Client, docToken: string) {
-  const res = await client.docx.documentBlock.list({
-    path: { document_id: docToken },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
-
   return {
-    blocks: res.data?.items ?? [],
+    blocks: await listAllDocumentBlocks(client, docToken),
   };
 }
 
