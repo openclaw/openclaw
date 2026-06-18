@@ -1030,6 +1030,13 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/release-user-journey-assertions.test.ts",
     ],
   ],
+  [
+    "scripts/e2e/lib/release-assertion-files.mjs",
+    [
+      "test/scripts/release-scenarios-assertions.test.ts",
+      "test/scripts/release-user-journey-assertions.test.ts",
+    ],
+  ],
   ["scripts/e2e/lib/skills/clawhub-install-proof.sh", ["test/scripts/e2e-shell-tempfiles.test.ts"]],
   [
     "scripts/e2e/lib/update-channel-switch/assertions.mjs",
