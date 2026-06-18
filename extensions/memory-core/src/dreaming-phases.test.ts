@@ -723,8 +723,8 @@ describe("memory-core dreaming phases", () => {
       const stateAfterFirst = await testing.readDailyIngestionState(workspaceDir);
       const firstEntry = Object.values(stateAfterFirst.files)[0];
       expect(firstEntry).toBeDefined();
-      expect(firstEntry!.strippedHash).toBeDefined();
-      expect(typeof firstEntry!.strippedHash).toBe("string");
+      expect(firstEntry.strippedHash).toBeDefined();
+      expect(typeof firstEntry.strippedHash).toBe("string");
 
       // Second run: the managed block changed the file fingerprint, but the
       // stripped content hash should match → skip re-ingestion.
@@ -733,7 +733,7 @@ describe("memory-core dreaming phases", () => {
       const stateAfterSecond = await testing.readDailyIngestionState(workspaceDir);
       const secondEntry = Object.values(stateAfterSecond.files)[0];
       expect(secondEntry).toBeDefined();
-      expect(secondEntry!.strippedHash).toBe(firstEntry!.strippedHash);
+      expect(secondEntry.strippedHash).toBe(firstEntry.strippedHash);
 
       // Candidate snippets should remain the same — no false re-ingestion.
       const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:02:00.000Z");
