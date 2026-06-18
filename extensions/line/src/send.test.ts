@@ -6,6 +6,8 @@ const {
   replyMessageMock,
   showLoadingAnimationMock,
   getProfileMock,
+  getMessageQuotaMock,
+  getMessageQuotaConsumptionMock,
   MessagingApiClientMock,
   requireRuntimeConfigMock,
   resolveLineAccountMock,
@@ -13,17 +15,23 @@ const {
   recordChannelActivityMock,
   logVerboseMock,
   resolvePinnedHostnameWithPolicyMock,
+  getMessageQuotaMock,
+  getMessageQuotaConsumptionMock,
 } = vi.hoisted(() => {
   const pushMessageMockLocal = vi.fn();
   const replyMessageMockLocal = vi.fn();
   const showLoadingAnimationMockLocal = vi.fn();
   const getProfileMockLocal = vi.fn();
+  const getMessageQuotaMockLocal = vi.fn();
+  const getMessageQuotaConsumptionMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
     return {
       pushMessage: pushMessageMockLocal,
       replyMessage: replyMessageMockLocal,
       showLoadingAnimation: showLoadingAnimationMockLocal,
       getProfile: getProfileMockLocal,
+      getMessageQuota: getMessageQuotaMockLocal,
+      getMessageQuotaConsumption: getMessageQuotaConsumptionMockLocal,
     };
   });
   const requireRuntimeConfigMockLocal = vi.fn((cfg: unknown) => cfg ?? {});
@@ -37,6 +45,8 @@ const {
     replyMessageMock: replyMessageMockLocal,
     showLoadingAnimationMock: showLoadingAnimationMockLocal,
     getProfileMock: getProfileMockLocal,
+    getMessageQuotaMock: getMessageQuotaMockLocal,
+    getMessageQuotaConsumptionMock: getMessageQuotaConsumptionMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
     requireRuntimeConfigMock: requireRuntimeConfigMockLocal,
     resolveLineAccountMock: resolveLineAccountMockLocal,
@@ -117,6 +127,8 @@ describe("LINE send helpers", () => {
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
     getProfileMock.mockReset();
+    getMessageQuotaMock.mockReset();
+    getMessageQuotaConsumptionMock.mockReset();
     MessagingApiClientMock.mockReset();
     requireRuntimeConfigMock.mockClear();
     resolveLineAccountMock.mockReset();
@@ -131,6 +143,8 @@ describe("LINE send helpers", () => {
         replyMessage: replyMessageMock,
         showLoadingAnimation: showLoadingAnimationMock,
         getProfile: getProfileMock,
+        getMessageQuota: getMessageQuotaMock,
+        getMessageQuotaConsumption: getMessageQuotaConsumptionMock,
       };
     });
     requireRuntimeConfigMock.mockImplementation((cfg: unknown) => cfg ?? LINE_TEST_CFG);
@@ -408,6 +422,43 @@ describe("LINE send helpers", () => {
     );
   });
 
+  it("retries on 5xx push errors and succeeds", async () => {
+    pushMessageMock
+      .mockRejectedValueOnce({ statusCode: 502, statusText: "Bad Gateway" })
+      .mockResolvedValueOnce({});
+
+    await sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+      cfg: LINE_TEST_CFG,
+    });
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts immediately on non-retryable push errors (400)", async () => {
+    const err = { statusCode: 400, statusText: "Bad Request", body: "invalid" };
+    pushMessageMock.mockRejectedValueOnce(err);
+
+    await expect(
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toEqual(err);
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("exhausts retries on persistent 5xx push errors", async () => {
+    pushMessageMock.mockRejectedValue({ statusCode: 503, statusText: "Service Unavailable" });
+
+    await expect(
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(5);
+  });
+
   it("logs HTTP body when push fails", async () => {
     const err = new Error("LINE push failed") as Error & {
       statusCode: number;
@@ -457,6 +508,51 @@ describe("LINE send helpers", () => {
     expect(logVerboseMock).toHaveBeenCalledWith(
       "line: loading animation failed (non-fatal): Error: unsupported",
     );
+  });
+
+  it("logLineChannelQuota logs limited quota", async () => {
+    getMessageQuotaMock.mockResolvedValue({ type: "limited", value: 5000 });
+    getMessageQuotaConsumptionMock.mockResolvedValue({ totalUsage: 1200 });
+
+    await sendModule.logLineChannelQuota({ cfg: LINE_TEST_CFG });
+
+    expect(getMessageQuotaMock).toHaveBeenCalledTimes(1);
+    expect(getMessageQuotaConsumptionMock).toHaveBeenCalledTimes(1);
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: quota type=limited, 1200/5000 used (3800 remaining, 24%)",
+    );
+  });
+
+  it("logLineChannelQuota logs unlimited quota", async () => {
+    getMessageQuotaMock.mockResolvedValue({ type: "none" });
+    getMessageQuotaConsumptionMock.mockResolvedValue({ totalUsage: 0 });
+
+    await sendModule.logLineChannelQuota({ cfg: LINE_TEST_CFG });
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: quota type=none (unlimited plan, no monthly cap)",
+    );
+  });
+
+  it("logLineChannelQuota handles API error gracefully", async () => {
+    getMessageQuotaMock.mockRejectedValue(new Error("API error"));
+
+    await sendModule.logLineChannelQuota({ cfg: LINE_TEST_CFG });
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      expect.stringMatching(/line: failed to query quota info/),
+    );
+  });
+
+  it("incrementPushCount tracks message counts", async () => {
+    sendModule.resetMonthlyPushCount();
+    expect(sendModule.getPushCounts()).toEqual({ total: 0, monthly: 0 });
+
+    sendModule.incrementPushCount(3);
+    expect(sendModule.getPushCounts()).toEqual({ total: 3, monthly: 3 });
+
+    sendModule.resetMonthlyPushCount();
+    expect(sendModule.getPushCounts()).toEqual({ total: 3, monthly: 0 });
   });
 
   it("pushes quick-reply text and caps to 13 buttons", async () => {
