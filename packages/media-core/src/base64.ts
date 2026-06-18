@@ -37,13 +37,16 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
+/** Returns true for standard (+ /) and URL-safe (- _) base64 alphabet chars. */
 function isBase64DataChar(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||
     (code >= 0x61 && code <= 0x7a) ||
     (code >= 0x30 && code <= 0x39) ||
     code === 0x2b ||
-    code === 0x2f
+    code === 0x2f ||
+    code === 0x2d || // URL-safe: -
+    code === 0x5f    // URL-safe: _
   );
 }
 
@@ -72,7 +75,14 @@ export function canonicalizeBase64(base64: string): string | undefined {
     if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
     }
-    cleaned += base64[i];
+    // Normalize URL-safe base64 chars to standard base64.
+    if (code === 0x2d) {
+      cleaned += "+";
+    } else if (code === 0x5f) {
+      cleaned += "/";
+    } else {
+      cleaned += base64[i];
+    }
   }
   if (!cleaned || cleaned.length % 4 !== 0) {
     return undefined;

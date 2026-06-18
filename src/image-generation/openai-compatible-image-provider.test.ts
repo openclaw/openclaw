@@ -282,7 +282,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      response: { json: async () => ({ data: ["bad-entry-shape"] }) },
       release: vi.fn(async () => {}),
     });
     const provider = createProvider();

@@ -110,7 +110,14 @@ describe("image asset helpers", () => {
         { data: { b64_json: Buffer.from("png").toString("base64") } },
         { malformedResponseError: "Sample image response malformed" },
       ),
-    ).toThrow("Sample image response malformed");
+    ).not.toThrow();
+    // Single-object data is normalized to a single-element array.
+    expect(
+      parseOpenAiCompatibleImageResponse(
+        { data: { b64_json: Buffer.from("png").toString("base64") } },
+        { defaultMimeType: "image/png" },
+      ),
+    ).toHaveLength(1);
   });
 
   it("resolves source upload filenames from explicit names or MIME types", () => {

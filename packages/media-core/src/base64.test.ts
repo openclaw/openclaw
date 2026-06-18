@@ -19,6 +19,16 @@ describe("base64 helpers", () => {
       expected: undefined,
     },
     {
+      name: "canonicalizeBase64 accepts URL-safe base64",
+      actual: canonicalizeBase64("-___"),
+      expected: "+///",
+    },
+    {
+      name: "canonicalizeBase64 accepts URL-safe base64 with padding",
+      actual: canonicalizeBase64("-w=="),
+      expected: "+w==",
+    },
+    {
       name: "estimateBase64DecodedBytes handles whitespace",
       actual: estimateBase64DecodedBytes("SGV s bG8= \n"),
       expected: 5,

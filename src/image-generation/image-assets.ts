@@ -204,14 +204,14 @@ export function parseOpenAiCompatibleImageResponse(
     throwMalformedImageResponse(options.malformedResponseError);
     return [];
   }
-  const data = payload.data;
-  if (data === undefined || data === null) {
+  const rawData = payload.data;
+  if (rawData === undefined || rawData === null) {
     return [];
   }
-  if (!Array.isArray(data)) {
-    throwMalformedImageResponse(options.malformedResponseError);
-    return [];
-  }
+  // Normalize data to an array: some OpenAI-compatible proxies return a
+  // single object when there is only one image, while the OpenAI spec
+  // requires an array.
+  const data: unknown[] = Array.isArray(rawData) ? rawData : [rawData];
 
   const images: GeneratedImageAsset[] = [];
   for (const [index, entry] of data.entries()) {
