@@ -60,6 +60,7 @@ describe("qa scenario catalog", () => {
         "package-openclaw-for-docker",
         "plugin-lifecycle-probe",
         "qa-otel-smoke",
+        "ux-matrix-evidence-dashboard",
       ].toSorted(),
     );
     expect(
@@ -140,6 +141,7 @@ describe("qa scenario catalog", () => {
 
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
+    const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
@@ -148,6 +150,14 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
+    expect(uxMatrix.execution.kind).toBe("script");
+    if (uxMatrix.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${uxMatrix.execution.kind}`);
+    }
+    expect(uxMatrix.execution.path).toBe("scripts/qa/ux-matrix-evidence-producer.ts");
+    expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
+    expect(uxMatrix.execution.config).toBeUndefined();
+    expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
