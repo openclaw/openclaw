@@ -1,14 +1,13 @@
-// Channel Message Flows tests cover channel message flows script behavior.
+// Channel Message Flows tests cover QA Lab channel delivery evidence.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
-  parseChannelMessageFlowArgs,
   resolveTelegramFlowThreadSpec,
   runTelegramThinkingFinalFlow,
   runTelegramWorkingFinalFlow,
-} from "../../scripts/dev/channel-message-flows.ts";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+} from "./test-support/channel-message-flows.js";
 
-describe("channel message flows dev runner", () => {
+describe("channel message flows QA e2e", () => {
   function createTestDraftStream(params?: {
     update?: (text: string) => void;
     flush?: () => Promise<void>;
@@ -16,6 +15,7 @@ describe("channel message flows dev runner", () => {
   }) {
     return {
       update: vi.fn(params?.update ?? (() => {})),
+      updatePreview: vi.fn(),
       flush: vi.fn(params?.flush ?? (async () => {})),
       clear: vi.fn(params?.clear ?? (async () => {})),
       stop: vi.fn(async () => {}),
@@ -23,55 +23,6 @@ describe("channel message flows dev runner", () => {
       forceNewMessage: vi.fn(),
     };
   }
-
-  it("parses the Telegram thinking-final flow from channel/target flags", () => {
-    const parsed = parseChannelMessageFlowArgs([
-      "--channel",
-      "telegram",
-      "--target",
-      "123",
-      "--flow",
-      "thinking-final",
-      "--account",
-      "sut",
-      "--thread-id",
-      "42",
-      "--delay-ms",
-      "0",
-    ]);
-
-    expect(parsed).toEqual({
-      accountId: "sut",
-      channel: "telegram",
-      delayMs: 0,
-      flow: "thinking-final",
-      target: "123",
-      threadId: 42,
-    });
-  });
-
-  it("parses the Telegram working-final flow from channel/chat flags", () => {
-    const parsed = parseChannelMessageFlowArgs([
-      "--channel",
-      "telegram",
-      "--chat",
-      "123",
-      "--flow",
-      "working-final",
-      "--duration-ms",
-      "12000",
-      "--delay-ms",
-      "0",
-    ]);
-
-    expect(parsed).toEqual({
-      channel: "telegram",
-      delayMs: 0,
-      durationMs: 12000,
-      flow: "working-final",
-      target: "123",
-    });
-  });
 
   it("streams thinking updates, clears the preview, then sends the final answer", async () => {
     const events: string[] = [];
@@ -85,6 +36,7 @@ describe("channel message flows dev runner", () => {
       clear: vi.fn(async () => {
         events.push("clear");
       }),
+      updatePreview: vi.fn(),
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
@@ -96,9 +48,11 @@ describe("channel message flows dev runner", () => {
 
     const result = await runTelegramThinkingFinalFlow(
       {
+        accountId: "sut",
         cfg: {} as OpenClawConfig,
         delayMs: 0,
         target: "123",
+        threadId: 42,
         thinkingUpdates: ["Checking the request.", "Reading the Telegram code.", "Ready."],
       },
       {
@@ -114,11 +68,11 @@ describe("channel message flows dev runner", () => {
     expect(events.at(-2)).toBe("clear");
     expect(events.at(-1)).toBe("final");
     expect(sendFinal).toHaveBeenCalledWith({
-      accountId: undefined,
+      accountId: "sut",
       cfg: {},
       target: "123",
       text: "Final answer: the Telegram thinking preview cleared and this durable reply landed.",
-      threadId: undefined,
+      threadId: 42,
     });
     expect(result).toEqual({ finalMessageId: "99", previewUpdates: 3 });
   });
@@ -130,6 +84,7 @@ describe("channel message flows dev runner", () => {
         throw new Error("flush failed");
       }),
       clear: vi.fn(async () => {}),
+      updatePreview: vi.fn(),
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
@@ -161,6 +116,7 @@ describe("channel message flows dev runner", () => {
       update: vi.fn(() => {}),
       flush: vi.fn(async () => {}),
       clear: vi.fn(async () => {}),
+      updatePreview: vi.fn(),
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),

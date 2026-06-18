@@ -627,6 +627,38 @@ grep -q "prefix" "$SCRATCH_ROOT/install_noisy.log"
     }
   });
 
+  it("rejects invalid kitchen-sink log byte limits before CLI setup", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-log-invalid-"));
+    const scratchRoot = path.join(parent, "scratch");
+    const entry = path.join(parent, "entry.mjs");
+    try {
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(entry, "console.log('should not run');\n");
+
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_ENTRY="$ENTRY"
+export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64kb
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+run_kitchen_sink_openclaw_logged "install/log" plugins install demo
+`,
+        {
+          ENTRY: entry,
+          SCRATCH_ROOT: scratchRoot,
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: 64kb");
+      expect(result.stdout).not.toContain("should not run");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
   it("includes expected-failure transcripts in the final kitchen-sink log scan", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-failure-log-"));
     const home = path.join(parent, "home");

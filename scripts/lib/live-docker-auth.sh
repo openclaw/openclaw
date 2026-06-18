@@ -261,6 +261,16 @@ openclaw_live_resource_value_disabled() {
   return 1
 }
 
+openclaw_live_resolve_pids_limit() {
+  local env_name="$1"
+  local pids_limit="$2"
+  if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
+    echo "invalid $env_name: $pids_limit" >&2
+    return 2
+  fi
+  printf '%s\n' "$((10#$pids_limit))"
+}
+
 openclaw_live_detect_available_cpus() {
   if [ -n "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}" ]; then
     printf '%s\n' "${OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}"
@@ -298,6 +308,10 @@ openclaw_live_docker_run_resource_args() {
   local memory="${OPENCLAW_LIVE_DOCKER_MEMORY:-${OPENCLAW_DOCKER_E2E_MEMORY:-8g}}"
   local cpus="${OPENCLAW_LIVE_DOCKER_CPUS:-${OPENCLAW_DOCKER_E2E_CPUS:-16}}"
   local pids_limit="${OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:-${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}}"
+  local pids_limit_env="OPENCLAW_LIVE_DOCKER_PIDS_LIMIT"
+  if [ -z "${OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:-}" ]; then
+    pids_limit_env="OPENCLAW_DOCKER_E2E_PIDS_LIMIT"
+  fi
   cpus="$(openclaw_live_resolve_cpus "$cpus")"
 
   if ! openclaw_live_resource_value_disabled "$memory"; then
@@ -307,6 +321,7 @@ openclaw_live_docker_run_resource_args() {
     eval "${target_array}+=(--cpus \"\$cpus\")"
   fi
   if ! openclaw_live_resource_value_disabled "$pids_limit"; then
+    pids_limit="$(openclaw_live_resolve_pids_limit "$pids_limit_env" "$pids_limit")" || return $?
     eval "${target_array}+=(--pids-limit \"\$pids_limit\")"
   fi
 }
@@ -328,7 +343,7 @@ openclaw_live_init_docker_run_args() {
   else
     eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
   fi
-  openclaw_live_docker_run_resource_args resource_args
+  openclaw_live_docker_run_resource_args resource_args || return $?
   openclaw_live_append_array "$target_array" resource_args
 }
 
@@ -433,7 +448,7 @@ openclaw_live_chown_bind_dirs_for_container_user() {
   ((index > 0)) || return 0
 
   local resource_args=()
-  openclaw_live_docker_run_resource_args resource_args
+  openclaw_live_docker_run_resource_args resource_args || return $?
 
   docker run --rm \
     "${resource_args[@]}" \

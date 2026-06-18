@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCLAW_KITCHEN_SINK_PLUGIN_E2E_IMAGE)"
+OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536
+)"
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 kitchen-sink-plugin empty)"
 KITCHEN_SINK_NPM_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-npm:@openclaw/kitchen-sink@latest}"
@@ -45,6 +48,7 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" kitchen-sink-plugin
 
 DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e "OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=$OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES"
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
   -e "KITCHEN_SINK_SCENARIOS=$KITCHEN_SINK_SCENARIOS"
   -e "KITCHEN_SINK_CLI_TIMEOUT=$KITCHEN_SINK_CLI_TIMEOUT"

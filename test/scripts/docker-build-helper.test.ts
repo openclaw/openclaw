@@ -124,6 +124,17 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function cleanupSmokeLogTailHelpers(): string {
+  const script = readFileSync(CLEANUP_SMOKE_RUN_PATH, "utf8");
+  const match = script.match(
+    /(read_positive_int_env\(\) \{[\s\S]*?\n\}\n\nprint_log_tail\(\) \{[\s\S]*?\n\})\n\nread_positive_int_env/u,
+  );
+  if (!match) {
+    throw new Error("cleanup smoke log helpers were not found");
+  }
+  return match[1];
+}
+
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
   const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
   const match = script.match(/(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u);
@@ -228,8 +239,65 @@ docker_build_transient_failure "$LOG_PATH"
     const cleanupRun = readFileSync(CLEANUP_SMOKE_RUN_PATH, "utf8");
 
     expect(cleanupRun).toContain("OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES");
+    expect(cleanupRun).toContain(
+      "read_positive_int_env OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES 65536 >/dev/null",
+    );
     expect(cleanupRun.match(/print_log_tail \/tmp\/openclaw-cleanup-/g)).toHaveLength(3);
     expect(cleanupRun).not.toContain("cat /tmp/openclaw-cleanup-");
+  });
+
+  it("rejects invalid cleanup-smoke log byte limits", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-cleanup-smoke-log-invalid-"));
+
+    try {
+      const logPath = join(workDir, "cleanup.log");
+      writeFileSync(logPath, "cleanup output\n");
+      const script = `
+set -euo pipefail
+LOG_PATH=${shellQuote(logPath)}
+export OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES=64kb
+
+${cleanupSmokeLogTailHelpers()}
+
+print_log_tail "$LOG_PATH"
+`;
+
+      const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES: 64kb");
+      expect(result.stdout).toBe("");
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes zero-padded cleanup-smoke log byte limits", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-cleanup-smoke-log-tail-"));
+
+    try {
+      const logPath = join(workDir, "cleanup.log");
+      writeFileSync(logPath, "old-cleanup-output-recent\n");
+      const script = `
+set -euo pipefail
+LOG_PATH=${shellQuote(logPath)}
+export OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES=0008
+
+${cleanupSmokeLogTailHelpers()}
+
+print_log_tail "$LOG_PATH"
+`;
+
+      const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("truncated: showing last 8");
+      expect(result.stdout).toContain("-recent\n");
+      expect(result.stdout).not.toContain("old-cleanup-output");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("prints Docker MCP client logs through the bounded helper", () => {
@@ -613,6 +681,82 @@ source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
+
+  it("normalizes zero-padded centralized Docker build retry counts", () => {
+    const rootDir = process.cwd();
+    const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+export ROOT_DIR
+export OPENCLAW_DOCKER_BUILD_RETRIES=08
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+[[ "$(docker_build_retry_count)" = "8" ]]
+`;
+
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+  });
+
+  it.each([
+    [
+      "retry count",
+      "OPENCLAW_DOCKER_BUILD_RETRIES",
+      "2x",
+      "invalid OPENCLAW_DOCKER_BUILD_RETRIES: 2x",
+    ],
+    [
+      "heartbeat interval",
+      "OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS",
+      "soon",
+      "invalid OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS: soon",
+    ],
+  ])(
+    "rejects invalid centralized Docker build %s before invoking docker",
+    (_label, envName, value, expectedError) => {
+      const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-config-"));
+
+      try {
+        const binDir = join(workDir, "bin");
+        const markerPath = join(workDir, "docker-invoked");
+        mkdirSync(binDir);
+        writeFileSync(
+          join(binDir, "docker"),
+          `#!/bin/bash
+printf invoked >${shellQuote(markerPath)}
+exit 0
+`,
+        );
+        chmodSync(join(binDir, "docker"), 0o755);
+        const rootDir = process.cwd();
+        const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+docker_build_run e2e-build -t demo-image .
+`;
+
+        const result = spawnSync("bash", ["-lc", script], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            [envName]: value,
+          },
+        });
+
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain(expectedError);
+        expect(existsSync(markerPath)).toBe(false);
+      } finally {
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("fails centralized Docker builds fast when timeout is unavailable", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-timeout-required-"));
@@ -1038,6 +1182,40 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
     }
   });
 
+  it("rejects invalid Docker run pids limits before invoking docker", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-pids-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+docker() {
+  printf invoked >"$TMPDIR/docker-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+set +e
+OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+[[ "$status" = "2" ]]
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
+[[ ! -e "$TMPDIR/docker-seen" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   for (const [shellSignal, expectedStatus] of [
     ["TERM", "143"],
     ["HUP", "129"],
@@ -1239,6 +1417,48 @@ set -e
 stderr="$(<"$TMPDIR/stderr")"
 [[ "$status" = "127" ]]
 [[ "$stderr" = *"timeout command not found; cannot bound Docker run after 11s"* ]]
+[[ ! -e "$TMPDIR/docker-seen" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid package-backed Docker run pids limits before invoking docker", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-pids-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf invoked >"$TMPDIR/docker-seen"
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+[[ "$status" = "2" ]]
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
 [[ ! -e "$TMPDIR/docker-seen" ]]
 `;
 
@@ -1625,30 +1845,40 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
   it("passes plugin lifecycle sampler timeout overrides into Docker", () => {
     const runner = readFileSync(PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH, "utf8");
 
-    expect(runner).toContain('if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS:-}" ]; then');
+    expect(runner).toContain("append_positive_int_env()");
+    expect(runner).toContain("append_positive_number_env()");
+    expect(runner).toContain("append_positive_int_env OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS");
     expect(runner).toContain(
-      'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS=$OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS")',
+      "append_positive_int_env OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS",
     );
+    expect(runner).toContain("append_positive_int_env OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB");
+    expect(runner).toContain("append_positive_int_env OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS");
     expect(runner).toContain(
-      'if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS:-}" ]; then',
-    );
-    expect(runner).toContain(
-      'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS=$OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS")',
-    );
-    expect(runner).toContain('if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB:-}" ]; then');
-    expect(runner).toContain(
-      'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB=$OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB")',
-    );
-    expect(runner).toContain('if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS:-}" ]; then');
-    expect(runner).toContain(
-      'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS=$OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS")',
-    );
-    expect(runner).toContain('if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO:-}" ]; then');
-    expect(runner).toContain(
-      'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO=$OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO")',
+      "append_positive_number_env OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO",
     );
     expect(runner).toContain('docker_e2e_run_with_harness \\\n  "${DOCKER_ENV_ARGS[@]}"');
   });
+
+  it.each([
+    ["phase timeout", "OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", "150ms"],
+    ["CPU ratio", "OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO", "0"],
+  ])(
+    "rejects invalid plugin lifecycle Docker %s overrides before package setup",
+    (_label, envName, value) => {
+      const result = spawnSync("bash", [PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/openclaw-missing-package.tgz",
+          [envName]: value,
+        },
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stderr).not.toContain("OpenClaw package tarball does not exist");
+    },
+  );
 
   it("wraps direct Docker E2E npm installs with the shared timeout helper", () => {
     const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
@@ -2443,6 +2673,12 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(readFileSync("scripts/lib/docker-e2e-logs.sh", "utf8")).toContain(
       "OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES",
     );
+    expect(runner).toContain(
+      "docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536",
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=$OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES"',
+    );
     expect(runner).toContain("docker_e2e_run_logged_print_with_harness \\");
     expect(runner).not.toContain("docker_e2e_run_logged_with_harness plugins-run");
   });
@@ -2468,6 +2704,67 @@ output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "DO_NOT_PRIN
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["printed log bytes", "OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES", "64kb"],
+    ["heartbeat termination grace", "OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS", "soon"],
+  ])("rejects invalid Docker E2E %s before setup", (_label, envName, value) => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-invalid-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export ${envName}=${shellQuote(value)}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+run_logged_print_heartbeat plugins-run 30 bash -c 'printf "should not print\\\\n"'
+`;
+
+      const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stdout).toBe("");
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid Docker E2E log heartbeat env before harness setup", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-heartbeat-invalid-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS=1e3
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_run_with_harness() {
+  echo "should not run"
+}
+
+docker_e2e_run_logged_print_with_harness plugins-run image-name
+`;
+
+      const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS: 1e3");
+      expect(result.stdout).toBe("");
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
@@ -2907,6 +3204,21 @@ output="$(cat "$sampler_log")"
     expect(result.stderr).not.toContain("OPENAI_API_KEY was not available");
   });
 
+  it("rejects invalid Codex media path Docker timeouts before Docker setup", () => {
+    const result = spawnSync("bash", [CODEX_MEDIA_PATH_DOCKER_E2E_PATH], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "180s",
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 180s");
+    expect(result.stderr).not.toContain("Docker image not found");
+  });
+
   it("forwards every kitchen-sink RPC runtime env knob into Docker", () => {
     const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
     const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
@@ -2929,6 +3241,12 @@ output="$(cat "$sampler_log")"
 
     expect(runner).toContain(
       'KITCHEN_SINK_CLI_TIMEOUT="${OPENCLAW_KITCHEN_SINK_PLUGIN_CLI_TIMEOUT:-${KITCHEN_SINK_CLI_TIMEOUT:-180s}}"',
+    );
+    expect(runner).toContain(
+      "docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536",
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=$OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES"',
     );
     expect(runner).toContain('-e "KITCHEN_SINK_CLI_TIMEOUT=$KITCHEN_SINK_CLI_TIMEOUT"');
     expect(sweep).toContain('KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"');

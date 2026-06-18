@@ -6,14 +6,24 @@ cd /repo
 export OPENCLAW_STATE_DIR="/tmp/openclaw-test"
 export OPENCLAW_CONFIG_PATH="${OPENCLAW_STATE_DIR}/openclaw.json"
 
+read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$((10#$value))"
+}
+
 print_log_tail() {
   local log_file="$1"
-  local max_bytes="${OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES:-65536}"
-  if ! [[ "$max_bytes" =~ ^[0-9]+$ ]] || [ "$max_bytes" -lt 1 ]; then
-    max_bytes="65536"
-  else
-    max_bytes="$((10#$max_bytes))"
-  fi
+  local max_bytes
+  max_bytes="$(read_positive_int_env OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES 65536)" || return $?
   if [ ! -f "$log_file" ]; then
     return 0
   fi
@@ -30,6 +40,8 @@ print_log_tail() {
   echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
   tail -c "$max_bytes" "$log_file"
 }
+
+read_positive_int_env OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES 65536 >/dev/null
 
 echo "==> Build"
 if ! pnpm build >/tmp/openclaw-cleanup-build.log 2>&1; then

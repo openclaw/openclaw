@@ -87,12 +87,8 @@ openclaw_plugins_print_fixture_log() {
     return
   fi
 
-  local max_bytes="${OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES:-65536}"
-  if ! [[ "$max_bytes" =~ ^[0-9]+$ ]] || [ "$max_bytes" -lt 1 ]; then
-    max_bytes="65536"
-  else
-    max_bytes="$((10#$max_bytes))"
-  fi
+  local max_bytes
+  max_bytes="$(openclaw_plugins_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536)" || return $?
 
   local log_bytes
   log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
@@ -106,6 +102,10 @@ openclaw_plugins_print_fixture_log() {
   fi
   echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
   tail -c "$max_bytes" "$log_file"
+}
+
+openclaw_plugins_validate_fixture_log_print_bytes() {
+  openclaw_plugins_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null
 }
 
 openclaw_plugins_register_fixture_pid_file() {
@@ -259,6 +259,8 @@ start_npm_fixture_registry() {
   local server_pid_file="$fixture_dir/npm-registry-pid"
 
   shift 4
+
+  openclaw_plugins_validate_fixture_log_print_bytes || return $?
 
   node scripts/e2e/lib/plugins/npm-registry-server.mjs "$server_port_file" "$package_name" "$version" "$tarball" "$@" >"$server_log" 2>&1 &
   local server_pid="$!"
