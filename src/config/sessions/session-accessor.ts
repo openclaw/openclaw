@@ -653,6 +653,31 @@ export async function loadTranscriptEvents(
   return events;
 }
 
+/** Reads a bounded transcript tail through the session accessor boundary. */
+export async function readTranscriptTailLines(
+  scope: SessionTranscriptReadScope & { maxLines: number },
+): Promise<{ lines: string[]; totalLines: number } | null> {
+  const transcript = await resolveTranscriptReadAccess(scope);
+  const maxLines = Math.max(1, Math.floor(scope.maxLines));
+  const lines: string[] = [];
+  let totalLines = 0;
+  try {
+    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
+      if (!line.trim()) {
+        continue;
+      }
+      totalLines += 1;
+      lines.push(line);
+      if (lines.length > maxLines) {
+        lines.shift();
+      }
+    }
+  } catch {
+    return null;
+  }
+  return { lines, totalLines };
+}
+
 /**
  * Appends a non-message transcript record such as session or metadata events.
  * Message records must use appendTranscriptMessage so parent links, idempotency,

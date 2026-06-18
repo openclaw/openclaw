@@ -435,6 +435,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one Gateway session row for an exact session key.
+    - `sessions.diagnose` returns read-only stored and live evidence for one session, including bounded finding codes for queued, stale, contradictory, unresolved, and delivery-uncertain states.
     - `sessions.resolve` resolves or canonicalizes a session target.
     - `sessions.create` creates a new session entry.
     - `sessions.send` sends a message into an existing session.
@@ -445,6 +446,40 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
     - `chat.message.get` is the additive bounded full-message reader for a single visible transcript entry. Clients pass `sessionKey`, optional `agentId` when the session selection is agent-scoped, plus a transcript `messageId` previously surfaced through `chat.history`, and the Gateway returns the same display-normalized projection without the lightweight history truncation cap when the stored entry is still available and not oversized.
+
+  </Accordion>
+
+  <Accordion title="sessions.diagnose">
+    `sessions.diagnose` is a read-only `operator.read` method for explaining why
+    one session appears active, queued, stalled, done, unresolved, or unknown.
+    It does not reset, abort, release lanes, migrate stores, or modify
+    transcripts.
+
+    Params:
+
+    - `key?: string`, `sessionId?: string`, `label?: string`: choose at most one
+      primary selector. Omitting all selectors makes the Gateway choose the most
+      relevant active or contradictory stored session, then the newest stored
+      session.
+    - `agentId?: string`: scope lookup to one agent store.
+    - `includeGlobal?: boolean`, `includeUnknown?: boolean`: allow `global` or
+      `unknown` fallback rows during no-selector candidate selection.
+    - `tail?: number`: bounded transcript metadata window. Valid range is `1`
+      through `200`; the Gateway default is `30`.
+
+    Outcomes are `diagnosed`, `not_found`, or `no_sessions`. Ambiguous
+    `sessionId` or `label` matches fail the request so callers can rerun with an
+    exact session key instead of diagnosing the wrong row.
+
+    The result includes `summary`, `session`, `live`, optional `transcript`,
+    optional `delivery`, `findings`, and `nextChecks`. Stable finding codes
+    include `active_run_visible`, `active_progress_fresh`,
+    `last_progress_stale`, `queued_without_active_run`,
+    `stale_diagnostic_tool`, `store_terminal_but_live_processing`,
+    `lane_blocked`, `transcript_unresolved`, `delivery_uncertain`,
+    `session_not_found`, and `unknown_low_confidence`. Transcript bodies, tool
+    arguments, tool results, secrets, and local transcript file paths are not
+    part of the response contract.
 
   </Accordion>
 
