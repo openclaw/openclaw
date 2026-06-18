@@ -129,6 +129,21 @@ function turnStartResult(turnId = "turn-auth-contract") {
   };
 }
 
+function getMockServerVersion() {
+  return "0.132.0";
+}
+
+function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "thread/resume" }) {
   const seenAuthProfileIds: Array<string | undefined> = [];
   const seenAgentDirs: Array<string | undefined> = [];
@@ -138,6 +153,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
     seenAuthProfileIds.push(authProfileId);
     seenAgentDirs.push(agentDir);
     return {
+      ...mockClientRuntimeMethods(),
       request: vi.fn(async (method: string, requestParams?: unknown) => {
         requests.push({ method, params: requestParams });
         if (method === params.startMethod) {

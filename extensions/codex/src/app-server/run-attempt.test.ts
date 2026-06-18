@@ -55,7 +55,9 @@ import {
   createResumeHarness,
   createStartedThreadHarness,
   fastWait,
+  getMockRuntimeIdentity,
   mockCall,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -577,7 +579,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -728,7 +730,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -805,7 +807,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -864,7 +866,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -1046,7 +1048,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await startOrResumeThread({
       client: {
-        getServerVersion: () => "0.132.0",
+        ...mockClientRuntimeMethods(),
         request: async (method: string, requestParams?: unknown) => {
           requests.push({ method, params: requestParams });
           if (method === "thread/start") {
@@ -1901,6 +1903,7 @@ describe("runCodexAppServerAttempt", () => {
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -1962,6 +1965,7 @@ describe("runCodexAppServerAttempt", () => {
     let startedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -2003,6 +2007,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request: vi.fn(async (method: string) => {
             if (method === "thread/start") {
               return threadStartResult();
@@ -3925,6 +3930,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4026,6 +4032,7 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4128,6 +4135,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4230,6 +4238,7 @@ describe("runCodexAppServerAttempt", () => {
         agentDir,
         authProfileId,
         accountId: "account-work",
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4373,6 +4382,7 @@ describe("runCodexAppServerAttempt", () => {
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
         }),
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4564,6 +4574,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4609,6 +4620,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4911,6 +4923,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex === 0) {
@@ -4963,6 +4976,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex < 2) {
@@ -5010,6 +5024,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(
@@ -5043,6 +5058,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             return await new Promise<never>(() => {});
@@ -5076,6 +5092,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new Error("write EPIPE");
@@ -5106,6 +5123,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(
