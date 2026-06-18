@@ -28,6 +28,7 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -478,6 +479,12 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
+  // Detect autonomous sessions (cron jobs, subagents) where the task was
+  // explicitly assigned by the user. These sessions should not require repeated
+  // manual approval for commands within the assigned task scope (#94599).
+  const autonomousSession =
+    isCronSessionKey(params.sessionKey) || isSubagentSessionKey(params.sessionKey);
+
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -485,6 +492,7 @@ export async function processGatewayAllowlist(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
+      autonomousSession,
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||

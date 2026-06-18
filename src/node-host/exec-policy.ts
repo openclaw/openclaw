@@ -63,6 +63,12 @@ export function evaluateSystemRunPolicy(params: {
   isWindows: boolean;
   cmdInvocation: boolean;
   shellWrapperInvocation: boolean;
+  /**
+   * When true, the session is autonomous (cron job, subagent). The effective
+   * ask policy is downgraded from "always" to "on-miss" so explicitly-assigned
+   * tasks don't require repeated manual approvals. (#94599)
+   */
+  autonomousSession?: boolean;
 }): SystemRunPolicyDecision {
   // POSIX node execution intentionally uses `/bin/sh -lc` as a transport wrapper.
   // Keep allowlist decisions based on the analyzed inner shell payload there.
@@ -99,6 +105,7 @@ export function evaluateSystemRunPolicy(params: {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied: params.durableApprovalSatisfied,
+    autonomousSession: params.autonomousSession,
   });
   if (requiresAsk && !approvedByAsk) {
     return {

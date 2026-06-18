@@ -12,6 +12,7 @@ import {
   resolveExecApprovalAllowedDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -129,6 +130,12 @@ export async function executeNodeHostCommand(
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv,
   } = approvalAnalysis;
+  // Detect autonomous sessions (cron jobs, subagents) for issue #94599.
+  // These sessions shouldn't require repeated manual approval for explicitly
+  // assigned tasks. The allowlist security boundary is still enforced.
+  const autonomousSession =
+    isCronSessionKey(prepared.sessionKey) || isSubagentSessionKey(prepared.sessionKey);
+
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -136,6 +143,7 @@ export async function executeNodeHostCommand(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
+      autonomousSession,
     }) ||
     inlineEvalHit !== null ||
     requiresSecurityAuditSuppressionApproval;

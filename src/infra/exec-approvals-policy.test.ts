@@ -286,6 +286,104 @@ describe("exec approvals policy helpers", () => {
     expect(requiresExecApproval(testCase)).toBe(testCase.expected);
   });
 
+  describe("autonomousSession parameter (issue #94599)", () => {
+    it("downgrades ask=always to on-miss when autonomousSession is true", () => {
+      // Autonomous sessions should not require approval when the allowlist is satisfied,
+      // even with ask="always". This is the core fix for #94599.
+      expect(
+        requiresExecApproval({
+          ask: "always",
+          security: "allowlist",
+          analysisOk: true,
+          allowlistSatisfied: true,
+          autonomousSession: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("still requires approval on allowlist miss even with autonomousSession=true", () => {
+      // Allowlist boundary is preserved — commands that fail allowlist analysis
+      // still require approval even in autonomous sessions.
+      expect(
+        requiresExecApproval({
+          ask: "always",
+          security: "allowlist",
+          analysisOk: false,
+          allowlistSatisfied: false,
+          autonomousSession: true,
+        }),
+      ).toBe(true);
+    });
+
+    it("preserves existing behavior when autonomousSession is false", () => {
+      // Non-autonomous sessions should behave exactly as before.
+      expect(
+        requiresExecApproval({
+          ask: "always",
+          security: "allowlist",
+          analysisOk: true,
+          allowlistSatisfied: true,
+          autonomousSession: false,
+        }),
+      ).toBe(true);
+    });
+
+    it("preserves existing behavior when autonomousSession is undefined", () => {
+      // Backward compatibility — omitting autonomousSession should preserve
+      // the pre-#94599 behavior.
+      expect(
+        requiresExecApproval({
+          ask: "always",
+          security: "allowlist",
+          analysisOk: true,
+          allowlistSatisfied: true,
+        }),
+      ).toBe(true);
+    });
+
+    it("does not affect ask=off behavior for autonomous sessions", () => {
+      // ask="off" should still return false regardless of autonomousSession.
+      expect(
+        requiresExecApproval({
+          ask: "off",
+          security: "full",
+          analysisOk: false,
+          allowlistSatisfied: false,
+          autonomousSession: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("does not affect durable approval behavior for autonomous sessions", () => {
+      // Durable approvals should still bypass approval regardless of autonomousSession.
+      expect(
+        requiresExecApproval({
+          ask: "always",
+          security: "allowlist",
+          analysisOk: false,
+          allowlistSatisfied: false,
+          durableApprovalSatisfied: true,
+          autonomousSession: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("downgrades only ask=always, not security boundary", () => {
+      // security="deny" is not affected by autonomousSession — it's a different gate.
+      // requiresExecApproval doesn't check security for denial (that's done elsewhere).
+      // But with ask="always" and a valid allowlist match, autonomousSession still downgrades.
+      expect(
+        requiresExecApproval({
+          ask: "always",
+          security: "allowlist",
+          analysisOk: true,
+          allowlistSatisfied: false, // allowlist miss — should still require approval
+          autonomousSession: true,
+        }),
+      ).toBe(true);
+    });
+  });
+
   it("treats exact-command allow-always approvals as durable trust", () => {
     expect(
       hasDurableExecApproval({

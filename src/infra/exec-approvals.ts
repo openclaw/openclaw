@@ -1211,15 +1211,31 @@ export function requiresExecApproval(params: {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied?: boolean;
+  /**
+   * When true, the session is autonomous (cron job, subagent, or explicitly
+   * assigned task). The effective ask policy is downgraded from "always" to
+   * "on-miss" so explicitly-assigned tasks don't require repeated manual
+   * approvals. Allowlist validation still applies — commands that fail
+   * allowlist analysis still require approval regardless of this flag.
+   *
+   * Fixes #94599 — agents should not require approval for tasks explicitly
+   * assigned to them.
+   */
+  autonomousSession?: boolean;
 }): boolean {
-  if (params.ask === "always") {
+  // Autonomous sessions (cron, subagent): downgrade "always" → "on-miss"
+  // so explicitly-assigned tasks aren't blocked by repeated approval prompts.
+  // The allowlist security boundary is still enforced for all sessions.
+  const effectiveAsk = params.autonomousSession && params.ask === "always" ? "on-miss" : params.ask;
+
+  if (effectiveAsk === "always") {
     return true;
   }
   if (params.durableApprovalSatisfied === true) {
     return false;
   }
   return (
-    params.ask === "on-miss" &&
+    effectiveAsk === "on-miss" &&
     params.security === "allowlist" &&
     (!params.analysisOk || !params.allowlistSatisfied)
   );

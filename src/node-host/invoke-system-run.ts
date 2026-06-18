@@ -44,6 +44,7 @@ import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-bin
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -543,6 +544,12 @@ async function evaluateSystemRunPolicyPhase(
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
   let approvalDecision = parsed.approvalDecision;
+  // Detect autonomous sessions (cron jobs, subagents) for issue #94599.
+  // When true, the ask policy is downgraded from "always" to "on-miss" so
+  // explicitly-assigned tasks don't require repeated manual approvals.
+  const autonomousSession =
+    isCronSessionKey(parsed.sessionKey) || isSubagentSessionKey(parsed.sessionKey);
+
   let policy = evaluateSystemRunPolicy({
     security,
     ask,
@@ -556,6 +563,7 @@ async function evaluateSystemRunPolicyPhase(
     // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
     // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
+    autonomousSession,
   });
   const requiresSecurityAuditSuppressionApproval =
     commandRequiresSecurityAuditSuppressionApproval({
@@ -656,6 +664,7 @@ async function evaluateSystemRunPolicyPhase(
           isWindows,
           cmdInvocation,
           shellWrapperInvocation: parsed.shellPayload !== null,
+          autonomousSession,
         });
       } else {
         autoReviewDeferredMessage = `${policy.errorMessage} (exec auto-review deferred to human approval: ${decision.rationale})`;

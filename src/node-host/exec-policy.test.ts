@@ -166,4 +166,65 @@ describe("evaluateSystemRunPolicy", () => {
     expect(allowed.analysisOk).toBe(true);
     expect(allowed.allowlistSatisfied).toBe(true);
   });
+
+  describe("autonomousSession parameter (issue #94599)", () => {
+    it("allows ask=always with allowlist match when autonomousSession is true", () => {
+      // Autonomous sessions should not require approval when the allowlist is
+      // satisfied, even with ask="always".
+      const allowed = expectAllowedDecision(
+        evaluateSystemRunPolicy(
+          buildPolicyParams({
+            ask: "always",
+            autonomousSession: true,
+          }),
+        ),
+      );
+      expect(allowed.requiresAsk).toBe(false);
+    });
+
+    it("still denies allowlist miss even with autonomousSession=true", () => {
+      // Allowlist boundary is preserved — commands that fail allowlist
+      // analysis still require approval in autonomous sessions.
+      const denied = expectDeniedDecision(
+        evaluateSystemRunPolicy(
+          buildPolicyParams({
+            ask: "always",
+            analysisOk: false,
+            allowlistSatisfied: false,
+            autonomousSession: true,
+          }),
+        ),
+      );
+      // The ask gate fires first with "approval-required" because the
+      // effective ask is downgraded to "on-miss" (not "off") and the
+      // allowlist miss still triggers the approval requirement.
+      expect(denied.eventReason).toBe("approval-required");
+      expect(denied.requiresAsk).toBe(true);
+    });
+
+    it("preserves existing ask=always behavior when autonomousSession is false", () => {
+      const denied = expectDeniedDecision(
+        evaluateSystemRunPolicy(
+          buildPolicyParams({
+            ask: "always",
+            autonomousSession: false,
+          }),
+        ),
+      );
+      expect(denied.eventReason).toBe("approval-required");
+      expect(denied.requiresAsk).toBe(true);
+    });
+
+    it("preserves existing ask=always behavior when autonomousSession is undefined", () => {
+      const denied = expectDeniedDecision(
+        evaluateSystemRunPolicy(
+          buildPolicyParams({
+            ask: "always",
+          }),
+        ),
+      );
+      expect(denied.eventReason).toBe("approval-required");
+      expect(denied.requiresAsk).toBe(true);
+    });
+  });
 });
