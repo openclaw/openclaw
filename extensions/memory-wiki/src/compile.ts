@@ -214,6 +214,7 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
         .filter(
           (page) =>
             page.kind !== "report" &&
+            page.durable !== true &&
             !(
               isUnmanagedRawSourceSummary(page) &&
               !managedImportedSourcePagePaths.has(page.relativePath)

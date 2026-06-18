@@ -559,6 +559,67 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("excludes durable pages from the Stale Pages report", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    const oldTimestamp = "2024-01-01T00:00:00.000Z";
+
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "alpha-concept.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.alpha",
+          title: "Alpha Concept",
+          updatedAt: oldTimestamp,
+          durable: true,
+        },
+        body: "# Alpha Concept\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.alpha",
+          title: "Alpha Synthesis",
+          updatedAt: oldTimestamp,
+          durable: true,
+        },
+        body: "# Alpha Synthesis\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "beta-concept.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.beta",
+          title: "Beta Concept",
+          updatedAt: oldTimestamp,
+        },
+        body: "# Beta Concept\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const stalePages = await fs.readFile(
+      path.join(rootDir, "reports", "stale-pages.md"),
+      "utf8",
+    );
+    expect(stalePages).not.toContain("Alpha Concept");
+    expect(stalePages).not.toContain("Alpha Synthesis");
+    expect(stalePages).toContain("Beta Concept");
+  });
+
   it("skips dashboard report pages when createDashboards is disabled", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

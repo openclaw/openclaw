@@ -325,6 +325,74 @@ describe("toWikiPageSummary", () => {
     expect(crlfStructuredSource?.pageType).toBe("source");
   });
 
+  it("parses the durable opt-in flag from frontmatter strictly", () => {
+    const trueDurable = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/concepts/concept-durable-true.md",
+      relativePath: "concepts/concept-durable-true.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          title: "Concept Durable True",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          durable: true,
+        },
+        body: "# Concept Durable True\n\ndurable reference",
+      }),
+    });
+    expect(trueDurable?.durable).toBe(true);
+
+    const falseDurable = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/concepts/concept-durable-false.md",
+      relativePath: "concepts/concept-durable-false.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          title: "Concept Durable False",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          durable: false,
+        },
+        body: "# Concept Durable False\n\ndurable opt-out",
+      }),
+    });
+    expect(falseDurable?.durable).toBe(false);
+
+    const stringDurable = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/concepts/concept-durable-string.md",
+      relativePath: "concepts/concept-durable-string.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          title: "Concept Durable String",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          durable: "true",
+        },
+        body: "# Concept Durable String\n\ndurable opt-in via string is not honored",
+      }),
+    });
+    expect(stringDurable?.durable).toBeUndefined();
+
+    const missingDurable = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/concepts/concept-durable-missing.md",
+      relativePath: "concepts/concept-durable-missing.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          title: "Concept Durable Missing",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+        },
+        body: "# Concept Durable Missing\n\ndurable opt-in missing",
+      }),
+    });
+    expect(missingDurable?.durable).toBeUndefined();
+
+    const noFrontmatterDurable = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/concepts/concept-durable-no-frontmatter.md",
+      relativePath: "concepts/concept-durable-no-frontmatter.md",
+      raw: "# Concept Durable No Frontmatter\n\nno frontmatter block",
+    });
+    expect(noFrontmatterDurable?.durable).toBeUndefined();
+  });
+
   it("normalizes agent-facing people wiki metadata", () => {
     const raw = renderWikiMarkdown({
       frontmatter: {

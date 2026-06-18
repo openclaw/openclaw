@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
+  asBoolean,
   asFiniteNumber,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -107,6 +108,7 @@ export type WikiPageSummary = {
   unsafeLocalRelativePath?: string;
   lastRefreshedAt?: string;
   updatedAt?: string;
+  durable?: boolean;
 };
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -626,5 +628,6 @@ export function toWikiPageSummary(params: {
     unsafeLocalRelativePath: normalizeOptionalString(parsed.frontmatter.unsafeLocalRelativePath),
     lastRefreshedAt: normalizeOptionalString(parsed.frontmatter.lastRefreshedAt),
     updatedAt: normalizeOptionalString(parsed.frontmatter.updatedAt),
+    durable: asBoolean(parsed.frontmatter.durable),
   };
 }

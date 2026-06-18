@@ -311,6 +311,24 @@ These reports track things like:
 - evidence class coverage
 - non-public privacy tiers that need review before use
 
+### Opting pages out of the Stale Pages report
+
+Concept, synthesis, and other intentionally durable reference pages should
+not be flagged by the 30-day / 90-day freshness thresholds in
+`reports/stale-pages.md`. Mark any such page with a strict boolean frontmatter
+field:
+
+```yaml
+---
+durable: true
+---
+```
+
+`memory-wiki` excludes pages where `durable: true` is set from the Stale Pages
+report. Use this for concepts, syntheses, and other reference material whose
+value comes from durability rather than recency. The marker does not change
+`updatedAt`, so other freshness signals remain accurate.
+
 ## Search and retrieval
 
 `memory-wiki` supports two search backends:
