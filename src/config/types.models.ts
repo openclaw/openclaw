@@ -1,6 +1,7 @@
 // Defines model selection and provider configuration types.
 import type {
   AnthropicMessagesCompat,
+  ModelRequestContextHeaders,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
   ThinkingLevelMap,
@@ -149,6 +150,8 @@ export type ModelProviderLocalServiceConfig = {
   idleStopMs?: number;
 };
 
+export type ModelProviderRequestContextHeadersConfig = ModelRequestContextHeaders;
+
 export type ModelDefinitionConfig = {
   /** Provider-facing model id. */
   id: string;
@@ -235,6 +238,8 @@ export type ModelProviderConfig = {
   localService?: ModelProviderLocalServiceConfig;
   /** Secret-bearing headers merged into provider requests. */
   headers?: Record<string, SecretInput>;
+  /** Maps OpenClaw run context fields to provider request header names. */
+  requestContextHeaders?: ModelProviderRequestContextHeadersConfig;
   /** Whether default Authorization header injection is enabled. */
   authHeader?: boolean;
   /** Provider request transport/retry overrides. */

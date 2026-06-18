@@ -32,6 +32,7 @@ export type InlineProviderConfig = {
   maxTokens?: ModelProviderConfig["maxTokens"];
   params?: ModelProviderConfig["params"];
   headers?: unknown;
+  requestContextHeaders?: ModelProviderConfig["requestContextHeaders"];
   authHeader?: boolean;
   timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];
   request?: ModelProviderConfig["request"];
