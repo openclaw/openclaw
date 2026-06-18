@@ -161,6 +161,7 @@ export function capturePluginToolDescriptor(params: {
       inputSchema: asJsonObject(params.tool.parameters),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      ...(params.tool.availability ? { availability: params.tool.availability } : {}),
     },
   };
 }
