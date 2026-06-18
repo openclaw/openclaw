@@ -1044,6 +1044,27 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(markdown);
   });
 
+  it("keeps the rich reply deliverable when a markdown link targets a local path (#94117)", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
+    const markdown =
+      "See [scripts/yougile.py](/home/user/.openclaw/workspace/scripts/yougile.py#L41) and [docs](https://example.com/docs)";
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    // Local/relative hrefs once emitted an <a href> that Telegram rejects with
+    // RICH_MESSAGE_URL_INVALID, dropping the entire reply. The rich payload must
+    // now deliver with the unsupported anchor stripped to its label while the
+    // supported https link stays clickable.
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = String(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "");
+    expect(richHtml).not.toContain('<a href="/home');
+    expect(richHtml).toContain("<code>scripts/yougile.py</code>");
+    expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
+  });
+
   it("renders complex markdown into HTML text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [
