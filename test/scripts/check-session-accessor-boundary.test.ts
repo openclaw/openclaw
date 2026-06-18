@@ -83,6 +83,7 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-reset-model.ts",
         "src/auto-reply/reply/session-updates.ts",
         "src/auto-reply/reply/session-usage.ts",
+        "src/plugins/host-hook-cleanup.ts",
         "src/tui/embedded-backend.ts",
         "src/config/sessions/cleanup-service.ts",
       ]),
