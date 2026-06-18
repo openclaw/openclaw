@@ -291,6 +291,7 @@ function createChatSessionPickerRequestParams(
     includeGlobal: overrides.includeGlobal,
     includeUnknown: overrides.includeUnknown,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
+    includeDerivedTitles: true,
     limit: overrides.limit,
   };
   const activeAgentSession = parseAgentSessionKey(state.sessionKey);

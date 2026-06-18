@@ -2845,6 +2845,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -2910,6 +2911,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3058,6 +3060,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3102,6 +3105,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3114,6 +3118,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3201,6 +3206,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3465,6 +3471,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3472,6 +3479,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3521,6 +3529,7 @@ describe("chat session controls", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3601,6 +3610,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -3608,6 +3618,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "ops",
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,

@@ -335,6 +335,7 @@ describe("createSessionAndRefresh", () => {
       parentSessionKey: "agent:main:main",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -398,6 +399,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -430,6 +432,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -525,6 +528,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(deleted).toEqual(["key-a"]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -549,6 +553,7 @@ describe("patchSession", () => {
       fastMode: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -799,6 +804,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
@@ -828,6 +834,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       activeMinutes: 120,
       limit: 50,
       includeGlobal: true,
@@ -858,6 +865,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -887,6 +895,7 @@ describe("loadSessions", () => {
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -917,6 +926,7 @@ describe("loadSessions", () => {
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -954,6 +964,7 @@ describe("loadSessions", () => {
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       limit: 1,
       offset: 2,
       search: "telegram",
@@ -1055,6 +1066,7 @@ describe("loadSessions", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeDerivedTitles: true,
       activeMinutes: 30,
       limit: 10,
       includeGlobal: true,
@@ -1062,6 +1074,7 @@ describe("loadSessions", () => {
       configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1145,6 +1158,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1205,6 +1219,7 @@ describe("loadSessions", () => {
       checkpointId: "checkpoint-1",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1216,6 +1231,7 @@ describe("loadSessions", () => {
       checkpointId: "checkpoint-1",
     });
     expect(request).toHaveBeenNthCalledWith(4, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,

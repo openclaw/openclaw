@@ -1126,6 +1126,7 @@ async function loadSessionsOnce(
       includeGlobal,
       includeUnknown,
       configuredAgentsOnly,
+      includeDerivedTitles: true,
     };
     const agentId = overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
