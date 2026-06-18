@@ -12,7 +12,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   parseWikiMarkdown,
   renderWikiMarkdown,
-  slugifyWikiSegment,
+  slugifyWikiPageStem,
   normalizeSourceIds,
   normalizeWikiClaims,
   type WikiClaim,
@@ -223,7 +223,7 @@ async function applyCreateSynthesisMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: CreateSynthesisMemoryWikiMutation;
 }): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
-  const slug = slugifyWikiSegment(params.mutation.title);
+  const slug = slugifyWikiPageStem(params.mutation.title);
   const pagePath = path.join("syntheses", `${slug}.md`).replace(/\\/g, "/");
   const root = await fsRoot(params.config.vault.path);
   const existing = await root.readText(pagePath).catch(() => "");

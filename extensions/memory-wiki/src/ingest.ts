@@ -9,7 +9,7 @@ import {
   preserveHumanNotesBlock,
   renderMarkdownFence,
   renderWikiMarkdown,
-  slugifyWikiSegment,
+  slugifyWikiPageStem,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -50,7 +50,7 @@ export async function ingestMemoryWikiSource(params: {
   const buffer = await fs.readFile(sourcePath);
   const content = assertUtf8Text(buffer, sourcePath);
   const title = resolveSourceTitle(sourcePath, params.title);
-  const slug = slugifyWikiSegment(title);
+  const slug = slugifyWikiPageStem(title);
   const pageId = `source.${slug}`;
   const pageRelativePath = path.join("sources", `${slug}.md`);
   const pagePath = path.join(params.config.vault.path, pageRelativePath);

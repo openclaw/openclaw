@@ -124,6 +124,7 @@ const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
   Buffer.byteLength(FS_SAFE_PINNED_WRITE_TEMP_SUFFIX) -
   Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
+const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
 const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
 const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
@@ -162,6 +163,15 @@ export function slugifyWikiSegment(raw: string): string {
     return "page";
   }
   return capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, "page");
+}
+
+export function slugifyWikiPageStem(raw: string): string {
+  const slug = slugifyWikiSegment(raw);
+  if (!WIKI_RESERVED_PAGE_STEMS.has(slug)) {
+    return slug;
+  }
+  const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  return `${slug}-${suffix}`;
 }
 
 export function createWikiPageFilename(stem: string, extension = ".md"): string {
