@@ -137,6 +137,14 @@ describe("kitchen-sink RPC isolated state", () => {
       resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
     ).resolves.toBe(19080);
     await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65535" }),
+    ).resolves.toBe(65535);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65536" }),
+    ).rejects.toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: "65536"',
+    );
+    await expect(
       resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
     ).resolves.toBe(45678);
   });

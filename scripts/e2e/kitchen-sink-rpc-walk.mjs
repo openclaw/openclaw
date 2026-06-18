@@ -182,7 +182,13 @@ export async function findAvailableLoopbackPort(options = {}) {
 export async function resolveKitchenSinkRpcPort(env = process.env, options = {}) {
   const rawPort = (env.OPENCLAW_KITCHEN_SINK_RPC_PORT || "").trim();
   if (rawPort) {
-    return readPositiveInt(rawPort, 0, "OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    const port = readPositiveInt(rawPort, 0, "OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    if (port > 65535) {
+      throw new Error(
+        `OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: ${JSON.stringify(rawPort)}`,
+      );
+    }
+    return port;
   }
   return await (options.findAvailablePort ?? findAvailableLoopbackPort)();
 }
