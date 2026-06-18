@@ -180,6 +180,7 @@ export async function deliverLineAutoReply(params: {
       pushMessageLine: deps.pushMessageLine,
       pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+      onReplyError: deps.onReplyError,
     });
     replyTokenUsed = nextReplyTokenUsed;
     if (!sendRichBeforeText) {
