@@ -70,14 +70,6 @@ function npmViewVersion(spec: string): string {
   return run("npm", ["view", spec, "version"], { quiet: true }).stdout.trim();
 }
 
-export async function ensureCurrentBuild(input: {
-  lockDir: string;
-  requireControlUi?: boolean;
-  checkDirty?: boolean;
-}): Promise<void> {
-  await withPackageLock(input.lockDir, async () => ensureCurrentBuildUnlocked(input));
-}
-
 async function ensureCurrentBuildUnlocked(input: {
   requireControlUi?: boolean;
   checkDirty?: boolean;

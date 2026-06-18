@@ -1,5 +1,5 @@
 // Filesystem script supports OpenClaw repository automation.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { access, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot } from "./host-command.ts";
@@ -89,10 +89,6 @@ export async function writeSummaryMarkdown(input: {
 
 export async function cleanupPath(filePath: string): Promise<void> {
   await rm(filePath, { force: true, recursive: true }).catch(() => undefined);
-}
-
-export function cleanupPathSync(filePath: string): void {
-  rmSync(filePath, { force: true, recursive: true });
 }
 
 export function writeExecutable(filePath: string, content: string): void {

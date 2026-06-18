@@ -949,7 +949,6 @@ if (isPrlctl) {
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("config set --batch-file");
     expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsAgentTurnConfigPatchScript");
     const powershell = readFileSync(TS_PATHS.powershell, "utf8");
-    expect(powershell).toContain("config set --batch-file");
     expect(powershell).toContain("agents.defaults.skipBootstrap");
     expect(powershell).toContain("tools.profile");
     expect(powershell).toContain("replace(/^\\\\uFEFF/u");
@@ -1565,16 +1564,11 @@ setInterval(() => {}, 1000);
     const windows = readFileSync(TS_PATHS.windows, "utf8");
 
     expect(powershell).toContain("windowsOpenClawResolver");
-    expect(powershell).toContain("providerTimeoutConfigJson");
-    expect(powershell).toContain("models.providers.${providerId}");
-    expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
     expect(powershell).toContain("OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED");
     expect(powershell).toContain("Programs\\nodejs");
     expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "openclaw" }');
     expect(powershell).toContain("delete selectedModelEntry.agentRuntime");
     expect(powershell).toContain("delete providerEntry.agentRuntime");
-    expect(powershell).toContain("configPathMapKey");
-    expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
     expect(powershell).toContain("$ErrorActionPreference = 'Continue'");

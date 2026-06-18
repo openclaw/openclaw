@@ -225,12 +225,6 @@ export function readBundledChannelCatalog(
   };
 }
 
-export function readBundledChannelCatalogIds(
-  extensionsDirOverride: string = extensionsDir,
-): string[] {
-  return readBundledChannelCatalog(extensionsDirOverride).ids;
-}
-
 function createIsolatedRootHelpRenderContext(
   bundledPluginsDir: string = extensionsDir,
 ): RootHelpRenderContext {
