@@ -494,6 +494,36 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:default");
   });
 
+  it("keeps current-provider configured model ids over cross-provider alias collisions (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                alias: "gpt-5.4-mini",
+              },
+            },
+            compaction: { model: "gpt-5.4-mini" },
+          },
+        },
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.4-mini" }] },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.authProfileId).toBe("openai:default");
+  });
+
   it("leaves non-openai providers unchanged", () => {
     const result = resolveEmbeddedCompactionTarget({
       provider: "anthropic",

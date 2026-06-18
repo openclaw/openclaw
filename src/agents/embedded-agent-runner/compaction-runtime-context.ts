@@ -129,6 +129,23 @@ export function resolveEmbeddedCompactionTarget(params: {
   }
   const defaultProvider = provider?.trim() || params.defaultProvider?.trim() || DEFAULT_PROVIDER;
   const config = params.config ?? {};
+  const currentProvider = provider?.trim();
+  if (
+    currentProvider &&
+    hasBareConfiguredModelForProvider({
+      cfg: config,
+      provider: currentProvider,
+      model: override,
+    })
+  ) {
+    const authProfileId = params.authProfileId ?? undefined;
+    return {
+      provider: currentProvider,
+      ...resolveTargetProviders(currentProvider, authProfileId),
+      model: override,
+      authProfileId,
+    };
+  }
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
@@ -176,6 +193,42 @@ export function resolveEmbeddedCompactionTarget(params: {
     model: override,
     authProfileId,
   };
+}
+
+function normalizeCompactionConfigKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function hasBareConfiguredModelForProvider(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  const providerKey = normalizeCompactionConfigKey(params.provider);
+  const modelKey = normalizeCompactionConfigKey(params.model);
+  if (!providerKey || !modelKey || params.model.includes("/")) {
+    return false;
+  }
+  for (const rawRef of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
+    const slashIdx = rawRef.indexOf("/");
+    if (slashIdx <= 0 || rawRef.endsWith("/*")) {
+      continue;
+    }
+    const rawProvider = rawRef.slice(0, slashIdx);
+    const rawModel = rawRef.slice(slashIdx + 1);
+    if (
+      normalizeCompactionConfigKey(rawProvider) === providerKey &&
+      normalizeCompactionConfigKey(rawModel) === modelKey
+    ) {
+      return true;
+    }
+  }
+  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(([key]) => {
+    return normalizeCompactionConfigKey(key) === providerKey;
+  })?.[1];
+  return (configuredProvider?.models ?? []).some((entry) => {
+    return normalizeCompactionConfigKey(entry?.id ?? "") === modelKey;
+  });
 }
 
 function shouldUseCodexRuntimeProviderForCompaction(params: {
