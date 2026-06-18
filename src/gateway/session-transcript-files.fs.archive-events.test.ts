@@ -159,8 +159,8 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       expect(fs.existsSync(trajectoryFile)).toBe(false);
       expect(fs.existsSync(pointerFile)).toBe(false);
       const remaining = fs.readdirSync(tmpDir);
-      expect(remaining.some((name) => /\.trajectory\.jsonl\.reset\.\d/.test(name))).toBe(true);
-      expect(remaining.some((name) => /\.trajectory-path\.json\.reset\.\d/.test(name))).toBe(true);
+      expect(remaining.some((name) => name.includes(".trajectory.jsonl.reset."))).toBe(true);
+      expect(remaining.some((name) => name.includes(".trajectory-path.json.reset."))).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -191,7 +191,7 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       expect(fs.existsSync(trajectoryFile)).toBe(true);
       expect(fs.existsSync(pointerFile)).toBe(true);
       const remaining = fs.readdirSync(tmpDir);
-      expect(remaining.some((name) => /\.trajectory\.jsonl\.reset\./.test(name))).toBe(false);
+      expect(remaining.some((name) => name.includes(".trajectory.jsonl.reset."))).toBe(false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
