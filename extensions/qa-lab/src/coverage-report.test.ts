@@ -35,8 +35,8 @@ function testMaturityTaxonomy(params?: {
         id: "smoke-ci",
         description: "Test smoke profile.",
         includeAllCategories: false,
-        channelDriver: "qa-channel" as const,
-        categoryIds: [],
+        channelDriver: "crabline" as const,
+        categoryIds: [categoryId],
       },
       {
         id: "release",
@@ -133,7 +133,7 @@ describe("qa coverage report", () => {
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
     ).toMatchObject({
-      channelDriver: "qa-channel",
+      channelDriver: "crabline",
       evidenceMode: "slim",
     });
     expect(

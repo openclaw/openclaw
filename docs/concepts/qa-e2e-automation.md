@@ -73,17 +73,17 @@ pnpm openclaw qa run \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
-Use `smoke-ci` for deterministic no-live-service proof and `release` for the
-Stable/LTS proof lane. When a command also needs an OpenClaw root profile, put
-the root profile before the QA command:
+Use `smoke-ci` for Crabline-backed PR proof with deterministic mock model
+providers and `release` for the Stable/LTS proof lane. When a command also needs
+an OpenClaw root profile, put the root profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
 ```
 
-QA profiles select the channel driver: `smoke-ci` uses the synthetic
-`qa-channel`, and `release` uses `live`. Scenarios set `execution.channel` only
-when they need a specific channel; otherwise the driver default is used.
+QA profiles select the channel driver: `smoke-ci` uses the Crabline SDK-backed
+channel driver, and `release` uses `live`. Scenarios set `execution.channel`
+only when they need a specific channel; otherwise the driver default is used.
 
 ## Operator flow
 
