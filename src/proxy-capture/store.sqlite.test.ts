@@ -79,6 +79,62 @@ describe("DebugProxyCaptureStore", () => {
     second.release();
   });
 
+  it("preserves the shipped path-based Plugin SDK overloads", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-legacy-sdk-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    const blobDir = path.join(root, "blobs");
+    const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);
+
+    expect(getDebugProxyCaptureStore(dbPath, blobDir)).toBe(lease.store);
+    lease.store.upsertSession({
+      id: "legacy-sdk-session",
+      startedAt: 1,
+      mode: "sdk",
+      sourceScope: "openclaw",
+      sourceProcess: "plugin",
+      dbPath,
+      blobDir,
+    });
+    const blob = lease.store.persistPayload(Buffer.from("legacy sdk payload"), "text/plain");
+    lease.store.recordEvent({
+      sessionId: "legacy-sdk-session",
+      ts: 2,
+      sourceScope: "openclaw",
+      sourceProcess: "plugin",
+      protocol: "https",
+      direction: "outbound",
+      kind: "request",
+      flowId: "legacy-sdk-flow",
+      dataBlobId: blob.blobId,
+      dataSha256: blob.sha256,
+    });
+
+    expect(lease.store.readBlob(blob.blobId)).toBe("legacy sdk payload");
+    expect(blob.path).toBe(path.join(blobDir, `${blob.blobId}.bin.gz`));
+    expect(fs.existsSync(dbPath)).toBe(true);
+    expect(fs.existsSync(blob.path ?? "")).toBe(true);
+    expect(
+      lease.store.db
+        .prepare("SELECT db_path AS dbPath, blob_dir AS blobDir FROM capture_sessions WHERE id = ?")
+        .get("legacy-sdk-session"),
+    ).toEqual({ dbPath, blobDir });
+    expect(
+      lease.store.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
+        .get(),
+    ).toBeUndefined();
+    expect(lease.store.deleteSessions(["legacy-sdk-session"])).toEqual({
+      sessions: 1,
+      events: 1,
+      blobs: 1,
+    });
+    expect(fs.existsSync(blob.path ?? "")).toBe(false);
+
+    lease.release();
+    expect(lease.store.isClosed).toBe(true);
+  });
+
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
     vi.spyOn(fs, "statfsSync").mockReturnValue({
       type: 0x6969,
