@@ -2369,7 +2369,7 @@ export async function runEmbeddedAttempt(
         if (!name) {
           continue;
         }
-        const pluginMeta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+        const pluginMeta = getPluginToolMeta(tool);
         if (!pluginMeta?.pluginId) {
           continue;
         }

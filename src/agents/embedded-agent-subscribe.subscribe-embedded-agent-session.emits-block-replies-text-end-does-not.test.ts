@@ -180,13 +180,14 @@ Message ID: 6655442331193344`,
       onBlockReply,
       blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
     });
+    const receiptText = `Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 6655442331193344`;
 
     emitAssistantTextEnd({
       emit,
-      content: `Sent to Jiva. To: +13522815065
-From: +14155201316
-Status: accepted/queued
-Message ID: 6655442331193344`,
+      content: receiptText,
     });
     await Promise.resolve();
 
@@ -196,6 +197,16 @@ Message ID: 6655442331193344`,
       "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
     );
     expect(payload.text).not.toContain("Message ID: 6655442331193344");
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: receiptText }],
+      } as AssistantMessage,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
 
   it("emits block replies on text_end and does not duplicate on message_end", async () => {

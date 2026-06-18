@@ -80,7 +80,10 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
-import { normalizeExternalActionEvidence } from "./external-action-receipts.js";
+import {
+  normalizeExternalActionEvidence,
+  normalizeMessageToolExternalActionEvidence,
+} from "./external-action-receipts.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -1217,12 +1220,19 @@ export async function handleToolExecutionEnd(
     ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
   }
   if (!isToolError) {
+    ctx.state.externalActionEvidence ??= [];
     ctx.state.externalActionEvidence.push(
       ...collectExternalActionEvidenceForTool({
         toolName,
         pluginMetadataKey: callSummary.pluginMetadataKey,
         result: sanitizedResult,
       }),
+      ...(toolName === "message" && executionStarted
+        ? normalizeMessageToolExternalActionEvidence({
+            toolName,
+            result: sanitizedResult,
+          })
+        : []),
     );
   }
   ctx.state.toolMetaById.delete(toolCallId);

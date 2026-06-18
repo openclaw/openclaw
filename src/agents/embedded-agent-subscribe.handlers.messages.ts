@@ -185,6 +185,8 @@ function guardChunkedBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext): boole
   if (!receiptGuard.allowed) {
     ctx.blockChunker?.reset();
     ctx.state.suppressBlockChunks = true;
+    ctx.state.lastBlockReplyText = receiptGuard.replacementText;
+    ctx.state.lastDeliveredBlockReplyText = receiptGuard.replacementText;
     ctx.emitBlockReply({
       text: receiptGuard.replacementText,
     });

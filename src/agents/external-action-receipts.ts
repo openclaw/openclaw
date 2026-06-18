@@ -23,6 +23,7 @@ export type ExternalActionEvidence = {
 export type ExternalActionEvidenceDeclaration = PluginExternalActionEvidenceRegistration;
 
 const SUCCESS_STATUSES = new Set(["accepted", "queued", "accepted/queued", "sent", "delivered"]);
+const MESSAGE_TOOL_SMS_CHANNEL = "sms";
 
 function readPath(value: unknown, path: string): unknown {
   let current: unknown = value;
@@ -75,6 +76,84 @@ function readFirstBoolean(value: unknown, paths: readonly string[] | undefined):
   return false;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+}
+
+function normalizeSuccessStatus(value: unknown): string | undefined {
+  const status = normalizeOptionalString(value)?.toLowerCase();
+  return status && SUCCESS_STATUSES.has(status) ? status : undefined;
+}
+
+function normalizeMessageToolSmsReceiptRecord(params: {
+  record: Record<string, unknown>;
+  fallbackChannel?: string;
+  fallbackRecipient?: string;
+  toolName?: string;
+}): ExternalActionEvidence | null {
+  const meta = asRecord(params.record.meta);
+  const channel = (
+    normalizeOptionalString(params.record.channel) ??
+    params.fallbackChannel ??
+    ""
+  ).toLowerCase();
+  if (channel !== MESSAGE_TOOL_SMS_CHANNEL) {
+    return null;
+  }
+  const providerId =
+    normalizeStringifiedOptionalString(params.record.messageId) ??
+    normalizeStringifiedOptionalString(params.record.platformMessageId);
+  const status = normalizeSuccessStatus(meta?.status ?? params.record.status);
+  if (!providerId && !status) {
+    return null;
+  }
+  const sender = readFirstString(params.record, ["from"]) ?? normalizeOptionalString(meta?.from);
+  const recipient =
+    readFirstString(params.record, ["chatId", "toJid", "conversationId", "to"]) ??
+    params.fallbackRecipient;
+  return {
+    actionFamily: MESSAGE_TOOL_SMS_CHANNEL,
+    ...(params.toolName ? { toolName: params.toolName } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(status ? { status } : {}),
+    ...(sender ? { sender } : {}),
+    ...(recipient ? { recipient } : {}),
+  };
+}
+
+function dedupeEvidence(records: ExternalActionEvidence[]): ExternalActionEvidence[] {
+  const byKey = new Map<string, ExternalActionEvidence>();
+  for (const record of records) {
+    const key = [
+      record.actionFamily,
+      record.toolName ?? "",
+      record.providerId ?? "",
+      record.recipient ?? "",
+    ].join("\0");
+    const current = byKey.get(key);
+    if (!current) {
+      byKey.set(key, record);
+      continue;
+    }
+    const currentScore = Object.values(current).filter(Boolean).length;
+    const nextScore = Object.values(record).filter(Boolean).length;
+    if (nextScore > currentScore) {
+      byKey.set(key, record);
+    }
+  }
+  return [...byKey.values()];
+}
+
 function hashBody(body: string): string {
   return createHash("sha256").update(body).digest("hex");
 }
@@ -116,4 +195,36 @@ export function normalizeExternalActionEvidence(params: {
     ...(recipient ? { recipient } : {}),
     ...(body ? { bodyHash: hashBody(body) } : {}),
   };
+}
+
+export function normalizeMessageToolExternalActionEvidence(params: {
+  toolName?: string;
+  result: unknown;
+}): ExternalActionEvidence[] {
+  const root = asRecord(params.result);
+  if (!root) {
+    return [];
+  }
+  const receipt = asRecord(root.receipt);
+  const fallbackChannel = normalizeOptionalString(root.channel);
+  const fallbackRecipient = readFirstString(root, ["chatId", "toJid", "conversationId", "to"]);
+  const candidates = [
+    root,
+    ...asRecordArray(receipt?.raw),
+    ...asRecordArray(receipt?.parts).flatMap((part) => {
+      const raw = asRecord(part.raw);
+      return raw ? [part, raw] : [part];
+    }),
+  ];
+  return dedupeEvidence(
+    candidates.flatMap((record) => {
+      const evidence = normalizeMessageToolSmsReceiptRecord({
+        record,
+        fallbackChannel,
+        fallbackRecipient,
+        toolName: params.toolName,
+      });
+      return evidence ? [evidence] : [];
+    }),
+  );
 }

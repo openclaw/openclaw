@@ -809,6 +809,58 @@ describe("handleToolExecutionEnd external action evidence", () => {
 
     expect(ctx.state.externalActionEvidence).toHaveLength(0);
   });
+
+  it("records built-in message tool SMS receipt evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM-default",
+        chatId: "+15551234567",
+        receipt: {
+          raw: [
+            {
+              channel: "sms",
+              messageId: "SM-default",
+              chatId: "+15551234567",
+              toJid: "+15551234567",
+              meta: {
+                from: "+15557654321",
+                status: "queued",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(ctx.state.externalActionEvidence).toEqual([
+      expect.objectContaining({
+        actionFamily: "sms",
+        toolName: "message",
+        providerId: "SM-default",
+        status: "queued",
+        sender: "+15557654321",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {

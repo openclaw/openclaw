@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isValidExternalActionEvidenceDeclaration,
+  normalizeMessageToolExternalActionEvidence,
   normalizeExternalActionEvidence,
 } from "./external-action-receipts.js";
 
@@ -91,5 +92,41 @@ describe("external action receipts", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("normalizes built-in message tool SMS receipts into evidence", () => {
+    expect(
+      normalizeMessageToolExternalActionEvidence({
+        toolName: "message",
+        result: {
+          channel: "sms",
+          messageId: "SM-default",
+          chatId: "+15551234567",
+          receipt: {
+            raw: [
+              {
+                channel: "sms",
+                messageId: "SM-default",
+                chatId: "+15551234567",
+                toJid: "+15551234567",
+                meta: {
+                  from: "+15557654321",
+                  status: "queued",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        actionFamily: "sms",
+        toolName: "message",
+        providerId: "SM-default",
+        status: "queued",
+        sender: "+15557654321",
+        recipient: "+15551234567",
+      }),
+    ]);
   });
 });

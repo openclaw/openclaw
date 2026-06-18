@@ -28,6 +28,15 @@ Message ID: 6655442331193344`),
     );
   });
 
+  it("detects accepted/queued SMS receipt starts", () => {
+    expect(
+      detectExternalActionReceiptClaim("SMS was accepted/queued. Message ID: 4797682962735104"),
+    ).toMatchObject({
+      actionFamily: "sms",
+      providerId: "4797682962735104",
+    });
+  });
+
   it("detects sent-to phone receipts without a colon", () => {
     expect(detectExternalActionReceiptClaim("SMS sent to +15550009999")).toMatchObject({
       actionFamily: "sms",
