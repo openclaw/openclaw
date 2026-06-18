@@ -13,6 +13,9 @@ export type RecentInboundHistoryImage = {
   contentType: string;
   sender: string;
   messageId?: string;
+  timestampMs?: number;
+  historyPosition?: number;
+  historyTotal?: number;
 };
 
 function isRemotePath(value: string): boolean {
@@ -100,6 +103,9 @@ export function resolveRecentInboundHistoryImages(params: {
         path: mediaPath,
         contentType,
         sender: entry.sender,
+        timestampMs: timestamp,
+        historyPosition: index + 1,
+        historyTotal: entries.length,
         ...(messageId ? { messageId } : {}),
       });
     }
@@ -116,7 +122,14 @@ export function appendRecentHistoryImageContext(params: {
   }
   const notes = params.images.map((image, index) => {
     const message = image.messageId ? `, message ${image.messageId}` : "";
-    return `[Recent image ${index + 1} from ${image.sender}${message}, attached as media.]`;
+    const sentAt =
+      image.timestampMs === undefined ? "" : `, sent ${new Date(image.timestampMs).toISOString()}`;
+    const position =
+      image.historyPosition === undefined || image.historyTotal === undefined
+        ? ""
+        : `, message ${image.historyPosition} of ${image.historyTotal} in thread`;
+    const context = `${message}${sentAt}${position}`;
+    return `[Recent image ${index + 1} from ${image.sender}${context}, attached as media.]`;
   });
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)
