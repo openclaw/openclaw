@@ -6,6 +6,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { assertHttpUrlTargetsPrivateNetwork } from "../../plugin-sdk/ssrf-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -39,6 +40,27 @@ async function loadSelfHostedWebToolsEndpoint(): Promise<
   WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
 > {
   return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
+}
+
+async function loadJsonWebToolsEndpoint(
+  url: string,
+): Promise<
+  | WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+  | WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:") {
+      await assertHttpUrlTargetsPrivateNetwork(parsed.toString(), {
+        dangerouslyAllowPrivateNetwork: true,
+      });
+      return await loadSelfHostedWebToolsEndpoint();
+    }
+  } catch {
+    // Preserve the existing trusted-path behavior for invalid and public HTTP URLs.
+  }
+
+  return await loadTrustedWebToolsEndpoint();
 }
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -142,8 +164,8 @@ export async function postTrustedWebToolsJson<T>(
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
-  return withTrustedWebToolsEndpoint(
+  const withJsonWebToolsEndpoint = await loadJsonWebToolsEndpoint(params.url);
+  return withJsonWebToolsEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
