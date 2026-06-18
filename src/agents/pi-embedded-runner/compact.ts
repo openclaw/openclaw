@@ -24,7 +24,13 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { canonicalUserFileDir, resolveAppToolWorkspace } from "../app-user-workspace.js";
+import { appUserIdFromSessionKey } from "../app-profile-context.js";
+import {
+  canonicalUserFileDir,
+  isAppUserSession,
+  resolveAppToolWorkspace,
+  resolveAppUserId,
+} from "../app-user-workspace.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -55,6 +61,9 @@ import { detectRuntimeShell } from "../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  buildAppSkillsPrompt,
+  buildWorkspaceSkillSnapshot,
+  limitAppSkills,
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
   type SkillSnapshot,
@@ -362,12 +371,25 @@ export async function compactEmbeddedPiSessionDirect(
           skills: skillEntries ?? [],
           config: params.config,
         });
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-    });
+
+    // Mirror the run path: app-user sessions are jailed and load skills by name via
+    // load_skill instead of reading SKILL.md, so compaction must not leak <location>
+    // or lose load-by-name (codex 4519976882 #2). Single, prompt-limited source for
+    // the app prompt + load_skill allowlist; the skills PROMPT is built after tools.
+    const appUserId = isAppUserSession(params.sessionKey)
+      ? (resolveAppUserId(params.sessionKey) ?? appUserIdFromSessionKey(params.sessionKey))
+      : null;
+    const appSkills = appUserId
+      ? limitAppSkills(
+          params.skillsSnapshot?.resolvedSkills ??
+            buildWorkspaceSkillSnapshot(effectiveWorkspace, {
+              entries: skillEntries,
+              config: params.config,
+            }).resolvedSkills ??
+            [],
+          params.config,
+        )
+      : undefined;
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { contextFiles } = await resolveBootstrapContextForRun({
@@ -395,6 +417,7 @@ export async function compactEmbeddedPiSessionDirect(
       agentDir,
       workspaceDir: toolWorkspace,
       userFileDir: canonicalUserFileDir(effectiveWorkspace),
+      appSkills,
       config: params.config,
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
@@ -404,6 +427,20 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
     logToolSchemasForGoogle({ tools, provider });
+
+    // load_skill must actually be available before instructing the model to call it
+    // (codex 4519976882 #1); suppress the app skills section otherwise.
+    const appSkillLoad = appUserId != null && tools.some((tool) => tool.name === "load_skill");
+    const skillsPrompt = appUserId
+      ? appSkillLoad
+        ? buildAppSkillsPrompt(appSkills ?? [])
+        : ""
+      : resolveSkillsPromptForRun({
+          skillsSnapshot: params.skillsSnapshot,
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+        });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -509,6 +546,7 @@ export async function compactEmbeddedPiSessionDirect(
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,
       skillsPrompt,
+      appSkillLoad,
       docsPath: docsPath ?? undefined,
       ttsHint,
       promptMode,

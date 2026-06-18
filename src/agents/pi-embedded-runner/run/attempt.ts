@@ -24,7 +24,13 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { canonicalUserFileDir, resolveAppToolWorkspace } from "../../app-user-workspace.js";
+import { appUserIdFromSessionKey } from "../../app-profile-context.js";
+import {
+  canonicalUserFileDir,
+  isAppUserSession,
+  resolveAppToolWorkspace,
+  resolveAppUserId,
+} from "../../app-user-workspace.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -65,6 +71,9 @@ import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  buildAppSkillsPrompt,
+  buildWorkspaceSkillSnapshot,
+  limitAppSkills,
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
@@ -283,12 +292,29 @@ export async function runEmbeddedAttempt(
           config: params.config,
         });
 
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-    });
+    // App-user sessions are jailed (tools.fs.workspaceOnly) and cannot read the
+    // shared SKILL.md by path. Resolve the chatting user (turn-1-safe via the #71
+    // session-key fallback) and, when present, surface the live skills through the
+    // read-only `load_skill` tool + a path-free app skills prompt.
+    const appUserId = isAppUserSession(params.sessionKey)
+      ? (resolveAppUserId(params.sessionKey) ?? appUserIdFromSessionKey(params.sessionKey))
+      : null;
+    // Filtered + prompt-limited skills (the SAME subset the normal prompt renders):
+    // the single source for both the app skills prompt and the load_skill allowlist,
+    // so they cannot drift (codex 4517821566 #2) and never exceed the configured
+    // prompt limits (codex 4519976882 #3). The skills PROMPT is built after tools
+    // (below) so it reflects whether load_skill survived tool-policy filtering.
+    const appSkills = appUserId
+      ? limitAppSkills(
+          params.skillsSnapshot?.resolvedSkills ??
+            buildWorkspaceSkillSnapshot(effectiveWorkspace, {
+              entries: skillEntries,
+              config: params.config,
+            }).resolvedSkills ??
+            [],
+          params.config,
+        )
+      : undefined;
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
@@ -335,6 +361,7 @@ export async function runEmbeddedAttempt(
           agentDir,
           workspaceDir: toolWorkspace,
           userFileDir: canonicalUserFileDir(effectiveWorkspace),
+          appSkills,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
@@ -352,6 +379,22 @@ export async function runEmbeddedAttempt(
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
+
+    // The app skills prompt + load-by-name instruction must only appear when
+    // load_skill actually survived tool-policy filtering, or the model is told to
+    // call a tool it doesn't have (codex 4519976882 #1). When it was filtered out,
+    // suppress the (otherwise unusable) skills section for the jailed app session.
+    const appSkillLoad = appUserId != null && tools.some((tool) => tool.name === "load_skill");
+    const skillsPrompt = appUserId
+      ? appSkillLoad
+        ? buildAppSkillsPrompt(appSkills ?? [])
+        : ""
+      : resolveSkillsPromptForRun({
+          skillsSnapshot: params.skillsSnapshot,
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+        });
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -468,6 +511,7 @@ export async function runEmbeddedAttempt(
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,
       skillsPrompt,
+      appSkillLoad,
       docsPath: docsPath ?? undefined,
       ttsHint,
       workspaceNotes,

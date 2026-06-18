@@ -17,6 +17,8 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
+  /** App-user session: render the `load_skill` instruction in the skills section. */
+  appSkillLoad?: boolean;
   docsPath?: string;
   ttsHint?: string;
   reactionGuidance?: {
@@ -58,6 +60,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
+    appSkillLoad: params.appSkillLoad,
     docsPath: params.docsPath,
     ttsHint: params.ttsHint,
     workspaceNotes: params.workspaceNotes,

@@ -14,10 +14,17 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  */
 export type PromptMode = "full" | "minimal" | "none";
 
-function buildSkillsSection(params: {
+export function buildSkillsSection(params: {
   skillsPrompt?: string;
   isMinimal: boolean;
   readToolName: string;
+  /**
+   * App-user sessions load skills by name via the `load_skill` tool — the
+   * `workspaceOnly` jail blocks reading the shared `SKILL.md` by path. Render the
+   * load-by-name instruction instead of the read-by-`<location>` one (the app
+   * skills prompt also omits `<location>` so no host path leaks).
+   */
+  appSkillLoad?: boolean;
 }) {
   if (params.isMinimal) {
     return [];
@@ -25,6 +32,18 @@ function buildSkillsSection(params: {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
+  }
+  if (params.appSkillLoad) {
+    return [
+      "## Skills (mandatory)",
+      "Before replying: scan <available_skills> <description> entries.",
+      "- If exactly one skill clearly applies: load it with `load_skill` (pass its <name>), then follow it.",
+      "- If multiple could apply: choose the most specific one, then load/follow it.",
+      "- If none clearly apply: do not load any skill.",
+      "Constraints: never load more than one skill up front; only load after selecting.",
+      trimmed,
+      "",
+    ];
   }
   return [
     "## Skills (mandatory)",
@@ -213,6 +232,11 @@ export function buildAgentSystemPrompt(params: {
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
+  /**
+   * App-user session: render the `load_skill` instruction in the skills section
+   * (the app skills prompt also omits `<location>`).
+   */
+  appSkillLoad?: boolean;
   heartbeatPrompt?: string;
   docsPath?: string;
   workspaceNotes?: string[];
@@ -415,6 +439,7 @@ export function buildAgentSystemPrompt(params: {
     skillsPrompt,
     isMinimal,
     readToolName,
+    appSkillLoad: params.appSkillLoad,
   });
   const memorySection = buildMemorySection({
     isMinimal,

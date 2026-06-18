@@ -1,3 +1,4 @@
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -10,6 +11,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createLoadSkillTool } from "./tools/load-skill.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSaveUserSectionTool } from "./tools/save-user-section.js";
@@ -69,6 +71,13 @@ export function createOpenClawTools(options?: {
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
   senderIsOwner?: boolean;
+  /**
+   * Prompt-limited, filtered skills (the `limitAppSkills` subset of the snapshot's
+   * `resolvedSkills`) for an app-user session — enables the read-only `load_skill`
+   * tool. Only set by the embedded run path for sessions with a resolved app user;
+   * omitted otherwise.
+   */
+  appSkills?: Skill[];
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -112,6 +121,7 @@ export function createOpenClawTools(options?: {
     workspaceDir,
     userFileDir: options?.userFileDir,
   });
+  const loadSkillTool = createLoadSkillTool({ skills: options?.appSkills });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -177,6 +187,7 @@ export function createOpenClawTools(options?: {
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
     ...(saveUserSectionTool ? [saveUserSectionTool] : []),
+    ...(loadSkillTool ? [loadSkillTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({

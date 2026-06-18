@@ -4,6 +4,7 @@ import {
   createReadTool,
   createWriteTool,
   readTool,
+  type Skill,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
@@ -178,6 +179,13 @@ export function createOpenClawCodingTools(options?: {
    * the dashboard reader resolves. Defaults to `<workspaceDir>/users`.
    */
   userFileDir?: string;
+  /**
+   * Prompt-limited, filtered skills (the `limitAppSkills` subset of `resolvedSkills`)
+   * for an app-user session — threaded to `createOpenClawTools` to enable the
+   * read-only `load_skill` tool. Set only by the embedded run path for sessions with
+   * a resolved app user.
+   */
+  appSkills?: Skill[];
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   /**
@@ -444,6 +452,7 @@ export function createOpenClawCodingTools(options?: {
       sandboxFsBridge,
       workspaceDir: workspaceRoot,
       userFileDir: options?.userFileDir,
+      appSkills: options?.appSkills,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([
