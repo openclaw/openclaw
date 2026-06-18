@@ -25,6 +25,11 @@ import {
   uniqueStrings,
 } from "./string-utils.js";
 
+/** Checks if a path is a Windows absolute path (drive-letter like `C:\` or UNC like `\\server\`). */
+function isWindowsAbsolutePath(p: string): boolean {
+  return /^[A-Za-z]:\\/.test(p) || /^\\\\/.test(p);
+}
+
 function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
 }
@@ -439,8 +444,15 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+
+  // Windows absolute paths (e.g., C:\Users\...) use backslashes which
+  // splitShellArgs treats as escape characters and strips. Bypass shell
+  // parsing when the command is a Windows absolute path so separators
+  // are preserved (the shell parser is only needed for the non-Windows
+  // case where users may pass flags like "qmd --verbose").
+  const command = isWindowsAbsolutePath(rawCommand)
+    ? rawCommand
+    : splitShellArgs(rawCommand)?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
