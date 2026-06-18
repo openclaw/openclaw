@@ -5,7 +5,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "../format.js";
+import { markdownToTelegramHtml } from "../format.js";
 import {
   isSafeToRetrySendError,
   isTelegramRateLimitError,
@@ -20,7 +20,7 @@ import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
-  splitTelegramRichTextChunks,
+  splitTelegramRichMessageTextChunks,
   TELEGRAM_LEGACY_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
 } from "../rich-message.js";
@@ -161,16 +161,21 @@ export async function sendTelegramText(
     }
     if (chunkLegacyFallback) {
       let lastMessageId: number | undefined;
-      const chunks = splitTelegramRichTextChunks({
+      const chunks = splitTelegramRichMessageTextChunks({
         text,
         textLimit: TELEGRAM_LEGACY_TEXT_LIMIT,
         textMode,
         chunkMode: "length",
+        tableMode: opts?.tableMode,
+        skipEntityDetection: linkPreviewEnabled === false,
       });
       for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index] ?? "";
-        const chunkHtml = textMode === "html" ? chunk : markdownToTelegramHtml(chunk);
-        const chunkPlain = textMode === "html" ? telegramHtmlToPlainTextFallback(chunkHtml) : chunk;
+        const chunk = chunks[index];
+        if (!chunk) {
+          continue;
+        }
+        const chunkHtml = chunk.text;
+        const chunkPlain = chunk.plainText;
         try {
           const res = await sendTelegramWithThreadFallback({
             operation: "sendMessage",
