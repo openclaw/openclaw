@@ -171,15 +171,17 @@ describe("issue-fix-agent github reads", () => {
       return {
         code: 0,
         stderr: "",
-        stdout: `${JSON.stringify({
-          author: { login: "external-user" },
-          body: "Repro: TypeError in src/commands/status.ts",
-          labels: ["bug"],
-          number: 12345,
-          title: "status crashes",
-          updatedAt: "2026-06-01T00:00:00Z",
-          url: "https://github.com/openclaw/openclaw/issues/12345",
-        })}\n`,
+        stdout: JSON.stringify([
+          {
+            author: { login: "external-user" },
+            body: "Repro: TypeError in src/commands/status.ts",
+            labels: ["bug"],
+            number: 12345,
+            title: "status crashes",
+            updatedAt: "2026-06-01T00:00:00Z",
+            url: "https://github.com/openclaw/openclaw/issues/12345",
+          },
+        ]),
       };
     };
 
@@ -209,15 +211,17 @@ describe("issue-fix-agent github reads", () => {
 
 describe("issue-fix-agent workflow", () => {
   function gitcrawlIssueStdout() {
-    return `${JSON.stringify({
-      author: { login: "external-user" },
-      body: "Repro: TypeError in src/commands/status.ts",
-      labels: ["bug"],
-      number: 12345,
-      title: "status crashes",
-      updatedAt: "2026-06-01T00:00:00Z",
-      url: "https://github.com/openclaw/openclaw/issues/12345",
-    })}\n`;
+    return JSON.stringify([
+      {
+        author: { login: "external-user" },
+        body: "Repro: TypeError in src/commands/status.ts",
+        labels: ["bug"],
+        number: 12345,
+        title: "status crashes",
+        updatedAt: "2026-06-01T00:00:00Z",
+        url: "https://github.com/openclaw/openclaw/issues/12345",
+      },
+    ]);
   }
 
   it("scan prints qualified candidates and performs no writes", async () => {

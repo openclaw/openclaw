@@ -12,12 +12,16 @@ type GitcrawlIssue = {
   pullRequest?: unknown;
 };
 
-function parseJsonLines(stdout: string): unknown[] {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as unknown);
+function parseJsonArray(stdout: string): unknown[] {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("gitcrawl issue search returned non-array JSON");
+  }
+  return parsed;
 }
 
 function normalizeLabels(labels: GitcrawlIssue["labels"]): string[] {
@@ -66,7 +70,7 @@ export async function fetchOpenIssueCandidates(params: {
   if (result.code !== 0) {
     throw new Error(`gitcrawl issue search failed: ${result.stderr || result.stdout}`);
   }
-  return parseJsonLines(result.stdout)
+  return parseJsonArray(result.stdout)
     .map((entry) => normalizeIssue(entry as GitcrawlIssue))
     .filter((entry): entry is IssueCandidate => entry !== null);
 }
