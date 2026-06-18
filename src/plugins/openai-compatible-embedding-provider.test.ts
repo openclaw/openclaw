@@ -476,6 +476,7 @@ describe("openai-compatible generic embedding provider", () => {
                 headers: {
                   "x-tenant": "tenant-a",
                 },
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
@@ -504,6 +505,7 @@ describe("openai-compatible generic embedding provider", () => {
                 api: "openai-responses",
                 baseUrl: server.baseUrl,
                 apiKey: token,
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
@@ -531,6 +533,7 @@ describe("openai-compatible generic embedding provider", () => {
               "tenant-embeddings": {
                 baseUrl: server.baseUrl,
                 apiKey: token,
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
@@ -559,6 +562,7 @@ describe("openai-compatible generic embedding provider", () => {
             providers: {
               "ollama-local": {
                 baseUrl: server.baseUrl,
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
