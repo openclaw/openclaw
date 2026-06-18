@@ -1776,10 +1776,12 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "direct",
     };
   } catch (err) {
+    const terminal = isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err);
     return {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
+      ...(terminal ? { terminal: true } : {}),
     };
   }
 }

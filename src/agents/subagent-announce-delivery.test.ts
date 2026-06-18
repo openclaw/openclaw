@@ -4979,14 +4979,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       results: [{ channel: "telegram", messageId: "msg-1" }],
     });
     const callGateway = vi.fn(async () => {
-      const err = new Error(
-        "session file changed while embedded prompt lock was released",
-      );
+      const err = new Error("session file changed while embedded prompt lock was released");
       err.cause = sendErr;
       throw err;
     }) as unknown as typeof runtimeCallGateway;
-    const queueEmbeddedAgentMessageWithOutcome =
-      createQueueOutcomeSequenceMock(["no_active_run"]);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       queueEmbeddedAgentMessageWithOutcome,
@@ -4999,8 +4996,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     // Should fail immediately without retries (send evidence present).
     expect(result.delivered).toBe(false);
     expect(result.path).toBe("direct");
+    expect(result.terminal).toBe(true);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
     // Only one call — no retry attempts.
     expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });
 
   it("allows retry when session-file-changed error has no send evidence (pre-send recovery)", async () => {
@@ -5009,9 +5009,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const callGateway = vi.fn(async () => {
       attempts++;
       if (attempts <= 1) {
-        throw new Error(
-          "session file changed while embedded prompt lock was released",
-        );
+        throw new Error("session file changed while embedded prompt lock was released");
       }
       // Second attempt succeeds
       return {
@@ -5020,8 +5018,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
       };
     }) as unknown as typeof runtimeCallGateway;
-    const queueEmbeddedAgentMessageWithOutcome =
-      createQueueOutcomeSequenceMock(["no_active_run"]);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       queueEmbeddedAgentMessageWithOutcome,
