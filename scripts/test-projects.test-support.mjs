@@ -772,6 +772,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
+    "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/bundled-plugin-install-uninstall-probe.test.ts",
+    ],
+  ],
+  [
     "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
     ["test/scripts/plugin-lifecycle-measure.test.ts"],
   ],
@@ -822,6 +831,32 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [
     "scripts/e2e/lib/plugin-update/unchanged-scenario.sh",
     ["test/scripts/plugin-update-unchanged-docker.test.ts"],
+  ],
+  [
+    "scripts/e2e/plugin-update-unchanged-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/plugin-update-unchanged-docker.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/update-corrupt-plugin-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-update-unchanged-docker.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/plugins-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugins-assertions.test.ts",
+    ],
   ],
   ["scripts/e2e/lib/plugins/clawhub.sh", ["test/scripts/plugins-assertions.test.ts"]],
   ["scripts/e2e/lib/plugins/fixtures.sh", ["test/scripts/plugins-assertions.test.ts"]],

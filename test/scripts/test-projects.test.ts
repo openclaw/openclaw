@@ -584,6 +584,15 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       ["scripts/e2e/lib/package-compat.mjs", ["test/scripts/docker-build-helper.test.ts"]],
       [
+        "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/bundled-plugin-install-uninstall-probe.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
         ["test/scripts/plugin-update-unchanged-docker.test.ts"],
       ],
@@ -594,6 +603,32 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "scripts/e2e/lib/plugin-update/unchanged-scenario.sh",
         ["test/scripts/plugin-update-unchanged-docker.test.ts"],
+      ],
+      [
+        "scripts/e2e/plugin-update-unchanged-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/plugin-update-unchanged-docker.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/update-corrupt-plugin-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/plugin-update-unchanged-docker.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/plugins-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugins-assertions.test.ts",
+        ],
       ],
       ["scripts/e2e/lib/plugins/clawhub.sh", ["test/scripts/plugins-assertions.test.ts"]],
       ["scripts/e2e/lib/plugins/fixtures.sh", ["test/scripts/plugins-assertions.test.ts"]],
