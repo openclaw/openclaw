@@ -570,6 +570,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   let useContextEngineCompaction = true;
   let nativeFallbackToContextEngine = false;
   let nativeFallbackNeedsBindingClear = false;
+  let nativeCompactionFailureReason: string | undefined;
   let resolvedContextEngine: ContextEngine | undefined;
   let autoCompactionGuardApplied = false;
   const authProfileId = params.sessionEntry?.authProfileOverride?.trim() || undefined;
@@ -621,7 +622,12 @@ export async function runCliTurnCompactionLifecycle(params: {
       nativeFallbackToContextEngine = true;
       nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
     } else if (nativeOutcome.failureReason) {
-      throw new Error(
+      // Native harness compaction failed (e.g. Connection error). This is a
+      // post-turn optimization — the assistant reply has already been generated
+      // and persisted. Treat the failure as a warning rather than a fatal error
+      // so the turn remains successful and the reply is still delivered.
+      nativeCompactionFailureReason = nativeOutcome.failureReason;
+      log.warn(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
           nativeOutcome.failureReason ?? "compaction did not reduce context"
         }`,
@@ -664,7 +670,11 @@ export async function runCliTurnCompactionLifecycle(params: {
     });
     compacted = contextOutcome.compacted;
     if (!compacted && contextOutcome.failureReason) {
-      throw new Error(
+      // Context engine compaction failed (e.g. "Connection error"). This is a
+      // post-turn optimization — the assistant reply has already been generated
+      // and persisted. Treat the failure as a warning rather than a fatal error
+      // so the turn remains successful and the reply is still delivered.
+      log.warn(
         `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
           contextOutcome.failureReason ?? "compaction did not reduce context"
         }`,

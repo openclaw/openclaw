@@ -2212,28 +2212,41 @@ async function agentCommandInternal(
           );
         }
         if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
-          sessionEntry = await (
-            await loadCliCompactionRuntime()
-          ).runCliTurnCompactionLifecycle({
-            cfg,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            cwd: effectiveCwd,
-            agentDir,
-            provider: result.meta.agentMeta?.provider ?? provider,
-            model: result.meta.agentMeta?.model ?? model,
-            skillsSnapshot,
-            messageChannel,
-            agentAccountId: runContext.accountId,
-            senderIsOwner: opts.senderIsOwner,
-            thinkLevel: resolvedThinkLevel,
-            extraSystemPrompt: opts.extraSystemPrompt,
-          });
+          try {
+            sessionEntry = await (
+              await loadCliCompactionRuntime()
+            ).runCliTurnCompactionLifecycle({
+              cfg,
+              sessionId: effectiveSessionId,
+              sessionKey: sessionKey ?? effectiveSessionId,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              workspaceDir,
+              cwd: effectiveCwd,
+              agentDir,
+              provider: result.meta.agentMeta?.provider ?? provider,
+              model: result.meta.agentMeta?.model ?? model,
+              skillsSnapshot,
+              messageChannel,
+              agentAccountId: runContext.accountId,
+              senderIsOwner: opts.senderIsOwner,
+              thinkLevel: resolvedThinkLevel,
+              extraSystemPrompt: opts.extraSystemPrompt,
+            });
+          } catch (compactionError: unknown) {
+            // Post-turn compaction failure should not abort the turn. The
+            // assistant reply has already been generated and persisted. Log the
+            // error and continue so the reply is still delivered.
+            const errorMsg =
+              compactionError instanceof Error
+                ? compactionError.message
+                : String(compactionError);
+            logger.warn(
+              `post-turn compaction failed but turn continues: ${errorMsg}`,
+            );
+          }
         }
       }
 
