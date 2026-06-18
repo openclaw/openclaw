@@ -1011,6 +1011,25 @@ describe("test-projects args", () => {
     ).toStrictEqual([]);
   });
 
+  it("routes auth setup script changes to the focused tooling planner test", () => {
+    const changedPaths = ["scripts/setup-auth-system.sh"];
+
+    expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/test-projects.test.ts"],
+    });
+    expect(
+      buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/test-projects.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("keeps core test-only changes on their owning test lane", () => {
     const changedPaths = ["src/auto-reply/reply/commands-approve.test.ts"];
 
