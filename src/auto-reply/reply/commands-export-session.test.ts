@@ -164,6 +164,14 @@ function writtenHtml(): string {
   return value;
 }
 
+function sessionDataFromHtml(html: string): Record<string, unknown> {
+  const match = html.match(/id="session-data"[^>]*>([^<]+)</);
+  if (!match) {
+    throw new Error("Expected session-data script in exported HTML");
+  }
+  return JSON.parse(Buffer.from(match[1].trim(), "base64").toString("utf-8"));
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -549,5 +557,55 @@ describe("buildExportSessionReply", () => {
       "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 4",
     );
     expect(reply.text).not.toMatch(/Unexpected|SyntaxError|position/i);
+  });
+
+  it("warns when the session only contains user messages (backend-delegated transcript)", async () => {
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { role: "user", content: "world" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("backend runtime");
+    expect(reply.text).toContain("not included in this export");
+    const data = sessionDataFromHtml(writtenHtml());
+    expect(typeof data.warning).toBe("string");
+    expect(data.warning).toContain("backend runtime");
+  });
+
+  it("does not warn when the transcript includes assistant messages", async () => {
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { role: "assistant", content: "hi" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).not.toContain("backend runtime");
+    expect(reply.text).not.toContain("not included in this export");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
   });
 });
