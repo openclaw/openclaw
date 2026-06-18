@@ -183,6 +183,50 @@ function logLineHttpError(err: unknown, context: string): void {
   }
 }
 
+// Retry on 429 with exponential backoff to prevent transient rate-limit
+// failures from silently dropping messages.  openclaw/openclaw#86012
+const LINE_RETRY_MAX_ATTEMPTS = 3;
+const LINE_RETRY_BASE_DELAY_MS = 1000;
+
+async function withLineRetry<T>(fn: () => Promise<T>, context: string): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= LINE_RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= LINE_RETRY_MAX_ATTEMPTS) break;
+      const status = (err as { status?: number }).status;
+      if (status !== 429) throw err;
+      const delay = Math.min(LINE_RETRY_BASE_DELAY_MS * Math.pow(2, attempt), 16000);
+      logVerbose(
+        `line: ${context} rate-limited (429), retrying in ${delay}ms` +
+          ` (attempt ${attempt + 1}/${LINE_RETRY_MAX_ATTEMPTS})`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
+// Check Push API quota before sending to avoid silently hitting the
+// free-plan limit (200 push messages/month).  openclaw/openclaw#86012
+async function checkPushQuota(client: messagingApi.MessagingApiClient): Promise<number | null> {
+  try {
+    const quota = await client.getMessageQuotaConsumption();
+    // totalUsage is the number of push messages sent this month.
+    // The free plan limit is 200; paid plans typically have no limit
+    // and the API returns type: 'none'.
+    if (quota.totalUsage !== undefined) {
+      return quota.totalUsage;
+    }
+    return null; // paid plan — no limit to track
+  } catch (err) {
+    logVerbose(`line: push quota check failed (non-fatal): ${String(err)}`);
+    return null;
+  }
+}
+
 function recordLineOutboundActivity(accountId: string): void {
   recordChannelActivity({
     channel: "line",
@@ -219,10 +263,27 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
-  const pushRequest = client.pushMessage({
-    to: chatId,
-    messages,
-  });
+
+  // Warn when approaching the free-plan push quota (200/month).
+  // Non-blocking — quota check failures must not prevent delivery.
+  // openclaw/openclaw#86012
+  try {
+    const used = await checkPushQuota(client);
+    if (used !== null && used >= 180) {
+      logVerbose(`line: push quota usage ${used}/200 — approaching free-plan limit`);
+    }
+  } catch {
+    // quota check is advisory; never block delivery
+  }
+
+  const pushRequest = withLineRetry(
+    () =>
+      client.pushMessage({
+        to: chatId,
+        messages,
+      }),
+    behavior.errorContext ?? "push message",
+  );
 
   if (behavior.errorContext) {
     await pushRequest.catch((err: unknown) => {
@@ -262,10 +323,16 @@ async function replyLineMessages(
 ): Promise<void> {
   const { account, client } = createLineMessagingClient(opts);
 
-  await client.replyMessage({
-    replyToken,
-    messages,
-  });
+  // Reply tokens expire after ~60s.  Retry on 429 only — token-expiry
+  // 400s are permanent and must not be retried.  openclaw/openclaw#86012
+  await withLineRetry(
+    () =>
+      client.replyMessage({
+        replyToken,
+        messages,
+      }),
+    "reply message",
+  );
 
   recordLineOutboundActivity(account.accountId);
 

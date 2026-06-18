@@ -145,6 +145,7 @@ vi.mock("./send.js", () => ({
   replyMessageLine: async () => {
     throw new Error("replyMessageLine should not be called from bot-handlers tests");
   },
+  showLoadingAnimation: vi.fn(async () => {}),
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({

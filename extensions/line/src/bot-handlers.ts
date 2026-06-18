@@ -34,7 +34,7 @@ import {
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { pushMessageLine, replyMessageLine } from "./send.js";
+import { pushMessageLine, replyMessageLine, showLoadingAnimation } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 
 type FollowEvent = webhook.FollowEvent;
@@ -495,6 +495,23 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   if (!messageContext) {
     logVerbose("line: skipping empty message");
     return;
+  }
+
+  // Send loading animation immediately via Reply API so the user sees
+  // feedback within the ~60s reply-token window, before agent processing
+  // may exceed it.  Fires-and-forgets — failures are non-fatal.
+  // openclaw/openclaw#86012
+  if (event.replyToken) {
+    const { userId, groupId, roomId } = getLineSourceInfo(event.source);
+    const loadingTarget = groupId ?? roomId ?? userId ?? "";
+    if (loadingTarget) {
+      showLoadingAnimation(loadingTarget, {
+        cfg,
+        accountId: account.accountId,
+        channelAccessToken: account.channelAccessToken,
+        loadingSeconds: 20,
+      }).catch(() => {});
+    }
   }
 
   await processMessage(messageContext);
