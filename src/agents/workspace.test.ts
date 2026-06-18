@@ -616,6 +616,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
 
     const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
     expect(result.repaired).toBe(true);
@@ -636,6 +639,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
     const rmSpy = vi
       .spyOn(fs, "rm")
@@ -665,6 +671,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_SOUL_FILENAME,
       content: "# SOUL.md\n\nUse a concise, practical voice.\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-06-15.md"), "# Daily log\n");
 
     const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
     expect(result.repaired).toBe(true);
@@ -762,6 +771,99 @@ describe("ensureAgentWorkspace", () => {
     // Verify required files (AGENTS.md, TOOLS.md) still exist.
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
     await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
+  });
+
+  it("preserves BOOTSTRAP.md in preseeded workspaces with custom profile files", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    const customSoulContent = "# SOUL.md\n\nCustom platform-provided soul configuration\n";
+    const customIdentityContent = "# IDENTITY.md\n\nCustom platform identity\n";
+    const customUserContent = "# USER.md\n\nCustom platform user settings\n";
+    const bootstrapContent = "# BOOTSTRAP.md\n\nFirst-run onboarding flow\n";
+
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, DEFAULT_SOUL_FILENAME), customSoulContent);
+    await fs.writeFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), customIdentityContent);
+    await fs.writeFile(path.join(tempDir, DEFAULT_USER_FILENAME), customUserContent);
+    await fs.writeFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), bootstrapContent);
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(
+      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+    ).resolves.toBeUndefined();
+
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toBeUndefined();
+
+    expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("keeps BOOTSTRAP.md pending across restart before first onboarding", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const customSoulContent = "# SOUL.md\n\nCustom platform soul\n";
+    const customIdentityContent = "# IDENTITY.md\n\nCustom platform identity\n";
+    const customUserContent = "# USER.md\n\nCustom platform user\n";
+    const bootstrapContent = "# BOOTSTRAP.md\n\nFirst-run onboarding flow\n";
+
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, DEFAULT_SOUL_FILENAME), customSoulContent);
+    await fs.writeFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), customIdentityContent);
+    await fs.writeFile(path.join(tempDir, DEFAULT_USER_FILENAME), customUserContent);
+    await fs.writeFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), bootstrapContent);
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    const stateAfterFirstStart = await readWorkspaceState(tempDir);
+    expect(stateAfterFirstStart.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(stateAfterFirstStart.setupCompletedAt).toBeUndefined();
+
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "# IDENTITY.md\n\n- **Name:** Example\n",
+    });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(
+      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+    ).resolves.toBeUndefined();
+    const stateAfterRestart = await readWorkspaceState(tempDir);
+    expect(stateAfterRestart.setupCompletedAt).toBeUndefined();
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+
+    const reconcileResult = await reconcileWorkspaceBootstrapCompletion(tempDir);
+    expect(reconcileResult.repaired).toBe(false);
+    expect(reconcileResult.bootstrapExists).toBe(true);
+  });
+
+  it("does not treat preseeded workspace skills as bootstrap completion evidence", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, DEFAULT_SOUL_FILENAME), "# SOUL.md\n\nCustom soul\n");
+    await fs.writeFile(
+      path.join(tempDir, DEFAULT_IDENTITY_FILENAME),
+      "# IDENTITY.md\n\nCustom identity\n",
+    );
+    await fs.writeFile(path.join(tempDir, DEFAULT_USER_FILENAME), "# USER.md\n\nCustom user\n");
+    await fs.writeFile(
+      path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME),
+      "# BOOTSTRAP.md\n\nOnboarding\n",
+    );
+    await fs.mkdir(path.join(tempDir, "skills", "my-preseeded-skill"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, "skills", "my-preseeded-skill", "SKILL.md"),
+      "# Preseeded Skill\n",
+    );
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(
+      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+    ).resolves.toBeUndefined();
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toBeUndefined();
   });
 });
 
