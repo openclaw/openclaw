@@ -11,7 +11,14 @@ const qaScorecardIdSchema = z
   .string()
   .trim()
   .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
-    message: "scorecard and coverage ids must use lowercase dotted or dashed tokens",
+    message: "scorecard ids must use lowercase dotted or dashed tokens",
+  });
+
+const qaCoverageIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
+    message: "coverage ids must use lowercase dotted tokens",
   });
 
 function isRepoRootRelativeRef(value: string) {
@@ -31,7 +38,7 @@ const qaScorecardProfileSchema = z.object({
 
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
-  coverageIds: z.array(qaScorecardIdSchema).default([]),
+  coverageIds: z.array(qaCoverageIdSchema).default([]),
   description: z.string().trim().min(1).optional(),
 });
 

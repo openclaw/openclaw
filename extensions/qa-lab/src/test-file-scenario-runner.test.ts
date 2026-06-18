@@ -726,9 +726,9 @@ describe("qa test file scenario runner", () => {
         "tools.evidence",
         "workspace.artifacts",
         "ui.control",
-        "control-ui",
-        "cli-entrypoint",
-        "status-snapshots",
+        "gateway.control-ui-hosting",
+        "cli.entrypoint",
+        "cli.status-snapshots",
       ]),
     );
     const artifactKinds = evidence.entries.flatMap(
