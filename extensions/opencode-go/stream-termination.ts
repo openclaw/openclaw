@@ -48,9 +48,14 @@ function validTimeoutMs(value: unknown): number | undefined {
 }
 
 function resolveTimeoutMs(model: unknown, fallbackMs: number): number {
-  return Math.max(
-    validTimeoutMs((model as { requestTimeoutMs?: unknown })?.requestTimeoutMs) ?? 0,
-    fallbackMs,
+  return validTimeoutMs((model as { requestTimeoutMs?: unknown })?.requestTimeoutMs) ?? fallbackMs;
+}
+
+function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
+  return (
+    event.type === "text_delta" ||
+    event.type === "thinking_delta" ||
+    event.type === "toolcall_delta"
   );
 }
 
@@ -348,7 +353,7 @@ export function createOpencodeGoStalledStreamWrapper(
           }
           trackPartial(event);
           output.push(event);
-          if (event.type !== "start") {
+          if (isProviderProgressEvent(event)) {
             armIdleTimer();
           }
         }
