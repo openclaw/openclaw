@@ -13,7 +13,10 @@ import {
   makePluginSessionSchedulerJobKey,
 } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type {
+  PluginRegistry,
+  PluginRuntimeLifecycleRegistryRegistration,
+} from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
@@ -33,8 +36,49 @@ export type PluginHostCleanupResult = {
 
 type ResolveCleanupSessionStorePaths = () => readonly string[];
 
+type RuntimeLifecycleCleanup = NonNullable<
+  PluginRuntimeLifecycleRegistryRegistration["lifecycle"]["cleanup"]
+>;
+
+type RuntimeLifecycleCleanupRecord =
+  | {
+      ok: true;
+      pluginId: string;
+      hookId: string;
+      cleanup?: RuntimeLifecycleCleanup;
+    }
+  | {
+      ok: false;
+      pluginId: string;
+      hookId: string;
+      error: unknown;
+    };
+
 function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
   return !filterPluginId || pluginId === filterPluginId;
+}
+
+function readRuntimeLifecycleCleanupRecord(
+  registration: PluginRuntimeLifecycleRegistryRegistration,
+): RuntimeLifecycleCleanupRecord {
+  let pluginId = "plugin-host";
+  try {
+    pluginId = registration.pluginId;
+    const lifecycle = registration.lifecycle;
+    return {
+      ok: true,
+      pluginId,
+      hookId: `runtime:${lifecycle.id}`,
+      cleanup: lifecycle.cleanup,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      pluginId,
+      hookId: "runtime:<unreadable>",
+      error,
+    };
+  }
 }
 
 function collectStoredSessionEntrySlotKeys(entry: SessionEntry, pluginId?: string): Set<string> {
@@ -453,16 +497,24 @@ export async function runPluginHostCleanup(params: {
       if (!shouldCleanup()) {
         return { cleanupCount, failures };
       }
-      if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
+      const record = readRuntimeLifecycleCleanupRecord(registration);
+      if (!shouldCleanPlugin(record.pluginId, params.pluginId)) {
         continue;
       }
-      const cleanup = registration.lifecycle.cleanup;
+      if (!record.ok) {
+        failures.push({
+          pluginId: record.pluginId,
+          hookId: record.hookId,
+          error: record.error,
+        });
+        continue;
+      }
+      const cleanup = record.cleanup;
       if (!cleanup) {
         continue;
       }
-      const hookId = `runtime:${registration.lifecycle.id}`;
       try {
-        await withPluginHostCleanupTimeout(hookId, () =>
+        await withPluginHostCleanupTimeout(record.hookId, () =>
           cleanup({
             reason: params.reason,
             sessionKey: params.sessionKey,
@@ -472,8 +524,8 @@ export async function runPluginHostCleanup(params: {
         cleanupCount += 1;
       } catch (error) {
         failures.push({
-          pluginId: registration.pluginId,
-          hookId,
+          pluginId: record.pluginId,
+          hookId: record.hookId,
           error,
         });
       }
