@@ -14,8 +14,6 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/canvas/src/host/a2ui-app/bootstrap.js",
   "extensions/canvas/src/host/a2ui-app/rolldown.config.mjs",
   "extensions/copilot/src/doctor-probes.ts",
-  "extensions/copilot/src/telemetry-bridge.ts",
-  "extensions/copilot/src/user-input-bridge.ts",
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
