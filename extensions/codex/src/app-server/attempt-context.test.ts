@@ -117,6 +117,58 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryToolRouted).toBe(false);
   });
 
+  // FIX #94295: MEMORY.md should remain injected even when memory tools are available
+  it("keeps MEMORY.md injected when memory tools are available (FIX #94295)", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-fix-workspace-"));
+    const memorySummary = "Project-specific operational facts for memory recall.";
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+
+    const context = await buildCodexWorkspaceBootstrapContext({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        config: {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sessionKey: "agent:main:session-1",
+      sessionAgentId: "main",
+      memoryToolNames: ["memory_search", "memory_get"],
+    });
+
+    // When workspaces match, memory tools can be routed
+    expect(context.memoryToolRouted).toBe(true);
+
+    // FIX #94295: MEMORY.md should still be in prompt context (not filtered out)
+    expect(context.promptContext).toContain(memorySummary);
+
+    // Verify the system prompt report shows non-zero injected chars for MEMORY.md
+    const report = buildCodexSystemPromptReport({
+      attempt: {
+        sessionId: "session-1",
+        provider: "codex",
+        modelId: "gpt-5.4-codex",
+      } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:session-1",
+      workspaceDir,
+      developerInstructions: "test instructions",
+      workspaceBootstrapContext: context,
+      skillsPrompt: "",
+      tools: [] as CodexDynamicToolSpec[],
+    });
+
+    const memoryFile = report.injectedWorkspaceFiles.find((f) => f.name === "MEMORY.md");
+    expect(memoryFile).toBeDefined();
+    expect(memoryFile?.injectedChars).toBeGreaterThan(0);
+    expect(memoryFile?.rawChars).toBeGreaterThan(0);
+  });
+
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
     expect(
       remapCodexContextFilePath({

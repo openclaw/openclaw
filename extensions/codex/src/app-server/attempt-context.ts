@@ -174,8 +174,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         agentId: params.params.agentId ?? params.sessionAgentId,
         workspaceDir: params.effectiveWorkspace,
       });
-    // Native Codex turns should read workspace MEMORY.md through tools when
-    // possible; pasting it into every prompt turns durable memory into policy.
+    // FIX #94295: MEMORY.md provides sparse long-lived bootstrap facts that agents
+    // need to know which memory queries to run. Memory tools offer deeper recall,
+    // but should not suppress root bootstrap memory that contains operational facts.
     const bootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
@@ -199,30 +200,22 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
-    const contextFiles = buildBootstrapContextForFiles(
-      memoryToolsAvailable
-        ? bootstrapFiles.filter(
-            (file) =>
-              !isCodexWorkspaceRootMemoryBootstrapFile({
-                file,
-                workspaceDir: params.resolvedWorkspace,
-              }),
-          )
-        : bootstrapFiles,
-      {
-        config: params.params.config,
-        agentId: params.params.agentId ?? params.sessionAgentId,
-        warn: (message) => embeddedAgentLog.warn(message),
-      },
-    ).map((file) =>
+    // FIX #94295: Always include MEMORY.md in bootstrap context when present.
+    // Memory tools provide an additional deeper-recall path, not a replacement.
+    const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {
+      config: params.params.config,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      warn: (message) => embeddedAgentLog.warn(message),
+    }).map((file) =>
       remapCodexContextFilePath({
         file,
         sourceWorkspaceDir: params.resolvedWorkspace,
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
+    // FIX #94295: Include MEMORY.md in prompt context files regardless of memory tools availability.
     const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
-      excludeMemory: memoryToolsAvailable,
+      excludeMemory: false,
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
@@ -418,28 +411,17 @@ function buildCodexBootstrapInjectionStats(params: {
   const developerInstructionIndex = indexCodexContextFileContent(
     params.developerInstructionFiles ?? [],
   );
-  const memoryToolRoutedPaths = new Set(
-    (params.memoryToolRoutedBootstrapFiles ?? [])
-      .map((file) => readNonEmptyString(file.path))
-      .filter(isNonEmptyString)
-      .map(normalizeCodexContextFilePath),
-  );
   return params.bootstrapFiles.map((file) => {
     const fileName = readNonEmptyString(file.name);
     const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
     const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
     const baseName = getCodexContextFileBasename(pathValue || fileName || "");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const memoryToolRoutedFile =
-      baseName === CODEX_MEMORY_CONTEXT_BASENAME &&
-      params.memoryToolRouted === true &&
-      memoryToolRoutedPaths.has(normalizeCodexContextFilePath(pathValue));
-    const injected = memoryToolRoutedFile
-      ? undefined
-      : (readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
-        readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
-    let injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
-    let truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
+    const injected =
+      readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
+      readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName);
+    let injectedChars = injected?.length ?? 0;
+    let truncated = !file.missing && injectedChars < rawChars;
     if (injected === undefined) {
       if (CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)) {
         injectedChars = rawChars;
@@ -805,18 +787,18 @@ export function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
+// FIX #94295: MEMORY.md stays in bootstrap prompt context; memory tools are an additional path.
 function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryToolRouted: boolean;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
 }): string | undefined {
-  const memoryRecallInstructions = params.memoryToolRouted
-    ? renderCodexMemoryRecallInstructions({
-        toolNames: params.toolNames,
-        citationsMode: params.citationsMode,
-      })
-    : undefined;
+  const memoryRecallInstructions = renderCodexMemoryRecallInstructions({
+    toolNames: params.toolNames,
+    citationsMode: params.citationsMode,
+    memoryInjectedInPrompt: !params.memoryToolRouted,
+  });
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
     files: params.files,
     toolNames: params.toolNames,
@@ -828,6 +810,7 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+  memoryInjectedInPrompt?: boolean;
 }): string | undefined {
   const availableTools = new Set(params.toolNames);
   const memoryPrompt = buildMemorySystemPromptAddition({
@@ -840,7 +823,15 @@ function renderCodexMemoryRecallInstructions(params: {
     return undefined;
   }
   const toolSearchBridge = renderCodexMemoryToolSearchBridge(params.toolNames);
-  return [memoryPrompt, toolSearchBridge].filter(isNonEmptyString).join("\n").trim();
+  // FIX #94295: Add guidance about MEMORY.md being in prompt vs only accessible through tools
+  const memoryLocationGuidance =
+    params.memoryInjectedInPrompt === false
+      ? " Note: Workspace MEMORY.md is not pasted into this turn's prompt; use memory tools when durable memory context may be relevant."
+      : " Note: Workspace MEMORY.md is included in this turn's bootstrap prompt context; memory tools provide additional deeper recall when needed.";
+  return [memoryPrompt + memoryLocationGuidance, toolSearchBridge]
+    .filter(isNonEmptyString)
+    .join("\n")
+    .trim();
 }
 
 function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
@@ -926,7 +917,9 @@ function isCodexWorkspaceRootMemoryPath(params: {
   const absolutePath = path.isAbsolute(filePath)
     ? path.resolve(filePath)
     : path.resolve(params.workspaceDir, filePath);
-  return absolutePath === path.join(path.resolve(params.workspaceDir), "MEMORY.md");
+  return (
+    absolutePath === path.join(path.resolve(params.workspaceDir), CODEX_MEMORY_CONTEXT_BASENAME)
+  );
 }
 
 function isSameCodexWorkspacePath(left: string, right: string): boolean {
