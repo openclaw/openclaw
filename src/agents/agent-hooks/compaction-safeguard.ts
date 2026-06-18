@@ -193,21 +193,18 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
     : {};
 }
 
-type ReplayUnsafeToolCalls = {
-  found: boolean;
-  ids: Set<string>;
-};
-
-function collectReplayUnsafeMessagingToolCalls(message: AgentMessage): ReplayUnsafeToolCalls {
+function filterReplayUnsafeMessagingToolCalls(
+  message: AgentMessage,
+  replayUnsafeToolCallIds: Set<string>,
+): AgentMessage | undefined {
   const content = (message as { content?: unknown }).content;
-  const ids = new Set<string>();
-  let found = false;
   if (!Array.isArray(content)) {
-    return { found, ids };
+    return message;
   }
-  for (const block of content) {
+  let removed = false;
+  const filteredContent = content.filter((block) => {
     if (!block || typeof block !== "object") {
-      continue;
+      return true;
     }
     const record = block as {
       type?: unknown;
@@ -217,21 +214,27 @@ function collectReplayUnsafeMessagingToolCalls(message: AgentMessage): ReplayUns
       input?: unknown;
     };
     if (typeof record.type !== "string" || !TOOL_CALL_BLOCK_TYPES.has(record.type)) {
-      continue;
+      return true;
     }
     if (typeof record.name !== "string" || !record.name.trim()) {
-      continue;
+      return true;
     }
     const args = recordOrEmpty(record.arguments ?? record.input);
     if (!isMessagingToolSendAction(record.name, args)) {
-      continue;
+      return true;
     }
-    found = true;
+    removed = true;
     if (typeof record.id === "string" && record.id.trim()) {
-      ids.add(record.id.trim());
+      replayUnsafeToolCallIds.add(record.id.trim());
     }
+    return false;
+  });
+  if (!removed) {
+    return message;
   }
-  return { found, ids };
+  return filteredContent.length > 0
+    ? ({ ...message, content: filteredContent } as AgentMessage)
+    : undefined;
 }
 
 function isReplayUnsafeMessagingToolResult(
@@ -267,13 +270,15 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
       skippingInterSessionReply = false;
     }
     if (role === "assistant") {
-      const replayUnsafeToolCalls = collectReplayUnsafeMessagingToolCalls(message);
-      if (replayUnsafeToolCalls.found) {
-        for (const id of replayUnsafeToolCalls.ids) {
-          replayUnsafeToolCallIds.add(id);
-        }
+      const filteredMessage = filterReplayUnsafeMessagingToolCalls(
+        message,
+        replayUnsafeToolCallIds,
+      );
+      if (!filteredMessage) {
         continue;
       }
+      filtered.push(filteredMessage);
+      continue;
     }
     if (isReplayUnsafeMessagingToolResult(message, replayUnsafeToolCallIds)) {
       continue;
