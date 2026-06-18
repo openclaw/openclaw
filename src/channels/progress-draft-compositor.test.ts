@@ -154,6 +154,28 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
   });
 
+  it("ignores reasoning deltas that are a substring of the current buffer", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushReasoningProgress("Reading files");
+    await progress.pushReasoningProgress("Read");
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n🛠️ Exec\n• _Reading files_",
+      expect.objectContaining({
+        lines: ["🛠️ Exec", "_Reading files_"],
+      }),
+    );
+  });
+
   it("interleaves reasoning bursts with tool calls in arrival order", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
