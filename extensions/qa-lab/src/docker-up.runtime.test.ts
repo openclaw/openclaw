@@ -1,37 +1,11 @@
 // Qa Lab tests cover docker up plugin behavior.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 
 type QaDockerUpDeps = NonNullable<Parameters<typeof runQaDockerUp>[1]>;
-
-async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => Promise<void> }> {
-  const server = createServer();
-  const listening = await new Promise<boolean>((resolve, reject) => {
-    server.once("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE") {
-        resolve(false);
-        return;
-      }
-      reject(error);
-    });
-    server.listen(port, "127.0.0.1", () => resolve(true));
-  });
-
-  return {
-    close: async () => {
-      if (!listening) {
-        return;
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-  };
-}
 
 function createHealthyDockerDeps(calls: string[]): QaDockerUpDeps {
   return {
@@ -163,7 +137,8 @@ describe("runQaDockerUp", () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
     const gatewayPort = 18789;
     const qaLabPort = 43124;
-    const resolveHostPort = vi.fn(async (preferredPort: number) => {
+    const resolveHostPort = vi.fn(async (preferredPort: number, pinned: boolean) => {
+      expect(pinned).toBe(false);
       if (preferredPort === gatewayPort) {
         return 28001;
       }
@@ -172,16 +147,12 @@ describe("runQaDockerUp", () => {
       }
       return preferredPort;
     });
-    const gatewayPortReservation = await occupyPortOrAcceptExisting(18789);
-    const qaLabPortReservation = await occupyPortOrAcceptExisting(43124);
 
     try {
       const result = await runQaDockerUp(
         {
           repoRoot: "/repo/openclaw",
           outputDir,
-          gatewayPort,
-          qaLabPort,
           skipUiBuild: true,
           usePrebuiltImage: true,
         },
@@ -202,9 +173,9 @@ describe("runQaDockerUp", () => {
       expect(result.qaLabUrl).not.toBe(`http://127.0.0.1:${qaLabPort}`);
       expect(result.gatewayUrl).toBe("http://127.0.0.1:28001/");
       expect(result.qaLabUrl).toBe("http://127.0.0.1:28002");
+      expect(resolveHostPort).toHaveBeenCalledWith(gatewayPort, false);
+      expect(resolveHostPort).toHaveBeenCalledWith(qaLabPort, false);
     } finally {
-      await gatewayPortReservation.close();
-      await qaLabPortReservation.close();
       await rm(outputDir, { recursive: true, force: true });
     }
   });
@@ -258,7 +229,7 @@ describe("runQaDockerUp", () => {
         `docker compose -f ${composeFile} up -d @${repoRoot}`,
         `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
         `docker compose -f ${composeFile} ps -q openclaw-qa-gateway @${repoRoot}`,
-        `docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} gateway-container @${repoRoot}`,
+        `docker inspect --format {{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}} gateway-container @${repoRoot}`,
       ]);
       expect(fetchCalls).toEqual([
         "http://127.0.0.1:43124/healthz",

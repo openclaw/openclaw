@@ -2443,10 +2443,6 @@ export function resetAutoMigrateLegacyStateForTest() {
   cachedLegacySessionSurfaces = null;
 }
 
-export function resetAutoMigrateLegacyAgentDirForTest() {
-  resetAutoMigrateLegacyStateForTest();
-}
-
 export function resetAutoMigrateLegacyStateDirForTest() {
   autoMigrateStateDirChecked = false;
 }
@@ -3588,21 +3584,6 @@ export async function runLegacyStateMigrations(params: {
       ...channelPlans.warnings,
     ],
   };
-}
-
-export async function autoMigrateLegacyAgentDir(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-}> {
-  return await autoMigrateLegacyState(params);
 }
 
 /**

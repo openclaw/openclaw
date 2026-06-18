@@ -81,16 +81,6 @@ export type RoutableChannelRouteRef = ChannelRouteRef & {
   };
 };
 
-/** Session fields that can carry or reconstruct a channel route. */
-export type SessionRouteDeliveryFields = {
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
-
 /** Normalizes a route and rejects routes that cannot address a channel target. */
 export function normalizeRoutableChannelRoute(
   route?: ChannelRouteRef | null,
@@ -132,13 +122,6 @@ export function routeFromSessionEntry(entry?: SessionEntry | null): ChannelRoute
   );
 }
 
-/** Builds session persistence fields from a channel route. */
-export function sessionDeliveryFieldsFromRoute(
-  route?: ChannelRouteRef,
-): SessionRouteDeliveryFields {
-  return normalizeSessionDeliveryFields({ route });
-}
-
 /** Converts a persisted conversation reference into a channel route. */
 export function routeFromConversationRef(
   conversation?: ConversationRef | null,
@@ -160,25 +143,11 @@ export function routeFromConversationRef(
   });
 }
 
-/** Converts a conversation reference into a routable channel route. */
-export function routableRouteFromConversationRef(
-  conversation?: ConversationRef | null,
-): RoutableChannelRouteRef | undefined {
-  return normalizeRoutableChannelRoute(routeFromConversationRef(conversation));
-}
-
 /** Extracts a channel route from a session binding record. */
 export function routeFromBindingRecord(
   binding?: SessionBindingRecord | null,
 ): ChannelRouteRef | undefined {
   return routeFromConversationRef(binding?.conversation);
-}
-
-/** Extracts a routable channel route from a session binding record. */
-export function routableRouteFromBindingRecord(
-  binding?: SessionBindingRecord | null,
-): RoutableChannelRouteRef | undefined {
-  return normalizeRoutableChannelRoute(routeFromBindingRecord(binding));
 }
 
 /** Projects route fields used by older session and delivery callers. */

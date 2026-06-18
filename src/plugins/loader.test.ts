@@ -98,6 +98,8 @@ import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   listImportedRuntimePluginIds,
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
 import {
@@ -4155,7 +4157,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     resetGlobalHookRunner();
   });
 
-  it("preserves the gateway-bindable hook runner across later default-mode activating loads", () => {
+  it("keeps pinned gateway hooks and later default-mode hooks dispatchable together", () => {
     useNoBundledPlugins();
     const gatewayPlugin = writePlugin({
       id: "gateway-hook-surface",
@@ -4190,30 +4192,85 @@ module.exports = { id: "throws-after-import", register() {} };`,
         allowGatewaySubagentBinding: true,
       },
     });
-    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
+    // The gateway pins its boot registry to the channel/http surfaces; the
+    // pin is what keeps gateway lifecycle hooks live across later swaps.
+    pinActivePluginChannelRegistry(gatewayRegistry);
+    try {
+      expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+      expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
 
-    const defaultRegistry = loadOpenClawPlugins({
-      workspaceDir: defaultPlugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [defaultPlugin.file] },
-          allow: ["default-hook-surface"],
-          entries: {
-            "default-hook-surface": {
-              enabled: true,
-              hooks: { allowConversationAccess: true },
+      const defaultRegistry = loadOpenClawPlugins({
+        workspaceDir: defaultPlugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [defaultPlugin.file] },
+            allow: ["default-hook-surface"],
+            entries: {
+              "default-hook-surface": {
+                enabled: true,
+                hooks: { allowConversationAccess: true },
+              },
             },
           },
         },
-      },
+      });
+
+      expect(getActivePluginRegistry()).toBe(defaultRegistry);
+      expect(getGlobalPluginRegistry()).toBe(defaultRegistry);
+      // Regression guard for #91918: the runner must see the union of live
+      // registries, not just whichever registry initialized it last.
+      const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
+      expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
+      expect(globalHookRunner.hasHooks("message_sent")).toBe(true);
+    } finally {
+      releasePinnedPluginChannelRegistry(gatewayRegistry);
+    }
+  });
+
+  it("drops hooks of replaced unpinned registries from the global runner", () => {
+    useNoBundledPlugins();
+    const firstPlugin = writePlugin({
+      id: "retired-hook-surface",
+      filename: "retired-hook-surface.cjs",
+      body: `module.exports = { id: "retired-hook-surface", register(api) {
+        api.on("subagent_ended", () => undefined);
+      } };`,
+    });
+    const secondPlugin = writePlugin({
+      id: "replacing-hook-surface",
+      filename: "replacing-hook-surface.cjs",
+      body: `module.exports = { id: "replacing-hook-surface", register(api) {
+        api.on("message_sent", () => undefined);
+      } };`,
     });
 
-    expect(getActivePluginRegistry()).toBe(defaultRegistry);
-    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    loadOpenClawPlugins({
+      workspaceDir: firstPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [firstPlugin.file] },
+          allow: ["retired-hook-surface"],
+          entries: { "retired-hook-surface": { enabled: true } },
+        },
+      },
+    });
+    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
+
+    // A second activation retires the unpinned first registry entirely; its
+    // hooks must drop instead of dispatching stale config closures.
+    loadOpenClawPlugins({
+      workspaceDir: secondPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [secondPlugin.file] },
+          allow: ["replacing-hook-surface"],
+          entries: { "replacing-hook-surface": { enabled: true } },
+        },
+      },
+    });
     const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
-    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
-    expect(globalHookRunner.hasHooks("message_sent")).toBe(false);
+    expect(globalHookRunner.hasHooks("message_sent")).toBe(true);
+    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(false);
   });
 
   it.each([
