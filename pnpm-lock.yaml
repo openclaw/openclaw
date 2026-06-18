@@ -1812,6 +1812,8 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/ard-core: {}
+
   packages/gateway-client:
     dependencies:
       '@openclaw/gateway-protocol':

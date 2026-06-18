@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/ard-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./search": {
+      "types": "./dist/search.d.mts",
+      "import": "./dist/search.mjs",
+      "default": "./dist/search.mjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/types.mjs",
+      "default": "./dist/types.mjs"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.mts",
+      "import": "./dist/validation.mjs",
+      "default": "./dist/validation.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/search.ts src/types.ts src/validation.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}
