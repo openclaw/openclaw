@@ -207,7 +207,10 @@ async function ensureLoadedForRead(state: CronServiceState) {
   }
   // Use the maintenance-only version so that read-only operations never
   // advance a past-due nextRunAtMs without executing the job (#16156).
-  const changed = recomputeNextRunsForMaintenance(state);
+  const changed = recomputeNextRunsForMaintenance(state, {
+    skipFutureRepairJobIds:
+      state.deferredCatchupJobIds.size > 0 ? state.deferredCatchupJobIds : undefined,
+  });
   if (changed) {
     await persist(state);
   }
@@ -257,6 +260,11 @@ export async function start(state: CronServiceState) {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
     deferAgentTurnJobs: true,
   });
+
+  // Persist deferred catch-up job IDs in state so every caller of
+  // recomputeNextRunsForMaintenance can skip future-slot repair for
+  // these overflow jobs — not only the immediate post-startup pass.
+  state.deferredCatchupJobIds = deferredCatchupJobIds;
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and

@@ -1183,6 +1183,8 @@ export async function onTimer(state: CronServiceState) {
         const changed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
+          skipFutureRepairJobIds:
+            state.deferredCatchupJobIds.size > 0 ? state.deferredCatchupJobIds : undefined,
         });
         if (changed) {
           await persist(state);
@@ -1199,7 +1201,10 @@ export async function onTimer(state: CronServiceState) {
         for (const job of due) {
           delete job.state.runningAtMs;
         }
-        recomputeNextRunsForMaintenance(state);
+        recomputeNextRunsForMaintenance(state, {
+          skipFutureRepairJobIds:
+            state.deferredCatchupJobIds.size > 0 ? state.deferredCatchupJobIds : undefined,
+        });
         await persist(state);
         return [];
       }
@@ -1294,7 +1299,10 @@ export async function onTimer(state: CronServiceState) {
           // locked block.  The full recomputeNextRuns would silently skip
           // those jobs (advancing nextRunAtMs without execution), causing
           // daily cron schedules to jump 48 h instead of 24 h (#17852).
-          recomputeNextRunsForMaintenance(state);
+          recomputeNextRunsForMaintenance(state, {
+            skipFutureRepairJobIds:
+              state.deferredCatchupJobIds.size > 0 ? state.deferredCatchupJobIds : undefined,
+          });
           await persist(state);
         });
         finalizationSucceeded = finalizedResults.length > 0;
@@ -1328,7 +1336,10 @@ export async function onTimer(state: CronServiceState) {
             delete job.state.runningAtMs;
           }
         }
-        recomputeNextRunsForMaintenance(state);
+        recomputeNextRunsForMaintenance(state, {
+          skipFutureRepairJobIds:
+            state.deferredCatchupJobIds.size > 0 ? state.deferredCatchupJobIds : undefined,
+        });
         await persist(state);
       });
     };
