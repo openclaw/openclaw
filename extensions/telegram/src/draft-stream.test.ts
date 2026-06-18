@@ -679,6 +679,107 @@ describe("createTelegramDraftStream", () => {
     expect(sentText.startsWith("# Long\n\nrich line")).toBe(true);
   });
 
+  describe("rich message unsupported fallback", () => {
+    function createRichMessageUnsupportedError(
+      message = "400: Bad Request: this message is currently not supported on Telegram Web",
+    ) {
+      return Object.assign(new Error(message), { error_code: 400 });
+    }
+
+    it("falls back to standard sendMessage when sendRichMessage returns unsupported error", async () => {
+      const api = createMockDraftApi();
+      api.raw.sendRichMessage.mockRejectedValue(createRichMessageUnsupportedError());
+      const stream = createDraftStream(api, { richMessages: true });
+
+      stream.updatePreview({
+        text: "Plan",
+        richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+      });
+      await stream.flush();
+
+      // Should fall back to regular sendMessage
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "<h2>Plan</h2><table><tr><td>A</td></tr></table>",
+        { parse_mode: "HTML" },
+      );
+      expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops the stream on non-unsupported errors from sendRichMessage without falling back", async () => {
+      const api = createMockDraftApi();
+      api.raw.sendRichMessage.mockRejectedValue(
+        Object.assign(new Error("400: Bad Request: can't parse entities"), { error_code: 400 }),
+      );
+      const stream = createDraftStream(api, { richMessages: true });
+
+      stream.updatePreview({
+        text: "Plan",
+        richMessage: { html: "<h2>Plan</h2>" },
+      });
+      // Draft stream internally stops on non-retryable errors and returns false
+      const result = await stream.flush();
+      expect(result).toBeUndefined();
+      // Should NOT have tried to send as regular sendMessage
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      // Subsequent updates should not trigger sends since stream is stopped
+      stream.updatePreview({
+        text: "Retry",
+        richMessage: { html: "<p>Retry</p>" },
+      });
+      await stream.flush();
+      expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back from editMessageText when rich message unsupported", async () => {
+      const api = createMockDraftApi();
+      api.raw.sendRichMessage.mockResolvedValue({ message_id: 17 });
+      const stream = createDraftStream(api, { richMessages: true });
+
+      // First send succeeds
+      stream.updatePreview({
+        text: "Plan",
+        richMessage: { html: "<h2>Plan</h2>" },
+      });
+      await stream.flush();
+      expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+
+      // Edit fails with unsupported
+      api.raw.editMessageText.mockRejectedValue(createRichMessageUnsupportedError());
+
+      stream.updatePreview({
+        text: "Plan updated",
+        richMessage: { html: "<h2>Plan updated</h2>" },
+      });
+      await stream.flush();
+
+      // Rich edit was attempted (once from send, once from edit = 2)
+      expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+      // Should have fallen back to regular editMessageText
+      expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<h2>Plan updated</h2>", {
+        parse_mode: "HTML",
+      });
+    });
+
+    it("handles MESSAGE_UNSUPPORTED error_code from sendRichMessage", async () => {
+      const api = createMockDraftApi();
+      api.raw.sendRichMessage.mockRejectedValue(
+        Object.assign(new Error("400: Bad Request: MESSAGE_UNSUPPORTED"), { error_code: 400 }),
+      );
+      const stream = createDraftStream(api, { richMessages: true });
+
+      stream.updatePreview({
+        text: "Hello",
+        richMessage: { html: "<b>Hello</b>" },
+      });
+      await stream.flush();
+
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Hello</b>", {
+        parse_mode: "HTML",
+      });
+    });
+  });
+
   it("keeps non-final overflow in one editable preview", async () => {
     const api = createMockDraftApi();
     const onSupersededPreview = vi.fn();

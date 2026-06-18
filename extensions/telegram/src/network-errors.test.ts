@@ -4,6 +4,7 @@ import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
   isTelegramRateLimitError,
+  isTelegramRichMessageUnsupportedError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
@@ -319,5 +320,71 @@ describe("isTelegramClientRejection", () => {
     ["Bad Gateway", 502, false],
   ])("returns %s for error_code %s", (message, errorCode, expected) => {
     expect(isTelegramClientRejection(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+});
+
+describe("isTelegramRichMessageUnsupportedError", () => {
+  it.each([
+    [
+      "Telegram Web not supported",
+      "400: Bad Request: this message is currently not supported on Telegram Web",
+      true,
+    ],
+    ["MESSAGE_UNSUPPORTED code", "400: Bad Request: MESSAGE_UNSUPPORTED", true],
+    ["plain not supported", "400: Bad Request: message not supported", true],
+    ["UNSUPPORTED in message", "400: Bad Request: UNSUPPORTED_MESSAGE_TYPE", true],
+    [
+      "nested cause chain",
+      new Error("wrapped", {
+        cause: new Error(
+          "400: Bad Request: this message is currently not supported on Telegram Web",
+        ),
+      }),
+      true,
+    ],
+    [
+      "GrammyError with description in error chain",
+      Object.assign(new Error("Telegram API error"), {
+        cause: Object.assign(
+          new Error("400: Bad Request: this message is currently not supported on Telegram Web"),
+          { error_code: 400 },
+        ),
+      }),
+      true,
+    ],
+    ["HtmlParseError does not match", "400: Bad Request: can't parse entities", false],
+    ["message not modified", "400: Bad Request: message is not modified", false],
+    ["empty text error", "400: Bad Request: message text is empty", false],
+    ["rate limited error", "429: Too Many Requests", false],
+    ["not found error", "404: Not Found", false],
+    ["server error", "500: Internal Server Error", false],
+    ["unrelated error", "ECONNREFUSED: connect ECONNREFUSED", false],
+  ] as const)("detects %s: %s", (_name, errorInput, expected) => {
+    const err = typeof errorInput === "string" ? new Error(errorInput) : errorInput;
+    expect(isTelegramRichMessageUnsupportedError(err)).toBe(expected);
+  });
+
+  it("returns false for null or undefined", () => {
+    expect(isTelegramRichMessageUnsupportedError(null)).toBe(false);
+    expect(isTelegramRichMessageUnsupportedError(undefined)).toBe(false);
+  });
+
+  it("normalizes GrammyError descriptions for match", () => {
+    const err = {
+      response: {
+        description: "400: Bad Request: this message is currently not supported on Telegram Web",
+        error_code: 400,
+      },
+    };
+    expect(isTelegramRichMessageUnsupportedError(err)).toBe(true);
+  });
+
+  it("distinguishes unsupported from HTML parse errors", () => {
+    const unsupported = new Error(
+      "400: Bad Request: this message is currently not supported on Telegram Web",
+    );
+    const parseErr = new Error("400: Bad Request: can't parse entities");
+    expect(isTelegramRichMessageUnsupportedError(unsupported)).toBe(true);
+    expect(isTelegramRichMessageUnsupportedError(parseErr)).toBe(false);
   });
 });
