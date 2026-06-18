@@ -12,7 +12,11 @@ import {
 } from "./config-hash.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
-import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import {
+  resolveReadOnlyWorkspaceSkillMounts,
+  formatReadOnlyWorkspaceSkillMountHashState,
+  SANDBOX_MOUNT_FORMAT_VERSION,
+} from "./workspace-mounts.js";
 
 type SpawnCall = {
   command: string;
@@ -176,6 +180,28 @@ function createSandboxConfig(
   };
 }
 
+function computeExpectedSandboxHash(
+  cfg: SandboxConfig,
+  workspaceDir: string,
+  dockerEnvPolicyEpoch?: number,
+): string {
+  const mounts = resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    workdir: cfg.docker.workdir,
+    workspaceAccess: cfg.workspaceAccess,
+  });
+  return computeSandboxConfigHash({
+    docker: cfg.docker,
+    dockerEnvPolicyEpoch,
+    workspaceAccess: cfg.workspaceAccess,
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(mounts),
+  });
+}
+
 async function ensureSandboxCreateCallForTest(params: {
   cfg: SandboxConfig;
   workspaceDir?: string;
@@ -222,22 +248,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const oldCfg = createSandboxConfig(["1.1.1.1", "8.8.8.8"], [`${workspaceDir}:/workspace:rw`]);
     const newCfg = createSandboxConfig(["8.8.8.8", "1.1.1.1"], [`${workspaceDir}:/workspace:rw`]);
 
-    const oldHash = computeSandboxConfigHash({
-      docker: oldCfg.docker,
-      workspaceAccess: oldCfg.workspaceAccess,
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
-      readOnlyWorkspaceSkillMounts: [],
-    });
-    const newHash = computeSandboxConfigHash({
-      docker: newCfg.docker,
-      workspaceAccess: newCfg.workspaceAccess,
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
-      readOnlyWorkspaceSkillMounts: [],
-    });
+    const oldHash = computeExpectedSandboxHash(oldCfg, workspaceDir);
+    const newHash = computeExpectedSandboxHash(newCfg, workspaceDir);
     expect(newHash).not.toBe(oldHash);
 
     spawnState.labelHash = oldHash;
@@ -283,23 +295,12 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
     cfg.docker.binds = [`${workspaceDir}:/workspace:rw`];
 
-    const oldHash = computeSandboxConfigHash({
-      docker: cfg.docker,
-      workspaceAccess: cfg.workspaceAccess,
+    const oldHash = computeExpectedSandboxHash(cfg, workspaceDir);
+    const newHash = computeExpectedSandboxHash(
+      cfg,
       workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
-      readOnlyWorkspaceSkillMounts: [],
-    });
-    const newHash = computeSandboxConfigHash({
-      docker: cfg.docker,
-      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
-      workspaceAccess: cfg.workspaceAccess,
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
-      readOnlyWorkspaceSkillMounts: [],
-    });
+      SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+    );
     expect(newHash).not.toBe(oldHash);
 
     spawnState.labelHash = oldHash;
@@ -328,14 +329,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const customUserFile = path.join(customRoot, "USER.md");
     const cfg = createSandboxConfig(["1.1.1.1"], [`${customUserFile}:/workspace/USER.md:ro`]);
     cfg.docker.dangerouslyAllowExternalBindSources = true;
-    const expectedHash = computeSandboxConfigHash({
-      docker: cfg.docker,
-      workspaceAccess: cfg.workspaceAccess,
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
-      readOnlyWorkspaceSkillMounts: [],
-    });
+    const expectedHash = computeExpectedSandboxHash(cfg, workspaceDir);
 
     spawnState.inspectRunning = false;
     spawnState.labelHash = "stale-hash";

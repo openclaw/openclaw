@@ -74,7 +74,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
   const materializedSkillsWorkspaceDir =
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
+    params.skillsWorkspaceDir ??
+    resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
@@ -96,6 +97,16 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
       rootDir: materializedSkillsWorkspaceDir,
     },
   ];
+
+  // Ensure skill mount source directories exist so read-only mounts are always
+  // applied, even on first agent launch when directories haven't been created yet.
+  for (const mount of mounts) {
+    try {
+      fs.mkdirSync(mount.hostPath, { recursive: true });
+    } catch {
+      // skip — isExistingWorkspaceSkillMountSource will filter it out
+    }
+  }
 
   return mounts
     .filter((mount) =>

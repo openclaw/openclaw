@@ -64,7 +64,12 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith(workspaceDir));
-    expect(mounts).toEqual([`${workspaceDir}:/workspace:z`]);
+    expect(mounts).toEqual([
+      `${workspaceDir}:/workspace:z`,
+      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
+      `${path.join(workspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+      `${path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills")}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
+    ]);
   });
 
   it("marks split agent workspace mounts shared for SELinux", () => {
@@ -101,6 +106,8 @@ describe("appendWorkspaceMountArgs", () => {
     expect(mounts).toEqual([
       `${agentWorkspaceDir}:/workspace:z`,
       `${path.join(agentWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
+      `${path.join(agentWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+      `${path.join(agentWorkspaceDir, ".openclaw", "sandbox-skills", "skills")}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
     ]);
   });
 
@@ -122,7 +129,11 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith(agentWorkspaceDir));
-    expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
+    expect(mounts).toEqual([
+      `${agentWorkspaceDir}:/workspace:z`,
+      `${path.join(agentWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+      `${path.join(agentWorkspaceDir, ".openclaw", "sandbox-skills", "skills")}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
+    ]);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -143,7 +154,11 @@ describe("appendWorkspaceMountArgs", () => {
       });
 
       const mounts = args.filter((arg) => arg.startsWith(agentWorkspaceDir));
-      expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
+      expect(mounts).toEqual([
+        `${agentWorkspaceDir}:/workspace:z`,
+        `${path.join(agentWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
+        `${path.join(agentWorkspaceDir, ".openclaw", "sandbox-skills", "skills")}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
+      ]);
     },
   );
 
@@ -169,7 +184,9 @@ describe("appendWorkspaceMountArgs", () => {
     const mounts = args.filter((arg) => arg.startsWith(agentWorkspaceDir));
     expect(mounts).toEqual([
       `${agentWorkspaceDir}:/workspace:z`,
+      `${path.join(agentWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
       `${path.join(agentWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+      `${path.join(agentWorkspaceDir, ".openclaw", "sandbox-skills", "skills")}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
     ]);
   });
 
@@ -195,6 +212,8 @@ describe("appendWorkspaceMountArgs", () => {
     );
     expect(mounts).toEqual([
       `${agentWorkspaceDir}:/workspace:z`,
+      `${path.join(agentWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
+      `${path.join(agentWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
       `${materializedSkillsDir}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
     ]);
   });
