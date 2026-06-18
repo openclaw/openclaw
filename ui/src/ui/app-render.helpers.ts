@@ -1,13 +1,8 @@
 // Control UI module implements app render behavior.
 import { html, nothing } from "lit";
+import { isSettingsNavigationRoute, navigationIconForRoute } from "../app-navigation.ts";
+import { pathForRoute, titleForRoute, type RouteId } from "../app-routes.ts";
 import { t } from "../i18n/index.ts";
-import {
-  iconForRoute,
-  isSettingsRoute,
-  pathForRoute,
-  titleForRoute,
-  type RouteId,
-} from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   refreshChat,
@@ -27,7 +22,7 @@ import {
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
+import { createSessionAndRefresh } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
@@ -135,7 +130,7 @@ export function renderRouteNavItem(
 ) {
   const href = pathForRoute(routeId, state.basePath);
   const isActive =
-    routeId === "config" ? isSettingsRoute(state.routeId) : state.routeId === routeId;
+    routeId === "config" ? isSettingsNavigationRoute(state.routeId) : state.routeId === routeId;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
@@ -166,7 +161,9 @@ export function renderRouteNavItem(
       }}
       title=${titleForRoute(routeId)}
     >
-      <span class="nav-item__icon" aria-hidden="true">${icons[iconForRoute(routeId)]}</span>
+      <span class="nav-item__icon" aria-hidden="true"
+        >${icons[navigationIconForRoute(routeId)]}</span
+      >
       ${!collapsed ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>` : nothing}
     </a>
   `;

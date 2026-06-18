@@ -1,8 +1,8 @@
 // Control UI view renders login gate screen content.
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import { normalizeBasePath } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeBasePath } from "../../routes/route-registry.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { icons } from "../icons.ts";

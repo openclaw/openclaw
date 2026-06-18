@@ -2,20 +2,19 @@
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { isSettingsNavigationRoute, SIDEBAR_SECTIONS } from "../app-navigation.ts";
+import {
+  normalizeBasePath,
+  pathForRoute,
+  subtitleForRoute,
+  titleForRoute,
+  type RouteId,
+} from "../app-routes.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { appRouter } from "../router/index.ts";
-import {
-  isSettingsRoute,
-  normalizeBasePath,
-  pathForRoute,
-  ROUTE_GROUPS,
-  subtitleForRoute,
-  titleForRoute,
-  type RouteId,
-} from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
@@ -37,7 +36,6 @@ import {
   dismissChatError,
   dismissRealtimeTalkError,
   switchChatSession,
-  switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -134,7 +132,6 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
-  createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
   parseSessionsFilterInteger,
@@ -1129,7 +1126,7 @@ export function renderApp(state: AppViewState) {
   const isChat = state.routeId === "chat";
   const activeRoute = appRouter.getRoute(state.routeId);
   const routedPage =
-    activeRoute?.render({
+    activeRoute?.render?.({
       state,
       invalidate: notifyLazyViewChanged,
     }) ?? null;
@@ -2308,7 +2305,7 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               ${renderSidebarSessions(state)}
               <nav class="sidebar-nav">
-                ${ROUTE_GROUPS.map((group) => {
+                ${SIDEBAR_SECTIONS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
                   const showItems = navCollapsed || !isGroupCollapsed;
 
@@ -3550,7 +3547,7 @@ export function renderApp(state: AppViewState) {
                 }),
             )
           : nothing}
-        ${isSettingsRoute(state.routeId) && !routedPage
+        ${isSettingsNavigationRoute(state.routeId) && !routedPage
           ? renderSettingsWorkspace(state, renderConfigTabForActiveTab())
           : renderConfigTabForActiveTab()}
         ${state.routeId === "dreams"

@@ -1,7 +1,7 @@
+import type { RouteId } from "../app-routes.ts";
 // Control UI active route lifecycle and refresh orchestration.
 import { t } from "../i18n/index.ts";
 import { appRouter } from "../router/index.ts";
-import type { RouteId } from "../routes/route-registry.ts";
 import { refreshChat } from "../ui/app-chat.ts";
 import { startNodesPolling, stopNodesPolling } from "../ui/app-polling.ts";
 import { scheduleChatScroll } from "../ui/app-scroll.ts";

@@ -1,7 +1,7 @@
 // Control UI view renders overview screen content.
 import { html, nothing } from "lit";
+import type { RouteId } from "../../app-routes.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
-import type { RouteId } from "../../routes/route-registry.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";

@@ -1,8 +1,8 @@
 // Control UI chat module implements session controls behavior.
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { pathForRoute } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
-import { pathForRoute } from "../../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,

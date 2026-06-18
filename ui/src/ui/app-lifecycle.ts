@@ -1,7 +1,7 @@
+import type { RouteId } from "../app-routes.ts";
 import { cancelActiveRouteTransition } from "../app/active-route.ts";
 import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
 import { appRouter } from "../router/index.ts";
-import type { RouteId } from "../routes/route-registry.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {

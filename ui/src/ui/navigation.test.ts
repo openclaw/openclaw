@@ -1,11 +1,12 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
-  ROUTE_GROUPS,
-  SETTINGS_ROUTES,
-  iconForRoute,
+  SETTINGS_NAVIGATION_ROUTES,
+  SIDEBAR_SECTIONS,
+  navigationIconForRoute,
+} from "../app-navigation.ts";
+import {
   inferBasePathFromPathname,
-  isSettingsRoute,
   normalizeBasePath,
   normalizePath,
   pathForRoute,
@@ -13,13 +14,13 @@ import {
   routeIdFromPath,
   titleForRoute,
   type RouteId,
-} from "../routes/route-registry.ts";
+} from "../app-routes.ts";
 
 /** All route identifiers derived from visible groups plus routed settings slices. */
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
-    ...(ROUTE_GROUPS.flatMap((group) => group.routes) as RouteId[]),
-    ...SETTINGS_ROUTES,
+    ...(SIDEBAR_SECTIONS.flatMap((group) => group.routes) as RouteId[]),
+    ...SETTINGS_NAVIGATION_ROUTES,
   ]),
 );
 
@@ -28,10 +29,10 @@ const leadingSlashNormalizerCases = [
   { name: "normalizePath", normalize: normalizePath, input: "chat", expected: "/chat" },
 ];
 
-describe("iconForRoute", () => {
+describe("navigationIconForRoute", () => {
   it("returns stable icons for every route", () => {
     expect(
-      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, iconForRoute(routeId)])),
+      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, navigationIconForRoute(routeId)])),
     ).toEqual({
       chat: "messageSquare",
       overview: "barChart",
@@ -62,7 +63,7 @@ describe("iconForRoute", () => {
   it("returns a fallback icon for unknown route", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownRouteId = "unknown" as RouteId;
-    expect(iconForRoute(unknownRouteId)).toBe("folder");
+    expect(navigationIconForRoute(unknownRouteId)).toBe("folder");
   });
 });
 
@@ -232,21 +233,21 @@ describe("inferBasePathFromPathname", () => {
   });
 });
 
-describe("ROUTE_GROUPS", () => {
+describe("SIDEBAR_SECTIONS", () => {
   it("contains all expected groups", () => {
-    expect(ROUTE_GROUPS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
+    expect(SIDEBAR_SECTIONS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
   });
 
   it("all routes are unique", () => {
-    const allRoutes = ROUTE_GROUPS.flatMap((g) => g.routes);
+    const allRoutes = SIDEBAR_SECTIONS.flatMap((g) => g.routes);
     const uniqueRoutes = new Set(allRoutes);
     expect(uniqueRoutes.size).toBe(allRoutes.length);
   });
 
   it("keeps detailed settings slices routed but out of the root sidebar", () => {
-    const settings = ROUTE_GROUPS.find((group) => group.label === "settings");
+    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
     expect(settings?.routes).toEqual(["config"]);
-    expect(SETTINGS_ROUTES).toEqual([
+    expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
       "config",
       "channels",
       "communications",
@@ -258,6 +259,5 @@ describe("ROUTE_GROUPS", () => {
       "debug",
       "logs",
     ]);
-    expect(SETTINGS_ROUTES.every((routeId) => isSettingsRoute(routeId))).toBe(true);
   });
 });

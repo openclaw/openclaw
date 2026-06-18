@@ -1,4 +1,4 @@
-import { normalizeBasePath, type RouteId } from "../routes/route-registry.ts";
+import { normalizeBasePath, type RouteId } from "../app-routes.ts";
 // Control UI module implements app chat behavior.
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";

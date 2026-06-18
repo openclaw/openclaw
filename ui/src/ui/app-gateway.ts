@@ -4,8 +4,8 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import type { RouteId } from "../app-routes.ts";
 import { loadCron, refreshActiveRoute } from "../app/active-route.ts";
-import type { RouteId } from "../routes/route-registry.ts";
 import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
@@ -21,8 +21,8 @@ import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
-import { scheduleChatScroll } from "./app-scroll.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import { scheduleChatScroll } from "./app-scroll.ts";
 import { applySettings, setLastActiveSessionKey, syncUrlWithSessionKey } from "./app-settings.ts";
 import {
   handleAgentEvent,
@@ -755,8 +755,9 @@ async function refreshStartupChat(host: GatewayHost) {
       !(host as { chatHasAutoScrolled?: boolean }).chatHasAutoScrolled,
     );
   } finally {
-    void loadModelAuthStatusState(host as unknown as Parameters<typeof loadModelAuthStatusState>[0])
-      .catch(() => undefined);
+    void loadModelAuthStatusState(
+      host as unknown as Parameters<typeof loadModelAuthStatusState>[0],
+    ).catch(() => undefined);
   }
 }
 

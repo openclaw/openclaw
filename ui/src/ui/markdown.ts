@@ -18,12 +18,8 @@ import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
+import { inferBasePathFromPathname, normalizeBasePath, routeIdFromPath } from "../app-routes.ts";
 import { i18n, t } from "../i18n/index.ts";
-import {
-  inferBasePathFromPathname,
-  normalizeBasePath,
-  routeIdFromPath,
-} from "../routes/route-registry.ts";
 import { truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 

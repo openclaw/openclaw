@@ -1,12 +1,10 @@
 // @vitest-environment node
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RouteId } from "../routes/route-registry.ts";
+import type { RouteId } from "../app-routes.ts";
 import { connectGateway } from "./app-gateway.ts";
 import type { GatewayConnectTiming, GatewayHelloOk } from "./gateway.ts";
 
-const refreshActiveRouteMock = vi.hoisted(() =>
-  vi.fn(async (_host?: unknown) => undefined),
-);
+const refreshActiveRouteMock = vi.hoisted(() => vi.fn(async (_host?: unknown) => undefined));
 const refreshChatMock = vi.hoisted(() =>
   vi.fn(async (_host?: unknown, _opts?: unknown) => undefined),
 );

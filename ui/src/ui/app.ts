@@ -1,12 +1,12 @@
 // Control UI module implements app behavior.
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
+import type { RouteId } from "../app-routes.ts";
 import {
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
 } from "../app/active-route.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
-import type { RouteId } from "../routes/route-registry.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
