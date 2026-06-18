@@ -1,5 +1,6 @@
 // Resolves plugin SDK aliases for public package imports.
 import fs from "node:fs";
+import { existsSyncCached } from "../shared/cached-fs.js";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -171,7 +172,7 @@ function hasTrustedOpenClawRootIndicator(params: {
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
-  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "openclaw.mjs"));
+  const hasOpenClawEntrypoint = existsSyncCached(path.join(params.packageRoot, "openclaw.mjs"));
   return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
 }
 
@@ -452,7 +453,7 @@ export function resolvePluginSdkAliasFile(params: {
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
     })) {
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return candidate;
       }
     }
@@ -1048,7 +1049,7 @@ function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageDir: string;
 }): WorkspacePackageAliasEntry[] {
   const distRoot = path.join(params.packageRoot, "dist", params.packageDir);
-  if (!fs.existsSync(distRoot)) {
+  if (!existsSyncCached(distRoot)) {
     return [];
   }
   const entries: WorkspacePackageAliasEntry[] = [];
@@ -1128,7 +1129,7 @@ export function listWorkspacePackageExportAliasEntries(params: {
 }
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
-  if (!fs.existsSync(candidate)) {
+  if (!existsSyncCached(candidate)) {
     return false;
   }
   switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
@@ -1143,7 +1144,7 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
     const source = fs.readFileSync(candidate, "utf-8");
     for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
       const specifier = match[1];
-      if (!specifier || fs.existsSync(path.resolve(path.dirname(candidate), specifier))) {
+      if (!specifier || existsSyncCached(path.resolve(path.dirname(candidate), specifier))) {
         continue;
       }
       return false;
@@ -1231,7 +1232,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
         params.dirName,
         `${params.basename}.js`,
       );
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return candidate;
       }
       continue;
@@ -1243,7 +1244,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
         params.dirName,
         `${params.basename}${ext}`,
       );
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return candidate;
       }
     }
@@ -1357,7 +1358,7 @@ function resolveWorkspacePackageAliasMap(params: {
               path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
             ]
           : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
-      const candidate = candidates.find((candidatePath) => fs.existsSync(candidatePath));
+      const candidate = candidates.find((candidatePath) => existsSyncCached(candidatePath));
       if (candidate) {
         aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
         break;
@@ -1499,7 +1500,7 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
     return true;
   }
   return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
-    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+    existsSyncCached(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
   );
 }
 
@@ -1643,7 +1644,7 @@ export function resolvePluginSdkScopedAliasMap(
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
-        if (!fs.existsSync(candidate)) {
+        if (!existsSyncCached(candidate)) {
           continue;
         }
         for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
@@ -1677,14 +1678,14 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
     for (const kind of orderedKinds) {
       if (kind === "dist") {
         const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
-        if (fs.existsSync(candidate)) {
+        if (existsSyncCached(candidate)) {
           return candidate;
         }
         continue;
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
-        if (fs.existsSync(candidate)) {
+        if (existsSyncCached(candidate)) {
           return candidate;
         }
       }
@@ -1972,7 +1973,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
     }
     const dedupedCandidates = dedupeResolvedPaths(candidates);
     for (const candidate of dedupedCandidates) {
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return {
           modulePath,
           packageRoot,
