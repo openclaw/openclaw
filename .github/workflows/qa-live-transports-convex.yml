@@ -14,10 +14,6 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
-      smoke_scenario:
-        description: Optional comma-separated smoke-ci scenario filters; empty runs the full profile
-        required: false
-        type: string
       discord_scenario:
         description: Optional comma-separated Discord scenario ids
         required: false
@@ -630,21 +626,10 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          INPUT_SMOKE_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_scenario || '' }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/smoke-ci-crabline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          scenario_args=()
-          if [[ -n "${INPUT_SMOKE_SCENARIO:-}" ]]; then
-            IFS=',' read -r -a requested_scenarios <<< "${INPUT_SMOKE_SCENARIO}"
-            for raw_scenario in "${requested_scenarios[@]}"; do
-              scenario="$(printf '%s' "${raw_scenario}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-              if [[ -n "${scenario}" ]]; then
-                scenario_args+=(--scenario "${scenario}")
-              fi
-            done
-          fi
 
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
@@ -653,8 +638,7 @@ jobs:
             --output-dir "${output_dir}" \
             --qa-profile smoke-ci \
             --provider-mode mock-openai \
-            --fast \
-            "${scenario_args[@]}"
+            --fast
 
       - name: Upload smoke-ci Crabline artifacts
         if: always()
