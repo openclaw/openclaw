@@ -1244,7 +1244,7 @@ async function collectDailyIngestionBatches(params: {
       continue;
     }
     const lines = stripManagedDailyDreamingLines(raw.split(/\r?\n/));
-    const strippedHash = createHash("sha1").update(lines.join("\n")).digest("hex").slice(0, 16);
+    const strippedHash = createHash("sha1").update(lines.filter(l => l.trim().length > 0).join("\n")).digest("hex").slice(0, 16);
     // If only the managed dreaming block changed (e.g. light-phase wrote a
     // new summary), the stripped content hash stays the same.  Skip
     // re-ingestion so recordShortTermRecalls does not advance lastRecalledAt

@@ -705,6 +705,43 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(dailyIngestion.files)).toHaveLength(1);
   });
 
+
+  it("preserves strippedHash through normalizeDailyIngestionState across persisted cycles", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      // First run: ingests the daily note and computes strippedHash.
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+
+      const stateAfterFirst = await testing.readDailyIngestionState(workspaceDir);
+      const firstEntry = Object.values(stateAfterFirst.files)[0];
+      expect(firstEntry).toBeDefined();
+      expect(firstEntry!.strippedHash).toBeDefined();
+      expect(typeof firstEntry!.strippedHash).toBe("string");
+
+      // Second run: the managed block changed the file fingerprint, but the
+      // stripped content hash should match → skip re-ingestion.
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 2);
+
+      const stateAfterSecond = await testing.readDailyIngestionState(workspaceDir);
+      const secondEntry = Object.values(stateAfterSecond.files)[0];
+      expect(secondEntry).toBeDefined();
+      expect(secondEntry!.strippedHash).toBe(firstEntry!.strippedHash);
+
+      // Candidate snippets should remain the same — no false re-ingestion.
+      const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:02:00.000Z");
+      expect(snippets).toEqual(["Move backups to S3 Glacier.; Keep retention at 365 days."]);
+    });
+  });
+
+
   it("ingests recent daily memory files even before recall traffic exists", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await fs.writeFile(
