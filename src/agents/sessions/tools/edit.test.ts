@@ -148,7 +148,7 @@ describe("edit tool", () => {
       "call-unwrap",
       {
         path: filePath,
-        edits: [{ item: { oldText: "original content", newText: "replaced content" } }],
+        edits: [{ oldText: "original content", newText: "replaced content" }],
       },
       undefined,
     );
@@ -169,7 +169,7 @@ describe("edit tool", () => {
       {
         path: filePath,
         edits: [
-          { item: { oldText: "line one", newText: "LINE ONE" } },
+          { oldText: "line one", newText: "LINE ONE" },
           { oldText: "line three", newText: "LINE THREE" },
         ],
       },
