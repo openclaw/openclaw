@@ -1,5 +1,6 @@
 // Xai tests cover stream plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { streamSimple, type Api, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
@@ -72,7 +73,7 @@ function runXaiToolPayloadWrapper(params: {
   api?: XaiStreamApi;
   modelId?: string;
   input?: string[];
-  config?: Record<string, unknown>;
+  config?: OpenClawConfig;
   nativeWebSearchAllowedByToolPolicy?: boolean;
 }) {
   const baseStreamFn: StreamFn = (_model, _context, options) => {

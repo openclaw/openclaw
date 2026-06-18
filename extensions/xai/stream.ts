@@ -1,5 +1,6 @@
 // Xai plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -42,16 +43,9 @@ function stripUnsupportedStrictFlag(tool: unknown): unknown {
 }
 
 type XaiNativeWebSearchOptions = {
-  config?: unknown;
+  config?: OpenClawConfig;
   nativeWebSearchAllowedByToolPolicy?: boolean;
 };
-
-function readNativeWebSearchAllowedByToolPolicy(
-  ctx: ProviderWrapStreamFnContext,
-): boolean | undefined {
-  return (ctx as { nativeWebSearchAllowedByToolPolicy?: boolean })
-    .nativeWebSearchAllowedByToolPolicy;
-}
 
 function isXaiResponsesWebSearchTool(tool: unknown): boolean {
   if (!tool || typeof tool !== "object") {
@@ -77,32 +71,17 @@ function isManagedWebSearchFunctionTool(tool: unknown): boolean {
   );
 }
 
-function readWebSearchConfig(config: unknown): Record<string, unknown> | undefined {
-  if (!config || typeof config !== "object") {
-    return undefined;
-  }
-  const tools = (config as Record<string, unknown>).tools;
-  if (!tools || typeof tools !== "object") {
-    return undefined;
-  }
-  const web = (tools as Record<string, unknown>).web;
-  if (!web || typeof web !== "object") {
-    return undefined;
-  }
-  const search = (web as Record<string, unknown>).search;
-  return search && typeof search === "object" ? (search as Record<string, unknown>) : undefined;
-}
-
-function shouldUseXaiNativeWebSearchProvider(config: unknown): boolean {
-  const search = readWebSearchConfig(config);
+function shouldUseXaiNativeWebSearchProvider(config: OpenClawConfig | undefined): boolean {
+  const search = config?.tools?.web?.search;
   if (search?.enabled === false) {
     return false;
   }
-  if (typeof search?.provider !== "string") {
+  const provider = search?.provider;
+  if (typeof provider !== "string") {
     return true;
   }
-  const provider = search.provider.trim().toLowerCase();
-  return provider === "" || provider === "auto" || provider === "grok";
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "" || normalized === "auto" || normalized === "grok";
 }
 
 function normalizeXaiWebSearchToolChoice(payloadObj: Record<string, unknown>): void {
@@ -355,7 +334,7 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
   return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
     let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn, {
       config: ctx.config,
-      nativeWebSearchAllowedByToolPolicy: readNativeWebSearchAllowedByToolPolicy(ctx),
+      nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
     });
     if (typeof fastMode === "boolean") {
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
