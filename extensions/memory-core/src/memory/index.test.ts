@@ -1716,7 +1716,7 @@ describe("memory index", () => {
     expect(status.vector?.available).toBe(available);
   });
 
-  it("drops the shipped legacy vector table after loading sqlite-vec", async () => {
+  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
     const cfg = createCfg({ vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
     const db = Reflect.get(manager, "db") as DatabaseSync;
@@ -1732,6 +1732,7 @@ describe("memory index", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'")
         .get(),
     ).toBeUndefined();
+    expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 
   it("probes sqlite vector store availability without initializing embeddings", async () => {
