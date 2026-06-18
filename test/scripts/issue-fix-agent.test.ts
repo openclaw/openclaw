@@ -22,6 +22,7 @@ import {
   transitionIssueFixAgentRun,
 } from "../../scripts/issue-fix-agent-lib/state.sqlite.ts";
 import type { IssueCandidate } from "../../scripts/issue-fix-agent-lib/types.ts";
+import { runIssueFixAgentCommand } from "../../scripts/issue-fix-agent-lib/workflow.ts";
 
 function issue(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
   return {
@@ -195,5 +196,64 @@ describe("issue-fix-agent github reads", () => {
       "--limit",
       "5",
     ]);
+  });
+});
+
+describe("issue-fix-agent workflow", () => {
+  function gitcrawlIssueStdout() {
+    return `${JSON.stringify({
+      author: { login: "external-user" },
+      body: "Repro: TypeError in src/commands/status.ts",
+      labels: ["bug"],
+      number: 12345,
+      title: "status crashes",
+      updatedAt: "2026-06-01T00:00:00Z",
+      url: "https://github.com/openclaw/openclaw/issues/12345",
+    })}\n`;
+  }
+
+  it("scan prints qualified candidates and performs no writes", async () => {
+    const calls: string[][] = [];
+    const output: string[] = [];
+    await runIssueFixAgentCommand({
+      args: { command: "scan", execute: false, pushPr: false, yes: false },
+      out: (line) => output.push(line),
+      runCommand: async (command, args) => {
+        calls.push([command, ...args]);
+        return { code: 0, stderr: "", stdout: gitcrawlIssueStdout() };
+      },
+    });
+    expect(output.join("\n")).toContain("#12345 status crashes");
+    expect(calls.every((call) => call[0] === "gitcrawl")).toBe(true);
+  });
+
+  it("run dry-runs through qualified and records a resumable state", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-run-"));
+    const output: string[] = [];
+    await runIssueFixAgentCommand({
+      args: { command: "run", execute: false, pushPr: false, yes: false },
+      out: (line) => output.push(line),
+      runCommand: async () => ({ code: 0, stderr: "", stdout: gitcrawlIssueStdout() }),
+      statePath: path.join(root, "state.sqlite"),
+    });
+
+    expect(output.join("\n")).toContain("Dry run stopped at qualified");
+    const store = openIssueFixAgentState(path.join(root, "state.sqlite"));
+    expect(getLatestOpenIssueFixAgentRun(store)).toMatchObject({
+      issueNumber: 12345,
+      state: "qualified",
+    });
+    store.close();
+  });
+
+  it("status reports when there is no active run", async () => {
+    const output: string[] = [];
+    await runIssueFixAgentCommand({
+      args: { command: "status", execute: false, pushPr: false, yes: false },
+      out: (line) => output.push(line),
+      runCommand: async () => ({ code: 0, stderr: "", stdout: "" }),
+      statePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "issue-fix-status-")), "state.sqlite"),
+    });
+    expect(output.join("\n")).toContain("No active issue-fix-agent run.");
   });
 });

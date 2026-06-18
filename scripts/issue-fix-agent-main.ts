@@ -60,7 +60,8 @@ export function parseIssueFixAgentArgs(argv: readonly string[]): IssueFixAgentAr
 
 async function main() {
   const args = parseIssueFixAgentArgs(process.argv.slice(2));
-  process.stdout.write(`${JSON.stringify(args)}\n`);
+  const { runIssueFixAgentCommand } = await import("./issue-fix-agent-lib/workflow.js");
+  await runIssueFixAgentCommand({ args });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
