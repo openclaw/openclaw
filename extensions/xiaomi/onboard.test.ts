@@ -18,6 +18,8 @@ describe("xiaomi onboard", () => {
     const provider = cfg.models?.providers?.xiaomi;
     expect(provider).toEqual(buildXiaomiProvider());
     expect(provider?.models.map((m) => m.id)).toEqual([
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
       "mimo-v2-flash",
       "mimo-v2-pro",
       "mimo-v2-omni",
@@ -42,6 +44,8 @@ describe("xiaomi onboard", () => {
     });
     expect(provider?.models.map((m) => m.id)).toEqual([
       "custom-model",
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
       "mimo-v2-flash",
       "mimo-v2-pro",
       "mimo-v2-omni",

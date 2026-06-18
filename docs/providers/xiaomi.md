@@ -64,11 +64,13 @@ The same plugin also registers the `xiaomi` speech (TTS) provider.
 
 ## Pay-as-you-go catalog
 
-| Model ref              | Input       | Context   | Max output | Reasoning | Notes         |
-| ---------------------- | ----------- | --------- | ---------- | --------- | ------------- |
-| `xiaomi/mimo-v2-flash` | text        | 262,144   | 8,192      | No        | Default model |
-| `xiaomi/mimo-v2-pro`   | text        | 1,048,576 | 32,000     | Yes       | Large context |
-| `xiaomi/mimo-v2-omni`  | text, image | 262,144   | 32,000     | Yes       | Multimodal    |
+| Model ref              | Input       | Context   | Max output | Reasoning | Notes           |
+| ---------------------- | ----------- | --------- | ---------- | --------- | --------------- |
+| `xiaomi/mimo-v2.5-pro` | text        | 1,048,576 | 32,000     | Yes       | V2.5 flagship   |
+| `xiaomi/mimo-v2.5`     | text, image | 1,048,576 | 32,000     | Yes       | V2.5 multimodal |
+| `xiaomi/mimo-v2-flash` | text        | 262,144   | 8,192      | No        | Default model   |
+| `xiaomi/mimo-v2-pro`   | text        | 1,048,576 | 32,000     | Yes       | Large context   |
+| `xiaomi/mimo-v2-omni`  | text, image | 262,144   | 32,000     | Yes       | Multimodal      |
 
 <Tip>
 The default model ref is `xiaomi/mimo-v2-flash`. The provider is injected automatically when `XIAOMI_API_KEY` is set or an auth profile exists.
@@ -170,6 +172,22 @@ output to 48kHz Opus with `ffmpeg` before delivery.
         apiKey: "XIAOMI_API_KEY",
         models: [
           {
+            id: "mimo-v2.5-pro",
+            name: "Xiaomi MiMo V2.5 Pro",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+          {
+            id: "mimo-v2.5",
+            name: "Xiaomi MiMo V2.5",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+          {
             id: "mimo-v2-flash",
             name: "Xiaomi MiMo V2 Flash",
             reasoning: false,
@@ -247,11 +265,11 @@ Pricing comes from the bundled manifest (Token Plan models include tiered cache-
   </Accordion>
 
   <Accordion title="Model details">
-    - **mimo-v2-flash** — lightweight and fast, ideal for general-purpose text tasks. No reasoning support.
+    - **mimo-v2.5-pro** — Xiaomi's current V2.5 reasoning flagship with a 1M token context window. Available on both pay-as-you-go and Token Plan (the Token Plan default).
+    - **mimo-v2.5** — multimodal V2.5 model (text and image) with a 1M token context window. Available on both pay-as-you-go and Token Plan.
+    - **mimo-v2-flash** — lightweight and fast, ideal for general-purpose text tasks. No reasoning support. Pay-as-you-go default.
     - **mimo-v2-pro** — supports reasoning with a 1M token context window for long-document workloads.
     - **mimo-v2-omni** — reasoning-enabled multimodal model that accepts both text and image inputs.
-    - **mimo-v2.5-pro** — Token Plan default with Xiaomi's current V2.5 reasoning stack.
-    - **mimo-v2.5** — Token Plan multimodal V2.5 route.
 
     <Note>
     Pay-as-you-go models use the `xiaomi/` prefix. Token Plan models use the `xiaomi-token-plan/` prefix.
