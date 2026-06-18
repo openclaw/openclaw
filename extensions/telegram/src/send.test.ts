@@ -1065,6 +1065,22 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
   });
 
+  it("keeps the rich reply deliverable when a markdown link uses a relative path (#94117)", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
+    const markdown = "Edit [config](./openclaw.json) or see [docs](https://example.com/docs)";
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = String(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "");
+    expect(richHtml).not.toContain('<a href="./');
+    expect(richHtml).toContain("config");
+    expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
+  });
+
   it("renders complex markdown into HTML text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [
