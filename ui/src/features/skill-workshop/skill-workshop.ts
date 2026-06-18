@@ -2,6 +2,7 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import type { RouteFeature } from "../../routes/route-features.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
 import { switchChatSessionAndWait } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -343,5 +344,5 @@ export function createSkillWorkshopFeature(notifyLazyViewChanged: () => void) {
         });
       });
     },
-  };
+  } satisfies RouteFeature;
 }

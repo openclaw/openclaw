@@ -59,6 +59,108 @@ import { resetChatViewState } from "../ui/views/chat.ts";
 import type { SettingsAppHost, SettingsHost } from "./app-host.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "./operator-access.ts";
 
+type RefreshActiveRouteOptions = { chatStartup?: boolean };
+
+type ActiveRouteRefreshContext = {
+  host: SettingsHost;
+  app: SettingsAppHost;
+  opts?: RefreshActiveRouteOptions;
+};
+
+type ActiveRouteRefresh = (context: ActiveRouteRefreshContext) => void | Promise<void>;
+
+const refreshSettingsRoute: ActiveRouteRefresh = async ({ host, app }) => {
+  const primaryRefresh = loadConfig(app);
+  loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+  await primaryRefresh;
+};
+
+const ACTIVE_ROUTE_REFRESHERS = {
+  config: refreshSettingsRoute,
+  communications: refreshSettingsRoute,
+  appearance: refreshSettingsRoute,
+  automation: refreshSettingsRoute,
+  mcp: refreshSettingsRoute,
+  infrastructure: refreshSettingsRoute,
+  "ai-agents": refreshSettingsRoute,
+  overview: ({ host }) => loadOverview(host),
+  activity: () => undefined,
+  workboard: async ({ host, app }) => {
+    await Promise.all([
+      loadConfig(app),
+      loadSessions(app),
+      loadAgents(app),
+      loadWorkboard({
+        host,
+        client: app.client,
+        force: true,
+        requestUpdate: host.requestUpdate,
+        refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
+      }),
+    ]);
+  },
+  channels: ({ host }) => loadChannelsRoute(host),
+  instances: ({ app }) => loadPresence(app),
+  usage: ({ app }) => loadUsage(app),
+  sessions: async ({ app }) => {
+    await Promise.all([loadConfig(app), loadSessions(app)]);
+  },
+  cron: ({ host }) => loadCron(host),
+  skills: async ({ app }) => {
+    await loadAgents(app);
+    reconcileSkillsAgentId(app, app.agentsList);
+    await loadSkills(app);
+  },
+  "skill-workshop": ({ app }) => loadSkillWorkshopProposals(app, { force: true }),
+  agents: ({ host, app }) => refreshAgentsRoute(host, app),
+  nodes: async ({ app }) => {
+    await loadNodes(app);
+    await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
+  },
+  dreams: async ({ host, app }) => {
+    host.selectedAgentId = resolveDreamingAgentIdForSession(host);
+    await loadConfig(app);
+    await Promise.all([
+      loadDreamingStatus(app),
+      loadDreamDiary(app),
+      loadWikiImportInsights(app),
+      loadWikiMemoryPalace(app),
+    ]);
+  },
+  chat: async ({ host, app, opts }) => {
+    // Capture this before refreshChat seeds a one-row result from history.
+    const hadSessionsResult = Boolean(app.sessionsResult);
+    try {
+      await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+        awaitHistory: opts?.chatStartup === true,
+        startup: opts?.chatStartup === true,
+      });
+      scheduleChatScroll(
+        host as unknown as Parameters<typeof scheduleChatScroll>[0],
+        !host.chatHasAutoScrolled,
+      );
+    } finally {
+      void loadModelAuthStatusState(app).catch(() => undefined);
+      if (opts?.chatStartup === true || !hadSessionsResult) {
+        void loadSessions(app, {
+          ...createChatSessionsLoadOverrides(app),
+          ...scopedAgentListParamsForSession(app, app.sessionKey),
+          backgroundHydrate: true,
+        }).catch(() => undefined);
+      }
+    }
+  },
+  debug: async ({ host, app }) => {
+    await loadDebug(app);
+    host.eventLog = host.eventLogBuffer;
+  },
+  logs: async ({ host, app }) => {
+    host.logsAtBottom = true;
+    await loadLogs(app, { reset: true });
+    scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+  },
+} satisfies Record<RouteId, ActiveRouteRefresh>;
+
 export function applyActiveRouteTransition(
   host: SettingsHost,
   previous: RouteId,
@@ -95,118 +197,12 @@ export function applyActiveRouteTransition(
 
 export async function refreshActiveRoute(
   host: SettingsHost,
-  opts?: { chatStartup?: boolean },
+  opts?: RefreshActiveRouteOptions,
 ): Promise<void> {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.routeId);
   try {
-    switch (host.routeId) {
-      case "config":
-      case "communications":
-      case "appearance":
-      case "automation":
-      case "mcp":
-      case "infrastructure":
-      case "ai-agents":
-        {
-          const primaryRefresh = loadConfig(app);
-          loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
-          await primaryRefresh;
-        }
-        break;
-      case "overview":
-        await loadOverview(host);
-        break;
-      case "activity":
-        break;
-      case "workboard":
-        await Promise.all([
-          loadConfig(app),
-          loadSessions(app),
-          loadAgents(app),
-          loadWorkboard({
-            host,
-            client: app.client,
-            force: true,
-            requestUpdate: host.requestUpdate,
-            refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
-          }),
-        ]);
-        break;
-      case "channels":
-        await loadChannelsRoute(host);
-        break;
-      case "instances":
-        await loadPresence(app);
-        break;
-      case "usage":
-        await loadUsage(app);
-        break;
-      case "sessions":
-        await Promise.all([loadConfig(app), loadSessions(app)]);
-        break;
-      case "cron":
-        await loadCron(host);
-        break;
-      case "skills":
-        await loadAgents(app);
-        reconcileSkillsAgentId(app, app.agentsList);
-        await loadSkills(app);
-        break;
-      case "skill-workshop":
-        await loadSkillWorkshopProposals(app, { force: true });
-        break;
-      case "agents":
-        await refreshAgentsRoute(host, app);
-        break;
-      case "nodes":
-        await loadNodes(app);
-        await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
-        break;
-      case "dreams":
-        host.selectedAgentId = resolveDreamingAgentIdForSession(host);
-        await loadConfig(app);
-        await Promise.all([
-          loadDreamingStatus(app),
-          loadDreamDiary(app),
-          loadWikiImportInsights(app),
-          loadWikiMemoryPalace(app),
-        ]);
-        break;
-      case "chat": {
-        // Capture this before refreshChat seeds a one-row result from history.
-        const hadSessionsResult = Boolean(app.sessionsResult);
-        try {
-          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
-            awaitHistory: opts?.chatStartup === true,
-            startup: opts?.chatStartup === true,
-          });
-          scheduleChatScroll(
-            host as unknown as Parameters<typeof scheduleChatScroll>[0],
-            !host.chatHasAutoScrolled,
-          );
-        } finally {
-          void loadModelAuthStatusState(app).catch(() => undefined);
-          if (opts?.chatStartup === true || !hadSessionsResult) {
-            void loadSessions(app, {
-              ...createChatSessionsLoadOverrides(app),
-              ...scopedAgentListParamsForSession(app, app.sessionKey),
-              backgroundHydrate: true,
-            }).catch(() => undefined);
-          }
-        }
-        break;
-      }
-      case "debug":
-        await loadDebug(app);
-        host.eventLog = host.eventLogBuffer;
-        break;
-      case "logs":
-        host.logsAtBottom = true;
-        await loadLogs(app, { reset: true });
-        scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
-        break;
-    }
+    await ACTIVE_ROUTE_REFRESHERS[host.routeId]({ host, app, opts });
     finishControlUiRefresh(host, refreshRun, "ok");
   } catch (err) {
     finishControlUiRefresh(host, refreshRun, "error");
