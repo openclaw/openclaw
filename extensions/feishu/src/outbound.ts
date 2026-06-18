@@ -5,9 +5,8 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  hasInteractiveReplyBlocks,
-  hasMessagePresentationBlocks,
   interactiveReplyToPresentation,
+  isMessagePresentationInteractiveBlock,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
@@ -507,18 +506,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     const commentTarget = parseFeishuCommentTarget(ctx.to);
     if (commentTarget) {
+      const normalizedPresentation =
+        normalizeMessagePresentation(ctx.payload.presentation) ??
+        (() => {
+          const interactive = normalizeInteractiveReply(ctx.payload.interactive);
+          return interactive ? interactiveReplyToPresentation(interactive) : undefined;
+        })();
       const presentationFallbackText = renderMessagePresentationFallbackText({
         text: ctx.payload.text,
-        presentation:
-          normalizeMessagePresentation(ctx.payload.presentation) ??
-          (() => {
-            const interactive = normalizeInteractiveReply(ctx.payload.interactive);
-            return interactive ? interactiveReplyToPresentation(interactive) : undefined;
-          })(),
+        presentation: normalizedPresentation,
       });
       const hasInteractiveContent =
-        hasMessagePresentationBlocks(ctx.payload.presentation) ||
-        hasInteractiveReplyBlocks(ctx.payload.interactive);
+        normalizedPresentation?.blocks.some(isMessagePresentationInteractiveBlock) ?? false;
       const text = hasInteractiveContent
         ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
         : presentationFallbackText;

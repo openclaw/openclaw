@@ -278,7 +278,7 @@ describe("interactive payload helpers", () => {
     });
   });
 
-  it("preserves command/callback values in button fallback text for manual execution", () => {
+  it("preserves command values in button fallback text while keeping callback values private", () => {
     const presentation = {
       blocks: [
         {
@@ -298,7 +298,7 @@ describe("interactive payload helpers", () => {
       [
         "- Approve: `/approve req_1 allow-once`",
         "- Deny: `/approve req_1 deny`",
-        "- Ignore: `ignore_123`",
+        "- Ignore",
         "- Docs: https://example.com/docs",
         "- Disabled",
       ].join("\n"),

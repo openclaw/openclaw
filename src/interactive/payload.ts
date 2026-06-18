@@ -532,7 +532,10 @@ export function renderMessagePresentationFallbackText(params: {
           if (targetUrl) {
             return `${button.label}: ${targetUrl}`;
           }
-          const controlValue = resolveMessagePresentationControlValue(button);
+          const controlValue =
+            button.action?.type === "callback"
+              ? undefined
+              : resolveMessagePresentationControlValue(button);
           if (controlValue) {
             return `${button.label}: \`${controlValue}\``;
           }
