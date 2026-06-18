@@ -264,9 +264,8 @@ export class TokenManager {
       release = guarded.release;
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
-      throw new Error(formatQQBotNetworkError("/app/getAppAccessToken", formatErrorMessage(err)), {
-        cause: err,
-      });
+      const message = formatQQBotNetworkError("/app/getAppAccessToken", formatErrorMessage(err));
+      throw new Error(`${message} access_token retryable token fetch failure.`, { cause: err });
     }
 
     try {

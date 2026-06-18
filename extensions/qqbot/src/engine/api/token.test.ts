@@ -124,6 +124,14 @@ describe("QQBot token manager", () => {
     expect((caught as Error).message).toContain('"message":"invalid app secret"');
   });
 
+  it("keeps token network failures visible to the retry heuristic", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("fetch failed"));
+
+    await expect(new TokenManager().getAccessToken("app-id", "secret")).rejects.toThrow(
+      /access_token/,
+    );
+  });
+
   it("passes the RFC2544 SSRF allowance to the token fetch (regression for #88984)", async () => {
     mockGuardedTokenResponse('{"access_token":"token-1","expires_in":7200}', {
       status: 200,
