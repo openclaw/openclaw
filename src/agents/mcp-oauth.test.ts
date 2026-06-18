@@ -77,6 +77,123 @@ describe("MCP OAuth provider", () => {
     );
   });
 
+  it("returns stored rotated tokens instead of replaying a stale refresh token", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          token_type: "Bearer",
+        });
+
+        const fetchFn = vi.fn(async () => {
+          return new Response(
+            JSON.stringify({
+              access_token: "replayed-access",
+              refresh_token: "replayed-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        });
+
+        const response = await provider.wrapFetchForTokenRefresh(fetchFn)(
+          new URL("https://auth.example.com/token"),
+          {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: "old-refresh",
+            }),
+          },
+        );
+
+        await expect(response.json()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+        expect(fetchFn).not.toHaveBeenCalled();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-stale-refresh-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("serializes concurrent refreshes so rotating refresh tokens are not replayed", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "old-access",
+          refresh_token: "old-refresh",
+          token_type: "Bearer",
+        });
+
+        const fetchFn = vi.fn(async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 25);
+          });
+          return new Response(
+            JSON.stringify({
+              access_token: "new-access",
+              refresh_token: "new-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        });
+        const wrappedFetch = provider.wrapFetchForTokenRefresh(fetchFn);
+        const refreshInit = () => ({
+          method: "POST",
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: "old-refresh",
+          }),
+        });
+
+        const [first, second] = await Promise.all([
+          wrappedFetch(new URL("https://auth.example.com/token"), refreshInit()),
+          wrappedFetch(new URL("https://auth.example.com/token"), refreshInit()),
+        ]);
+
+        await expect(first.json()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+        await expect(second.json()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+        expect(fetchFn).toHaveBeenCalledOnce();
+        await expect(provider.tokens()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-concurrent-refresh-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
   it("keeps the legacy loopback redirect as the default for upgrade compatibility", () => {
     const provider = createMcpOAuthClientProvider({
       serverName: "Calendly",

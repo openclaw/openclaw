@@ -48,6 +48,9 @@ export type McpOAuthCredentialsStatus = {
 
 const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
+const REFRESH_LOCK_TIMEOUT_MS = 60_000;
+const REFRESH_LOCK_STALE_MS = 120_000;
+const REFRESH_LOCK_POLL_MS = 100;
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
@@ -77,11 +80,102 @@ function readStoreSync(filePath: string): McpOAuthStore {
 
 async function writeStore(filePath: string, store: McpOAuthStore): Promise<void> {
   await fsPromises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fsPromises.writeFile(filePath, JSON.stringify(store, null, 2), {
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  await fsPromises.writeFile(tempPath, JSON.stringify(store, null, 2), {
     encoding: "utf-8",
     mode: 0o600,
   });
+  await fsPromises.chmod(tempPath, 0o600).catch(() => {});
+  await fsPromises.rename(tempPath, filePath);
   await fsPromises.chmod(filePath, 0o600).catch(() => {});
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+type StoreLock = {
+  release: () => Promise<void>;
+};
+
+async function acquireStoreLock(filePath: string): Promise<StoreLock> {
+  await fsPromises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const lockPath = `${filePath}.lock`;
+  const lockId = randomUUID();
+  const started = Date.now();
+  while (true) {
+    try {
+      const handle = await fsPromises.open(lockPath, "wx", 0o600);
+      try {
+        await handle.writeFile(
+          JSON.stringify({
+            id: lockId,
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+          }),
+          "utf-8",
+        );
+      } finally {
+        await handle.close();
+      }
+      return {
+        release: async () => {
+          const current = await readStore(lockPath);
+          if ((current as { id?: string }).id === lockId) {
+            await fsPromises.rm(lockPath, { force: true }).catch(() => {});
+          }
+        },
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
+        throw error;
+      }
+      const stat = await fsPromises.stat(lockPath).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > REFRESH_LOCK_STALE_MS) {
+        await fsPromises.rm(lockPath, { force: true }).catch(() => {});
+        continue;
+      }
+      if (Date.now() - started > REFRESH_LOCK_TIMEOUT_MS) {
+        throw new Error(
+          `Timed out waiting for MCP OAuth token refresh lock for ${path.basename(filePath)}.`,
+          { cause: error },
+        );
+      }
+      await sleep(REFRESH_LOCK_POLL_MS);
+    }
+  }
+}
+
+function refreshTokenFromRequestBody(body: BodyInit | null | undefined): string | null {
+  if (body instanceof URLSearchParams) {
+    return body.get("grant_type") === "refresh_token" ? body.get("refresh_token") : null;
+  }
+  if (typeof body === "string") {
+    const params = new URLSearchParams(body);
+    return params.get("grant_type") === "refresh_token" ? params.get("refresh_token") : null;
+  }
+  return null;
+}
+
+function responseFromTokens(tokens: OAuthTokens): Response {
+  return new Response(JSON.stringify(tokens), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function parseRefreshResponseTokens(
+  response: Response,
+  refreshToken: string,
+): Promise<OAuthTokens> {
+  const payload = (await response.clone().json()) as OAuthTokens;
+  return { refresh_token: refreshToken, ...payload };
 }
 
 function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
@@ -109,6 +203,10 @@ function buildOAuthClientMetadata(
   };
 }
 
+type OAuthClientProviderWithRefreshSerialization = OAuthClientProvider & {
+  wrapFetchForTokenRefresh(fetchFn?: FetchLike): FetchLike;
+};
+
 /** Creates the MCP SDK OAuth provider backed by OpenClaw's private store. */
 export function createMcpOAuthClientProvider(params: {
   serverName: string;
@@ -116,7 +214,7 @@ export function createMcpOAuthClientProvider(params: {
   config?: McpOAuthConfig;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
   allowAuthorizationRedirect?: boolean;
-}): OAuthClientProvider {
+}): OAuthClientProviderWithRefreshSerialization {
   const config = params.config ?? {};
   const filePath = oauthStorePath(params.serverName, params.serverUrl);
   const allowAuthorizationRedirect =
@@ -199,6 +297,41 @@ export function createMcpOAuthClientProvider(params: {
     async discoveryState() {
       return (await readStore(filePath)).discoveryState;
     },
+    wrapFetchForTokenRefresh(fetchFn) {
+      return async (input, init) => {
+        const refreshToken = refreshTokenFromRequestBody(init?.body);
+        if (!refreshToken) {
+          return await (fetchFn ?? fetch)(input, init);
+        }
+
+        const lock = await acquireStoreLock(filePath);
+        try {
+          const store = await readStore(filePath);
+          const currentTokens = store.tokens;
+          if (
+            currentTokens?.refresh_token &&
+            currentTokens.refresh_token !== refreshToken &&
+            currentTokens.access_token
+          ) {
+            return responseFromTokens(currentTokens);
+          }
+
+          const response = await (fetchFn ?? fetch)(input, init);
+          if (!response.ok) {
+            return response;
+          }
+
+          // The MCP SDK refresh path parses the same response and calls saveTokens().
+          // Persisting the clone before releasing the lock lets concurrent callers
+          // observe the rotated refresh token instead of replaying the stale one.
+          const tokens = await parseRefreshResponseTokens(response, refreshToken);
+          await writeStore(filePath, { ...store, tokens });
+          return response;
+        } finally {
+          await lock.release();
+        }
+      };
+    },
   };
 }
 
@@ -233,18 +366,16 @@ async function runMcpOAuthLoginAttempt(params: {
   fetchFn?: FetchLike;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
 }): Promise<"authorized" | "redirect"> {
-  const result = await auth(
-    createMcpOAuthClientProvider({
-      ...params,
-      allowAuthorizationRedirect: true,
-    }),
-    {
-      serverUrl: params.serverUrl,
-      authorizationCode: normalizeOptionalString(params.authorizationCode),
-      scope: normalizeOptionalString(params.config?.scope),
-      fetchFn: params.fetchFn,
-    },
-  );
+  const provider = createMcpOAuthClientProvider({
+    ...params,
+    allowAuthorizationRedirect: true,
+  });
+  const result = await auth(provider, {
+    serverUrl: params.serverUrl,
+    authorizationCode: normalizeOptionalString(params.authorizationCode),
+    scope: normalizeOptionalString(params.config?.scope),
+    fetchFn: provider.wrapFetchForTokenRefresh(params.fetchFn),
+  });
   return result === "AUTHORIZED" ? "authorized" : "redirect";
 }
 
