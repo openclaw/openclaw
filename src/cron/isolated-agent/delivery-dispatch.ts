@@ -658,14 +658,19 @@ async function resolveDirectCronDeliverySessionKey(params: {
     // Determine if the resolved session is a routed per-channel-peer session.
     // Mirror writes to such sessions can race the embedded runner session lock
     // and trigger EmbeddedAttemptSessionTakeoverError (issue #84583).
-    const mainSessionKey = resolveAgentMainSessionKey({
+    const agentMainSessionKey = resolveAgentMainSessionKey({
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const isMainSession = isSameSessionKey(canonicalRouteSessionKey, mainSessionKey);
+    const globalMainSessionKey = resolveMainSessionKey(params.cfg);
+    const isMainSession =
+      isSameSessionKey(canonicalRouteSessionKey, agentMainSessionKey) ||
+      isSameSessionKey(canonicalRouteSessionKey, globalMainSessionKey);
     const threadSuffix = parseThreadSessionSuffix(canonicalRouteSessionKey);
     const isThreadedMainSession =
-      threadSuffix !== undefined && isSameSessionKey(threadSuffix.baseSessionKey, mainSessionKey);
+      threadSuffix !== undefined &&
+      (isSameSessionKey(threadSuffix.baseSessionKey, agentMainSessionKey) ||
+        isSameSessionKey(threadSuffix.baseSessionKey, globalMainSessionKey));
     const isRoutedPeerSession = !isMainSession && !isThreadedMainSession;
 
     // Bootstrap metadata for a cron-originated first contact so the resolved
