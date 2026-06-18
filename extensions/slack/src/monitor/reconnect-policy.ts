@@ -2,7 +2,7 @@
 import { formatSlackError } from "../errors.js";
 
 const SLACK_AUTH_ERROR_RE =
-  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
+  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
 const NO_ERROR_DETAIL = "no error detail";
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
@@ -10,7 +10,6 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxMs: 30_000,
   factor: 1.8,
   jitter: 0.25,
-  maxAttempts: 12,
 } as const;
 
 type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
@@ -88,9 +87,8 @@ export function waitForSlackSocketDisconnect(
 }
 
 /**
- * Detect non-recoverable Slack API / auth errors that should NOT be retried.
- * These indicate permanent credential problems (revoked bot, deactivated account, etc.)
- * and retrying will never succeed — continuing to retry blocks the entire gateway.
+ * Detect permanent Slack account and credential failures.
+ * Transient request and HTTP failures stay in OpenClaw's reconnect loop.
  */
 export function isNonRecoverableSlackAuthError(error: unknown): boolean {
   return SLACK_AUTH_ERROR_RE.test(formatUnknownError(error, ""));

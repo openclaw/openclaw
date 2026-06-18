@@ -2,6 +2,7 @@
  * Tests QA runtime command loading and private CLI gating.
  */
 import { Command } from "commander";
+import { createServer } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
@@ -35,6 +36,29 @@ describe("plugin-sdk qa-runtime", () => {
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
   });
+
+  async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
+    const server = createServer();
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("test server address unavailable"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    return {
+      port,
+      close: async () => {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      },
+    };
+  }
 
   it("stays cold until the runtime seam is used", async () => {
     const module = await import("./qa-runtime.js");
@@ -272,5 +296,63 @@ describe("plugin-sdk qa-runtime", () => {
 
     expect(runCommand).toHaveBeenCalledTimes(2);
     expect(sleepImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes multiline Docker compose service lookup output", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    const runCommand = vi.fn(async (command: string, args: string[], cwd: string) => {
+      expect(command).toBe("docker");
+      expect(cwd).toBe("/repo");
+
+      if (args.includes("ps") && args.includes("-q")) {
+        return {
+          stdout: "\nqa-gateway-one\nqa-gateway-two\n",
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect") {
+        expect(args.at(-1)).toBe("qa-gateway-one");
+        return {
+          stdout: "\n172.18.0.4\n172.19.0.4\n",
+          stderr: "",
+        };
+      }
+
+      throw new Error(`unexpected docker args: ${args.join(" ")}`);
+    });
+    const fetchImpl = vi.fn(async (url: string) => ({
+      ok: url === "http://172.18.0.4:18789/healthz",
+    }));
+
+    await expect(
+      runtime.resolveComposeServiceUrl(
+        "gateway",
+        18789,
+        "/tmp/docker-compose.yml",
+        "/repo",
+        runCommand,
+        fetchImpl,
+      ),
+    ).resolves.toBe("http://172.18.0.4:18789/");
+
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz");
+  });
+
+  it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {
+    const module = await import("./qa-runtime.js");
+    const reservation = await occupyLoopbackPort();
+    try {
+      await expect(module.resolveQaDockerHostPort(reservation.port, true)).resolves.toBe(
+        reservation.port,
+      );
+      const fallbackPort = await module.resolveQaDockerHostPort(reservation.port, false);
+      expect(fallbackPort).toBeGreaterThan(0);
+      expect(fallbackPort).not.toBe(reservation.port);
+    } finally {
+      await reservation.close();
+    }
   });
 });

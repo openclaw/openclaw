@@ -118,6 +118,21 @@ describe("telegram user credential path handling", () => {
 });
 
 describe("telegram user credential IO", () => {
+  it("uses collision-resistant generated credential lease owner IDs", async () => {
+    const credentialModule = (await import(
+      `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=owner-id-${Date.now()}`
+    )) as {
+      buildTelegramUserCredentialOwnerId(): string;
+    };
+
+    expect(credentialModule.buildTelegramUserCredentialOwnerId()).toMatch(
+      /^telegram-user-[0-9a-f-]{36}$/u,
+    );
+    expect(readFileSync("scripts/e2e/telegram-user-credential.ts", "utf8")).not.toContain(
+      "telegram-user-${Date.now()}-${Math.random()",
+    );
+  });
+
   it("rejects oversized chunked lease payload markers before hydration", async () => {
     const credentialModule = (await import(
       `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=chunk-marker-${Date.now()}`

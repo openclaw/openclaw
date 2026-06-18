@@ -78,6 +78,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private readonly options: GatewayClientTransportOptions;
   private client: GatewayClientLike | null = null;
   private connectPromise: Promise<void> | null = null;
+  private rejectPendingConnect: ((error: Error) => void) | null = null;
   private closePromise: Promise<void> | null = null;
 
   constructor(options: GatewayClientTransportOptions = {}) {
@@ -89,6 +90,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
       return this.connectPromise;
     }
     this.connectPromise = new Promise<void>((resolve, reject) => {
+      this.rejectPendingConnect = reject;
       const client = new GatewayClient({
         ...this.options,
         onEvent: (event: unknown) => {
@@ -98,6 +100,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
         },
         onHelloOk: (_hello: unknown) => {
           this.options.onHelloOk?.(_hello);
+          this.rejectPendingConnect = null;
           resolve();
         },
         onConnectError: (error: Error) => {
@@ -109,6 +112,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
             this.connectPromise = null;
           }
           void client.stopAndWait().catch(() => {});
+          this.rejectPendingConnect = null;
           reject(error);
         },
         onReconnectPaused: this.options.onReconnectPaused,
@@ -145,6 +149,9 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     this.eventsHub.close();
     const client = this.client;
     this.client = null;
+    const rejectPendingConnect = this.rejectPendingConnect;
+    this.rejectPendingConnect = null;
+    rejectPendingConnect?.(new Error("gateway transport closed before connect completed"));
     this.connectPromise = null;
     this.closePromise = client?.stopAndWait() ?? Promise.resolve();
     await this.closePromise;

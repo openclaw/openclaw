@@ -19,7 +19,7 @@ import {
   readWebProviderEnvValue,
   resolveWebProviderConfig,
   resolveWebProviderDefinition,
-} from "../web/provider-runtime-shared.js";
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 
 // Runtime provider selection for the web_fetch tool. It resolves config,
 // credentials, runtime metadata, and sandbox-safe bundled provider scopes.
@@ -29,7 +29,7 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     : undefined
   : undefined;
 
-export type ResolveWebFetchDefinitionParams = {
+type ResolveWebFetchDefinitionParams = {
   config?: OpenClawConfig;
   sandboxed?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
@@ -38,7 +38,7 @@ export type ResolveWebFetchDefinitionParams = {
 };
 
 /** Resolves whether web_fetch is enabled for the current config/sandbox. */
-export function resolveWebFetchEnabled(params: {
+function resolveWebFetchEnabled(params: {
   fetch?: WebFetchConfig;
   sandboxed?: boolean;
 }): boolean {
@@ -102,17 +102,8 @@ export function listWebFetchProviders(params?: {
   });
 }
 
-/** Lists plugin-configured web_fetch providers. */
-export function listConfiguredWebFetchProviders(params?: {
-  config?: OpenClawConfig;
-}): PluginWebFetchProviderEntry[] {
-  return resolvePluginWebFetchProviders({
-    config: params?.config,
-  });
-}
-
 /** Resolves the configured or auto-detected web_fetch provider id. */
-export function resolveWebFetchProviderId(params: {
+function resolveWebFetchProviderId(params: {
   fetch?: WebFetchConfig;
   config?: OpenClawConfig;
   providers?: PluginWebFetchProviderEntry[];

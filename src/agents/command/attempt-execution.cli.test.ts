@@ -127,6 +127,16 @@ function makeCliResult(text: string): EmbeddedAgentRunResult {
   };
 }
 
+async function persistCliTranscriptEntry(
+  params: Parameters<typeof persistCliTurnTranscript>[0],
+): Promise<SessionEntry | undefined> {
+  const result = await persistCliTurnTranscript(params);
+  if (result.kind !== "persisted") {
+    throw new Error("expected CLI transcript persistence to keep the current session");
+  }
+  return result.sessionEntry;
+}
+
 async function readSessionMessages(sessionFile: string) {
   return (await readSessionFileJsonLines<{ type?: string; message?: unknown }>(sessionFile))
     .filter((entry) => entry.type === "message")
@@ -1143,7 +1153,7 @@ describe("CLI attempt execution", () => {
     });
     let updatedEntry: SessionEntry | undefined;
     try {
-      updatedEntry = await persistCliTurnTranscript({
+      updatedEntry = await persistCliTranscriptEntry({
         body: "persist this",
         result: makeCliResult("hello from cli"),
         sessionId: sessionEntry.sessionId,
@@ -1204,6 +1214,40 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
+  it("does not append a CLI transcript after the session is deleted", async () => {
+    const sessionKey = "agent:main:subagent:cli-transcript-deleted";
+    const staleSessionFile = path.join(tmpDir, "session-cli-stale.jsonl");
+    const staleEntry: SessionEntry = {
+      sessionId: "session-cli-stale",
+      sessionFile: staleSessionFile,
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: staleEntry };
+    await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+    clearSessionStoreCacheForTest();
+
+    const result = await persistCliTurnTranscript({
+      body: "late prompt",
+      result: makeCliResult("late reply"),
+      sessionId: staleEntry.sessionId,
+      sessionKey,
+      sessionEntry: staleEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    expect(result).toEqual({ kind: "session-rebound", sessionEntry: undefined });
+    await expect(fs.stat(staleSessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]).toBeUndefined();
+  });
+
   it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {
     const sessionKey = "agent:main:subagent:embedded-gap-fill";
     const sessionEntry: SessionEntry = {
@@ -1221,7 +1265,7 @@ describe("CLI attempt execution", () => {
       runner: "embedded",
     };
 
-    const updatedFirst = await persistCliTurnTranscript({
+    const updatedFirst = await persistCliTranscriptEntry({
       body: "ignored for gap fill",
       transcriptBody: "also ignored",
       result,
@@ -1278,7 +1322,7 @@ describe("CLI attempt execution", () => {
       runner: "embedded",
     };
 
-    const updatedFirst = await persistCliTurnTranscript({
+    const updatedFirst = await persistCliTranscriptEntry({
       body: "ignored for gap fill",
       result,
       sessionId: sessionEntry.sessionId,
@@ -1344,7 +1388,7 @@ describe("CLI attempt execution", () => {
       runner: "embedded",
     };
 
-    const updatedFirst = await persistCliTurnTranscript({
+    const updatedFirst = await persistCliTranscriptEntry({
       body: "ignored for gap fill",
       result,
       sessionId: sessionEntry.sessionId,
@@ -1415,7 +1459,7 @@ describe("CLI attempt execution", () => {
       runner: "embedded",
     };
 
-    const updatedFirst = await persistCliTurnTranscript({
+    const updatedFirst = await persistCliTranscriptEntry({
       body: "ignored for gap fill",
       result,
       sessionId: sessionEntry.sessionId,
@@ -1484,7 +1528,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
 
-    const updatedEntry = await persistCliTurnTranscript({
+    const updatedEntry = await persistCliTranscriptEntry({
       body: [
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",

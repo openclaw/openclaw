@@ -14,14 +14,16 @@ import {
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
   type ExecAsk,
+  type AllowAlwaysPersistenceDecision,
   type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
   commandRequiresSecurityAuditSuppressionApproval,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
   hasNodeCommandAllowAlwaysMarker,
   resolveExecApprovalsFromFile,
+  resolveAllowAlwaysPersistenceDecision,
   resolveAllowAlwaysPatternCoverage,
   type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
@@ -74,6 +76,7 @@ type NodeApprovalAnalysis = {
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewArgv?: string[];
+  allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
 
 function resolveNodeRunTimeoutSec(
@@ -103,7 +106,7 @@ function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
 type NodePolicyCommandEval = {
   command: string;
   cwd: string | undefined;
-  allowlistEval: ReturnType<typeof evaluateShellAllowlist>;
+  allowlistEval: Awaited<ReturnType<typeof evaluateShellAllowlistWithAuthorization>>;
 };
 
 type NodeAllowAlwaysCoverage = {
@@ -494,7 +497,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   const approvalCommand = params.prepared.rawCommand;
   const approvalCwd = params.prepared.cwd ?? params.request.workdir;
   const analysisEnv = buildNodeApprovalAnalysisEnv(params.target.env);
-  const baseAllowlistEval = evaluateShellAllowlist({
+  const baseAllowlistEval = await evaluateShellAllowlistWithAuthorization({
     command: approvalCommand,
     allowlist: [],
     safeBins: new Set(),
@@ -510,7 +513,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       allowlistEval: baseAllowlistEval,
     },
   ];
-  const addCommandEval = (
+  const addCommandEval = async (
     entries: NodePolicyCommandEval[],
     command: string | null | undefined,
     cwd: string | undefined,
@@ -525,7 +528,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     entries.push({
       command: normalizedCommand,
       cwd,
-      allowlistEval: evaluateShellAllowlist({
+      allowlistEval: await evaluateShellAllowlistWithAuthorization({
         command: normalizedCommand,
         allowlist: [],
         safeBins: new Set(),
@@ -543,7 +546,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   const preparedShellPayload =
     extractPreparedNodeShellPayload(params.prepared.argv) ??
     (preparedCommand.ok ? preparedCommand.shellPayload : null);
-  addCommandEval(bindingCommandEvals, preparedShellPayload, approvalCwd);
+  await addCommandEval(bindingCommandEvals, preparedShellPayload, approvalCwd);
   const autoReviewBindingCommand = preparedShellPayload?.trim() || approvalCommand;
   const autoReviewBindingEval =
     bindingCommandEvals.find(
@@ -551,8 +554,8 @@ export async function analyzeNodeApprovalRequirement(params: {
         entry.command.trim() === autoReviewBindingCommand.trim() && entry.cwd === approvalCwd,
     )?.allowlistEval ?? baseAllowlistEval;
   const policyCommandEvals = [...bindingCommandEvals];
-  addCommandEval(policyCommandEvals, params.prepared.plan.commandPreview, approvalCwd);
-  addCommandEval(policyCommandEvals, params.request.command, params.request.workdir);
+  await addCommandEval(policyCommandEvals, params.prepared.plan.commandPreview, approvalCwd);
+  await addCommandEval(policyCommandEvals, params.request.command, params.request.workdir);
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
@@ -611,43 +614,45 @@ export async function analyzeNodeApprovalRequirement(params: {
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         // POSIX node transport wraps commands, so mirror node policy by
         // accepting either the prepared wrapper or its semantic inner command.
-        const allowlistEvals = bindingCommandEvals.map((entry) => {
-          const allowlistEval = evaluateShellAllowlist({
-            command: entry.command,
-            allowlist: resolved.allowlist,
-            safeBins: new Set(),
-            cwd: entry.cwd,
-            env: analysisEnv,
-            platform: params.target.platform,
-            trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-          });
-          return {
-            command: entry.command,
-            allowlistEligible:
-              !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
-            exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
+        const allowlistEvals = await Promise.all(
+          bindingCommandEvals.map(async (entry) => {
+            const allowlistEval = await evaluateShellAllowlistWithAuthorization({
+              command: entry.command,
               allowlist: resolved.allowlist,
-              commandText: entry.command,
-            }),
-            nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
-              allowlist: resolved.allowlist,
-              commandText: params.prepared.rawCommand,
-              segments: entry.allowlistEval.segments,
+              safeBins: new Set(),
               cwd: entry.cwd,
               env: analysisEnv,
               platform: params.target.platform,
-              strictInlineEval: params.request.strictInlineEval,
-              nodeCoverage: params.prepared.allowAlwaysCoverage,
-            }),
-            allowlistEval,
-            durableApprovalSatisfied: hasDurableExecApproval({
-              analysisOk: allowlistEval.analysisOk,
-              segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-              allowlist: resolved.allowlist,
-              commandText: entry.command,
-            }),
-          };
-        });
+              trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+            });
+            return {
+              command: entry.command,
+              allowlistEligible:
+                !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
+              exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
+                allowlist: resolved.allowlist,
+                commandText: entry.command,
+              }),
+              nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
+                allowlist: resolved.allowlist,
+                commandText: params.prepared.rawCommand,
+                segments: entry.allowlistEval.segments,
+                cwd: entry.cwd,
+                env: analysisEnv,
+                platform: params.target.platform,
+                strictInlineEval: params.request.strictInlineEval,
+                nodeCoverage: params.prepared.allowAlwaysCoverage,
+              }),
+              allowlistEval,
+              durableApprovalSatisfied: hasDurableExecApproval({
+                analysisOk: allowlistEval.analysisOk,
+                segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+                allowlist: resolved.allowlist,
+                commandText: entry.command,
+              }),
+            };
+          }),
+        );
         durableApprovalSatisfied = allowlistEvals.some(
           (entry) =>
             (entry.durableApprovalSatisfied &&
@@ -672,6 +677,17 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
+      segments: baseAllowlistEval.segments,
+      commandText: approvalCommand,
+      cwd: approvalCwd,
+      env: analysisEnv,
+      platform: params.target.platform,
+      strictInlineEval: params.request.strictInlineEval,
+      authorizationPlan: baseAllowlistEval.authorizationPlan,
+      runtimePayload: inlineEvalHit !== null,
+      preparedCoverage: params.prepared.allowAlwaysCoverage,
+    }),
     autoReviewArgv:
       autoReviewBindingEval.segments.length === 1 &&
       (autoReviewBindingEval.segments[0]?.raw === undefined ||

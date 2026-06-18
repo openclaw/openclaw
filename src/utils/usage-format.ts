@@ -22,7 +22,7 @@ export { formatTokenCount } from "./token-format.js";
  * token counts.  The tiers MUST be sorted in ascending `range[0]` order
  * with no gaps.
  */
-export type PricingTier = {
+type PricingTier = {
   input: number;
   output: number;
   cacheRead: number;
@@ -52,7 +52,7 @@ export type ModelCostConfig = {
   tieredPricing?: PricingTier[];
 };
 
-export type UsageTotals = {
+type UsageTotals = {
   input?: number;
   output?: number;
   cacheRead?: number;

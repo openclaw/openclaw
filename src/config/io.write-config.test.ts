@@ -9,7 +9,6 @@ import { clearLoadPluginMetadataSnapshotMemo } from "../plugins/plugin-metadata-
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { hashConfigIncludeRaw } from "./includes.js";
-import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
   createConfigIO,
   getRuntimeConfigSourceSnapshot,
@@ -22,6 +21,8 @@ import {
 } from "./io.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression

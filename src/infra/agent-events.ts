@@ -495,20 +495,6 @@ export function emitAgentItemEvent(params: {
   });
 }
 
-/** Emits a plan update event on the shared agent event bus. */
-export function emitAgentPlanEvent(params: {
-  runId: string;
-  data: AgentPlanEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "plan",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
 /** Emits an approval event on the shared agent event bus. */
 export function emitAgentApprovalEvent(params: {
   runId: string;
