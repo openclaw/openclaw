@@ -280,14 +280,15 @@ function pruneMissingTranscriptEntries(params: {
       params.onPruned?.(key, entry);
       continue;
     }
+    const sessionId = entry.sessionId;
     let transcriptPath: string | undefined;
     try {
-      transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+      transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
     } catch {
       // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
     }
     const transcriptExists = transcriptPath ? fs.existsSync(transcriptPath) : false;
-    if (transcriptExists && !transcriptHasNoMessageRecords(transcriptPath)) {
+    if (transcriptPath && transcriptExists && !transcriptHasNoMessageRecords(transcriptPath)) {
       continue;
     }
     const persistedSessionFile =
@@ -295,11 +296,7 @@ function pruneMissingTranscriptEntries(params: {
     if (transcriptPath && !transcriptExists && persistedSessionFile) {
       let canonicalTranscriptPath: string | undefined;
       try {
-        canonicalTranscriptPath = resolveSessionFilePath(
-          entry.sessionId,
-          undefined,
-          sessionPathOpts,
-        );
+        canonicalTranscriptPath = resolveSessionFilePath(sessionId, undefined, sessionPathOpts);
       } catch {
         // Invalid legacy session ids still belong to the missing-transcript prune path.
       }
