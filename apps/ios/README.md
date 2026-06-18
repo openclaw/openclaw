@@ -155,7 +155,6 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
    - `ai.openclawfoundation.app.share`
    - `ai.openclawfoundation.app.activitywidget`
    - `ai.openclawfoundation.app.watchkitapp`
-   - `ai.openclawfoundation.app.watchkitapp.extension`
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
