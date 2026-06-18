@@ -963,6 +963,31 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("main-test-case-name");
   });
 
+  it("preserves ordinary kebab-case text in generic fields to avoid data corruption", () => {
+    const input = {
+      text: "open the help-desk-team-page link and rerun kube-node-pool-spec",
+      content: "verify logs-from-unit-test output",
+      message: "check the abcd-efgh-ijkl-wxyz status",
+    };
+    const output = redactSecrets(input);
+    expect(output.text).toContain("help-desk-team-page");
+    expect(output.text).toContain("kube-node-pool-spec");
+    expect(output.content).toContain("logs-from-unit-test");
+    expect(output.message).toContain("abcd-efgh-ijkl-wxyz");
+  });
+
+  it("still masks app-specific password shapes in Apple-related fields", () => {
+    const input = {
+      apple: "password is abcd-efgh-ijkl-mnop here",
+      appSpecificPassword: "qrst-uvwx-yzab-cdef",
+      icloud: "use lmno-pqrs-tuvw-xyza to sign in",
+    };
+    const output = redactSecrets(input);
+    expect(output.apple).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(output.appSpecificPassword).not.toContain("qrst-uvwx-yzab-cdef");
+    expect(output.icloud).not.toContain("lmno-pqrs-tuvw-xyza");
+  });
+
   it("skips redaction when mode is off", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, {
@@ -1092,8 +1117,12 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("ya29.fake-access-token");
     expect(serialized).not.toContain("1//0fake-refresh-token");
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
-    expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
-    expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
+    // The password field value (line 1075) is still masked because "password"
+    // matches STRUCTURED_SECRET_FIELD_RE. App passwords in non-Apple generic
+    // fields ("text", "errorMessage") are no longer masked to protect
+    // ordinary kebab-case text identifiers from corruption.
+    expect(serialized).toContain("standalone app password abcd-efgh-ijkl-mnop");
+    expect(serialized).toContain("qrst-uvwx-yzab-cdef");
     expect(serialized).toContain("main-test-case-name");
   });
 
