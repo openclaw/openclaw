@@ -44,7 +44,7 @@ Link the issue, PR, discussion, maintainer request, or owner request that explai
 
 ## Real behavior proof (required for external PRs)
 
-- Behavior or issue addressed:
+- Behavior addressed:
 - Real environment tested:
 - Exact steps or command run after this patch:
 - Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):
