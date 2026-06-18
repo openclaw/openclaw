@@ -31,7 +31,6 @@ import {
   isJobEnabled,
   isJobDue,
   nextWakeAtMs,
-  recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import type {
@@ -479,12 +478,11 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
-    await ensureLoaded(state);
+    await ensureLoaded(state, { skipRecompute: true });
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
-    // Defensive: recompute all next-run times to ensure consistency
-    recomputeNextRuns(state);
+    recomputeNextRunsForMaintenance(state);
 
     await persist(state);
     armTimer(state);
@@ -581,7 +579,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 export async function remove(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
-    await ensureLoaded(state);
+    await ensureLoaded(state, { skipRecompute: true });
     const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
@@ -589,6 +587,9 @@ export async function remove(state: CronServiceState, id: string) {
     const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
+
+    recomputeNextRunsForMaintenance(state);
+
     await persist(state);
     armTimer(state);
     if (removed) {
