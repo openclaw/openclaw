@@ -326,6 +326,7 @@ async function stageMcpContentBlock(params: {
             type: "audio",
             data: block.data,
             mimeType: block.mimeType,
+            budget: params.budget,
           })
         : undefined;
     case "resource": {

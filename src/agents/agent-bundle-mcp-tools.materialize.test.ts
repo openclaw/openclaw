@@ -527,6 +527,67 @@ describe("createBundleMcpToolRuntime", () => {
     }
   });
 
+  it("caps MCP media attachment count per tool result", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: Array.from({ length: 10 }, () => ({
+            type: "image",
+            data: "AAAA",
+            mimeType: "image/png",
+          })),
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const media = extractToolResultMediaArtifact(result);
+
+    expect(result.content).toHaveLength(10);
+    expect(resolveOutboundAttachmentFromBufferMock).toHaveBeenCalledTimes(8);
+    expect(media?.mediaUrls).toEqual([
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-0.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-1.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-2.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-3.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-4.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-5.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-6.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-7.png",
+    ]);
+  });
+
+  it("caps aggregate MCP media bytes before decoding additional blocks", async () => {
+    const fiveMiBImageBase64 = Buffer.alloc(5 * 1024 * 1024).toString("base64");
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: Array.from({ length: 7 }, () => ({
+            type: "image",
+            data: fiveMiBImageBase64,
+            mimeType: "image/png",
+          })),
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+      const media = extractToolResultMediaArtifact(result);
+
+      expect(result.content).toHaveLength(7);
+      expect(resolveOutboundAttachmentFromBufferMock).toHaveBeenCalledTimes(6);
+      expect(media?.mediaUrls).toHaveLength(6);
+      expect(
+        bufferFromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64"),
+      ).toHaveLength(6);
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
+  });
+
   it("coerces a malformed image block (missing base64 source) to text", async () => {
     // A real-world poison case: image block with undefined data/media_type.
     const runtime = await materializeBundleMcpToolsForRun({
