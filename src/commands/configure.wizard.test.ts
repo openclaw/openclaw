@@ -465,6 +465,12 @@ describe("runConfigureWizard", () => {
       "fc-entered-key",
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
+    expect(mocks.setupSearch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      { preserveDisabledSearchState: false },
+    );
   });
 
   it("keeps web_search disabled when provider setup has no credential", async () => {

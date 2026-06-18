@@ -337,7 +337,9 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await setupSearch(workingConfig, runtime, prompter);
+        workingConfig = await setupSearch(workingConfig, runtime, prompter, {
+          preserveDisabledSearchState: false,
+        });
         const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
           ...selectedSearch,
