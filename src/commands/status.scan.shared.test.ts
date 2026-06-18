@@ -573,6 +573,66 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 
+  it("recognizes shipped memory tables before the manager migrates them", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-memory-"));
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE files (
+        path TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL
+      );
+      CREATE TABLE chunks (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'memory',
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
+    `);
+    db.close();
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => true),
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "openai",
+        files: 1,
+        chunks: 0,
+        vector: { enabled: true, available: true },
+        fts: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    try {
+      const result = await resolveSharedMemoryStatusSnapshot({
+        cfg: {},
+        agentStatus: { defaultId: "main" },
+        memoryPlugin: { enabled: true, slot: "memory-core" },
+        resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
+        getMemorySearchManager,
+        requireDefaultDatabasePath: () => databasePath,
+      });
+
+      expect(getMemorySearchManager).toHaveBeenCalledOnce();
+      expect(result?.files).toBe(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not initialize memory status for an agent database owned by another feature", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-memory-"));
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");

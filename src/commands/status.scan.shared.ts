@@ -56,34 +56,50 @@ function hasBuiltInMemoryState(databasePath: string): boolean {
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(databasePath, { readOnly: true });
-    const builtInMemoryTables = [
-      MEMORY_INDEX_META_TABLE,
-      MEMORY_INDEX_SOURCES_TABLE,
-      MEMORY_INDEX_CHUNKS_TABLE,
+    const builtInMemoryTableSets = [
+      {
+        meta: MEMORY_INDEX_META_TABLE,
+        sources: MEMORY_INDEX_SOURCES_TABLE,
+        chunks: MEMORY_INDEX_CHUNKS_TABLE,
+      },
+      {
+        meta: "meta",
+        sources: "files",
+        chunks: "chunks",
+      },
     ] as const;
+    const builtInMemoryTables = builtInMemoryTableSets.flatMap(({ meta, sources, chunks }) => [
+      meta,
+      sources,
+      chunks,
+    ]);
     const tableNames = new Set(
       (
         db
-          .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?)`)
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${builtInMemoryTables.map(() => "?").join(", ")})`,
+          )
           .all(...builtInMemoryTables) as Array<{ name?: unknown }>
       )
         .map((row) => row.name)
         .filter((name): name is string => typeof name === "string"),
     );
-    if (
-      tableNames.has(MEMORY_INDEX_META_TABLE) &&
-      db
-        .prepare(`SELECT 1 AS ok FROM ${MEMORY_INDEX_META_TABLE} WHERE key = ? LIMIT 1`)
-        .get(MEMORY_INDEX_META_KEY)
-    ) {
-      return true;
-    }
-    for (const tableName of [MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_CHUNKS_TABLE] as const) {
+    for (const tables of builtInMemoryTableSets) {
       if (
-        tableNames.has(tableName) &&
-        db.prepare(`SELECT 1 AS ok FROM ${tableName} LIMIT 1`).get()
+        tableNames.has(tables.meta) &&
+        db
+          .prepare(`SELECT 1 AS ok FROM ${tables.meta} WHERE key = ? LIMIT 1`)
+          .get(MEMORY_INDEX_META_KEY)
       ) {
         return true;
+      }
+      for (const tableName of [tables.sources, tables.chunks]) {
+        if (
+          tableNames.has(tableName) &&
+          db.prepare(`SELECT 1 AS ok FROM ${tableName} LIMIT 1`).get()
+        ) {
+          return true;
+        }
       }
     }
     return false;
