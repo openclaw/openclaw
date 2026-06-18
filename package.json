@@ -57,6 +57,8 @@
     "!dist/plugin-sdk/provider-test-contracts.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
+    "!dist/plugin-sdk/sqlite-runtime-testing.js",
+    "!dist/plugin-sdk/sqlite-runtime-testing.d.ts",
     "!dist/plugin-sdk/ssrf-runtime-internal.js",
     "!dist/plugin-sdk/ssrf-runtime-internal.d.ts",
     "!dist/plugin-sdk/test-env.js",
@@ -972,6 +974,10 @@
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/sqlite-runtime": {
+      "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",
+      "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
     "./plugin-sdk/session-transcript-hit": {
       "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
