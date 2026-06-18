@@ -206,12 +206,10 @@ describe("convertResponsesTools", () => {
         type: "function",
         name: "lookup",
         description: "Lookup",
-        strict: true,
+        strict: false,
         parameters: {
           type: "object",
           properties: {},
-          required: [],
-          additionalProperties: false,
         },
       },
     ]);

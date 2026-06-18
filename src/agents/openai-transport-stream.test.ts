@@ -5290,7 +5290,7 @@ describe("openai transport stream", () => {
       tool_choice?: unknown;
     };
 
-    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: true })]);
+    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: false })]);
     expect(params.tool_choice).toEqual({ type: "function", name: "lookup" });
   });
 
