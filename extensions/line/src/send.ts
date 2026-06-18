@@ -193,7 +193,7 @@ async function withLineRetry<T>(fn: () => Promise<T>, context: string): Promise<
   for (let attempt = 0; attempt <= LINE_RETRY_MAX_ATTEMPTS; attempt++) {
     try {
       return await fn();
-    } catch (err) {
+    } catch (err: unknown) {
       lastErr = err;
       if (attempt >= LINE_RETRY_MAX_ATTEMPTS) {
         break;
@@ -202,12 +202,14 @@ async function withLineRetry<T>(fn: () => Promise<T>, context: string): Promise<
       if (status !== 429) {
         throw err;
       }
-      const delay = Math.min(LINE_RETRY_BASE_DELAY_MS * Math.pow(2, attempt), 16000);
+      const delay = Math.min(LINE_RETRY_BASE_DELAY_MS * 2 ** attempt, 16000);
       logVerbose(
         `line: ${context} rate-limited (429), retrying in ${delay}ms` +
           ` (attempt ${attempt + 1}/${LINE_RETRY_MAX_ATTEMPTS})`,
       );
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delay);
+      });
     }
   }
   throw lastErr;
@@ -225,7 +227,7 @@ async function checkPushQuota(client: messagingApi.MessagingApiClient): Promise<
       return quota.totalUsage;
     }
     return null; // paid plan — no limit to track
-  } catch (err) {
+  } catch (err: unknown) {
     logVerbose(`line: push quota check failed (non-fatal): ${String(err)}`);
     return null;
   }

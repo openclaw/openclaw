@@ -502,10 +502,10 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // may exceed it.  Fires-and-forgets — failures are non-fatal.
   // openclaw/openclaw#86012
   if (event.replyToken) {
-    const { userId, groupId, roomId } = getLineSourceInfo(event.source);
-    const loadingTarget = groupId ?? roomId ?? userId ?? "";
-    if (loadingTarget) {
-      showLoadingAnimation(loadingTarget, {
+    const sourceInfo = getLineSourceInfo(event.source);
+    const target = sourceInfo.groupId ?? sourceInfo.roomId ?? sourceInfo.userId ?? "";
+    if (target) {
+      showLoadingAnimation(target, {
         cfg,
         accountId: account.accountId,
         channelAccessToken: account.channelAccessToken,
