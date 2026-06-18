@@ -629,6 +629,55 @@ describe("bot-native-command-menu", () => {
     expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({ language_code: "ko" });
   });
 
+  it("cached-hash verifier ignores retry-omitted localized variants", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
+      .mockResolvedValue(undefined);
+    const getMyCommands = vi.fn(
+      async (opts?: { scope?: { type?: string }; language_code?: string }) =>
+        opts?.language_code === "ko" ? [] : [{ command: "cmd_0", description: "Command 0" }],
+    );
+    const accountId = `test-retry-omitted-localized-${Date.now()}`;
+    const commands = Array.from({ length: 100 }, (_, i) => ({
+      command: `cmd_${i}`,
+      description: `Command ${i}`,
+      ...(i >= 80 ? { descriptionLocalizations: { ko: `명령 ${i}` } } : undefined),
+    }));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(3);
+    });
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => {
+      expect(getMyCommands).toHaveBeenCalledTimes(2);
+    });
+    expect(getMyCommands).not.toHaveBeenCalledWith({ language_code: "ko" });
+    expect(getMyCommands).not.toHaveBeenCalledWith({
+      scope: { type: "all_group_chats" },
+      language_code: "ko",
+    });
+    expect(deleteMyCommands).toHaveBeenCalledTimes(2);
+    expect(setMyCommands).toHaveBeenCalledTimes(3);
+  });
+
   it.each([
     { label: "description envelope", error: { description: "BOT_COMMANDS_TOO_MUCH" } },
     { label: "message envelope", error: { message: "BOT_COMMANDS_TOO_MUCH" } },
