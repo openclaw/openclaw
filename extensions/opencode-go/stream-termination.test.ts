@@ -202,6 +202,75 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
+  it("keeps the first-event window after an openai-completions synthetic start", async () => {
+    const { stream: baseStream, controller } = createFakeBaseStream();
+    let abortCalled = false;
+
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) {
+        options.signal.addEventListener("abort", () => {
+          abortCalled = true;
+        });
+      }
+      return baseStream;
+    });
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+      firstEventTimeoutMs: 10_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const received: AnyEvent[] = [];
+    const consumer = (async () => {
+      for await (const event of downstream) {
+        received.push(event);
+      }
+    })();
+
+    const partial = {
+      role: "assistant",
+      content: [],
+      stopReason: undefined,
+    };
+    controller.emit({ type: "start", partial } as any);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(abortCalled).toBe(false);
+
+    controller.emit({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "hello",
+      partial: {
+        ...partial,
+        content: [{ type: "text", text: "hello" }],
+      },
+    } as any);
+    controller.emit({
+      type: "done",
+      reason: "stop",
+      message: {
+        ...partial,
+        content: [{ type: "text", text: "hello" }],
+        stopReason: "stop",
+      },
+    } as any);
+    await consumer;
+
+    expect(abortCalled).toBe(false);
+    expect(received.some((event) => event.type === "text_delta")).toBe(true);
+    expect(received.some((event) => event.type === "done")).toBe(true);
+  });
+
   it("honors explicit opencode-go provider request timeout above the wrapper idle default", async () => {
     const { stream: baseStream, controller } = createFakeBaseStream();
     let abortCalled = false;

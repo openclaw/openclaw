@@ -196,7 +196,7 @@ function synthesizeMinimalAssistantMessage(
  * Behavior:
  * - Provider-scoped: only applies when `model.provider === options.provider`.
  * - Idle-based: the timer covers stream creation, first event delivery, and
- *   every gap between forwarded events; if no event arrives within
+ *   every gap after provider progress begins; if no event arrives within
  *   `idleTimeoutMs`, the wrapper calls `controller.abort()` on the AbortSignal
  *   injected into the underlying call (so the OpenAI SDK request is genuinely
  *   interrupted, not just the iterator) and pushes a terminal `error` event
@@ -205,8 +205,7 @@ function synthesizeMinimalAssistantMessage(
  *   wrapper forwards the event, clears all timers, and ends the stream.
  *
  * The wrapper never shortens the natural end of a normal completion, because
- * every event (including delayed usage-only deltas) refreshes the idle timer
- * and a terminal event cancels it entirely.
+ * provider progress refreshes the idle timer and a terminal event cancels it entirely.
  */
 export function createOpencodeGoStalledStreamWrapper(
   underlying: ProviderStreamFn,
@@ -349,7 +348,9 @@ export function createOpencodeGoStalledStreamWrapper(
           }
           trackPartial(event);
           output.push(event);
-          armIdleTimer();
+          if (event.type !== "start") {
+            armIdleTimer();
+          }
         }
       } catch (error) {
         if (!settled) {
