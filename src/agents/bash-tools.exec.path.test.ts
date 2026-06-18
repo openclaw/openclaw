@@ -232,8 +232,10 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(result.details?.status).toBe("failed");
-    expect(value).toContain(`workdir "${missingWorkdir}" is unavailable`);
+    expect(value).toContain(`workdir "${missingWorkdir}" not found`);
     expect(value).toContain("command was not executed");
+    expect(value).toContain("workdir is treated as a literal path");
+    expect(value).toContain('shell expansions such as "~" are not applied');
     expect(value).not.toMatch(/^ok/);
   });
 

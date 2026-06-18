@@ -193,7 +193,10 @@ export function resolveExistingWorkdir(workdir: string): string | null {
 }
 
 export function formatUnavailableWorkdirFailure(workdir: string) {
-  return `workdir "${workdir}" is unavailable; command was not executed.`;
+  return [
+    `workdir "${workdir}" not found: command was not executed.`,
+    'workdir is treated as a literal path; shell expansions such as "~" are not applied. Use an existing path or omit workdir.',
+  ].join(" ");
 }
 
 /** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
