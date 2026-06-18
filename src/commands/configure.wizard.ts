@@ -359,7 +359,7 @@ async function promptWebToolsConfig(
   );
 
   const nextFetch = {
-    ...existingFetch,
+    ...workingConfig.tools?.web?.fetch,
     enabled: enableFetch,
   };
 
