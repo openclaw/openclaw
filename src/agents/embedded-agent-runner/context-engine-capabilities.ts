@@ -28,6 +28,22 @@ export function resolveContextEngineCapabilities(
     agentId: params.agentId,
   });
   const contextEnginePluginId = normalizeOptionalString(params.contextEnginePluginId);
+  // Resolve per-plugin allowModelOverride / allowAgentIdOverride from the
+  // plugin's config entry so that LCM compaction and other context-engine
+  // consumers honor the plugin's configured LLM authority.  Default to false
+  // when no plugin config is found or the field is unset. (#94289)
+  const pluginLlmConfig = contextEnginePluginId
+    ? params.config?.plugins?.entries?.[contextEnginePluginId]?.llm
+    : undefined;
+  const pluginAllowModelOverride =
+    pluginLlmConfig && typeof pluginLlmConfig === "object" && !Array.isArray(pluginLlmConfig)
+      ? (pluginLlmConfig as Record<string, unknown>).allowModelOverride === true
+      : false;
+  const pluginAllowAgentIdOverride =
+    pluginLlmConfig && typeof pluginLlmConfig === "object" && !Array.isArray(pluginLlmConfig)
+      ? (pluginLlmConfig as Record<string, unknown>).allowAgentIdOverride === true
+      : false;
+
   return {
     llm: {
       complete: async (request) => {
@@ -41,8 +57,8 @@ export function resolveContextEngineCapabilities(
             ...(agentId ? { agentId } : {}),
             ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
             ...(contextEnginePluginId ? { pluginIdForPolicy: contextEnginePluginId } : {}),
-            allowAgentIdOverride: false,
-            allowModelOverride: false,
+            allowAgentIdOverride: pluginAllowAgentIdOverride,
+            allowModelOverride: pluginAllowModelOverride,
             allowComplete: true,
           },
         }).complete(request);
