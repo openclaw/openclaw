@@ -37,6 +37,18 @@ Message ID: 6655442331193344`),
     });
   });
 
+  it("detects first-person SMS receipts with status and message id", () => {
+    expect(
+      detectExternalActionReceiptClaim(
+        "I sent the SMS. Status: accepted/queued. Message ID: 4797682962735104",
+      ),
+    ).toMatchObject({
+      actionFamily: "sms",
+      status: "accepted/queued",
+      providerId: "4797682962735104",
+    });
+  });
+
   it("detects sent-to phone receipts without a colon", () => {
     expect(detectExternalActionReceiptClaim("SMS sent to +15550009999")).toMatchObject({
       actionFamily: "sms",

@@ -26,6 +26,7 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { guardExternalActionReceiptText } from "./external-action-receipt-guard.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
@@ -860,6 +861,12 @@ describe("handleToolExecutionEnd external action evidence", () => {
         recipient: "+15551234567",
       }),
     ]);
+    expect(
+      guardExternalActionReceiptText({
+        text: "I sent the SMS. Status: accepted/queued. Message ID: SM-default",
+        evidence: ctx.state.externalActionEvidence,
+      }),
+    ).toEqual({ allowed: true });
   });
 });
 

@@ -24,6 +24,25 @@ function phoneComparablesMatch(left: string | undefined, right: string | undefin
   );
 }
 
+function statusComparablesMatch(left: string | undefined, right: string | undefined): boolean {
+  const leftParts = new Set(
+    left
+      ?.toLowerCase()
+      .split(/[/\s]+/u)
+      .filter(Boolean),
+  );
+  const rightParts = new Set(
+    right
+      ?.toLowerCase()
+      .split(/[/\s]+/u)
+      .filter(Boolean),
+  );
+  if (leftParts.size === 0 || rightParts.size === 0) {
+    return left === right;
+  }
+  return [...leftParts].some((part) => rightParts.has(part));
+}
+
 function evidenceMatchesClaim(
   evidence: ExternalActionEvidence,
   claim: ExternalActionReceiptClaim,
@@ -47,7 +66,7 @@ function evidenceMatchesClaim(
   } else if (claim.sender) {
     matchedClaimDiscriminator = true;
   }
-  if (claim.status && evidence.status !== claim.status) {
+  if (claim.status && !statusComparablesMatch(evidence.status, claim.status)) {
     return false;
   } else if (claim.status) {
     matchedClaimDiscriminator = true;

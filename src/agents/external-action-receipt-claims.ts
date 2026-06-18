@@ -9,9 +9,9 @@ export type ExternalActionReceiptClaim = {
 };
 
 const SMS_PREFILTER_RE =
-  /\b(?:sms|text message)\b[\s\S]{0,240}\b(?:sent|queued|delivered|accepted\/queued|message id|status)\b|\bSent to\b[\s\S]{0,240}\b(?:To:|Status:|Message ID:)/iu;
+  /\b(?:sms|text message)\b[\s\S]{0,240}\b(?:sent|queued|delivered|accepted\/queued|message id|status)\b|\b(?:sent|queued|delivered)\b[\s\S]{0,80}\b(?:sms|text message)\b[\s\S]{0,240}\b(?:message id|status)\b|\bSent to\b[\s\S]{0,240}\b(?:To:|Status:|Message ID:)/iu;
 const SMS_DELIVERY_ASSERTION_RE =
-  /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b)/giu;
+  /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:the\s+)?(?:sms|text message)\b)/giu;
 const UNCERTAIN_OR_NEGATED_RE =
   /\b(?:not sent|did not send|didn't send|no evidence|not verified|would not trust|do not see evidence|draft|can send|could send|ready to send)\b/iu;
 const QUOTED_DIAGNOSTIC_RE = /^\s*(?:>|["']).{0,120}\b(?:Sent to|Status:|Message ID:)/iu;
@@ -41,7 +41,7 @@ function detectSingleExternalActionReceiptClaim(text: string): ExternalActionRec
   const recipient = captureFirst(trimmed, /\b(?:Sent to|To)\s*:?\s*(\+?\d[\d\s().-]{6,})/iu);
   const sender = captureFirst(trimmed, /\bFrom:\s*(\+?\d[\d\s().-]{6,})/iu);
   const hasSmsDeliveryMarker =
-    /\b(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b/iu.test(
+    /\b(?:(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)|(?:sent|queued|delivered)\s+(?:the\s+)?(?:sms|text message))\b/iu.test(
       trimmed,
     );
   if (!recipient && !hasSmsDeliveryMarker) {

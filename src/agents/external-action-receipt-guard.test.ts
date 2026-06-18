@@ -95,6 +95,22 @@ Message ID: 4797682962735104`;
     ).toEqual({ allowed: true });
   });
 
+  it("allows built-in message evidence with queued status for accepted/queued receipt text", () => {
+    expect(
+      guardExternalActionReceiptText({
+        text: "I sent the SMS. Status: accepted/queued. Message ID: SM-default",
+        evidence: [
+          {
+            actionFamily: "sms",
+            toolName: "message",
+            providerId: "SM-default",
+            status: "queued",
+          },
+        ],
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it("blocks when one of multiple receipt claims lacks matching evidence", () => {
     expect(
       guardExternalActionReceiptText({

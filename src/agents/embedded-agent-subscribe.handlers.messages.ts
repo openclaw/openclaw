@@ -168,7 +168,7 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
 }
 
 function hasPotentialSmsReceiptAssertion(text: string): boolean {
-  return /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered)\b)/iu.test(
+  return /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:the\s+)?(?:sms|text message)\b)/iu.test(
     text,
   );
 }
