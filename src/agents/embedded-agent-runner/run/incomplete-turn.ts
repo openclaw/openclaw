@@ -285,7 +285,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     hasTerminalOutput,
-    lastAssistant: params.attempt.lastAssistant,
+    lastAssistant: assistant,
   });
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
