@@ -195,4 +195,27 @@ describe("cursorKeyMode", () => {
     session.cursorKeyMode = "normal";
     expect(session.cursorKeyMode).toBe("normal");
   });
+
+  it("tracks outputText separately from aggregated (stdout only)", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 10_000,
+      pendingMaxOutputChars: 10_000,
+      backgrounded: false,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "Hello user\n");
+    appendOutput(session, "stderr", "Warning: something went wrong\n");
+    appendOutput(session, "stdout", "More output\n");
+
+    // aggregated captures everything
+    expect(session.aggregated).toContain("Hello user");
+    expect(session.aggregated).toContain("Warning");
+    expect(session.aggregated).toContain("More output");
+
+    // outputText captures stdout only (no stderr)
+    expect(session.outputText).toContain("Hello user");
+    expect(session.outputText).toContain("More output");
+    expect(session.outputText).not.toContain("Warning");
+  });
 });
