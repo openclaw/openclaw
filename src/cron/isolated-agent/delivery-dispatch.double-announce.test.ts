@@ -1727,18 +1727,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       to: "telegram:123456",
     });
     const deliveryError = new Error("second payload failed");
-    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(
-      async (deliveryParams: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
-        deliveryParams.onPayloadDeliveryOutcome?.({
-          index: 1,
-          status: "failed",
-          error: deliveryError,
-          sentBeforeError: true,
-          stage: "platform_send",
-        });
-        return [{ channel: "telegram", messageId: "tg-first" }] as never;
-      },
-    );
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error: deliveryError,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      return [{ channel: "telegram", messageId: "tg-first" }] as never;
+    });
 
     const params = makeBaseParams({
       synthesizedText: undefined,
