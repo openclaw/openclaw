@@ -19,12 +19,33 @@ export type ReadOnlyWorkspaceSkillMount = {
   containerPath: string;
 };
 
+/**
+ * Translates a container-internal path to the equivalent host path for Docker
+ * bind mounts. When the gateway runs inside a container (DooD), the Docker
+ * daemon resolves mount source paths on the host filesystem, not inside the
+ * container. Set OPENCLAWL_HOST_STATE_DIR to the host-side equivalent of
+ * OPENCLAWL_STATE_DIR to allow correct bind resolution.
+ *
+ * Example: internal /home/node/.openclaw/skills → /DATA/openclaw/skills
+ * when OPENCLAWL_STATE_DIR=/home/node/.openclaw and
+ * OPENCLAWL_HOST_STATE_DIR=/DATA/openclaw.
+ */
+function translateHostPathForDocker(internalPath: string): string {
+  const stateDir = process.env.OPENCLAWL_STATE_DIR;
+  const hostStateDir = process.env.OPENCLAWL_HOST_STATE_DIR;
+  if (stateDir && hostStateDir && internalPath.startsWith(stateDir)) {
+    return internalPath.replace(stateDir, hostStateDir);
+  }
+  return internalPath;
+}
+
 function formatManagedWorkspaceBind(params: {
   hostPath: string;
   containerPath: string;
   readOnly: boolean;
 }): string {
-  return `${params.hostPath}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
+  const hostPath = translateHostPathForDocker(params.hostPath);
+  return `${hostPath}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
 }
 
 function containerJoin(root: string, ...parts: string[]): string {
@@ -74,7 +95,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
   const materializedSkillsWorkspaceDir =
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
+    params.skillsWorkspaceDir ??
+    resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
