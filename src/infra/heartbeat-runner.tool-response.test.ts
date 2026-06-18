@@ -310,6 +310,27 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it("keeps plain text replies private when heartbeat response tool is not invoked in message-tool mode", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue({ text: "Nothing to report HEARTBEAT_OK" });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("rewrites foreground generic runner failure payloads before heartbeat delivery", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });

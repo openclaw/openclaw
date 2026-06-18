@@ -32,6 +32,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
@@ -1829,6 +1830,9 @@ export async function runHeartbeatOnce(opts: {
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    const replyPayloadDeliverableDespiteSuppression =
+      replyPayload != null &&
+      getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression === true;
     if (
       !heartbeatToolResponse &&
       (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
@@ -1934,8 +1938,14 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = replacement.text;
       normalized.shouldSkip = false;
     }
+    const suppressMainBecauseToolNotUsed =
+      usesHeartbeatResponseTool &&
+      !heartbeatToolResponse &&
+      !replyPayloadDeliverableDespiteSuppression;
     const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
+      (normalized.shouldSkip || suppressMainBecauseToolNotUsed) &&
+      !normalized.hasMedia &&
+      !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
