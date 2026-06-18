@@ -10,7 +10,11 @@
  */
 
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { formatQQBotNetworkError } from "../utils/setup-guidance.js";
@@ -19,13 +23,6 @@ const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const FILE_UPLOAD_TIMEOUT_MS = 120_000;
 const QQBOT_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-
-function resolveQqbotApiSsrfPolicy(url: string): SsrFPolicy {
-  return {
-    hostnameAllowlist: [new URL(url).hostname],
-    allowRfc2544BenchmarkRange: true,
-  };
-}
 
 interface RequestOptions {
   /** Request timeout override in milliseconds. */
@@ -58,12 +55,14 @@ export class ApiClient {
   private readonly fileUploadTimeoutMs: number;
   private readonly logger?: EngineLogger;
   private readonly resolveUserAgent: () => string;
+  private readonly ssrfPolicy?: SsrFPolicy;
 
   constructor(config: ApiClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     this.defaultTimeoutMs = config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fileUploadTimeoutMs = config.fileUploadTimeoutMs ?? FILE_UPLOAD_TIMEOUT_MS;
     this.logger = config.logger;
+    this.ssrfPolicy = ssrfPolicyFromHttpBaseUrlAllowedHostname(this.baseUrl);
     const ua = config.userAgent ?? "QQBotPlugin/unknown";
     this.resolveUserAgent = typeof ua === "function" ? ua : () => ua;
   }
@@ -136,8 +135,10 @@ export class ApiClient {
       const guarded = await fetchWithSsrFGuard({
         url,
         init: fetchInit,
+        timeoutMs: timeout,
+        policy: this.ssrfPolicy,
+        capture: false,
         auditContext: "qqbot-api",
-        policy: resolveQqbotApiSsrfPolicy(url),
       });
       res = guarded.response;
       release = guarded.release;
