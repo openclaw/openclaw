@@ -4919,7 +4919,7 @@ export async function runEmbeddedAttempt(
         // Only trust snapshot if compaction wasn't running before or after capture
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
-        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
+        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 300_000;
 
         try {
           // Flush buffered block replies before waiting for compaction so the
