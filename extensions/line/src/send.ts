@@ -175,13 +175,17 @@ function logLineHttpError(err: unknown, context: string): void {
   if (!err || typeof err !== "object") {
     return;
   }
-  const { status, statusText, body } = err as {
+  const { status, statusText, body, statusCode, statusMessage } = err as {
     status?: number;
     statusText?: string;
     body?: string;
+    statusCode?: number;
+    statusMessage?: string;
   };
   if (typeof body === "string") {
-    const summary = status ? `${status} ${statusText ?? ""}`.trim() : "unknown status";
+    const code = status ?? statusCode;
+    const text = statusText ?? statusMessage ?? "";
+    const summary = code ? `${code} ${text}`.trim() : "unknown status";
     logVerbose(`line: ${context} failed (${summary}): ${body}`);
   }
 }

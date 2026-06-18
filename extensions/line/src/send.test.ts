@@ -174,16 +174,19 @@ describe("LINE send helpers", () => {
       { cfg: LINE_TEST_CFG, verbose: true },
     );
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U123",
-      messages: [
-        {
-          type: "image",
-          originalContentUrl: "https://example.com/original.jpg",
-          previewImageUrl: "https://example.com/original.jpg",
-        },
-      ],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "U123",
+        messages: [
+          {
+            type: "image",
+            originalContentUrl: "https://example.com/original.jpg",
+            previewImageUrl: "https://example.com/original.jpg",
+          },
+        ],
+      },
+      expect.any(String),
+    );
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
       channel: "line",
       accountId: "default",
@@ -296,21 +299,24 @@ describe("LINE send helpers", () => {
       trackingId: "track-1",
     });
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-          trackingId: "track-1",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "U100",
+        messages: [
+          {
+            type: "video",
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.jpg",
+            trackingId: "track-1",
+          },
+          {
+            type: "text",
+            text: "Video",
+          },
+        ],
+      },
+      expect.any(String),
+    );
   });
 
   it("throws when video preview URL is missing", async () => {
@@ -347,20 +353,23 @@ describe("LINE send helpers", () => {
       trackingId: "track-group",
     });
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "C100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "C100",
+        messages: [
+          {
+            type: "video",
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.jpg",
+          },
+          {
+            type: "text",
+            text: "Video",
+          },
+        ],
+      },
+      expect.any(String),
+    );
   });
 
   it("throws when push messages are empty", async () => {
@@ -370,10 +379,10 @@ describe("LINE send helpers", () => {
   });
 
   it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
-    // 33-char value with lowercase leading char — what an upstream session-key
+    // 33-char value with lowercase leading char ??what an upstream session-key
     // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
     // anyway; throwing locally keeps the failure permanent so delivery-recovery
-    // moves the entry to failed/ immediately instead of silently retrying 5×.
+    // moves the entry to failed/ immediately instead of silently retrying 5?.
     await expect(
       sendModule.pushMessagesLine(
         "cabcdef0123456789abcdef0123456789",
@@ -390,19 +399,22 @@ describe("LINE send helpers", () => {
       [{ type: "text", text: "hello" }],
       { cfg: LINE_TEST_CFG },
     );
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "Cabcdef0123456789abcdef0123456789",
-      messages: [{ type: "text", text: "hello" }],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "Cabcdef0123456789abcdef0123456789",
+        messages: [{ type: "text", text: "hello" }],
+      },
+      expect.any(String),
+    );
   });
 
   it("logs HTTP body when push fails", async () => {
     const err = new Error("LINE push failed") as Error & {
-      status: number;
+      statusCode: number;
       statusText: string;
       body: string;
     };
-    err.status = 400;
+    err.statusCode = 400;
     err.statusText = "Bad Request";
     err.body = "invalid flex payload";
     pushMessageMock.mockRejectedValueOnce(err);
