@@ -4672,7 +4672,13 @@ describe("capDirectTextContent", () => {
 
 describe("active wake failure fallback", () => {
   it("tries direct text delivery when active wake fails with no_active_run", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => ({
+      channel: "telegram",
+      to: "user:123",
+      via: "direct" as const,
+      mediaUrl: null,
+      result: { messageId: "msg-wake-fail" },
+    }));
     const queueEmbeddedAgentMessageWithOutcome = vi.fn(
       async () =>
         ({
@@ -4706,14 +4712,13 @@ describe("active wake failure fallback", () => {
     ];
 
     const result = await deliverSubagentAnnouncement({
-      sessionId: "requester-session-wake-fail",
-      isActive: false,
-      expectsCompletionMessage: true,
-      directIdempotencyKey: "wake-fail-test",
-      triggerMessage: "child done",
-      steerMessage: "child done",
       requesterSessionKey: "agent:main:telegram:123456789",
       targetRequesterSessionKey: "agent:main:telegram:123456789",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "wake-fail-test",
       requesterOrigin: {
         channel: "telegram",
         to: "user:123",
@@ -4754,7 +4759,13 @@ describe("active wake failure fallback", () => {
   });
 
   it("tries direct text delivery when session is locked", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => ({
+      channel: "telegram",
+      to: "user:123",
+      via: "direct" as const,
+      mediaUrl: null,
+      result: { messageId: "msg-locked" },
+    }));
     // Use no_active_run instead of compacting to avoid long retry loops in tests
     const queueEmbeddedAgentMessageWithOutcome = vi.fn(
       async () =>
@@ -4794,14 +4805,13 @@ describe("active wake failure fallback", () => {
     ];
 
     await deliverSubagentAnnouncement({
-      sessionId: "requester-session-locked",
-      isActive: false,
-      expectsCompletionMessage: true,
-      directIdempotencyKey: "locked-test",
-      triggerMessage: "child done",
-      steerMessage: "child done",
       requesterSessionKey: "agent:main:telegram:123456789",
       targetRequesterSessionKey: "agent:main:telegram:123456789",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "locked-test",
       requesterOrigin: {
         channel: "telegram",
         to: "user:123",
@@ -4836,7 +4846,13 @@ describe("active wake failure fallback", () => {
   });
 
   it("caps long text output in direct delivery", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async () => ({
+      channel: "telegram",
+      to: "user:123",
+      via: "direct" as const,
+      mediaUrl: null,
+      result: { messageId: "msg-long" },
+    }));
     const queueEmbeddedAgentMessageWithOutcome = vi.fn(
       async () =>
         ({
@@ -4871,14 +4887,13 @@ describe("active wake failure fallback", () => {
     ];
 
     await deliverSubagentAnnouncement({
-      sessionId: "requester-session-long",
-      isActive: false,
-      expectsCompletionMessage: true,
-      directIdempotencyKey: "long-output-test",
-      triggerMessage: "child done",
-      steerMessage: "child done",
       requesterSessionKey: "agent:main:telegram:123456789",
       targetRequesterSessionKey: "agent:main:telegram:123456789",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "long-output-test",
       requesterOrigin: {
         channel: "telegram",
         to: "user:123",
@@ -4943,13 +4958,29 @@ describe("active wake failure fallback", () => {
     ];
 
     const result = await deliverSubagentAnnouncement({
-      sessionId: "requester-session-fail",
-      isActive: false,
-      expectsCompletionMessage: true,
-      directIdempotencyKey: "fail-test",
       requesterSessionKey: "agent:main:telegram:123456789",
       targetRequesterSessionKey: "agent:main:telegram:123456789",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "fail-test",
       requesterOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      requesterSessionOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      directOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      completionDirectOrigin: {
         channel: "telegram",
         to: "user:123",
         accountId: "default",
