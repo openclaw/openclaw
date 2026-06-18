@@ -938,9 +938,17 @@ export function convertMessages(
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    let systemPrompt: string;
+    if (model.compat?.disableBoundaryAwareCache) {
+      // Prefix-matching cache providers (DeepSeek) break when dynamic content
+      // changes the system prompt tail. Keep only the stable prefix (#94518).
+      const split = splitSystemPromptCacheBoundary(context.systemPrompt);
+      systemPrompt = split?.stablePrefix ?? context.systemPrompt;
+    } else if (options.preserveSystemPromptCacheBoundary) {
+      systemPrompt = context.systemPrompt;
+    } else {
+      systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+    }
     params.push({
       role,
       content: sanitizeSurrogates(systemPrompt),

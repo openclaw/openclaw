@@ -6030,6 +6030,32 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
+  it("keeps only stable prefix in OpenAI completions system prompt when disableBoundaryAwareCache is set", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v4",
+        name: "DeepSeek V4",
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+        compat: { disableBoundaryAwareCache: true },
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ content?: string }> };
+
+    expect(params.messages?.[0]?.content).toBe("Stable prefix");
+  });
+
   it("uses shared stream reasoning as OpenAI completions effort", () => {
     const params = buildOpenAICompletionsParams(
       {

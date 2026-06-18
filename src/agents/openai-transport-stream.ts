@@ -4145,10 +4145,13 @@ export function buildOpenAICompletionsParams(
 ) {
   const compat = getCompat(model);
   const compatDetection = detectOpenAICompletionsCompat(model);
+  const disableBoundaryAwareCache = model.compat?.disableBoundaryAwareCache === true;
   const completionsContext = context.systemPrompt
     ? {
         ...context,
-        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+        systemPrompt: disableBoundaryAwareCache
+          ? context.systemPrompt
+          : stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
   let messages = convertMessages(model as never, completionsContext, compat as never);

@@ -93,6 +93,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     supportsTools?: boolean;
     /** Whether provider accepts prompt-cache/session affinity keys. */
     supportsPromptCacheKey?: boolean;
+    /** Disable boundary-aware system prompt cache splitting for prefix-matching cache models. */
+    disableBoundaryAwareCache?: boolean;
     /** Whether all message parts must be coerced to plain strings. */
     requiresStringContent?: boolean;
     /** Whether unknown message payload keys must be stripped before requests. */
