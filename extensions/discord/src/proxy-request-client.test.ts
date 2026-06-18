@@ -1,3 +1,4 @@
+// Discord tests cover proxy request client plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAbortableFetchMock,
@@ -84,6 +85,25 @@ describe("createDiscordRequestClient", () => {
       throw new Error("Expected proxied fetch abort signal");
     }
     expect(abortable.receivedSignal.aborted).toBe(true);
+  });
+
+  it("lets a caller signal cancel active proxied fetches", async () => {
+    const abortable = createAbortableFetchMock();
+    const controller = new AbortController();
+    const client = createDiscordRequestClient("Bot test-token", {
+      fetch: abortable.fetch as never,
+      queueRequests: false,
+      signal: controller.signal,
+      timeout: 5_000,
+    });
+
+    const request = client.get("/channels/123/messages");
+    await vi.waitFor(() => expect(abortable.fetch).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+
+    await expectAbortError(request);
+    expect(abortable.receivedSignal?.aborted).toBe(true);
   });
 
   it("provides the REST client's timeout signal even without a caller signal", async () => {

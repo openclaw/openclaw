@@ -1,3 +1,4 @@
+// Tests dotenv file loading and environment merge behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -685,6 +686,33 @@ describe("loadCliDotEnv", () => {
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
+      });
+    });
+  });
+
+  it("can defer global dotenv while loading only workspace env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(cwdDir, ".env"), "BAZ=from-workspace\n");
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "BAR=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        delete process.env.BAZ;
+
+        loadCliDotEnv({ loadGlobalEnv: false, quiet: true });
+
+        expect(process.env.FOO).toBeUndefined();
+        expect(process.env.BAR).toBeUndefined();
+        expect(process.env.BAZ).toBe("from-workspace");
       });
     });
   });

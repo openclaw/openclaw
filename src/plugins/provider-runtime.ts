@@ -1,4 +1,8 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+// Composes provider plugin runtime hooks with shared provider policy.
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   sortUniqueStrings,
@@ -16,7 +20,9 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   clearProviderRuntimePluginCacheForTest,
@@ -29,6 +35,7 @@ import {
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  wrapProviderSimpleCompletionStreamFn,
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
@@ -72,7 +79,6 @@ import type {
   ProviderPreferRuntimeResolvedModelContext,
   ProviderPlugin,
   ProviderResolveExternalAuthProfilesContext,
-  ProviderResolveExternalOAuthProfilesContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderApplyConfigDefaultsContext,
   ProviderResolveConfigApiKeyContext,
@@ -80,13 +86,11 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
-  ProviderResolveWebSocketSessionPolicyContext,
   ProviderSystemPromptContributionContext,
   ProviderTransformSystemPromptContext,
   ProviderThinkingPolicyContext,
   ProviderTransportTurnState,
   ProviderValidateReplayTurnsContext,
-  ProviderWebSocketSessionPolicy,
   PluginTextTransforms,
 } from "./types.js";
 
@@ -147,12 +151,22 @@ function hasExplicitProviderRuntimePluginActivation(params: {
   return ownerPluginIds.some((pluginId) => allow.has(pluginId) || entries[pluginId] !== undefined);
 }
 
+function hasConfiguredModelProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
+  );
+}
+
 export {
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
+  wrapProviderSimpleCompletionStreamFn,
   wrapProviderStreamFn,
 };
 
@@ -308,9 +322,11 @@ export function shouldPreferProviderRuntimeResolvedModel(params: {
 
 export function normalizeProviderResolvedModelWithPlugin(params: {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   context: {
     config?: OpenClawConfig;
     agentDir?: string;
@@ -321,12 +337,16 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   };
 }): ProviderRuntimeModel | undefined {
   return (
-    resolveProviderRuntimePlugin(params)?.normalizeResolvedModel?.(params.context) ?? undefined
+    resolveProviderRuntimePlugin({
+      ...params,
+      modelId: params.context.modelId,
+    })?.normalizeResolvedModel?.(params.context) ?? undefined
   );
 }
 
 export function applyProviderResolvedTransportWithPlugin(params: {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -337,8 +357,10 @@ export function applyProviderResolvedTransportWithPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    modelId: params.context.modelId,
     context: {
       provider: params.context.provider,
+      modelId: params.context.modelId,
       api: params.context.model.api,
       baseUrl: params.context.model.baseUrl,
     },
@@ -365,6 +387,7 @@ export function normalizeProviderModelIdWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
@@ -376,6 +399,7 @@ export function normalizeProviderModelIdWithPlugin(params: {
 
 export function normalizeProviderTransportWithPlugin(params: {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -388,6 +412,9 @@ export function normalizeProviderTransportWithPlugin(params: {
   const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
   if (normalizedMatched && hasTransportChange(normalizedMatched)) {
     return normalizedMatched;
+  }
+  if (hasConfiguredModelProvider(params)) {
+    return undefined;
   }
 
   for (const candidate of resolveProviderPluginsForHooks(params)) {
@@ -564,27 +591,18 @@ export function resolveProviderStreamFn(params: {
 
 export function resolveProviderTransportTurnStateWithPlugin(params: {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  allowRuntimePluginLoad?: boolean;
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
-  return (
-    resolveProviderRuntimePlugin(params)?.resolveTransportTurnState?.(params.context) ?? undefined
-  );
-}
-
-export function resolveProviderWebSocketSessionPolicyWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderResolveWebSocketSessionPolicyContext;
-}): ProviderWebSocketSessionPolicy | undefined {
-  return (
-    resolveProviderRuntimePlugin(params)?.resolveWebSocketSessionPolicy?.(params.context) ??
-    undefined
-  );
+  const plugin =
+    params.allowRuntimePluginLoad === false
+      ? resolveLoadedProviderRuntimePlugin(params)
+      : resolveProviderRuntimePlugin(params);
+  return plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
 }
 
 export async function createProviderEmbeddingProvider(params: {
@@ -956,15 +974,6 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     matches.push(...profiles);
   }
   return matches;
-}
-
-export function resolveExternalOAuthProfilesWithPlugins(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderResolveExternalOAuthProfilesContext;
-}): ProviderExternalAuthProfile[] {
-  return resolveExternalAuthProfilesWithPlugins(params);
 }
 
 export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {

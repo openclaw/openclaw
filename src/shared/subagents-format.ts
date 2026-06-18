@@ -1,3 +1,4 @@
+// Subagent formatting helpers expose compact durations and status text.
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
@@ -31,7 +32,7 @@ export function truncateLine(value: string, maxLength: number) {
   return `${value.slice(0, maxLength).trimEnd()}...`;
 }
 
-export type TokenUsageLike = {
+type TokenUsageLike = {
   totalTokens?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;

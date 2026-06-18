@@ -1,5 +1,6 @@
+// Covers ACP diagnostic event propagation and sanitized error formatting.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AcpRuntimeError } from "../../acp/runtime/errors.js";
+import { AcpRuntimeError, formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import {
   type AgentEventPayload,
   onAgentEvent,
@@ -9,7 +10,6 @@ import {
   emitAcpLifecycleError,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent,
-  formatAcpLifecycleError,
 } from "./attempt-execution.js";
 
 let captured: AgentEventPayload[] = [];
@@ -18,6 +18,8 @@ let unsubscribe: (() => void) | undefined;
 beforeEach(() => {
   resetAgentEventsForTest();
   captured = [];
+  // Subscribe to the process-level event bus so tests observe exactly what
+  // parent relay diagnostics would receive.
   unsubscribe = onAgentEvent((evt) => {
     captured.push(evt);
   });
@@ -95,6 +97,8 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
   });
 
   it("flattens the cause chain into the error string so the underlying RequestError is not lost", () => {
+    // ACP callers historically surface a single string; flattening preserves
+    // the useful nested RequestError without exposing structured internals.
     const rootCause = new Error('RequestError: "Method not found": nes/close (-32601)');
     const wrapped = new Error("Agent does not support session/close (oneshot:abc)", {
       cause: rootCause,
@@ -127,12 +131,12 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
   });
 
   it("formats non-Error values without crashing", () => {
-    expect(formatAcpLifecycleError("just a string")).toBe("just a string");
-    expect(formatAcpLifecycleError(42)).toBe("42");
-    expect(formatAcpLifecycleError(undefined)).toBe("undefined");
+    expect(formatAcpErrorChain("just a string")).toBe("just a string");
+    expect(formatAcpErrorChain(42)).toBe("42");
+    expect(formatAcpErrorChain(undefined)).toBe("undefined");
 
     const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
-    const text = formatAcpLifecycleError(`upstream rejected token=${token}`);
+    const text = formatAcpErrorChain(`upstream rejected token=${token}`);
     expect(text).toMatch(/upstream rejected/);
     expect(text).not.toContain(token);
   });
@@ -141,7 +145,7 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
     const e: Error & { cause?: unknown } = new Error("loop");
     e.cause = e;
 
-    const text = formatAcpLifecycleError(e);
+    const text = formatAcpErrorChain(e);
 
     // Should produce a finite string with the message, not hang.
     expect(text).toMatch(/loop/);

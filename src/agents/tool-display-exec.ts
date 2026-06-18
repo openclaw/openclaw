@@ -1,3 +1,9 @@
+/**
+ * Exec tool display summaries.
+ *
+ * Turns common shell commands into short redacted labels for tool timelines and transcripts.
+ */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   binaryName,
@@ -12,7 +18,6 @@ import {
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
-import { asRecord } from "./tool-display-record.js";
 
 function summarizeKnownExec(words: string[]): string {
   if (words.length === 0) {

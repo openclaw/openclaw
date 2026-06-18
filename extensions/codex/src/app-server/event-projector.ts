@@ -1,3 +1,4 @@
+// Codex plugin module implements event projector behavior.
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -109,6 +110,8 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const MISSING_TOOL_RESULT_ERROR =
+  "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 const BYTES_PER_MB = 1024 * 1024;
 // Match OpenClaw's default image media cap for generated image tool outputs.
@@ -146,6 +149,9 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  // Codex emits each typed item completion before its matching raw response item.
+  // Pair by protocol order because contributors may rewrite only the typed text.
+  private pendingRawCommentaryEchoes = 0;
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -167,11 +173,18 @@ export class CodexAppServerEventProjector {
     string,
     { toolName: string; meta?: string; asyncStarted?: boolean }
   >();
+  private readonly terminalPresentationClearedItemIds = new Set<string>();
+  private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly sideEffectingToolItemIds = new Set<string>();
   private readonly sideEffectingDynamicToolCallIds = new Set<string>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly toolTranscriptNamesById = new Map<string, string>();
+  private readonly toolTrajectoryCallIds = new Set<string>();
+  private readonly toolTrajectoryResultIds = new Set<string>();
+  private readonly toolTrajectoryNamesById = new Map<string, string>();
+  private readonly toolTrajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
@@ -185,6 +198,7 @@ export class CodexAppServerEventProjector {
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
@@ -200,6 +214,26 @@ export class CodexAppServerEventProjector {
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
+  }
+
+  hasCompletedTerminalAssistantText(): boolean {
+    const finalItem = this.resolveFinalAssistantTextItem();
+    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
+  }
+
+  /** Resolves the shared model-order position for a native tool item. */
+  recordNativeToolOutcome(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.nativeToolOutcomeOrdinals.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const ordinal = this.params.allocateToolOutcomeOrdinal?.(item.id);
+    if (ordinal !== undefined) {
+      this.nativeToolOutcomeOrdinals.set(item.id, ordinal);
+    }
   }
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
@@ -285,10 +319,21 @@ export class CodexAppServerEventProjector {
       this.reasoningItemOrder,
     ).join("\n\n");
     const planText = collectTextValues(this.planTextByItem).join("\n\n");
+    const hasAssistantItemText = this.hasAssistantItemTextForSynthesis();
+    const legacyFailClosed =
+      !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
+    const hasDeliverableAssistantOnCompletedTurn =
+      this.completedTurn?.status === "completed" &&
+      assistantTexts.some((text) => text.trim().length > 0);
+    this.synthesizeMissingToolResults({
+      synthesize: legacyFailClosed,
+      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
+    });
     const lastAssistant =
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
         : undefined;
+    const currentAttemptAssistant = this.createCurrentAttemptAssistantMessage();
     // Each snapshot entry is tagged with a stable mirror identity of the
     // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
     // from this identity rather than from snapshot position or content
@@ -328,6 +373,7 @@ export class CodexAppServerEventProjector {
     const turnFailed = this.completedTurn?.status === "failed";
     const promptError =
       this.promptError ??
+      this.synthesizedMissingToolResultError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
     const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
@@ -360,6 +406,7 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas,
       lastAssistant,
+      currentAttemptAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
@@ -407,6 +454,7 @@ export class CodexAppServerEventProjector {
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
+    const resultText = collectDynamicToolContentText(params.contentItems);
     if (params.asyncStarted === true) {
       const existing = this.toolMetas.get(params.callId);
       this.toolMetas.set(params.callId, {
@@ -418,11 +466,22 @@ export class CodexAppServerEventProjector {
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
-      text: collectDynamicToolContentText(params.contentItems),
+      text: resultText,
       isError: !params.success,
     });
-    const terminalType = params.terminalType ?? (params.success ? "completed" : "error");
-    if (terminalType !== "blocked" && params.sideEffectEvidence === true) {
+    if (!params.success && params.terminalType === "blocked") {
+      this.lastNativeToolError = {
+        toolName: params.tool,
+        error: resultText || "codex dynamic tool blocked",
+      };
+    } else if (
+      params.success &&
+      this.lastNativeToolError &&
+      !this.lastNativeToolError.mutatingAction
+    ) {
+      this.lastNativeToolError = undefined;
+    }
+    if (params.sideEffectEvidence === true) {
       this.sideEffectingDynamicToolCallIds.add(params.callId);
     }
   }
@@ -543,6 +602,7 @@ export class CodexAppServerEventProjector {
     if (itemId) {
       this.activeItemIds.add(itemId);
     }
+    this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
       await runAgentHarnessBeforeCompactionHook({
@@ -583,17 +643,20 @@ export class CodexAppServerEventProjector {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    this.recordNativeToolOutcome(item);
+    this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
     this.rememberAssistantPhase(item);
-    if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
+    if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (this.isCommentaryAssistantItem(item.id)) {
+      if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+        this.pendingRawCommentaryEchoes += 1;
       }
     }
     this.recordNativeGeneratedMedia(item);
@@ -725,9 +788,25 @@ export class CodexAppServerEventProjector {
         "codex app-server turn failed";
       this.promptErrorSource = "prompt";
     }
-    for (const item of turn.items ?? []) {
+    const turnItems = turn.items ?? [];
+    // The final snapshot is authoritative when item notifications were omitted.
+    // Only its last relevant tool may change the terminal presentation.
+    for (let index = turnItems.length - 1; index >= 0; index -= 1) {
+      const item = turnItems[index];
+      if (!item || !this.isCurrentTurnSnapshotItem(item)) {
+        continue;
+      }
+      if (item?.type === "dynamicToolCall") {
+        break;
+      }
+      if (shouldClearTerminalPresentationForNativeItem(item)) {
+        this.clearTerminalPresentationForNativeItem(item);
+        break;
+      }
+    }
+    for (const item of turnItems) {
       this.rememberAssistantPhase(item);
-      if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
+      if (item.type === "agentMessage" && typeof item.text === "string") {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
@@ -839,12 +918,16 @@ export class CodexAppServerEventProjector {
     if (readString(item, "role") !== "assistant") {
       return;
     }
+    const phase = readString(item, "phase");
+    if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
+      this.pendingRawCommentaryEchoes -= 1;
+      return;
+    }
     const text = extractRawAssistantText(item);
     if (!text) {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
-    const phase = readString(item, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
@@ -1082,6 +1165,26 @@ export class CodexAppServerEventProjector {
     }
   }
 
+  private clearTerminalPresentationForNativeItem(item: CodexThreadItem | undefined): void {
+    if (
+      !item ||
+      this.terminalPresentationClearedItemIds.has(item.id) ||
+      !shouldClearTerminalPresentationForNativeItem(item)
+    ) {
+      return;
+    }
+    const toolCallOrdinal = this.nativeToolOutcomeOrdinals.get(item.id);
+    this.terminalPresentationClearedItemIds.add(item.id);
+    this.params.onToolOutcome?.({
+      toolName: itemName(item) ?? item.type,
+      argsHash: "",
+      resultHash: "",
+      ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  }
+
   private recordNativeToolError(params: {
     item: CodexThreadItem;
     name: string;
@@ -1125,6 +1228,9 @@ export class CodexAppServerEventProjector {
     status: ReturnType<typeof itemStatus>;
   }): void {
     if (params.phase === "start") {
+      this.toolTrajectoryCallIds.add(params.item.id);
+      this.toolTrajectoryNamesById.set(params.item.id, params.name);
+      this.toolTrajectoryItemsById.set(params.item.id, params.item);
       this.options.trajectoryRecorder?.recordEvent("tool.call", {
         threadId: this.threadId,
         turnId: this.turnId,
@@ -1135,6 +1241,7 @@ export class CodexAppServerEventProjector {
       });
       return;
     }
+    this.toolTrajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
     const output = itemOutputText(params.item, this.toolResultOutputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
@@ -1342,6 +1449,11 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    if (isSideEffectingNativeToolItem(item)) {
+      this.sideEffectingToolItemIds.add(item.id);
+    } else {
+      this.sideEffectingToolItemIds.delete(item.id);
+    }
     const toolName = itemName(item);
     if (!toolName) {
       return;
@@ -1353,11 +1465,6 @@ export class CodexAppServerEventProjector {
       ...(meta ? { meta } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
     });
-    if (isSideEffectingNativeToolItem(item)) {
-      this.sideEffectingToolItemIds.add(item.id);
-    } else {
-      this.sideEffectingToolItemIds.delete(item.id);
-    }
   }
 
   private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
@@ -1396,6 +1503,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptNamesById.set(params.id, params.name);
     this.toolTranscriptArgumentsById.set(params.id, params.arguments);
     if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       this.transcriptToolProgressSuppressedIds.add(params.id);
@@ -1423,6 +1531,95 @@ export class CodexAppServerEventProjector {
         `${this.turnId}:tool:${params.id}:result`,
       ),
     );
+  }
+
+  private synthesizeMissingToolResults(params: {
+    synthesize: boolean;
+    recordPromptError: boolean;
+  }): void {
+    if (!params.synthesize) {
+      return;
+    }
+    const missingTranscriptIds = [...this.toolTranscriptCallIds].filter(
+      (id) => !this.toolTranscriptResultIds.has(id),
+    );
+    const missingTrajectoryIds = [...this.toolTrajectoryCallIds].filter(
+      (id) => !this.toolTrajectoryResultIds.has(id),
+    );
+    if (missingTranscriptIds.length === 0 && missingTrajectoryIds.length === 0) {
+      return;
+    }
+
+    for (const id of missingTranscriptIds) {
+      const name = this.toolTranscriptNamesById.get(id) ?? this.toolTrajectoryNamesById.get(id);
+      if (!name) {
+        continue;
+      }
+      this.recordToolTranscriptResult({
+        id,
+        name,
+        text: formatMissingToolResultError({ id, name }),
+        isError: true,
+      });
+    }
+
+    for (const id of missingTrajectoryIds) {
+      const name = this.toolTrajectoryNamesById.get(id) ?? this.toolTranscriptNamesById.get(id);
+      if (!name) {
+        continue;
+      }
+      this.toolTrajectoryResultIds.add(id);
+      const text = formatMissingToolResultError({ id, name });
+      this.options.trajectoryRecorder?.recordEvent("tool.result", {
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId: id,
+        toolCallId: id,
+        name,
+        status: "failed",
+        isError: true,
+        result: { status: "failed", reason: "missing_tool_result" },
+        output: text,
+      });
+    }
+
+    if (!params.recordPromptError) {
+      const firstMissingId =
+        missingTranscriptIds.find((id) => {
+          const name = this.toolTranscriptNamesById.get(id) ?? this.toolTrajectoryNamesById.get(id);
+          return Boolean(name);
+        }) ??
+        missingTrajectoryIds.find((id) => {
+          const name = this.toolTrajectoryNamesById.get(id) ?? this.toolTranscriptNamesById.get(id);
+          return Boolean(name);
+        });
+      if (firstMissingId) {
+        const name =
+          this.toolTranscriptNamesById.get(firstMissingId) ??
+          this.toolTrajectoryNamesById.get(firstMissingId);
+        if (name) {
+          const item = this.toolTrajectoryItemsById.get(firstMissingId);
+          const meta = item
+            ? itemMeta(item, this.toolProgressDetailMode())
+            : this.toolMetas.get(firstMissingId)?.meta;
+          const actionFingerprint = item ? nativeToolActionFingerprint(item) : undefined;
+          this.lastNativeToolError = {
+            toolName: name,
+            ...(meta ? { meta } : {}),
+            error: formatMissingToolResultError({ id: firstMissingId, name }),
+            ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
+            ...(actionFingerprint ? { actionFingerprint } : {}),
+          };
+        }
+      }
+      return;
+    }
+    const missingCount = new Set([...missingTranscriptIds, ...missingTrajectoryIds]).size;
+    this.synthesizedMissingToolResultError =
+      missingCount === 1
+        ? MISSING_TOOL_RESULT_ERROR
+        : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingCount}`;
+    this.promptErrorSource = this.promptErrorSource ?? "prompt";
   }
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
@@ -1526,7 +1723,28 @@ export class CodexAppServerEventProjector {
     return finalText ? [finalText] : [];
   }
 
+  private hasAssistantItemTextForSynthesis(): boolean {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (!itemId) {
+        continue;
+      }
+      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId);
+      if (text && text.length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private resolveFinalAssistantText(): string | undefined {
+    return this.resolveFinalAssistantTextItem()?.text;
+  }
+
+  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -1537,7 +1755,7 @@ export class CodexAppServerEventProjector {
         continue;
       }
       if (text && !this.toolProgressTexts.has(text)) {
-        return text;
+        return { itemId, text };
       }
     }
     return undefined;
@@ -1548,6 +1766,26 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.assistantItemOrder.push(itemId);
+  }
+
+  private createCurrentAttemptAssistantMessage(): AssistantMessage | undefined {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (
+        !itemId ||
+        this.isCommentaryAssistantItem(itemId) ||
+        !this.assistantTextByItem.has(itemId)
+      ) {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId) ?? "";
+      const normalizedText = text.trim();
+      if (normalizedText && this.toolProgressTexts.has(normalizedText)) {
+        continue;
+      }
+      return this.createAssistantMessage(text);
+    }
+    return undefined;
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
@@ -1954,6 +2192,10 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   return "completed";
 }
 
+function formatMissingToolResultError(params: { id: string; name: string }): string {
+  return `${MISSING_TOOL_RESULT_ERROR} toolCallId=${params.id}; toolName=${params.name}`;
+}
+
 function isNonSuccessItemStatus(status: ReturnType<typeof itemStatus>): boolean {
   return status === "failed" || status === "blocked";
 }
@@ -2002,7 +2244,31 @@ function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
 }
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
-  return item.type === "commandExecution" || item.type === "fileChange";
+  if (item.type === "commandExecution") {
+    // Codex commandActions describe presentation, not safety. Upstream may
+    // classify mutating commands as read/search, so native commands fail closed.
+    return true;
+  }
+  return (
+    item.type === "fileChange" ||
+    item.type === "collabAgentToolCall" ||
+    item.type === "imageGeneration"
+  );
+}
+
+function shouldClearTerminalPresentationForNativeItem(item: CodexThreadItem): boolean {
+  switch (item.type) {
+    case "collabAgentToolCall":
+    case "commandExecution":
+    case "fileChange":
+    case "imageGeneration":
+    case "imageView":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {

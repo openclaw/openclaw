@@ -1,3 +1,4 @@
+// Auth choice tests cover auth choice application, provider config, and credential prompts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -60,7 +61,6 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
     );
   };
   return {
-    applyAuthChoiceApiProviders: vi.fn(async () => null),
     normalizeApiKeyTokenProviderAuthChoice: (params: {
       authChoice: string;
       tokenProvider?: string;
@@ -95,9 +95,12 @@ vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/tmp/openclaw-workspace",
 }));
 
-vi.mock("../plugins/setup-browser.js", () => ({
-  isRemoteEnvironment: () => false,
+vi.mock("../infra/browser-open.js", () => ({
   openUrl: vi.fn(async () => {}),
+}));
+
+vi.mock("../infra/remote-env.js", () => ({
+  isRemoteEnvironment: () => false,
 }));
 
 vi.mock("../plugins/provider-oauth-flow.js", () => ({

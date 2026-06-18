@@ -1,22 +1,26 @@
+// Changed Lanes tests cover changed lanes script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
+  isChangedLaneTestPath,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
   listChangedPathsFromGit,
 } from "../../scripts/changed-lanes.mjs";
 import {
   buildChangedCheckCrabboxArgs,
+  cleanupCorepackPnpmShimDir,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
   createPnpmManagedCommand,
   createTargetedCoreLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunShrinkwrapGuard,
+  shouldRunTestTempCreationReport,
   createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
@@ -70,11 +74,84 @@ function parseChangedLaneOutput(output: string): {
   };
 }
 
+function writeRepoFile(repoDir: string, filePath: string, contents: string): void {
+  const absolutePath = path.join(repoDir, filePath);
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, contents, "utf8");
+}
+
+function createSyntheticMergeRepo(prefix: string): { dir: string; staleBase: string } {
+  const dir = makeTempRepoRoot(tempDirs, prefix);
+  git(dir, ["init", "-q", "--initial-branch=main"]);
+  writeRepoFile(dir, "README.md", "base\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "base",
+  ]);
+  const staleBase = git(dir, ["rev-parse", "HEAD"]);
+
+  git(dir, ["switch", "-q", "-c", "feature"]);
+  writeRepoFile(dir, "src/pr.ts", "export const pr = true;\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "feature",
+  ]);
+
+  git(dir, ["switch", "-q", "main"]);
+  writeRepoFile(dir, "src/main-only.ts", "export const mainOnly = true;\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "main only",
+  ]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "merge",
+    "--no-ff",
+    "feature",
+    "-m",
+    "synthetic merge",
+  ]);
+
+  return { dir, staleBase };
+}
+
 afterEach(() => {
+  cleanupCorepackPnpmShimDir();
   cleanupTempDirs(tempDirs);
 });
 
 describe("scripts/changed-lanes", () => {
+  it("keeps a non-executed changed-gate warning fixture", () => {
+    // openclaw-temp-dir: allow test fixture for the temp warning report
+    const warningFixture = 'fs.mkdtemp("openclaw-warning-fixture-", () => {})';
+
+    expect(warningFixture).toContain("mkdtemp");
+  });
+
   it("detects direct script execution from Windows argv paths", () => {
     expect(
       isDirectRunPath(
@@ -228,14 +305,15 @@ describe("scripts/changed-lanes", () => {
     mkdirSync(path.join(dir, "src"), { recursive: true });
     writeFileSync(path.join(dir, "src", "feature.ts"), "export const value = 1;\n", "utf8");
 
-    const normalPaths = listChangedPathsFromGit({ base: "origin/main", cwd: dir });
-    expect(normalPaths.length).toBeGreaterThan(200);
-    expect(normalPaths).toContain("baseline-0.txt");
-    expect(normalPaths).toContain("src/feature.ts");
-
     const previousRawSync = process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
-    process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = "1";
+    delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
     try {
+      const normalPaths = listChangedPathsFromGit({ base: "origin/main", cwd: dir });
+      expect(normalPaths.length).toBeGreaterThan(200);
+      expect(normalPaths).toContain("baseline-0.txt");
+      expect(normalPaths).toContain("src/feature.ts");
+
+      process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = "1";
       expect(listChangedPathsFromGit({ base: "origin/main", cwd: dir })).toEqual([
         "src/feature.ts",
       ]);
@@ -246,6 +324,23 @@ describe("scripts/changed-lanes", () => {
         process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = previousRawSync;
       }
     }
+  });
+
+  it("uses the merge commit first parent instead of a stale PR payload base", () => {
+    const { dir, staleBase } = createSyntheticMergeRepo("openclaw-changed-lanes-merge-");
+
+    expect(listChangedPathsFromGit({ base: staleBase, cwd: dir, includeWorktree: false })).toEqual([
+      "src/main-only.ts",
+      "src/pr.ts",
+    ]);
+    expect(
+      listChangedPathsFromGit({
+        base: staleBase,
+        cwd: dir,
+        includeWorktree: false,
+        mergeHeadFirstParent: true,
+      }),
+    ).toEqual(["src/pr.ts"]);
   });
 
   it("ignores local Crabbox metadata in the default local diff", () => {
@@ -372,6 +467,13 @@ describe("scripts/changed-lanes", () => {
     expect(result.lanes.all).toBe(false);
   });
 
+  it("exposes the shared changed-lane test path classifier", () => {
+    expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
+    expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
+    expect(isChangedLaneTestPath("src/example.ts")).toBe(false);
+    expect(isChangedLaneTestPath("src/latest.ts")).toBe(false);
+  });
+
   it("routes core production changes to core prod and core test lanes", () => {
     const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
@@ -380,6 +482,9 @@ describe("scripts/changed-lanes", () => {
       core: true,
       coreTests: true,
     });
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:database-first-legacy-stores",
+    );
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
     expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
@@ -499,6 +604,21 @@ describe("scripts/changed-lanes", () => {
 
     expect(command.bin).toBe("corepack");
     expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+  });
+
+  it("cleans CI Corepack pnpm shim temp dirs", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { CI: "1", PATH: "/usr/bin" },
+    );
+    const [shimDir] = String(command.env?.PATH ?? "").split(path.delimiter);
+
+    expect(path.basename(shimDir)).toMatch(/^openclaw-corepack-pnpm-/u);
+    expect(existsSync(path.join(shimDir, "pnpm"))).toBe(true);
+
+    cleanupCorepackPnpmShimDir();
+
+    expect(existsSync(shimDir)).toBe(false);
   });
 
   it("keeps local changed-check children on the repo pnpm shim", () => {
@@ -792,6 +912,7 @@ describe("scripts/changed-lanes", () => {
       "duplicate scan target coverage",
       "dependency pin guard",
       "package patch guard",
+      "test temp creation report (warning-only)",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -1051,7 +1172,10 @@ describe("scripts/changed-lanes", () => {
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG.md",
-      "apps/android/app/build.gradle.kts",
+      "apps/android/CHANGELOG.md",
+      "apps/android/Config/Version.properties",
+      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/ios/Config/Version.xcconfig",
       "apps/ios/fastlane/metadata/en-US/release_notes.txt",
@@ -1076,6 +1200,7 @@ describe("scripts/changed-lanes", () => {
       "scripts/generate-npm-shrinkwrap.mjs",
       "deps:patches:check",
       "release-metadata:check",
+      "android:version:check",
       "ios:version:check",
       "config:schema:check",
       "config:docs:check",
@@ -1282,6 +1407,30 @@ describe("scripts/changed-lanes", () => {
 
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("adds the warning-only temp creation report for changed test paths", () => {
+    const result = detectChangedLanes(["test/helpers/temp-fixture.ts"]);
+    const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
+    const command = plan.commands.find(
+      (candidate) => candidate.name === "test temp creation report (warning-only)",
+    );
+
+    expect(shouldRunTestTempCreationReport(result.paths)).toBe(true);
+    expect(command).toMatchObject({
+      bin: "node",
+      args: ["scripts/report-test-temp-creations.mjs", "--base", "main", "--head", "feature"],
+    });
+  });
+
+  it("keeps the temp creation report out of non-test changed paths", () => {
+    const result = detectChangedLanes(["scripts/check-changed.mjs"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunTestTempCreationReport(result.paths)).toBe(false);
+    expect(plan.commands.map((command) => command.name)).not.toContain(
+      "test temp creation report (warning-only)",
+    );
   });
 
   it("does not route generated plugin bundle artifacts as direct Vitest targets", () => {

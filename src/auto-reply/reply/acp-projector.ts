@@ -1,3 +1,4 @@
+// Projects ACP runtime events into OpenClaw-visible session update records.
 import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 import {
   normalizeOptionalLowercaseString,
@@ -26,7 +27,7 @@ const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 
-export type AcpProjectedDeliveryMeta = {
+type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
   toolCallId?: string;
   toolStatus?: string;
@@ -160,7 +161,7 @@ function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_cal
   return formatToolSummary(display);
 }
 
-export type AcpReplyProjector = {
+type AcpReplyProjector = {
   onEvent: (event: AcpRuntimeEvent) => Promise<void>;
   flush: (force?: boolean) => Promise<void>;
 };

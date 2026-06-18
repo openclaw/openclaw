@@ -1,3 +1,4 @@
+// Covers safe-bin allowlist behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +10,7 @@ import {
 } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   isSafeBinUsage,
   normalizeSafeBins,
   resolveSafeBins,
@@ -436,11 +437,11 @@ describe("exec approvals safe bins", () => {
     expect(defaults.has("grep")).toBe(false);
   });
 
-  it("does not auto-allow unprofiled safe-bin entries", () => {
+  it("does not auto-allow unprofiled safe-bin entries", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const result = evaluateShellAllowlist({
+    const result = await evaluateShellAllowlistWithAuthorization({
       command: "python3 -c \"print('owned')\"",
       allowlist: [],
       safeBins: normalizeSafeBins(["python3"]),
@@ -556,7 +557,7 @@ describe("exec approvals safe bins", () => {
     expect(allowed.allowlistSatisfied).toBe(true);
   });
 
-  it("does not auto-trust PATH-shadowed safe bins without explicit trusted dirs", () => {
+  it("does not auto-trust PATH-shadowed safe bins without explicit trusted dirs", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -567,7 +568,7 @@ describe("exec approvals safe bins", () => {
     fs.writeFileSync(fakeHead, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(fakeHead, 0o755);
 
-    const result = evaluateShellAllowlist({
+    const result = await evaluateShellAllowlistWithAuthorization({
       command: "head -n 1",
       allowlist: [],
       safeBins: normalizeSafeBins(["head"]),
@@ -580,11 +581,11 @@ describe("exec approvals safe bins", () => {
     expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
   });
 
-  it("fails closed for semantic env wrappers in allowlist mode", () => {
+  it("fails closed for semantic env wrappers in allowlist mode", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const result = evaluateShellAllowlist({
+    const result = await evaluateShellAllowlistWithAuthorization({
       command: "env -S 'sh -c \"echo pwned\"' tr",
       allowlist: [{ pattern: "/usr/bin/tr" }],
       safeBins: normalizeSafeBins(["tr"]),

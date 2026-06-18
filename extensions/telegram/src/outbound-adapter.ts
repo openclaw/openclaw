@@ -1,3 +1,4 @@
+// Telegram plugin module implements outbound adapter behavior.
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveOutboundSendDep,
@@ -12,6 +13,7 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
@@ -19,7 +21,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
+import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
@@ -54,7 +56,7 @@ function chunkTelegramOutboundText(
 ): string[] {
   return ctx?.formatting?.parseMode === "HTML"
     ? splitTelegramHtmlChunks(text, limit)
-    : markdownToTelegramHtmlChunks(text, limit, { tableMode: ctx?.formatting?.tableMode });
+    : chunkMarkdownTextWithMode(text, limit, ctx?.formatting?.chunkMode ?? "length");
 }
 
 async function resolveTelegramSendContext(params: {
@@ -73,6 +75,7 @@ async function resolveTelegramSendContext(params: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
     textMode?: "html";
+    tableMode?: OutboundDeliveryFormattingOptions["tableMode"];
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
@@ -92,6 +95,7 @@ async function resolveTelegramSendContext(params: {
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
+      tableMode: params.formatting?.tableMode,
     },
   };
 }
@@ -173,7 +177,6 @@ export function createTelegramOutboundAdapter(
     deliveryMode: "direct",
     chunker: chunkTelegramOutboundText,
     chunkerMode: "markdown",
-    chunkedTextFormatting: { parseMode: "HTML" },
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
@@ -199,7 +202,7 @@ export function createTelegramOutboundAdapter(
           maxLabelLength: 64,
         },
         text: {
-          markdownDialect: "html",
+          markdownDialect: "markdown",
         },
       },
     },

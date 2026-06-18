@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context behavior.
 import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
@@ -44,6 +45,10 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import {
+  resolveTelegramGroupHistoryContextModeForAccount,
+  type TelegramGroupHistoryContextMode,
+} from "./group-history-context.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -105,6 +110,7 @@ export type TelegramMessageContext = {
   historyKey?: string;
   historyLimit: BuildTelegramMessageContextParams["historyLimit"];
   groupHistories: BuildTelegramMessageContextParams["groupHistories"];
+  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
@@ -261,9 +267,8 @@ export const buildTelegramMessageContext = async ({
       normalizeAccountId(resolveDefaultTelegramAccountId(freshCfg)) &&
     candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
-  // Named-account groups still require an explicit binding; DMs get a
-  // per-account fallback session key below to preserve isolation.
-  if (isNamedAccountFallback && isGroup) {
+  const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
+  if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -472,7 +477,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
-    requireMention,
+    requireMention: Boolean(requireMention),
     options,
     groupHistories,
     historyLimit,
@@ -481,6 +486,13 @@ export const buildTelegramMessageContext = async ({
   if (!bodyResult) {
     return null;
   }
+
+  const groupHistoryContextMode = isGroup
+    ? resolveTelegramGroupHistoryContextModeForAccount({
+        cfg,
+        accountId: route.accountId,
+      })
+    : undefined;
 
   if (!(await ensureConfiguredBindingReady())) {
     return null;
@@ -517,11 +529,13 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
+    groupHistoryContextMode,
     groupConfig,
     topicConfig,
-    stickerCacheHit: bodyResult.stickerCacheHit,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    mentionFacts: bodyResult.mentionFacts,
     hasControlCommand: bodyResult.hasControlCommand,
+    stickerCacheHit: bodyResult.stickerCacheHit,
     ...(bodyResult.audioTranscribedMediaIndex !== undefined
       ? { audioTranscribedMediaIndex: bodyResult.audioTranscribedMediaIndex }
       : {}),
@@ -653,6 +667,7 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
+    groupHistoryContextMode,
     route,
     skillFilter,
     sendTyping,

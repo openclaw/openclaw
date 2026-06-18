@@ -1,10 +1,11 @@
+/** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { normalizeOptionalThreadValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { readSessionEntry } from "../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -176,9 +177,9 @@ export async function resolveDeliveryTarget(
       } satisfies SessionEntry)
     : undefined;
   const threadEntry = threadSessionKey
-    ? (readSessionEntry(storePath, threadSessionKey) as SessionEntry | undefined)
+    ? loadSessionEntry({ agentId, sessionKey: threadSessionKey, storePath })
     : undefined;
-  const mainEntry = readSessionEntry(storePath, mainSessionKey) as SessionEntry | undefined;
+  const mainEntry = loadSessionEntry({ agentId, sessionKey: mainSessionKey, storePath });
   const main = storedDeliveryEntry ?? threadEntry ?? mainEntry;
 
   const preliminary = resolveSessionDeliveryTarget({
@@ -380,6 +381,8 @@ export async function resolveDeliveryTarget(
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
   if (route && routeCanCanonicalizeTarget && routeShouldCanonicalizeTarget) {
+    // Prefer channel-canonical targets when the plugin can prove the route; this
+    // keeps stored session keys and delivery targets aligned for threaded sends.
     const routeTo = stripSelectedProviderPrefix({
       channel,
       to: route.to,
@@ -426,6 +429,8 @@ export async function resolveDeliveryTarget(
           })?.threadId,
         )
       : undefined;
+  // Thread precedence is explicit config, route canonicalization, parser-derived
+  // explicit target, then same-peer session history.
   const threadId =
     explicitThreadId ??
     route?.threadId ??

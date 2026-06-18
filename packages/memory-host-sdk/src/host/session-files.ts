@@ -1,3 +1,4 @@
+// Memory Host SDK module implements session files behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -213,13 +215,6 @@ function resolveSessionStoreTranscriptPath(
     return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
   }
   return null;
-}
-
-export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
-  sessionsDir: string,
-): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForSessionsDir(sessionsDir)
-    .dreamingNarrativeTranscriptPaths;
 }
 
 export function loadSessionTranscriptClassificationForSessionsDir(
@@ -491,17 +486,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   return normalized;
 }
 
-export function extractSessionText(
-  content: unknown,
-  role: "user" | "assistant" = "assistant",
-): string | null {
-  const rawText = collectRawSessionText(content);
-  if (rawText === null) {
-    return null;
-  }
-  return sanitizeSessionText(rawText, role);
-}
-
 function parseSessionTimestampMs(
   record: { timestamp?: unknown },
   message: { timestamp?: unknown },
@@ -565,7 +549,12 @@ export async function buildSessionEntry(
         messageTimestampsMs: [],
       };
     }
-    const raw = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    const raw = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read session transcript ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];

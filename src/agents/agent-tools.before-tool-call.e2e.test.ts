@@ -1,11 +1,18 @@
+/**
+ * Integration-style tests for before_tool_call behavior.
+ * Covers loop detection, diagnostics, plugin approval, and skill telemetry
+ * around wrapped tool execution.
+ */
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
@@ -30,7 +37,7 @@ vi.mock("../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(),
+    getGlobalHookRunner: vi.fn(actual.getGlobalHookRunner),
   };
 });
 vi.mock("./tools/gateway.js", () => ({
@@ -38,6 +45,37 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+function setGlobalHookRunnerForTest(hookRunner: unknown): void {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
+    hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
+      hookRunner: null,
+      registry: null,
+    };
+  }
+  hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+}
+
+function getGlobalHookRunnerForTest(): unknown {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  return hookRunnerGlobalState[hookRunnerGlobalStateKey]?.hookRunner ?? null;
+}
+
+afterEach(() => {
+  setGlobalHookRunnerForTest(null);
+  mockGetGlobalHookRunner.mockReset();
+  mockGetGlobalHookRunner.mockImplementation(
+    () => getGlobalHookRunnerForTest() as ReturnType<typeof getGlobalHookRunner>,
+  );
+});
 
 describe("before_tool_call loop detection behavior", () => {
   let hookRunner: {
@@ -267,8 +305,35 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-    expectToolLoopBlockedResult(result, "CRITICAL");
+    await withDiagnosticEvents(async (emitted, flush) => {
+      const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+      await flush();
+      expectToolLoopBlockedResult(result, "CRITICAL");
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        reason: "tool-loop",
+        policy: {
+          id: "tool-loop-detection",
+          decision: "deny",
+          reason: "tool-loop",
+        },
+        control: {
+          id: "tool-loop-detection",
+          family: "authorization",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+    });
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
@@ -750,7 +815,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
       blockReason: "blocked by policy",
@@ -783,6 +848,59 @@ describe("before_tool_call loop detection behavior", () => {
         deniedReason: "plugin-before-tool-call",
         reason: "blocked by policy",
       });
+    });
+  });
+
+  it("emits a security event for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      const securityEvent = emitted.find(
+        (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+          event.type === "security.event",
+      );
+      expect(securityEvent).toMatchObject({
+        type: "security.event",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        severity: "medium",
+        reason: "plugin-before-tool-call",
+        actor: { kind: "agent" },
+        target: {
+          kind: "tool",
+          name: "read",
+        },
+        policy: {
+          id: "plugin-before-tool-call",
+          decision: "deny",
+          reason: "plugin-before-tool-call",
+        },
+        control: {
+          id: "before-tool-call",
+          family: "approval",
+        },
+        attributes: {
+          params_kind: "object",
+          tool_source: "core",
+        },
+      });
+      expect(securityEvent?.eventId).toBeTypeOf("string");
+      expect(JSON.stringify(securityEvent)).not.toContain("/tmp/file");
+      expect(emitted.some((event) => event.type === "tool.execution.blocked")).toBe(true);
     });
   });
 
@@ -875,6 +993,8 @@ describe("before_tool_call loop detection behavior", () => {
         type: "tool.execution.started",
       });
       expect(started.paramsSummary).toEqual({ kind: "object" });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[1]).toBe(params);
     });
   });
 });
@@ -924,24 +1044,13 @@ describe("before_tool_call requireApproval handling", () => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(true),
+      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
       runBeforeToolCall: vi.fn(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
-    const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
-    const hookRunnerGlobalState = globalThis as Record<
-      symbol,
-      { hookRunner: unknown; registry?: unknown } | undefined
-    >;
-    if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
-      hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
-        hookRunner: null,
-        registry: null,
-      };
-    }
-    hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+    setGlobalHookRunnerForTest(hookRunner);
     mockCallGateway.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
@@ -1734,5 +1843,144 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+});
+
+describe("before_tool_call tool content private-data capture", () => {
+  type TrustedToolEvent = {
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  };
+
+  beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
+    resetDiagnosticEventsForTest();
+  });
+
+  async function withTrustedToolEvents(
+    run: (emitted: TrustedToolEvent[], flush: () => Promise<void>) => Promise<void>,
+  ) {
+    const emitted: TrustedToolEvent[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type.startsWith("tool.execution.")) {
+        emitted.push({ event, privateData });
+      }
+    });
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    try {
+      await run(emitted, flush);
+    } finally {
+      stop();
+    }
+  }
+
+  function configWithToolContent(
+    fields: { toolInputs?: boolean; toolOutputs?: boolean } = {
+      toolInputs: true,
+      toolOutputs: true,
+    },
+  ) {
+    return {
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          traces: true,
+          captureContent: { enabled: true, ...fields },
+        },
+      },
+    } as unknown as import("../config/types.openclaw.js").OpenClawConfig;
+  }
+
+  it("attaches tool input/output to private data when opted in", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "file body" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent(),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(completed?.privateData.toolContent?.toolOutput).toEqual({
+        content: [{ type: "text", text: "file body" }],
+      });
+      // Public event payload must never carry raw params/results.
+      expect(JSON.stringify(completed?.event)).not.toContain("/etc/secret");
+      expect(JSON.stringify(completed?.event)).not.toContain("file body");
+    });
+  });
+
+  it("omits tool content from private data when capture is not configured", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed).toBeDefined();
+      expect(completed?.privateData.toolContent).toBeUndefined();
+    });
+  });
+
+  it("captures only opted-in fields and clones away from live params", async () => {
+    const liveParams = { path: "/etc/secret" };
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "out" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent({ toolInputs: true, toolOutputs: false }),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", liveParams, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(completed?.privateData.toolContent?.toolOutput).toBeUndefined();
+      // Captured snapshot is a clone, not the live params object.
+      expect(completed?.privateData.toolContent?.toolInput).not.toBe(liveParams);
+    });
+  });
+
+  it("attaches tool input but not output on execution errors", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("boom"));
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent(),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined),
+      ).rejects.toThrow("boom");
+      await flush();
+
+      const errored = emitted.find((e) => e.event.type === "tool.execution.error");
+      expect(errored?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(errored?.privateData.toolContent?.toolOutput).toBeUndefined();
+    });
   });
 });

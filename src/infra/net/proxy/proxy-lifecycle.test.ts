@@ -1,3 +1,5 @@
+// Exercises managed proxy lifecycle ownership, env inheritance, Proxyline
+// reuse, loopback bypass policy, TLS trust, and cleanup behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -115,6 +117,8 @@ describe("startProxy", () => {
   });
 
   afterEach(() => {
+    resetProxyLifecycleForTests();
+    resetActiveManagedProxyStateForTests();
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }

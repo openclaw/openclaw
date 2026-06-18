@@ -1,3 +1,4 @@
+// Telegram plugin module implements fetch behavior.
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -27,6 +28,7 @@ import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
+  TELEGRAM_DNS_RESULT_ORDER_ENV,
 } from "./network-config.js";
 import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
@@ -634,9 +636,14 @@ export function resolveTelegramTransport(
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const hasExplicitDnsResultOrder =
+    (dnsDecision.source === "config" ||
+      dnsDecision.source === `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`) &&
+    dnsDecision.value !== "ipv4first";
   const allowStickyFallback =
-    defaultDispatcher.mode === "direct" ||
-    (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
+    !hasExplicitDnsResultOrder &&
+    (defaultDispatcher.mode === "direct" ||
+      (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy));
   const fallbackDispatcherPolicy = allowStickyFallback
     ? resolveTelegramDispatcherPolicy({
         autoSelectFamily: false,

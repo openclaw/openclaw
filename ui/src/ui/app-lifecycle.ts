@@ -1,3 +1,4 @@
+// Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -23,6 +24,7 @@ import {
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./controllers/workboard.ts";
 import type { Tab } from "./navigation.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
@@ -56,6 +58,11 @@ type LifecycleHost = {
   sessionKey: string;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
+  chatComposerProvisionalRestore?: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null;
   chatComposerPersistTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   chatComposerPersistSnapshot?: PendingChatComposerPersistSnapshot | null;
   pendingGatewayUrl?: string | null;
@@ -83,6 +90,7 @@ type LifecycleHost = {
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiTabPaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
+  controlUiBootstrapReady?: Promise<void> | null;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
@@ -91,21 +99,27 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
-  const bootstrapReady = loadControlUiBootstrapConfig(
+  host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+    { applyIdentity: false },
   );
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
+  const hasPendingGatewaySwitch =
+    typeof host.pendingGatewayUrl === "string" && host.pendingGatewayUrl.trim();
+  if (!hasPendingGatewaySwitch && restoreChatComposerState(host, { preserveCurrent: true })) {
+    host.chatComposerProvisionalRestore = {
+      sessionKey: host.sessionKey,
+      chatMessage: host.chatMessage,
+      chatQueue: [...host.chatQueue],
+    };
+  } else {
+    host.chatComposerProvisionalRestore = null;
+  }
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
-  void bootstrapReady.finally(() => {
-    if (host.connectGeneration !== connectGeneration) {
-      return;
-    }
-    if (!host.pendingGatewayUrl) {
-      restoreChatComposerState(host, { preserveCurrent: true });
-    }
+  if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
-  });
+  }
   if (host.tab === "nodes") {
     startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   }
@@ -188,6 +202,8 @@ export function handleDisconnected(host: LifecycleHost) {
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  stopWorkboardPolling(host);
+  stopWorkboardLifecycleRefresh(host);
   cancelHostAnimationFrame(host.chatScrollFrame);
   host.chatScrollFrame = null;
   cancelHostAnimationFrame(host.logsScrollFrame);

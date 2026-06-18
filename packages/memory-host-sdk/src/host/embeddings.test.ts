@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover embeddings behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,6 +97,20 @@ describe("local embedding provider", () => {
     expect(runtime.getEmbeddingFor).toHaveBeenCalledWith("test query");
   });
 
+  it("truncates local embeddings before normalizing them", async () => {
+    mockLocalEmbeddingRuntime(new Float32Array([3, 4, 12]));
+    const provider = await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      outputDimensionality: 2,
+    });
+
+    await expect(provider.embedQuery("test query")).resolves.toEqual([0.6, 0.8]);
+    await expect(provider.embedBatch(["test document"])).resolves.toEqual([[0.6, 0.8]]);
+  });
+
   it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
@@ -110,6 +125,24 @@ describe("local embedding provider", () => {
 
     expect(runtime.createEmbeddingContext).toHaveBeenCalledWith(
       expect.objectContaining({ contextSize: 4096, createSignal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("imports node-llama-cpp from an explicit module URL when provided", async () => {
+    mockLocalEmbeddingRuntime();
+
+    await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: {
+        nodeLlamaCppImportUrl: "file:///plugins/llama-cpp/node-llama-cpp.js",
+      } as never,
+    });
+
+    expect(nodeLlamaMock.importNodeLlamaCpp).toHaveBeenCalledWith(
+      "file:///plugins/llama-cpp/node-llama-cpp.js",
     );
   });
 
@@ -340,6 +373,14 @@ describe("local embedding provider", () => {
       `
 process.on("message", (message) => {
   if (message.type === "initialize") {
+    if (message.options.local?.nodeLlamaCppImportUrl !== "file:///plugin/node-llama-cpp.js") {
+      process.send({ id: message.id, ok: false, error: "missing nodeLlamaCppImportUrl" });
+      return;
+    }
+    if (message.options.outputDimensionality !== 2) {
+      process.send({ id: message.id, ok: false, error: "missing outputDimensionality" });
+      return;
+    }
     process.send({ id: message.id, ok: true });
     return;
   }
@@ -362,8 +403,12 @@ process.on("message", (message) => {
         provider: "local",
         model: "",
         fallback: "none",
+        outputDimensionality: 2,
       },
-      { workerScriptPath: workerScript },
+      {
+        workerScriptPath: workerScript,
+        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+      },
     );
 
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);

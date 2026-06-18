@@ -1,3 +1,5 @@
+// Outbound target normalization trims user input, applies plugin normalizers,
+// and optionally resolves directory-backed destinations.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -23,6 +25,8 @@ type TargetNormalizerCacheEntry = {
 };
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
+const preparedPluginSignatureIds = new WeakMap<ChannelPlugin, number>();
+let nextPreparedPluginSignatureId = 1;
 
 function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin | undefined {
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
@@ -36,7 +40,13 @@ export const testing = {
   resetTargetNormalizerCacheForTests,
 } as const;
 
-function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
+function resolveTargetNormalizer(
+  channelId: ChannelId,
+  preparedPlugin?: ChannelPlugin,
+): TargetNormalizer {
+  if (preparedPlugin) {
+    return preparedPlugin.messaging?.normalizeTarget;
+  }
   const version = getActivePluginChannelRegistryVersion();
   const cached = targetNormalizerCacheByChannelId.get(channelId);
   if (cached && cached.version === version) {
@@ -52,10 +62,25 @@ function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   return normalizer;
 }
 
+function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
+  const existing = preparedPluginSignatureIds.get(plugin);
+  if (existing) {
+    return existing;
+  }
+  const id = nextPreparedPluginSignatureId;
+  nextPreparedPluginSignatureId += 1;
+  preparedPluginSignatureIds.set(plugin, id);
+  return id;
+}
+
 /**
  * Applies a channel plugin normalizer and falls back to trimmed input.
  */
-export function normalizeTargetForProvider(provider: string, raw?: string): string | undefined {
+export function normalizeTargetForProvider(
+  provider: string,
+  raw?: string,
+  plugin?: ChannelPlugin,
+): string | undefined {
   if (!raw) {
     return undefined;
   }
@@ -64,7 +89,7 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
     return undefined;
   }
   const providerId = normalizeOptionalLowercaseString(provider);
-  const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
+  const normalizer = providerId ? resolveTargetNormalizer(providerId, plugin) : undefined;
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
@@ -90,6 +115,7 @@ export type ResolvedPluginMessagingTarget = {
 export function resolveNormalizedTargetInput(
   provider: string,
   raw?: string,
+  plugin?: ChannelPlugin,
 ): { raw: string; normalized: string } | undefined {
   const trimmed = normalizeChannelTargetInput(raw ?? "");
   if (!trimmed) {
@@ -97,7 +123,7 @@ export function resolveNormalizedTargetInput(
   }
   return {
     raw: trimmed,
-    normalized: normalizeTargetForProvider(provider, trimmed) ?? trimmed,
+    normalized: normalizeTargetForProvider(provider, trimmed, plugin) ?? trimmed,
   };
 }
 
@@ -108,12 +134,15 @@ export function looksLikeTargetId(params: {
   channel: ChannelId;
   raw: string;
   normalized?: string;
+  plugin?: ChannelPlugin;
 }): boolean {
   const normalizedInput =
-    params.normalized ?? normalizeTargetForProvider(params.channel, params.raw);
-  const lookup = resolveChannelPluginForTargetRead(params.channel)?.messaging?.targetResolver
-    ?.looksLikeId;
+    params.normalized ?? normalizeTargetForProvider(params.channel, params.raw, params.plugin);
+  const lookup = (params.plugin ?? resolveChannelPluginForTargetRead(params.channel))?.messaging
+    ?.targetResolver?.looksLikeId;
   if (lookup) {
+    // Plugin heuristics win so provider-specific ids do not fall through to
+    // generic phone/mention checks.
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
   if (/^(channel|group|user):/i.test(params.raw)) {
@@ -141,12 +170,14 @@ export async function maybeResolvePluginMessagingTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKindLike;
   requireIdLike?: boolean;
+  plugin?: ChannelPlugin;
 }): Promise<ResolvedPluginMessagingTarget | undefined> {
-  const normalizedInput = resolveNormalizedTargetInput(params.channel, params.input);
+  const normalizedInput = resolveNormalizedTargetInput(params.channel, params.input, params.plugin);
   if (!normalizedInput) {
     return undefined;
   }
-  const resolver = resolveChannelPluginForTargetRead(params.channel)?.messaging?.targetResolver;
+  const resolver = (params.plugin ?? resolveChannelPluginForTargetRead(params.channel))?.messaging
+    ?.targetResolver;
   if (!resolver?.resolveTarget) {
     return undefined;
   }
@@ -156,6 +187,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
       channel: params.channel,
       raw: normalizedInput.raw,
       normalized: normalizedInput.normalized,
+      plugin: params.plugin,
     })
   ) {
     return undefined;
@@ -182,14 +214,20 @@ export async function maybeResolvePluginMessagingTarget(params: {
 /**
  * Builds a cache signature for target-resolution behavior exposed by a channel plugin.
  */
-export function buildTargetResolverSignature(channel: ChannelId): string {
-  const plugin = resolveChannelPluginForTargetRead(channel);
+export function buildTargetResolverSignature(
+  channel: ChannelId,
+  preparedPlugin?: ChannelPlugin,
+): string {
+  const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
+  const registryScope = preparedPlugin
+    ? `prepared:${resolvePreparedPluginSignatureId(preparedPlugin)}`
+    : "pinned";
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const looksLike = resolver?.looksLikeId;
   // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
-  return hashSignature(`${hint}|${source}`);
+  return hashSignature(`${registryScope}|${hint}|${source}`);
 }
 
 function hashSignature(value: string): string {

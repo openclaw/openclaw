@@ -1,3 +1,5 @@
+// Covers message-action cross-context policy, markers, and presentation
+// decoration behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -42,6 +44,42 @@ const localChatTestPlugin: ChannelPlugin = {
   },
 };
 
+const resolvedDmTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "slackdm",
+    label: "Resolved DM",
+    capabilities: { chatTypes: ["direct"], media: true },
+  }),
+  outbound: directOutbound,
+  messaging: {
+    normalizeTarget: (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      const userId = trimmed.replace(/^user:/i, "");
+      return /^user:/i.test(trimmed)
+        ? `user:${userId.toLowerCase()}`
+        : `channel:${trimmed.toLowerCase()}`;
+    },
+    targetResolver: {
+      looksLikeId: (raw) => /^(?:user:)?[UW][A-Z0-9]+$/i.test(raw.trim()),
+      hint: "<user:ID>",
+      resolveTarget: async ({ input }) => {
+        const userId = input.trim().replace(/^user:/i, "");
+        return /^[UW][A-Z0-9]+$/i.test(userId)
+          ? { to: userId, kind: "user", source: "normalized" }
+          : null;
+      },
+    },
+  },
+  threading: {
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      target.toLowerCase() ===
+      toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
+  },
+};
+
 describe("runMessageAction context isolation", () => {
   beforeEach(() => {
     setActivePluginRegistry(
@@ -65,6 +103,11 @@ describe("runMessageAction context isolation", () => {
           pluginId: "localchat",
           source: "test",
           plugin: localChatTestPlugin,
+        },
+        {
+          pluginId: "slackdm",
+          source: "test",
+          plugin: resolvedDmTestPlugin,
         },
       ]),
     );
@@ -134,6 +177,33 @@ describe("runMessageAction context isolation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it("allows the active DM after target resolution strips its user prefix", async () => {
+    const result = await runDrySend({
+      cfg: {
+        channels: { slackdm: {} },
+        tools: {
+          message: {
+            crossContext: {
+              allowWithinProvider: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "slackdm",
+        target: "user:U123",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentChannelProvider: "slackdm",
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "send", to: "U123" });
   });
 
   it.each([
@@ -286,6 +356,55 @@ describe("runMessageAction context isolation", () => {
         channel: "forum",
         target: "@opsbot",
         message: "hi",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider message mutations by default",
+      action: "edit" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+        message: "updated",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider delete mutations by default",
+      action: "delete" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider pin mutations by default",
+      action: "pin" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider unpin mutations by default",
+      action: "unpin" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
       },
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
       message: /Cross-context messaging denied/,

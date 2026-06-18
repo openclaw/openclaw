@@ -1,6 +1,8 @@
+// Codex plugin module implements run attempt test harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  abortAndDrainAgentHarnessRun,
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
@@ -8,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -30,6 +33,8 @@ const appServerHarnessWait = { interval: 1, timeout: 120_000 } as const;
 const activeAppServerAttemptsForTest = new Set<{
   abortController?: AbortController;
   promise: Promise<unknown>;
+  sessionId: string;
+  sessionKey?: string;
 }>();
 
 type RunCodexAppServerAttemptOptions = NonNullable<
@@ -62,6 +67,8 @@ export function runCodexAppServerAttempt(
   const entry = {
     abortController,
     promise: undefined as unknown as Promise<unknown>,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
   };
   const promise = runCodexAppServerAttemptImpl(
     trackedParams,
@@ -76,6 +83,7 @@ export function runCodexAppServerAttempt(
 }
 
 async function drainActiveAppServerAttemptsForTest(): Promise<void> {
+  vi.useRealTimers();
   const attempts = [...activeAppServerAttemptsForTest];
   if (attempts.length === 0) {
     return;
@@ -83,12 +91,33 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   for (const attempt of attempts) {
     attempt.abortController?.abort("test_cleanup");
   }
-  await Promise.race([
-    Promise.allSettled(attempts.map((attempt) => attempt.promise)),
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, 5_000);
+  const drainedSessions = new Set<string>();
+  const sessionDrains = attempts.flatMap((attempt) => {
+    if (!attempt.sessionId || drainedSessions.has(attempt.sessionId)) {
+      return [];
+    }
+    drainedSessions.add(attempt.sessionId);
+    return [
+      abortAndDrainAgentHarnessRun({
+        sessionId: attempt.sessionId,
+        sessionKey: attempt.sessionKey,
+        settleMs: 1_000,
+        forceClear: true,
+        reason: "test_cleanup",
+      }).catch(() => undefined),
+    ];
+  });
+  const drainResult = await Promise.race([
+    Promise.allSettled([...attempts.map((attempt) => attempt.promise), ...sessionDrains]).then(
+      () => "settled" as const,
+    ),
+    new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), 5_000);
     }),
   ]);
+  if (drainResult === "settled") {
+    activeAppServerAttemptsForTest.clear();
+  }
 }
 
 export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
@@ -172,6 +201,21 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
     throw new Error(`Expected ${label} call ${index + 1}`);
   }
   return call;
+}
+
+export function getMockServerVersion() {
+  return "0.132.0";
+}
+
+export function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+export function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
 }
 
 export function threadStartResult(threadId = "thread-1") {
@@ -268,7 +312,7 @@ export function createAppServerHarness(
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     options.onStart?.(authProfileId, agentDir);
     return {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
       addNotificationHandler: (
         handler: (notification: CodexServerNotification) => Promise<void>,
@@ -467,6 +511,7 @@ export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
     vi.useRealTimers();
     clearInternalHooks();
+    clearMemoryPluginState();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -484,14 +529,15 @@ export function setupRunAttemptTestHooks(): void {
     testing.clearPendingCodexNativeHookRelayUnregistersForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearMemoryPluginState();
     clearPluginCommands();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     await closeCodexSandboxExecServersForTests();
     await fs.rm(tempDir, { recursive: true, force: true });

@@ -1,3 +1,4 @@
+// Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
 import {
   normalizeInboundTextNewlines,
@@ -189,6 +190,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       onRecordError: record?.onRecordError ?? (() => undefined),
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
+    await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
     const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
@@ -223,6 +225,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           onRecordError: params.record?.onRecordError ?? (() => undefined),
           trackSessionMetaTask: params.record?.trackSessionMetaTask,
         });
+        await params.afterRecord?.();
       } catch (err) {
         try {
           await params.onPreDispatchFailure?.(err);

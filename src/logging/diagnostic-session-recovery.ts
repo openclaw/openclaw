@@ -1,9 +1,10 @@
+// Diagnostic session recovery types describe session recovery diagnostic payloads.
 import type {
   DiagnosticSessionActiveWorkKind,
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 
-export type DiagnosticSessionRecoverySkipReason =
+type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
   | "active_lane_task"
@@ -11,7 +12,7 @@ export type DiagnosticSessionRecoverySkipReason =
   | "missing_session_ref"
   | "stale_session_state";
 
-export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
+type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;

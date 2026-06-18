@@ -1,3 +1,6 @@
+/**
+ * Test harness mocks for embedded-agent compaction hook coverage.
+ */
 import { vi, type Mock } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -54,7 +57,7 @@ export const sessionCompactImpl = vi.fn(async () => ({
   details: { ok: true },
 }));
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
-export const sanitizeSessionHistoryMock = vi.fn(
+const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
 export const getMemorySearchManagerMock: Mock<
@@ -163,11 +166,13 @@ export const resolveEmbeddedAgentStreamFnMock: Mock<
 > = vi.fn((_params?: unknown) => vi.fn());
 export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
-export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
-  vi.fn(() => undefined);
+const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> = vi.fn(
+  () => undefined,
+);
 export const resolveSandboxContextMock = vi.fn(async () => null);
-export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
-  vi.fn(async () => undefined);
+export const maybeCompactAgentHarnessSessionMock: Mock<
+  (params?: unknown, options?: unknown) => Promise<unknown>
+> = vi.fn(async () => undefined);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({
@@ -458,8 +463,11 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../harness/selection.js", () => ({
+  vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+  }));
+
+  vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 
@@ -520,9 +528,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../agent-settings.js", () => ({
     applyAgentAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
     applyAgentCompactionSettingsFromConfig: applyAgentCompactionSettingsFromConfigMock,
-    ensureAgentCompactionReserveTokens: vi.fn(),
     isSilentOverflowProneModel: vi.fn(() => false),
-    resolveCompactionReserveTokensFloor: vi.fn(() => 0),
   }));
 
   vi.doMock("../models-config.js", () => ({

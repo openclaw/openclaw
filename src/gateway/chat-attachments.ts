@@ -1,3 +1,5 @@
+// Gateway chat attachment parser.
+// Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
@@ -58,6 +60,7 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =
@@ -426,23 +429,6 @@ export async function parseMessageWithAttachments(
     imageOrder,
     offloadedRefs,
   };
-}
-
-export async function resolveChatAttachmentLooksLikeImage(
-  attachment: ChatAttachment,
-  index = 0,
-): Promise<boolean> {
-  const normalized = normalizeAttachment(attachment, index, {
-    stripDataUrlPrefix: true,
-    requireImageMime: false,
-  });
-  if (!isValidBase64(normalized.base64)) {
-    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
-  }
-  const providedMime = normalizeMime(normalized.mime);
-  const sniffedMime = normalizeMime(await sniffMimeFromBase64(normalized.base64));
-  const labelMime = normalizeMime(mimeTypeFromFilePath(normalized.label));
-  return isImageMime(resolveAttachmentMime({ sniffedMime, providedMime, labelMime }));
 }
 
 /**

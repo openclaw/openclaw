@@ -1,3 +1,8 @@
+/**
+ * Footer data provider for session UI.
+ *
+ * Watches git metadata and exposes current branch/repository state without blocking rendering.
+ */
 import { type ExecFileException, execFile, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -101,7 +106,7 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
  * Token stats, model info available via ctx.sessionManager and ctx.model.
  */
-export class FooterDataProvider {
+class FooterDataProvider {
   private cwd: string;
   private static readonly WATCH_DEBOUNCE_MS = 500;
 

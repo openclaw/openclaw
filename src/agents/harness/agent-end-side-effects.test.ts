@@ -1,3 +1,4 @@
+// Verifies agent-end side effects keep plugin hooks independent from auto-capture.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
@@ -34,6 +35,8 @@ describe("agent end side effects", () => {
       }),
     );
 
+    // Plugin hooks are user-visible lifecycle behavior; auto-capture is
+    // opportunistic and must not delay fire-and-forget agent_end dispatch.
     runAgentEndSideEffects({
       event: {
         messages: [],
@@ -41,7 +44,9 @@ describe("agent end side effects", () => {
       },
       ctx: {
         runId: "run-1",
+        sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
+        trigger: "user",
         config: {
           skills: {
             workshop: {
@@ -62,7 +67,9 @@ describe("agent end side effects", () => {
       },
       ctx: {
         runId: "run-1",
+        sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
+        trigger: "user",
         config: {
           skills: {
             workshop: {
@@ -90,6 +97,8 @@ describe("agent end side effects", () => {
   it("still runs agent_end hooks when Skill Research auto-capture fails", async () => {
     mockAutoCapture.mockRejectedValueOnce(new Error("capture failed"));
 
+    // Awaiting callers still get hook completion even when optional research
+    // capture rejects.
     await awaitAgentEndSideEffects({
       event: {
         messages: [],

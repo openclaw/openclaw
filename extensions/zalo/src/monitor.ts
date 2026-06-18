@@ -1,3 +1,4 @@
+// Zalo plugin module implements monitor behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -97,6 +98,21 @@ function loadZaloWebhookModule(): Promise<ZaloWebhookModule> {
   return zaloWebhookModulePromise;
 }
 
+function releaseSharedHostedMediaRouteRef(routePath: string): void {
+  const current = hostedMediaRouteRefs.get(routePath);
+  if (!current) {
+    return;
+  }
+  if (current.count > 1) {
+    current.count -= 1;
+    return;
+  }
+  hostedMediaRouteRefs.delete(routePath);
+  for (const unregisterHandle of current.unregisters) {
+    unregisterHandle();
+  }
+}
+
 function registerSharedHostedMediaRoute(params: {
   path: string;
   accountId: string;
@@ -124,37 +140,11 @@ function registerSharedHostedMediaRoute(params: {
   if (existing) {
     existing.count += 1;
     existing.unregisters.push(unregister);
-    return () => {
-      const current = hostedMediaRouteRefs.get(params.path);
-      if (!current) {
-        return;
-      }
-      if (current.count > 1) {
-        current.count -= 1;
-        return;
-      }
-      hostedMediaRouteRefs.delete(params.path);
-      for (const unregisterHandle of current.unregisters) {
-        unregisterHandle();
-      }
-    };
+    return () => releaseSharedHostedMediaRouteRef(params.path);
   }
 
   hostedMediaRouteRefs.set(params.path, { count: 1, unregisters: [unregister] });
-  return () => {
-    const current = hostedMediaRouteRefs.get(params.path);
-    if (!current) {
-      return;
-    }
-    if (current.count > 1) {
-      current.count -= 1;
-      return;
-    }
-    hostedMediaRouteRefs.delete(params.path);
-    for (const unregisterHandle of current.unregisters) {
-      unregisterHandle();
-    }
-  };
+  return () => releaseSharedHostedMediaRouteRef(params.path);
 }
 
 type ZaloMessagePipelineParams = ZaloProcessingContext & {

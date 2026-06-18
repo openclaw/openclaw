@@ -1,3 +1,5 @@
+// Gateway method authorization scope resolver.
+// Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
@@ -61,21 +63,6 @@ export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
 }
 
-/** Returns true when a method requires the pairing operator scope. */
-export function isPairingMethod(method: string): boolean {
-  return resolveScopedMethod(method) === PAIRING_SCOPE;
-}
-
-/** Returns true when a method can be satisfied by read or stronger write/admin scopes. */
-export function isReadMethod(method: string): boolean {
-  return resolveScopedMethod(method) === READ_SCOPE;
-}
-
-/** Returns true when a method requires write or admin operator scope. */
-export function isWriteMethod(method: string): boolean {
-  return resolveScopedMethod(method) === WRITE_SCOPE;
-}
-
 /** Returns true when a method is reserved for node-role clients instead of operators. */
 export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);
@@ -107,6 +94,8 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
     return undefined;
   }
   const requiredScopes = registration.action.requiredScopes;
+  // Registered session actions default to write scope when they omit a custom
+  // requirement; this preserves the historical mutation boundary.
   return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
 }
 

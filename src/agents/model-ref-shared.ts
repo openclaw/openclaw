@@ -1,3 +1,8 @@
+/**
+ * Shared provider/model reference normalization for static catalogs,
+ * allowlists, and display paths. Manifest policies are optional so tests can
+ * isolate built-in normalization behavior.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
@@ -19,7 +24,7 @@ export type ProviderModelIdNormalizationOptions = {
   manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
 };
 
-export type ManifestModelIdNormalizationProvider = {
+type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
   prefixWhenBare?: string;
@@ -29,12 +34,13 @@ export type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
-export type ManifestModelIdNormalizationRecord = {
+type ManifestModelIdNormalizationRecord = {
   modelIdNormalization?: {
     providers?: Record<string, ManifestModelIdNormalizationProvider>;
   };
 };
 
+/** Join provider and model into the canonical provider/model key. */
 export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -51,6 +57,7 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
+/** Normalize a static provider model ID with built-in and optional manifest policy. */
 export function normalizeStaticProviderModelId(
   provider: string,
   model: string,
@@ -78,6 +85,7 @@ export function normalizeStaticProviderModelId(
   return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId);
 }
 
+/** Normalize a configured catalog model ID for comparisons against provider catalogs. */
 export function normalizeConfiguredProviderCatalogModelId(
   provider: string,
   model: string,
@@ -116,6 +124,7 @@ function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelR
   };
 }
 
+/** Resolve an allowlist entry to a canonical provider/model key. */
 export function resolveStaticAllowlistModelKey(
   raw: string,
   defaultProvider: string,
@@ -127,6 +136,7 @@ export function resolveStaticAllowlistModelKey(
   return modelKey(parsed.provider, parsed.model);
 }
 
+/** Preserve literal provider/model refs that already include a provider prefix twice. */
 export function formatLiteralProviderPrefixedModelRef(provider: string, modelRef: string): string {
   const providerId = normalizeProviderId(provider);
   const trimmedRef = modelRef.trim();

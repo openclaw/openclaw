@@ -1,3 +1,5 @@
+// End-to-end subscription tests cover usage, lifecycle, tool logging,
+// messaging/media side effects, and replay-state behavior for embedded runs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +24,8 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
+    // Block replies can schedule nested microtasks; drain twice before checking
+    // delivery state in broad subscription tests.
     await Promise.resolve();
     await Promise.resolve();
   }
@@ -54,13 +58,15 @@ describe("subscribeEmbeddedAgentSession", () => {
   function createSubscribedHarness(
     options: Omit<Parameters<typeof subscribeEmbeddedAgentSession>[0], "session">,
   ) {
+    // Default trusted media tools to built-ins so tests that opt into custom
+    // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       ...options,
       trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
-    return { emit };
+    return { emit, subscription };
   }
 
   function emitAssistantTextDelta(
@@ -135,6 +141,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   }
 
   async function captureToolLifecycleLogSubsystems(messageChannel?: string): Promise<string[]> {
+    // Use a temporary file-backed logger so subsystem attribution is verified
+    // against real serialized log lines.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-log-attribution-"));
     const logFile = path.join(tempDir, "openclaw.log");
     try {
@@ -493,7 +501,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -566,6 +574,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
     expect(mediaPayloads).toHaveLength(1);
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
   });
 
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
@@ -768,6 +777,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       audioAsVoice: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
   });
 
@@ -954,6 +964,20 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Visible answer");
     expect(payloads[0]?.delta).toBe("Visible answer");
+  });
+
+  it("replaces leaked MiniMax reasoning when its orphan close arrives in a later delta", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain");
+    emitAssistantTextDelta(emit, "</mm:think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toMatchObject([
+      { text: "private chain", delta: "private chain" },
+      { text: "Visible answer", delta: "", replace: true },
+    ]);
   });
 
   it("replaces malformed streamed reasoning when orphan close tags split across deltas", () => {
@@ -1275,6 +1299,43 @@ describe("subscribeEmbeddedAgentSession", () => {
     const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
     expect(error).toContain("API rate limit reached");
+  });
+
+  it("reads terminal abort state before emitting lifecycle:end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    let terminalAborted = false;
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-aborted",
+      sessionKey: "test-session",
+      onAgentEvent,
+      isTerminalAborted: () => terminalAborted,
+    });
+    const assistantMessage = {
+      api: "test",
+      provider: "test",
+      model: "test",
+      role: "assistant",
+      stopReason: "aborted",
+      content: [],
+      usage: makeZeroUsageSnapshot(),
+      timestamp: 0,
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    terminalAborted = true;
+    emit({ type: "agent_end", messages: [assistantMessage] });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        stopReason: "aborted",
+        aborted: true,
+      }),
+    );
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {

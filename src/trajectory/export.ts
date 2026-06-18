@@ -1,3 +1,4 @@
+// Trajectory export helpers package recorded trajectories for diagnostics.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -5,6 +6,10 @@ import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  isCanonicalSessionTranscriptEntry,
+  scanSessionTranscriptTree,
+} from "../config/sessions/transcript-tree.js";
 import {
   jsonSupportBundleFile,
   jsonlSupportBundleFile,
@@ -18,6 +23,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
@@ -28,6 +34,9 @@ import type {
   TrajectoryToolDefinition,
 } from "./types.js";
 
+// Trajectory bundle exporter: joins persisted session JSONL with runtime
+// trace JSONL, redacts local/support-sensitive data, and writes a portable
+// support bundle for debugging agent behavior.
 type BuildTrajectoryBundleParams = {
   outputDir: string;
   sessionFile: string;
@@ -117,6 +126,8 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
   if (version < 2) {
+    // Older session logs predate entry ids. Synthetic ids preserve branch order
+    // long enough to export the reachable suffix without mutating source files.
     let previousId: string | null = null;
     let index = 0;
     for (const entry of entries) {
@@ -173,18 +184,28 @@ async function readSessionBranch(filePath: string): Promise<{
   const entries = fileEntries.filter(
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
+      isCanonicalSessionTranscriptEntry(entry) &&
       typeof (entry as { id?: unknown }).id === "string" &&
       (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
         typeof (entry as { timestamp?: unknown }).timestamp === "number"),
   );
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const leafId = entries.at(-1)?.id ?? null;
+  const tree = scanSessionTranscriptTree(fileEntries);
+  if (!tree.hasLeafUpdate) {
+    return {
+      header,
+      leafId: entries.at(-1)?.id ?? null,
+      branchEntries: entries,
+      warnings,
+    };
+  }
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
   const branchEntries: SessionEntry[] = [];
   const seen = new Set<string>();
-  let currentId = leafId;
+  let descendantEntry: SessionEntry | undefined;
+  let currentId = tree.leafId;
   while (currentId) {
     if (seen.has(currentId)) {
-      const cycleEntry = byId.get(currentId);
+      const cycleEntry = tree.byId.get(currentId)?.entry;
       warnings.push({
         source: "session",
         code: "cyclic-session-branch",
@@ -194,7 +215,7 @@ async function readSessionBranch(filePath: string): Promise<{
       break;
     }
     seen.add(currentId);
-    const current = byId.get(currentId);
+    const current = tree.byId.get(currentId);
     if (!current) {
       warnings.push({
         source: "session",
@@ -204,20 +225,27 @@ async function readSessionBranch(filePath: string): Promise<{
       });
       break;
     }
-    branchEntries.unshift(current);
-    const parentId = typeof current.parentId === "string" ? current.parentId : null;
-    if (parentId && !byId.has(parentId)) {
+    const visibleEntry = entriesById.get(currentId);
+    if (visibleEntry) {
+      const normalizedEntry = { ...visibleEntry, parentId: current.parentId };
+      if (descendantEntry) {
+        descendantEntry.parentId = normalizedEntry.id;
+      }
+      branchEntries.unshift(normalizedEntry);
+      descendantEntry = normalizedEntry;
+    }
+    if (current.parentId && !tree.byId.has(current.parentId)) {
       warnings.push({
         source: "session",
         code: "incomplete-session-branch",
-        row: rowByEntry.get(current) ?? 0,
+        row: rowByEntry.get(current.entry) ?? 0,
         message: "Exported the reachable session branch suffix after a missing parent link.",
       });
       break;
     }
-    currentId = parentId;
+    currentId = current.parentId;
   }
-  return { header, leafId, branchEntries, warnings };
+  return { header, leafId: tree.leafId, branchEntries, warnings };
 }
 
 async function parseJsonlFile<T>(
@@ -389,6 +417,10 @@ function extractAssistantToolCalls(
   });
 }
 
+function sanitizeTrajectoryExportValue<T>(value: T): T {
+  return redactSecrets(sanitizeDiagnosticPayload(value)) as T;
+}
+
 function buildTranscriptEvents(params: {
   entries: SessionEntry[];
   sessionId: string;
@@ -525,6 +557,15 @@ function trajectoryJsonlFile(
   return jsonlSupportBundleFile(pathName, lines);
 }
 
+function redactTrajectoryBundleFileContent(
+  file: DiagnosticSupportBundleFile,
+): DiagnosticSupportBundleFile {
+  return {
+    ...file,
+    content: redactToolPayloadText(file.content),
+  };
+}
+
 function buildTrajectoryExportRedaction(params: {
   workspaceDir: string;
 }): TrajectoryExportRedaction {
@@ -555,6 +596,8 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceRedacted = redactWorkspacePathString(value, redaction);
+  // Redact only strings that look path-like after workspace substitution. This
+  // keeps ordinary model text readable while still removing local host details.
   if (
     workspaceRedacted !== value ||
     path.isAbsolute(workspaceRedacted) ||
@@ -585,19 +628,57 @@ function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedact
   return next;
 }
 
+function uniqueRedactedObjectKey(key: string, usedKeys: Set<string>): string {
+  if (!usedKeys.has(key)) {
+    usedKeys.add(key);
+    return key;
+  }
+  let index = 2;
+  while (usedKeys.has(`${key}#${index}`)) {
+    index += 1;
+  }
+  const unique = `${key}#${index}`;
+  usedKeys.add(unique);
+  return unique;
+}
+
+function redactTrajectoryExportObjectKeys(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTrajectoryExportObjectKeys(entry, redaction));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const usedKeys = new Set<string>();
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
+    // Object keys can contain file paths or tool payload snippets too. Preserve
+    // all entries even when redaction collapses two original keys together.
+    next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
+      entry,
+      redaction,
+    );
+  }
+  return next;
+}
+
+function redactTrajectoryExportValue(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  const redactedValue = sanitizeTrajectoryExportValue(redactLocalPathValues(value, redaction));
+  return redactTrajectoryExportObjectKeys(redactedValue, redaction);
+}
+
 function redactEventForExport(
   event: TrajectoryEvent,
   redaction: TrajectoryExportRedaction,
 ): TrajectoryEvent {
-  return {
-    ...event,
-    workspaceDir: event.workspaceDir
-      ? maybeRedactPathString(event.workspaceDir, redaction)
-      : undefined,
-    data: event.data
-      ? (redactLocalPathValues(event.data, redaction) as Record<string, unknown>)
-      : undefined,
-  };
+  return redactTrajectoryExportValue(event, redaction) as TrajectoryEvent;
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
@@ -678,6 +759,8 @@ function markInvokedSkills(params: { skills: unknown; events: TrajectoryEvent[] 
       return collectPotentialPathStrings(event.data?.arguments);
     }),
   );
+  // Skill invocation is inferred from tool-call file paths in captured prompts;
+  // this keeps the export self-contained without re-reading skill state later.
   const normalizedInvokedPaths = new Set(
     [...invokedPaths].map((value) => normalizePathForMatch(value)),
   );
@@ -870,6 +953,8 @@ export function resolveDefaultTrajectoryExportDir(params: {
   );
 }
 
+// Public export API used by CLI/tests. The bundle is intentionally sanitized
+// before writing so sharing it should not expose credentials or local paths.
 export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
   manifest: TrajectoryBundleManifest;
   outputDir: string;
@@ -967,19 +1052,25 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
   if (metadataCapture) {
     files.push(
-      jsonSupportBundleFile("metadata.json", redactLocalPathValues(metadataCapture, redaction)),
+      jsonSupportBundleFile(
+        "metadata.json",
+        redactTrajectoryExportValue(metadataCapture, redaction),
+      ),
     );
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
     files.push(
-      jsonSupportBundleFile("artifacts.json", redactLocalPathValues(artifactsCapture, redaction)),
+      jsonSupportBundleFile(
+        "artifacts.json",
+        redactTrajectoryExportValue(artifactsCapture, redaction),
+      ),
     );
     supplementalFiles.push("artifacts.json");
   }
   if (promptsCapture) {
     files.push(
-      jsonSupportBundleFile("prompts.json", redactLocalPathValues(promptsCapture, redaction)),
+      jsonSupportBundleFile("prompts.json", redactTrajectoryExportValue(promptsCapture, redaction)),
     );
     supplementalFiles.push("prompts.json");
   }
@@ -991,12 +1082,12 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   files.push(
     jsonSupportBundleFile(
       "session-branch.json",
-      redactLocalPathValues(
-        sanitizeDiagnosticPayload({
+      redactTrajectoryExportValue(
+        {
           header,
           leafId,
           entries: branchEntries,
-        }),
+        },
         redaction,
       ),
     ),
@@ -1005,7 +1096,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     files.push(
       textSupportBundleFile(
         "system-prompt.txt",
-        redactLocalPathValues(bundleRuntimeContext.systemPrompt, redaction) as string,
+        redactTrajectoryExportValue(bundleRuntimeContext.systemPrompt, redaction) as string,
       ),
     );
   }
@@ -1013,21 +1104,29 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     files.push(
       jsonSupportBundleFile(
         "tools.json",
-        redactLocalPathValues(bundleRuntimeContext.tools, redaction),
+        redactTrajectoryExportValue(bundleRuntimeContext.tools, redaction),
       ),
     );
   }
 
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
+  const redactedFiles = files.map(redactTrajectoryBundleFileContent);
+  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
   manifest.contents = contents;
+  const redactedManifest = redactTrajectoryExportValue(
+    manifest,
+    redaction,
+  ) as TrajectoryBundleManifest;
+  const manifestFile = redactTrajectoryBundleFileContent(
+    jsonSupportBundleFile("manifest.json", redactedManifest),
+  );
 
   await writeSupportBundleDirectory({
     outputDir: params.outputDir,
-    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
+    files: [manifestFile, ...redactedFiles],
   });
 
   return {
-    manifest,
+    manifest: redactedManifest,
     outputDir: params.outputDir,
     events,
     header,

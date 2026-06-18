@@ -1,3 +1,7 @@
+/**
+ * Bundled Codex plugin entry: app-server harness, model provider, media
+ * understanding, migration provider, CLI-session commands, and binding hooks.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -19,6 +23,7 @@ import {
   resumeCodexCliSessionOnNode,
   resolveCodexCliSessionForBindingOnNode,
 } from "./src/node-cli-sessions.js";
+import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
 export default definePluginEntry({
   id: "codex",
@@ -28,6 +33,8 @@ export default definePluginEntry({
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolveCurrentPluginConfig = () =>
+      // Codex plugin config can change at runtime; resolve from live config for
+      // harness attempts and binding claims instead of keeping startup values.
       resolveLivePluginConfigObject(
         resolveCurrentConfig,
         "codex",
@@ -39,6 +46,9 @@ export default definePluginEntry({
     api.registerProvider(buildCodexProvider({ pluginConfig: api.pluginConfig }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
+    );
+    api.registerWebSearchProvider(
+      createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     for (const command of createCodexCliSessionNodeHostCommands()) {
@@ -92,6 +102,8 @@ export default definePluginEntry({
             mutate: async (update) => {
               await mutateConfigFile({
                 mutate: (draft) => {
+                  // Create the nested plugin config path on demand so codex
+                  // plugin commands can enable/update Codex-managed plugins.
                   const root = draft as Record<string, unknown>;
                   root.plugins = (root.plugins ?? {}) as Record<string, unknown>;
                   const pluginsBlock = root.plugins as Record<string, unknown>;

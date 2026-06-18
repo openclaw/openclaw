@@ -1,3 +1,4 @@
+// OpenClaw test instance helper spawns isolated OpenClaw processes.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -71,6 +72,8 @@ type BoundedStringLog = string[] & {
   byteLength?: number;
   truncated?: boolean;
 };
+
+type OpenClawTestChildProcess = Pick<ChildProcessWithoutNullStreams, "kill" | "pid">;
 
 function createBoundedStringLog(): string[] {
   const log = [] as BoundedStringLog;
@@ -151,6 +154,7 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
     cwd,
     env: { ...process.env, VITEST: "1" },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: shouldUseOpenClawTestProcessGroup(),
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
@@ -166,7 +170,7 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
   ]);
 
   if (completed === null) {
-    child.kill("SIGKILL");
+    signalOpenClawTestProcess(child, "SIGKILL");
     throw new Error(`timeout preparing gateway entrypoint\n${formatLogs(stdout, stderr)}`);
   }
   if (completed.code !== 0) {
@@ -400,6 +404,7 @@ export async function createOpenClawTestInstance(
           cwd,
           env,
           stdio: ["ignore", "pipe", "pipe"],
+          detached: shouldUseOpenClawTestProcessGroup(),
         },
       );
 
@@ -427,7 +432,7 @@ export async function createOpenClawTestInstance(
       }
       if (!hasChildExited(child) && !child.killed) {
         try {
-          child.kill("SIGTERM");
+          signalOpenClawTestProcess(child, "SIGTERM");
         } catch {
           // ignore
         }
@@ -438,7 +443,7 @@ export async function createOpenClawTestInstance(
       );
       if (!exited && !hasChildExited(child) && !child.killed) {
         try {
-          child.kill("SIGKILL");
+          signalOpenClawTestProcess(child, "SIGKILL");
         } catch {
           // ignore
         }
@@ -478,6 +483,7 @@ async function runCommand(params: {
     cwd: params.cwd,
     env: params.env,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: shouldUseOpenClawTestProcessGroup(),
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
@@ -492,7 +498,7 @@ async function runCommand(params: {
     sleep(params.timeoutMs).then(() => null),
   ]);
   if (completed === null) {
-    child.kill("SIGKILL");
+    signalOpenClawTestProcess(child, "SIGKILL");
     await waitForGatewayExit(child, GATEWAY_STOP_TIMEOUT_MS);
     throw new Error(
       `command timed out after ${params.timeoutMs}ms: ${params.args.join(" ")}\n${formatLogs(stdout, stderr)}`,
@@ -505,10 +511,31 @@ async function runCommand(params: {
   };
 }
 
+function shouldUseOpenClawTestProcessGroup(): boolean {
+  return process.platform !== "win32";
+}
+
+function signalOpenClawTestProcess(
+  child: OpenClawTestChildProcess,
+  signal: NodeJS.Signals,
+  killProcess: (pid: number, signal: NodeJS.Signals) => boolean = process.kill,
+): void {
+  if (shouldUseOpenClawTestProcessGroup() && typeof child.pid === "number") {
+    try {
+      killProcess(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to the direct child if the process group already exited.
+    }
+  }
+  child.kill(signal);
+}
+
 export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
   hasChildExited,
+  signalOpenClawTestProcess,
   waitForPortOpen,
 };

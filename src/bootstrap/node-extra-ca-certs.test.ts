@@ -1,10 +1,14 @@
+// Covers automatic NODE_EXTRA_CA_CERTS discovery and validation.
 import { describe, expect, it } from "vitest";
 import {
   isNodeVersionManagerRuntime,
-  LINUX_CA_BUNDLE_PATHS,
   resolveAutoNodeExtraCaCerts,
   resolveLinuxSystemCaBundle,
 } from "./node-extra-ca-certs.js";
+
+const DEBIAN_CA_BUNDLE_PATH = "/etc/ssl/certs/ca-certificates.crt";
+const FEDORA_CA_BUNDLE_PATH = "/etc/pki/tls/certs/ca-bundle.crt";
+const GENERIC_CA_BUNDLE_PATH = "/etc/ssl/ca-bundle.pem";
 
 function allowOnly(path: string) {
   return (candidate: string) => {
@@ -19,7 +23,7 @@ describe("resolveLinuxSystemCaBundle", () => {
     expect(
       resolveLinuxSystemCaBundle({
         platform: "darwin",
-        accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[0]),
+        accessSync: allowOnly(DEBIAN_CA_BUNDLE_PATH),
       }),
     ).toBeUndefined();
   });
@@ -28,9 +32,9 @@ describe("resolveLinuxSystemCaBundle", () => {
     expect(
       resolveLinuxSystemCaBundle({
         platform: "linux",
-        accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[1]),
+        accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
       }),
-    ).toBe(LINUX_CA_BUNDLE_PATHS[1]);
+    ).toBe(FEDORA_CA_BUNDLE_PATH);
   });
 });
 
@@ -82,7 +86,10 @@ describe("isNodeVersionManagerRuntime", () => {
 
   it("detects mise via execPath", () => {
     expect(
-      isNodeVersionManagerRuntime({}, "/home/test/.local/share/mise/installs/node/22.14.0/bin/node"),
+      isNodeVersionManagerRuntime(
+        {},
+        "/home/test/.local/share/mise/installs/node/22.14.0/bin/node",
+      ),
     ).toBe(true);
   });
 
@@ -116,7 +123,7 @@ describe("resolveAutoNodeExtraCaCerts", () => {
           NODE_EXTRA_CA_CERTS: "/custom/ca.pem",
         },
         platform: "linux",
-        accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[0]),
+        accessSync: allowOnly(DEBIAN_CA_BUNDLE_PATH),
       }),
     ).toBeUndefined();
   });
@@ -127,7 +134,7 @@ describe("resolveAutoNodeExtraCaCerts", () => {
         env: {},
         platform: "linux",
         execPath: "/usr/bin/node",
-        accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[0]),
+        accessSync: allowOnly(DEBIAN_CA_BUNDLE_PATH),
       }),
     ).toBeUndefined();
   });
@@ -138,8 +145,8 @@ describe("resolveAutoNodeExtraCaCerts", () => {
         env: { NVM_DIR: "/home/test/.nvm" },
         platform: "linux",
         execPath: "/usr/bin/node",
-        accessSync: allowOnly(LINUX_CA_BUNDLE_PATHS[2]),
+        accessSync: allowOnly(GENERIC_CA_BUNDLE_PATH),
       }),
-    ).toBe(LINUX_CA_BUNDLE_PATHS[2]);
+    ).toBe(GENERIC_CA_BUNDLE_PATH);
   });
 });

@@ -1,3 +1,4 @@
+// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -16,6 +17,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,
+  readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
@@ -72,6 +74,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   workspaceDir: string;
   agentId: string;
 } {
+  // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig();
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId
@@ -149,6 +152,7 @@ function buildSkillVerificationOutput(
   result: ClawHubSkillVerificationResponse,
   target: ResolvedClawHubSkillVerificationTarget,
 ): Record<string, unknown> {
+  const verifiedSourceUrl = readVerifiedClawHubSkillSourceUrl(result.provenance);
   return {
     ...result,
     openclaw: {
@@ -158,6 +162,7 @@ function buildSkillVerificationOutput(
         registry: target.resolution.registry,
         installedVersion: target.resolution.installedVersion,
       },
+      ...(verifiedSourceUrl ? { verifiedSourceUrl } : {}),
     },
   };
 }
@@ -282,18 +287,28 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("install")
     .description("Install a skill from ClawHub, git, or a local directory")
-    .argument("<slug>", "ClawHub skill slug, git:<repo>, or local skill directory")
+    .argument(
+      "<skill-ref>",
+      "ClawHub skill ref (@owner/slug), git:<repo>, or local skill directory",
+    )
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
+    .option(
+      "--force-install",
+      "Install a pending GitHub-backed skill before ClawHub scan completes",
+      false,
+    )
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
+    .addHelpText("after", "\nExamples:\n  openclaw skills install @owner/weather\n")
     .action(
       async (
         slug: string,
         opts: {
           version?: string;
           force?: boolean;
+          forceInstall?: boolean;
           global?: boolean;
           agent?: string;
           as?: string;
@@ -343,6 +358,7 @@ export function registerSkillsCli(program: Command) {
             slug,
             version: opts.version,
             force: Boolean(opts.force),
+            ...(opts.forceInstall ? { forceInstall: true } : {}),
             logger: {
               info: (message) => defaultRuntime.log(message),
             },
@@ -365,12 +381,17 @@ export function registerSkillsCli(program: Command) {
     .description("Update ClawHub-installed skills in the active or shared managed directory")
     .argument("[slug]", "Single skill slug")
     .option("--all", "Update all tracked ClawHub skills", false)
+    .option(
+      "--force-install",
+      "Install a pending GitHub-backed skill before ClawHub scan completes",
+      false,
+    )
     .option("--global", "Update skills in the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(
       async (
         slug: string | undefined,
-        opts: { all?: boolean; global?: boolean; agent?: string },
+        opts: { all?: boolean; forceInstall?: boolean; global?: boolean; agent?: string },
         command: Command,
       ) => {
         try {
@@ -396,12 +417,15 @@ export function registerSkillsCli(program: Command) {
           const results = await updateSkillsFromClawHub({
             workspaceDir,
             slug,
+            ...(opts.forceInstall ? { forceInstall: true } : {}),
             logger: {
               info: (message) => defaultRuntime.log(message),
             },
           });
+          let failed = false;
           for (const result of results) {
             if (!result.ok) {
+              failed = true;
               defaultRuntime.error(result.error);
               continue;
             }
@@ -412,6 +436,9 @@ export function registerSkillsCli(program: Command) {
               continue;
             }
             defaultRuntime.log(`${result.slug} already at ${result.version}`);
+          }
+          if (failed) {
+            defaultRuntime.exit(1);
           }
         } catch (err) {
           defaultRuntime.error(String(err));
@@ -457,6 +484,7 @@ export function registerSkillsCli(program: Command) {
           } else {
             const verification = await fetchClawHubSkillVerification({
               slug: target.slug,
+              ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,
@@ -714,8 +742,8 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, proposalId });
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;

@@ -1,9 +1,11 @@
+// Covers diagnostic event emission and metadata handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  emitTrustedSecurityEvent,
   formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
@@ -239,6 +241,12 @@ describe("diagnostic-events", () => {
 
     expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
     expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
+    expect(
+      formatDiagnosticTraceparentForPropagation(
+        { trace },
+        { trusted: false, trustedTraceContext: true },
+      ),
+    ).toBeUndefined();
   });
 
   it("shares diagnostic state across duplicate module instances", async () => {
@@ -307,6 +315,78 @@ describe("diagnostic-events", () => {
     });
     expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
+  });
+
+  it("emits canonical security events only through the trusted security helper", () => {
+    const internalEvents: Array<{
+      action?: string;
+      eventId?: string;
+      trusted: boolean;
+      type: string;
+    }> = [];
+    onInternalDiagnosticEvent((event, metadata) => {
+      internalEvents.push({
+        action: event.type === "security.event" ? event.action : undefined,
+        eventId: event.type === "security.event" ? event.eventId : undefined,
+        trusted: metadata.trusted,
+        type: event.type,
+      });
+    });
+
+    emitDiagnosticEvent({
+      type: "security.event",
+      eventId: "untrusted-security-event",
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      severity: "medium",
+    } as unknown as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedDiagnosticEvent({
+      type: "security.event",
+      eventId: "generic-trusted-security-event",
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      severity: "medium",
+    } as unknown as Parameters<typeof emitTrustedDiagnosticEvent>[0]);
+    emitTrustedSecurityEvent({
+      eventId: "security-event-1",
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      severity: "medium",
+    });
+
+    expect(internalEvents).toEqual([
+      {
+        action: "tool.execution.blocked",
+        eventId: "security-event-1",
+        trusted: true,
+        type: "security.event",
+      },
+    ]);
+  });
+
+  it("keeps trusted security events off the public diagnostic stream", () => {
+    const publicEvents: string[] = [];
+    const internalEvents: Array<{ trusted: boolean; type: string }> = [];
+    onDiagnosticEvent((event) => {
+      publicEvents.push(event.type);
+    });
+    onInternalDiagnosticEvent((event, metadata) => {
+      internalEvents.push({ trusted: metadata.trusted, type: event.type });
+    });
+
+    emitTrustedSecurityEvent({
+      eventId: "security-event-public-filter",
+      category: "auth",
+      action: "gateway.auth.failed",
+      outcome: "failure",
+      severity: "medium",
+    });
+
+    expect(publicEvents).toStrictEqual([]);
+    expect(internalEvents).toEqual([{ trusted: true, type: "security.event" }]);
   });
 
   it("isolates diagnostic metadata from listener mutation", () => {

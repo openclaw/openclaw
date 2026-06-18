@@ -1,3 +1,4 @@
+/** Discovers plugin candidates from bundled, workspace, global, package, and bundle roots. */
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -42,7 +43,7 @@ import { resolvePluginSourceRoots } from "./roots.js";
 import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
-} from "./status-dependencies.js";
+} from "./status-dependencies-core.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
@@ -63,6 +64,7 @@ const packageManifestProcessCache = new Map<
   { mtimeMs: number; size: number; manifest: PackageManifest | null }
 >();
 
+/** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
   idHint: string;
   source: string;
@@ -87,6 +89,7 @@ export type PluginCandidate = {
   rawPackageManifest?: PackageManifest;
 };
 
+/** Discovery candidates plus warnings/errors emitted while scanning roots. */
 export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];

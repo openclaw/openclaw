@@ -1,3 +1,4 @@
+// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -64,7 +65,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import type { PluginDependencySpecMap } from "./status-dependencies.js";
+import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
   if (fs.existsSync(sourcePath)) {
@@ -382,6 +383,7 @@ function mergeManifestContracts(
   for (const key of [
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
+    "trustedToolPolicies",
     "externalAuthProviders",
     "embeddingProviders",
     "memoryEmbeddingProviders",
@@ -1202,3 +1204,8 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+
+export const testing = {
+  mergeManifestContracts,
+};
+export { testing as __testing };

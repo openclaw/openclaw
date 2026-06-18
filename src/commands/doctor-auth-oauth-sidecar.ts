@@ -1,3 +1,4 @@
+/** Doctor repair for legacy OAuth sidecar files and inline auth profile stores. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -44,7 +45,7 @@ type LegacyOAuthUnreferencedSidecar = {
   sidecarPath: string;
 };
 
-export type LegacyOAuthSidecarRepairResult = {
+type LegacyOAuthSidecarRepairResult = {
   detected: string[];
   changes: string[];
   warnings: string[];
@@ -186,6 +187,12 @@ function backupLegacyOAuthSidecarStore(authPath: string, now: () => number): str
   return backupPath;
 }
 
+/**
+ * Migrates legacy Codex OAuth sidecar secrets back into inline auth profile credentials.
+ *
+ * Only sidecar files that were successfully imported and are not referenced by another failed
+ * profile are removed; unreferenced sidecars stay because unknown agent directories may use them.
+ */
 export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   cfg: OpenClawConfig;
   prompter: Pick<DoctorPrompter, "confirmAutoFix">;
@@ -327,4 +334,3 @@ export const testing = {
   buildLegacyOAuthSecretAad: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretAad,
   buildLegacyOAuthSecretKey: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretKey,
 };
-export { testing as __testing };

@@ -1,3 +1,4 @@
+// Covers plugin trust audit findings and remediation hints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -148,7 +149,7 @@ vi.mock("../agents/tool-policy.js", () => ({
     profile === "coding" || profile === "minimal" ? {} : undefined,
 }));
 
-vi.mock("./audit-tool-policy.js", () => ({
+vi.mock("../agents/sandbox-tool-policy.js", () => ({
   pickSandboxToolPolicy: () => undefined,
 }));
 

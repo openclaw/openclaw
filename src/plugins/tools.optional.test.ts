@@ -1,3 +1,4 @@
+// Verifies optional plugin tool registration and absence handling.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -371,6 +372,7 @@ function createXaiToolManifest() {
     },
     toolMetadata: {
       x_search: {
+        replaySafe: true,
         authSignals: [{ provider: "xai" }],
         configSignals: [
           {
@@ -1268,6 +1270,7 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
+    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });

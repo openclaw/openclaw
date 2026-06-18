@@ -1,3 +1,4 @@
+// Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
@@ -37,12 +38,14 @@ export type ConfigState = {
   configActiveSection: string | null;
   configActiveSubsection: string | null;
   pendingUpdateExpectedVersion: string | null;
+  pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
   chatError?: string | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 export type LoadConfigOptions = {
   discardPendingChanges?: boolean;
@@ -282,15 +285,28 @@ export async function runUpdate(state: ConfigState) {
     const res = await state.client.request<{
       ok?: boolean;
       result?: { status?: string; reason?: string; after?: { version?: string | null } };
+      handoff?: { status?: string };
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
     const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
+    const handoffStarted =
+      res.ok === true &&
+      status === "skipped" &&
+      res.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
+      res.handoff?.status === "started";
+    if (handoffStarted) {
+      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateHandoff = true;
+      return;
+    }
     if (status === "ok" && res.ok === true) {
       state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateHandoff = false;
       return;
     }
     state.pendingUpdateExpectedVersion = null;
+    state.pendingUpdateHandoff = false;
     state.updateStatusBanner = resolveUpdateStatusBanner({
       status,
       reason: res.result?.reason,
@@ -298,6 +314,7 @@ export async function runUpdate(state: ConfigState) {
   } catch (err) {
     state.lastError = String(err);
     state.pendingUpdateExpectedVersion = null;
+    state.pendingUpdateHandoff = false;
   } finally {
     state.updateRunning = false;
   }

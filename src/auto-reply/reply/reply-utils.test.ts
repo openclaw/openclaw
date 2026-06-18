@@ -1,7 +1,8 @@
+// Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { parseAudioTag } from "./audio-tags.js";
+import { parseAudioTag } from "../../media/audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -149,7 +150,7 @@ describe("normalizeReplyPayload", () => {
     expect(reply.channelData).toEqual(payload.channelData);
   });
 
-  it("records skip reasons for silent/empty payloads", () => {
+  it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
       {
@@ -158,6 +159,21 @@ describe("normalizeReplyPayload", () => {
         reason: "silent",
       },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
+      {
+        name: "internalArtifact <channel|>",
+        payload: { text: "<channel|>" },
+        reason: "silent",
+      },
+      {
+        name: "internalArtifact set-thought",
+        payload: { text: "set-thought <channel|>" },
+        reason: "silent",
+      },
+      {
+        name: "internalArtifact box-drawing separator",
+        payload: { text: "───" },
+        reason: "silent",
+      },
     ] as const;
     for (const testCase of cases) {
       const reasons: string[] = [];
@@ -739,7 +755,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("starts typing and refreshes ttl on text for thinking mode", async () => {
+  it("starts typing on reasoning delta and refreshes ttl on text for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -747,8 +763,15 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
+    // Reasoning delta starts the typing loop and refreshes TTL,
+    // even before any renderable assistant text has arrived.
     await signaler.signalReasoningDelta();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+
+    // Once typing is active, text delta only refreshes TTL.
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);

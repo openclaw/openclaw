@@ -1,3 +1,11 @@
+/**
+ * Shared compact tool-call display helpers.
+ * Redacts and summarizes arguments into short labels/details for chat and UI
+ * tool update streams.
+ */
+import {
+  asOptionalObjectRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -5,13 +13,13 @@ import {
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
-import { asRecord } from "./tool-display-record.js";
 
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
 
+/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -19,7 +27,8 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type ToolSearchCodeDisplayTarget = {
+/** Normalized display target for code/search bridge tools. */
+type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
   displayArgs?: Record<string, unknown>;
@@ -35,10 +44,12 @@ type CoerceDisplayValueOptions = {
   maxArrayEntries?: number;
 };
 
+/** Normalize a tool name for fallback display. */
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
+/** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -75,6 +86,7 @@ function resolveActionArg(args: unknown): string | undefined {
   return action || undefined;
 }
 
+/** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -183,6 +195,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
+/** Format a detail path/key into a short display label. */
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
   let last = "";
   for (const segment of raw.split(".")) {
@@ -339,8 +352,13 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   add(record.q);
   add(record.search);
   add(record.input);
+  // Parallel's `web_search` provider uses the native Parallel Search shape
+  // (`objective` + `search_queries`). Surface those so CLI progress and
+  // Codex activity metadata render the query context instead of a bare
+  // `search`.
+  add(record.objective);
 
-  for (const key of ["search_query", "image_query", "queries"]) {
+  for (const key of ["search_query", "image_query", "queries", "search_queries"]) {
     const value = record[key];
     if (!Array.isArray(value)) {
       continue;
@@ -364,6 +382,8 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
 }
 
 function parseToolSearchCall(code: string): { target: string; args?: string } | undefined {
+  // This is a bounded summary parser for display only; execution still uses the
+  // real tool-search bridge and schema validation.
   const prefixMatch = code.match(/openclaw\.tools\.call\s*\(\s*/s);
   if (!prefixMatch || prefixMatch.index === undefined) {
     return undefined;
@@ -565,6 +585,7 @@ function summarizeToolSearchCallInput(raw: string | undefined): string | undefin
   return undefined;
 }
 
+/** Infer the bridged tool target displayed for tool_search_code snippets. */
 export function resolveToolSearchCodeDisplayTarget(
   args: unknown,
 ): ToolSearchCodeDisplayTarget | undefined {
@@ -771,6 +792,7 @@ function resolveToolVerbAndDetail(params: {
   return { verb, detail };
 }
 
+/** Normalize final detail text before attaching it to a tool display line. */
 export function formatToolDetailText(
   detail: string | undefined,
   opts: { prefixWithWith?: boolean } = {},

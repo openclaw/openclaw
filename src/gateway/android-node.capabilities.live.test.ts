@@ -1,7 +1,12 @@
+// Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
+import {
+  ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+  findMissingRequiredAndroidNodeCommands,
+} from "../../test/helpers/gateway/android-node-capabilities-required-commands.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -218,6 +223,15 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
       expectRecord(obj.memory, "device.health memory payload");
+    },
+  },
+  "device.apps": {
+    buildParams: () => ({ query: "calendar", includeSystem: true, limit: 5 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("device.apps", payload);
+      expect(Array.isArray(obj.apps)).toBe(true);
     },
   },
   "notifications.list": {
@@ -565,6 +579,21 @@ describeLive("android node capability integration (preconditioned)", () => {
     if (missingProfiles.length > 0) {
       throw new Error(
         `unmapped advertised commands: ${missingProfiles.join(", ")} (update COMMAND_PROFILES before running this suite)`,
+      );
+    }
+
+    const missingRequiredCommands = findMissingRequiredAndroidNodeCommands({
+      commandsToRun,
+      requiredCommands: ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+    });
+    if (missingRequiredCommands.length > 0) {
+      throw new Error(
+        [
+          `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
+          `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
+          `advertised by node.describe: ${commands.join(", ")}`,
+          "precondition: update the Android node, or fix gateway.nodes allowCommands/denyCommands before running this suite",
+        ].join("\n"),
       );
     }
   }, 60_000);

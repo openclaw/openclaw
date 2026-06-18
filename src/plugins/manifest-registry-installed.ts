@@ -1,3 +1,4 @@
+/** Builds manifest registry records from installed plugin index snapshots. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -25,7 +26,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
-} from "./status-dependencies.js";
+} from "./status-dependencies-core.js";
 
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
 const installedPackageJsonPathCache = new Map<string, string | null>();

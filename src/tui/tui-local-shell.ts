@@ -1,3 +1,4 @@
+// Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
@@ -124,8 +125,11 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       });
 
       child.on("close", (code, signal) => {
+        // Keep the tail (consistent with the streaming appendWithCap above) so a
+        // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
+        // end is what the operator needs most when output overflows the cap.
         const combined = (stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""))
-          .slice(0, maxChars)
+          .slice(-maxChars)
           .trimEnd();
 
         if (combined) {

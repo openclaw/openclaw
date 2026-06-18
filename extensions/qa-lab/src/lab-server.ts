@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements lab server behavior.
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -167,6 +168,10 @@ function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
 
+function normalizeQaLabCleanupError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
+}
+
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
   const runtime = createQaRunnerRuntime();
   setQaChannelRuntime(runtime);
@@ -241,7 +246,10 @@ export async function startQaLabServer(
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
   let labHandle: QaLabServerHandle | null = null;
+  let captureStoreReleased = false;
+  let serverListening = false;
 
+  let listenUrl = "";
   let publicBaseUrl = "";
   let runnerModelCatalogPromise: Promise<void> | null = null;
   let runnerModelCatalogAbort: AbortController | null = null;
@@ -547,8 +555,8 @@ export async function startQaLabServer(
           };
           activeSuiteRun = (async () => {
             try {
-              const { runQaSuite } = await import("./suite.js");
-              const result = await runQaSuite({
+              const { runQaFlowSuite } = await import("./suite.js");
+              const result = await runQaFlowSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
                 outputDir: createQaRunOutputDir(repoRoot),
@@ -564,6 +572,7 @@ export async function startQaLabServer(
                 finishedAt: new Date().toISOString(),
                 artifacts: {
                   outputDir: result.outputDir,
+                  evidencePath: result.evidencePath,
                   reportPath: result.reportPath,
                   summaryPath: result.summaryPath,
                   watchUrl: result.watchUrl,
@@ -626,82 +635,107 @@ export async function startQaLabServer(
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("qa-lab failed to bind");
-  }
-  const listenUrl = resolveAdvertisedBaseUrl({
-    bindHost: params?.host ?? "127.0.0.1",
-    bindPort: address.port,
-  });
-  publicBaseUrl = resolveAdvertisedBaseUrl({
-    bindHost: params?.host ?? "127.0.0.1",
-    bindPort: address.port,
-    advertiseHost: params?.advertiseHost,
-    advertisePort: params?.advertisePort,
-  });
-  if (embeddedGatewayEnabled) {
-    gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
-  }
-  if (params?.sendKickoffOnStart) {
-    injectKickoffMessage({
-      state,
-      defaults: bootstrapDefaults,
-      kickoffTask: scenarioCatalog.kickoffTask,
-    });
-  }
-
-  server.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (!controlUiProxyTarget || !isControlUiProxyPath(url.pathname)) {
-      socket.destroy();
+  const releaseCaptureStore = () => {
+    if (captureStoreReleased) {
       return;
     }
-    proxyUpgradeRequest({
-      req,
-      socket,
-      head,
-      target: controlUiProxyTarget,
-      authorizationToken: controlUiProxyToken,
-    });
-  });
-
-  const lab = {
-    baseUrl: publicBaseUrl,
-    listenUrl,
-    state,
-    setControlUi(next: {
-      controlUiUrl?: string | null;
-      controlUiProxyToken?: string | null;
-      controlUiProxyTarget?: string | null;
-    }) {
-      controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
-      controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
-      controlUiProxyTarget = next.controlUiProxyTarget?.trim()
-        ? new URL(next.controlUiProxyTarget)
-        : null;
-    },
-    setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
-      latestScenarioRun = next ? withQaLabRunCounts(next) : null;
-    },
-    setLatestReport(next: QaLabLatestReport | null) {
-      latestReport = next;
-    },
-    runSelfCheck,
-    async stop() {
-      runnerModelCatalogAbort?.abort();
-      await runnerModelCatalogPromise?.catch(() => undefined);
-      await gateway?.stop();
-      await closeQaHttpServer(server);
-      captureStoreLease.release();
-    },
+    captureStoreReleased = true;
+    captureStoreLease.release();
   };
-  labHandle = lab;
-  return lab;
+
+  const stopLabServerResources = async (): Promise<Error | undefined> => {
+    runnerModelCatalogAbort?.abort();
+    await runnerModelCatalogPromise?.catch(() => undefined);
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => gateway?.stop()),
+      Promise.resolve().then(() => (serverListening ? closeQaHttpServer(server) : undefined)),
+      Promise.resolve().then(releaseCaptureStore),
+    ]);
+    const failed = results.find((result) => result.status === "rejected");
+    return failed ? normalizeQaLabCleanupError(failed.reason) : undefined;
+  };
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1", () => resolve());
+    });
+    serverListening = true;
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("qa-lab failed to bind");
+    }
+    listenUrl = resolveAdvertisedBaseUrl({
+      bindHost: params?.host ?? "127.0.0.1",
+      bindPort: address.port,
+    });
+    publicBaseUrl = resolveAdvertisedBaseUrl({
+      bindHost: params?.host ?? "127.0.0.1",
+      bindPort: address.port,
+      advertiseHost: params?.advertiseHost,
+      advertisePort: params?.advertisePort,
+    });
+    if (embeddedGatewayEnabled) {
+      gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
+    }
+    if (params?.sendKickoffOnStart) {
+      injectKickoffMessage({
+        state,
+        defaults: bootstrapDefaults,
+        kickoffTask: scenarioCatalog.kickoffTask,
+      });
+    }
+
+    server.on("upgrade", (req, socket, head) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (!controlUiProxyTarget || !isControlUiProxyPath(url.pathname)) {
+        socket.destroy();
+        return;
+      }
+      proxyUpgradeRequest({
+        req,
+        socket,
+        head,
+        target: controlUiProxyTarget,
+        authorizationToken: controlUiProxyToken,
+      });
+    });
+
+    const lab = {
+      baseUrl: publicBaseUrl,
+      listenUrl,
+      state,
+      setControlUi(next: {
+        controlUiUrl?: string | null;
+        controlUiProxyToken?: string | null;
+        controlUiProxyTarget?: string | null;
+      }) {
+        controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
+        controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
+        controlUiProxyTarget = next.controlUiProxyTarget?.trim()
+          ? new URL(next.controlUiProxyTarget)
+          : null;
+      },
+      setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
+        latestScenarioRun = next ? withQaLabRunCounts(next) : null;
+      },
+      setLatestReport(next: QaLabLatestReport | null) {
+        latestReport = next;
+      },
+      runSelfCheck,
+      async stop() {
+        const cleanupError = await stopLabServerResources();
+        if (cleanupError) {
+          throw cleanupError;
+        }
+      },
+    };
+    labHandle = lab;
+    return lab;
+  } catch (error) {
+    await stopLabServerResources().catch(() => undefined);
+    throw error;
+  }
 }
 
 function serializeSelfCheck(result: QaSelfCheckResult) {

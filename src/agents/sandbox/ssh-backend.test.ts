@@ -1,3 +1,6 @@
+// SSH sandbox backend tests cover runtime description/removal, remote seeding,
+// command execution, bind validation, and backend config plumbing.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -7,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { captureFullEnv } from "../../test-utils/env.js";
 import type { SandboxConfig } from "./types.js";
 
 const sshMocks = vi.hoisted(() => ({
@@ -30,6 +34,13 @@ vi.mock("./ssh.js", async () => {
 });
 
 const { createSshSandboxBackend, sshSandboxBackendManager } = await import("./ssh-backend.js");
+const tempDirs: string[] = [];
+
+async function createTempDir(prefix: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function createConfig(): OpenClawConfig {
   return {
@@ -73,6 +84,8 @@ function requireMockRecordArg(mock: ReturnType<typeof vi.fn>, callIndex: number,
 }
 
 function requireSshRunCommandParams(callIndex = 0) {
+  // Backend assertions inspect the normalized remote command params before the
+  // ssh helper turns them into argv.
   return requireMockRecordArg(sshMocks.runSshSandboxCommand, callIndex, "ssh run command params");
 }
 
@@ -137,9 +150,10 @@ async function expectBackendCreationToReject(params: {
 }
 
 describe("ssh sandbox backend", () => {
-  const originalEnv = { ...process.env };
+  let envSnapshot: ReturnType<typeof captureFullEnv>;
 
   beforeEach(() => {
+    envSnapshot = captureFullEnv();
     vi.clearAllMocks();
     sshMocks.createSshSandboxSessionFromSettings.mockResolvedValue(createSession());
     sshMocks.disposeSshSandboxSession.mockResolvedValue(undefined);
@@ -159,13 +173,11 @@ describe("ssh sandbox backend", () => {
     ]);
   });
 
-  afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) {
-        delete process.env[key];
-      }
+  afterEach(async () => {
+    envSnapshot.restore();
+    for (const dir of tempDirs.splice(0)) {
+      await fs.rm(dir, { recursive: true, force: true });
     }
-    Object.assign(process.env, originalEnv);
     vi.restoreAllMocks();
   });
 
@@ -237,12 +249,15 @@ describe("ssh sandbox backend", () => {
         stderr: Buffer.alloc(0),
         code: 0,
       });
+    const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
+    await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
 
     const backend = await createSshSandboxBackend({
       sessionKey: "agent:worker:task",
       scopeKey: "agent:worker",
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/agent",
+      skillsWorkspaceDir,
       cfg: {
         mode: "all",
         backend: "ssh",
@@ -299,7 +314,7 @@ describe("ssh sandbox backend", () => {
       createSession().host,
     ]);
     expect(execSpec.argv.at(-1)).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
-    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(2);
+    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(3);
     const workspaceUploadParams = requireSshUploadParams(0, "workspace upload params");
     expect(workspaceUploadParams.localDir).toBe("/tmp/workspace");
     expect(workspaceUploadParams.remoteDir).toContain("/workspace");
@@ -309,6 +324,12 @@ describe("ssh sandbox backend", () => {
     );
     expect(agentUploadParams.localDir).toBe("/tmp/agent");
     expect(agentUploadParams.remoteDir).toContain("/agent");
+    const skillsUploadParams = requireRecord(
+      sshMocks.uploadDirectoryToSshTarget.mock.calls.at(2)?.[0],
+      "skills upload params",
+    );
+    expect(skillsUploadParams.localDir).toBe(skillsWorkspaceDir);
+    expect(skillsUploadParams.remoteDir).toContain("/workspace/.openclaw/sandbox-skills");
 
     await backend.finalizeExec?.({
       status: "completed",
@@ -317,6 +338,111 @@ describe("ssh sandbox backend", () => {
       token: execSpec.finalizeToken,
     });
     expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(2);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes materialized skills before each exec and remote fs command", async () => {
+    const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
+    await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      skillsWorkspaceDir,
+      cfg: createBackendSandboxConfig({
+        target: "peter@example.com:2222",
+      }),
+    });
+
+    const firstExec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+    const secondExec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+    await backend.runShellCommand({
+      script: "printf ok",
+    });
+
+    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(3);
+    const skillsUploadParams = requireSshUploadParams(0, "skills upload params");
+    expect(skillsUploadParams.localDir).toBe(skillsWorkspaceDir);
+    expect(skillsUploadParams.remoteDir).toContain("/workspace/.openclaw/sandbox-skills");
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: firstExec.finalizeToken,
+    });
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: secondExec.finalizeToken,
+    });
+  });
+
+  it("clears stale remote materialized skills when the local copy is missing", async () => {
+    const tmpDir = await createTempDir("openclaw-ssh-skills-");
+    const skillsWorkspaceDir = path.join(tmpDir, "missing");
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      skillsWorkspaceDir,
+      cfg: createBackendSandboxConfig({
+        target: "peter@example.com:2222",
+      }),
+    });
+
+    const execSpec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    const commandParams = requireSshRunCommandParams(1);
+    expect(commandParams.remoteCommand).toContain("openclaw-sandbox-clear");
+    expect(commandParams.remoteCommand).toContain("/workspace/.openclaw/sandbox-skills");
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
+  });
+
+  it("disposes the exec ssh session when materialized skills refresh fails", async () => {
+    const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
+    await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      skillsWorkspaceDir,
+      cfg: createBackendSandboxConfig({
+        target: "peter@example.com:2222",
+      }),
+    });
+    sshMocks.uploadDirectoryToSshTarget.mockRejectedValueOnce(new Error("upload failed"));
+
+    await expect(
+      backend.buildExecSpec({
+        command: "pwd",
+        env: {},
+        usePty: false,
+      }),
+    ).rejects.toThrow("upload failed");
+
+    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(1);
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 

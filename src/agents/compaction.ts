@@ -1,3 +1,6 @@
+/**
+ * Summarization and fallback helpers for transcript compaction.
+ */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
@@ -62,22 +65,7 @@ const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
   "including UUIDs, hashes, IDs, hostnames, IPs, ports, URLs, and file names.";
 
-const HANDOFF_INSTRUCTIONS = [
-  "Generate a concise recovery briefing for a new LLM taking over this session.",
-  "The previous model hit a quota limit and you are providing the context for a smooth handoff.",
-  "",
-  "LEADER HIERARCHY REINFORCEMENT:",
-  "- Explicitly state that the new model is the LEADER (Orchestrator).",
-  "- Identify any active autonomous units (like AutoClaw) as SUBORDINATES.",
-  "- Instruct the new model to NOT perform the subordinate's task, but to supervise and provide strategic commands.",
-  "",
-  "MUST CAPTURE:",
-  "- Current high-level goal and project path.",
-  "- Status of the latest tool executions (especially AutoClaw/Subagents).",
-  "- Critical files currently being modified.",
-  "- Pending items and next intended steps.",
-].join("\n");
-
+/** Optional instruction policy for preserving identifiers during compaction. */
 export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
@@ -121,6 +109,7 @@ function resolveIdentifierPreservationInstructions(
   return IDENTIFIER_PRESERVATION_INSTRUCTIONS;
 }
 
+/** Combines identifier-preservation and caller-provided compaction instructions. */
 export function buildCompactionSummarizationInstructions(
   customInstructions?: string,
   instructions?: CompactionSummarizationInstructions,
@@ -325,6 +314,7 @@ export async function summarizeWithFallback(params: {
   );
 }
 
+/** Summarizes history in multiple stages when a single pass would be too large. */
 export async function summarizeInStages(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
@@ -390,36 +380,7 @@ export async function summarizeInStages(params: {
   });
 }
 
-/**
- * Generates a concise handoff summary for model transitions, enforcing a 4000 token limit.
- */
-export async function summarizeForHandoff(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  headers?: Record<string, string>;
-  signal: AbortSignal;
-  maxChunkTokens: number;
-  contextWindow: number;
-  customInstructions?: string;
-  summarizationInstructions?: CompactionSummarizationInstructions;
-}): Promise<string> {
-  const custom = params.customInstructions?.trim();
-  const handoffInstructions = custom
-    ? `${HANDOFF_INSTRUCTIONS}\n\n${custom}`
-    : HANDOFF_INSTRUCTIONS;
-
-  // Use a hard cap of 4000 tokens for the handoff summary as per plan
-  const handoffMaxTokens = 4000;
-
-  return summarizeWithFallback({
-    ...params,
-    reserveTokens: SUMMARIZATION_OVERHEAD_TOKENS,
-    maxChunkTokens: Math.min(params.maxChunkTokens, handoffMaxTokens),
-    customInstructions: handoffInstructions,
-  });
-}
-
+/** Resolves a positive context-window token count from model metadata. */
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   const effective =
     (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;

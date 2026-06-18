@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -131,7 +132,7 @@ export const BUILD_ALL_STEPS = [
         "scripts/lib/copy-assets.ts",
         "src/auto-reply/reply/export-html",
       ],
-      outputs: ["dist/auto-reply/reply/export-html"],
+      outputs: ["dist/export-html"],
     },
   },
   {
@@ -336,6 +337,7 @@ export function resolveBuildAllStep(step, params = {}) {
       };
     }
     const runner = resolvePnpmRunner({
+      env,
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
       npmExecPath: params.npmExecPath ?? env.npm_execpath,
@@ -553,6 +555,20 @@ export function writeBuildAllStepCacheStamp(step, cacheState, params = {}) {
   );
 }
 
+export function resolveBuildAllStepCacheStampState(step, cacheState, params = {}) {
+  if (!cacheState.cacheable || !cacheState.signature || !step.cache) {
+    return cacheState;
+  }
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
+  return {
+    ...cacheState,
+    outputFiles: outputFiles.length,
+    relativeOutputFiles: outputFiles.map((file) => portableRelativePath(rootDir, file)),
+  };
+}
+
 export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
   if (!cacheState.restorable || !cacheState.outputRoot || !cacheState.stampedOutputs?.length) {
     return false;
@@ -639,7 +655,7 @@ if (isMainModule()) {
           exitCode = result.status;
           break;
         }
-        writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheState(step));
+        writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheStampState(step, cacheState));
         timings.push({ label: step.label, status: "ran", durationMs });
         console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
         continue;

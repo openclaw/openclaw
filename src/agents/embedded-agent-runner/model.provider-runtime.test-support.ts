@@ -1,3 +1,4 @@
+// Provider-runtime mock used by model resolution tests.
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
@@ -11,6 +12,7 @@ const XAI_BASE_URL = "https://api.x.ai/v1";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const GOOGLE_VERTEX_BASE_URL = "https://aiplatform.googleapis.com";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -37,7 +39,13 @@ type DynamicModelContext = {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistryLike;
-  providerConfig?: { api?: string | null; baseUrl?: string };
+  agentRuntimeId?: string;
+  authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
+  providerConfig?: {
+    api?: string | null;
+    auth?: "api-key" | "aws-sdk" | "oauth" | "token";
+    baseUrl?: string;
+  };
 };
 
 type ResolvedModelLike = Record<string, unknown>;
@@ -57,6 +65,8 @@ function findTemplate(
   provider: string,
   templateIds: readonly string[],
 ) {
+  // Forward-compat fallbacks clone the nearest known catalog row from the
+  // registry before patching the requested id/provider.
   for (const templateId of templateIds) {
     const template = ctx.modelRegistry.find(provider, templateId) as ResolvedModelLike | null;
     if (template) {
@@ -103,6 +113,8 @@ function normalizeOpenRouterBaseUrl(baseUrl?: string): string | undefined {
 }
 
 function normalizeDynamicModel(params: { provider: string; model: ResolvedModelLike }) {
+  // This mock mirrors provider-owned normalization contracts that model tests
+  // need without loading real plugin runtimes.
   if (params.provider === "openrouter") {
     const baseUrl =
       typeof params.model.baseUrl === "string"
@@ -148,6 +160,8 @@ function normalizeTransport(params: {
   provider: string;
   context: { api?: string | null; baseUrl?: string };
 }): NormalizedTransportLike | undefined {
+  // Transport normalization proves provider hooks can upgrade legacy endpoints
+  // and API names before resolved models are returned to callers.
   const isNativeOpenAiTransport =
     params.context.api === "openai-completions" &&
     (params.context.baseUrl === OPENAI_BASE_URL ||
@@ -180,6 +194,16 @@ function normalizeTransport(params: {
     return {
       api: "google-generative-ai",
       baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
+    };
+  }
+  if (
+    params.provider === "google-vertex" &&
+    params.context.api == null &&
+    params.context.baseUrl === GOOGLE_VERTEX_BASE_URL
+  ) {
+    return {
+      api: "google-vertex",
+      baseUrl: GOOGLE_VERTEX_BASE_URL,
     };
   }
   if (isNativeOpenAiTransport) {
@@ -276,10 +300,24 @@ function buildDynamicModel(
     }
     case "openai": {
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
+      const isSparkModel = lower === "gpt-5.3-codex-spark";
       const exactModel = params.modelRegistry.find("openai", modelId) as ResolvedModelLike | null;
+      const explicitResponsesAuth =
+        params.authProfileMode === "api_key" ||
+        params.authProfileMode === "aws-sdk" ||
+        params.providerConfig?.auth === "api-key" ||
+        params.providerConfig?.auth === "aws-sdk";
+      const explicitCodexAuth =
+        params.authProfileMode === "oauth" ||
+        params.authProfileMode === "token" ||
+        params.providerConfig?.auth === "oauth" ||
+        params.providerConfig?.auth === "token";
       const providerConfigSelectsChatGpt =
-        params.providerConfig?.api === "openai-chatgpt-responses" ||
-        isNativeOpenAICodexBaseUrl(params.providerConfig?.baseUrl);
+        !explicitResponsesAuth &&
+        (explicitCodexAuth ||
+          params.providerConfig?.api === "openai-chatgpt-responses" ||
+          isNativeOpenAICodexBaseUrl(params.providerConfig?.baseUrl) ||
+          params.agentRuntimeId === "codex");
       if (
         lower === "gpt-5.5" &&
         (providerConfigSelectsChatGpt || isOpenAIChatGptModelTemplate(exactModel))
@@ -325,11 +363,12 @@ function buildDynamicModel(
             : lower === "gpt-5.3-codex-spark"
               ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
               : findTemplate(params, "openai", ["gpt-5.4"]);
+      const templateSelectsChatGpt = !isSparkModel && isOpenAIChatGptModelTemplate(codexTemplate);
       if (
         isLegacyGpt54Alias ||
-        lower.includes("-codex") ||
+        (lower.includes("-codex") && !isSparkModel) ||
         providerConfigSelectsChatGpt ||
-        isOpenAIChatGptModelTemplate(codexTemplate)
+        templateSelectsChatGpt
       ) {
         const templateBaseUrl =
           typeof codexTemplate?.baseUrl === "string" ? codexTemplate.baseUrl : undefined;
@@ -675,7 +714,13 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       context: {
         modelId: string;
         modelRegistry: ModelRegistryLike;
-        providerConfig?: { api?: string | null; baseUrl?: string };
+        agentRuntimeId?: string;
+        authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
+        providerConfig?: {
+          api?: string | null;
+          auth?: "api-key" | "aws-sdk" | "oauth" | "token";
+          baseUrl?: string;
+        };
       };
     }) =>
       handledDynamicProviders.has(params.provider)
@@ -684,6 +729,8 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
               provider: params.provider,
               modelId: params.context.modelId,
               modelRegistry: params.context.modelRegistry,
+              agentRuntimeId: params.context.agentRuntimeId,
+              authProfileMode: params.context.authProfileMode,
               providerConfig: params.context.providerConfig,
             },
             {
@@ -697,7 +744,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       context: { modelId: string };
     }) =>
       params.provider === "openai" &&
-      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"].includes(
+      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),
     prepareProviderDynamicModel: async (params: {

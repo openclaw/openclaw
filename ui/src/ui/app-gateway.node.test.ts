@@ -5,8 +5,15 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadChatComposerSnapshotMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => { draft: string; queue: ChatQueueItem[] } | null>(() => null),
+);
+const restoreChatComposerStateMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => boolean>(() => false),
+);
 const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayRequest = (method: string, payload?: unknown) => Promise<unknown>;
@@ -118,6 +125,15 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadControlUiBootstrapConfigMock,
 }));
 
+vi.mock("./chat/composer-persistence.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/composer-persistence.ts")>();
+  return {
+    ...actual,
+    loadChatComposerSnapshot: loadChatComposerSnapshotMock,
+    restoreChatComposerState: restoreChatComposerStateMock,
+  };
+});
+
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
   chatQueue: import("./ui-types.ts").ChatQueueItem[];
@@ -169,10 +185,13 @@ function createHost(): TestGatewayHost {
     localMediaPreviewRoots: [],
     serverVersion: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
+    chatMessage: "",
     chatQueue: [],
+    chatComposerProvisionalRestore: null,
     chatQueueBySession: {},
     chatToolMessages: [],
     activityEntries: [],
@@ -245,6 +264,10 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    loadChatComposerSnapshotMock.mockReset();
+    loadChatComposerSnapshotMock.mockReturnValue(null);
+    restoreChatComposerStateMock.mockReset();
+    restoreChatComposerStateMock.mockReturnValue(false);
     loadControlUiBootstrapConfigMock.mockClear();
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
       setTimeout(() => callback(Date.now()), 0),
@@ -273,6 +296,79 @@ describe("connectGateway", () => {
     expect(gatewayClientInstances).toHaveLength(3);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
     expect(host.lastError).toBeNull();
+  });
+
+  it("lets hello-scoped composer state replace an unchanged provisional restore", () => {
+    const { host, client } = connectHostGateway();
+    const provisionalQueue = [{ id: "queued-old", text: "wrong agent", createdAt: 1 }];
+    const scopedQueue = [{ id: "queued-new", text: "right agent", createdAt: 2 }];
+    host.chatMessage = "fallback draft";
+    host.chatQueue = provisionalQueue;
+    host.chatComposerProvisionalRestore = {
+      sessionKey: "main",
+      chatMessage: "fallback draft",
+      chatQueue: provisionalQueue,
+    };
+    loadChatComposerSnapshotMock.mockReturnValueOnce({
+      draft: "scoped draft",
+      queue: scopedQueue,
+    });
+    restoreChatComposerStateMock.mockImplementationOnce((target: unknown) => {
+      const hostTarget = target as typeof host;
+      expect(hostTarget.chatMessage).toBe("");
+      expect(hostTarget.chatQueue).toEqual([]);
+      hostTarget.chatMessage = "scoped draft";
+      hostTarget.chatQueue = scopedQueue;
+      return true;
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "agent-b",
+          mainKey: "main",
+          mainSessionKey: "agent:agent-b:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    });
+
+    expect(loadChatComposerSnapshotMock).toHaveBeenCalledWith(host, "agent:agent-b:main");
+    expect(host.sessionKey).toBe("agent:agent-b:main");
+    expect(host.chatMessage).toBe("scoped draft");
+    expect(host.chatQueue).toBe(scopedQueue);
+    expect(host.chatComposerProvisionalRestore).toBeNull();
+  });
+
+  it("keeps a provisional composer restore when the user edited before hello", () => {
+    const { host, client } = connectHostGateway();
+    const provisionalQueue = [{ id: "queued-old", text: "offline", createdAt: 1 }];
+    host.chatMessage = "user edit";
+    host.chatQueue = provisionalQueue;
+    host.chatComposerProvisionalRestore = {
+      sessionKey: "main",
+      chatMessage: "fallback draft",
+      chatQueue: provisionalQueue,
+    };
+    loadChatComposerSnapshotMock.mockReturnValueOnce({
+      draft: "scoped draft",
+      queue: [{ id: "queued-new", text: "right agent", createdAt: 2 }],
+    });
+    restoreChatComposerStateMock.mockImplementationOnce((target: unknown) => {
+      const hostTarget = target as typeof host;
+      expect(hostTarget.chatMessage).toBe("user edit");
+      expect(hostTarget.chatQueue).toBe(provisionalQueue);
+      return false;
+    });
+
+    client.emitHello();
+
+    expect(loadChatComposerSnapshotMock).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("user edit");
+    expect(host.chatQueue).toBe(provisionalQueue);
+    expect(host.chatComposerProvisionalRestore).toBeNull();
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
@@ -437,7 +533,156 @@ describe("connectGateway", () => {
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
     });
+    expect(host.pendingUpdateHandoff).toBe(false);
     expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("clears managed-service handoff verification when update status completes", async () => {
+    const host = createHost();
+    host.pendingUpdateHandoff = true;
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "2.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "2.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateHandoff).toBe(false);
+    });
+    expect(host.pendingUpdateExpectedVersion).toBeNull();
+    expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("keeps polling while managed-service handoff restart health is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      host.pendingUpdateHandoff = true;
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      let updateStatusCalls = 0;
+      client.request.mockImplementation(async (method: string) => {
+        if (method === "update.status") {
+          updateStatusCalls += 1;
+          if (updateStatusCalls === 1) {
+            return {
+              sentinel: {
+                kind: "update",
+                status: "skipped",
+                stats: {
+                  reason: "restart-health-pending",
+                },
+              },
+            };
+          }
+          return {
+            sentinel: {
+              kind: "update",
+              status: "ok",
+              stats: {
+                after: { version: "2.0.0" },
+              },
+            },
+          };
+        }
+        return {};
+      });
+
+      client.emitHello({
+        type: "hello-ok",
+        protocol: 4,
+        server: { version: "2.0.0" },
+        auth: { role: "operator", scopes: [] },
+        snapshot: {},
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(updateStatusCalls).toBeGreaterThanOrEqual(2);
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fail managed-service handoff while the detached update is still pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      host.pendingUpdateHandoff = true;
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      let updateComplete = false;
+      let updateStatusCalls = 0;
+      client.request.mockImplementation(async (method: string) => {
+        if (method === "update.status") {
+          updateStatusCalls += 1;
+          return {
+            sentinel: updateComplete
+              ? {
+                  kind: "update",
+                  status: "ok",
+                  stats: {
+                    after: { version: "2.0.0" },
+                  },
+                }
+              : {
+                  kind: "update",
+                  status: "skipped",
+                  stats: {
+                    reason: "managed-service-handoff-started",
+                  },
+                },
+          };
+        }
+        return {};
+      });
+
+      client.emitHello({
+        type: "hello-ok",
+        protocol: 4,
+        server: { version: "2.0.0" },
+        auth: { role: "operator", scopes: [] },
+        snapshot: {},
+      });
+
+      await vi.advanceTimersByTimeAsync(10_500);
+
+      expect(updateStatusCalls).toBeGreaterThan(1);
+      expect(host.pendingUpdateHandoff).toBe(true);
+      expect(host.updateStatusBanner).toBeNull();
+
+      updateComplete = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a hard error when the restarted version does not match the expected update", async () => {
@@ -471,6 +716,7 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.pendingUpdateHandoff).toBe(false);
       expect(host.updateStatusBanner).toEqual({
         tone: "danger",
         text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.0.0.",
@@ -510,9 +756,48 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.pendingUpdateHandoff).toBe(false);
       expect(host.updateStatusBanner).toEqual({
         tone: "danger",
         text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
+      });
+    });
+  });
+
+  it("surfaces managed-service handoff failures even without a final version", async () => {
+    const host = createHost();
+    host.pendingUpdateHandoff = true;
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "managed-service-handoff-failed",
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update error: managed-service-handoff-failed. Check the gateway logs for the replacement failure.",
       });
     });
   });
@@ -863,7 +1148,7 @@ describe("connectGateway", () => {
     expect(host.lastError).toBe("disconnected (1006): no reason");
   });
 
-  it("refreshes bootstrap config after hello", () => {
+  it("refreshes bootstrap config after hello", async () => {
     const host = createHost();
 
     connectGateway(host);
@@ -871,8 +1156,22 @@ describe("connectGateway", () => {
 
     client.emitHello();
 
-    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1));
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
+  });
+
+  it("refreshes an open Talk catalog after hello", async () => {
+    const host = createHost();
+    const fetchRealtimeTalkCatalog = vi.fn(async () => undefined);
+    Object.assign(host, {
+      realtimeTalkOptionsOpen: true,
+      fetchRealtimeTalkCatalog,
+    });
+
+    connectGateway(host);
+    requireGatewayClient().emitHello();
+
+    await vi.waitFor(() => expect(fetchRealtimeTalkCatalog).toHaveBeenCalledOnce());
   });
 
   it("falls back from restored unconfigured agent sessions before refreshing chat", async () => {
@@ -919,7 +1218,7 @@ describe("connectGateway", () => {
     } as GatewayHelloOk);
 
     await vi.waitFor(() => {
-      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host, { startup: false });
     });
     expect(host.sessionKey).toBe("agent:main:main");
     expect(host.settings.sessionKey).toBe("agent:main:main");

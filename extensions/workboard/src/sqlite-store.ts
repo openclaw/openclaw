@@ -1,6 +1,8 @@
+// Workboard plugin module implements sqlite store behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
@@ -26,7 +28,7 @@ import type {
 } from "./types.js";
 
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -118,6 +120,21 @@ function runTransaction<T>(db: DatabaseSync, run: () => T): T {
   }
 }
 
+function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${tableName})`).all() as Row[]).flatMap((row) =>
+      typeof row.name === "string" ? [row.name] : [],
+    ),
+  );
+}
+
+function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, definition: string) {
+  if (tableColumns(db, tableName).has(columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+}
+
 function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(`
     PRAGMA foreign_keys = ON;
@@ -171,6 +188,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       template_id TEXT,
       archived_at INTEGER,
       stale_json TEXT,
+      lifecycle_status_source_updated_at INTEGER,
       failure_count INTEGER
     );
     CREATE INDEX IF NOT EXISTS workboard_cards_board_status_idx
@@ -333,18 +351,15 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       updated_at INTEGER NOT NULL
     );
   `);
+  ensureColumn(
+    db,
+    "workboard_cards",
+    "lifecycle_status_source_updated_at",
+    "lifecycle_status_source_updated_at INTEGER",
+  );
   db.prepare(
     "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
   ).run(`schema-${SCHEMA_VERSION}`, Date.now());
-}
-
-function configureWorkboardDatabase(db: DatabaseSync): void {
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
-    PRAGMA busy_timeout = ${WORKBOARD_SQLITE_BUSY_TIMEOUT_MS};
-    PRAGMA foreign_keys = ON;
-  `);
 }
 
 function chmodIfExists(targetPath: string, mode: number): void {
@@ -362,19 +377,40 @@ function hardenWorkboardDatabaseFiles(dbPath: string): void {
   chmodIfExists(dbPath, WORKBOARD_SQLITE_FILE_MODE);
   chmodIfExists(`${dbPath}-wal`, WORKBOARD_SQLITE_FILE_MODE);
   chmodIfExists(`${dbPath}-shm`, WORKBOARD_SQLITE_FILE_MODE);
+  chmodIfExists(`${dbPath}-journal`, WORKBOARD_SQLITE_FILE_MODE);
 }
 
-function createDatabase(dbPath: string): DatabaseSync {
+function createDatabase(dbPath: string): {
+  db: DatabaseSync;
+  maintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
+} {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: WORKBOARD_SQLITE_DIR_MODE });
   chmodIfExists(path.dirname(dbPath), WORKBOARD_SQLITE_DIR_MODE);
   if (!fs.existsSync(dbPath)) {
     fs.closeSync(fs.openSync(dbPath, "a", WORKBOARD_SQLITE_FILE_MODE));
   }
   const db = new DatabaseSync(dbPath);
-  configureWorkboardDatabase(db);
-  ensureWorkboardSchema(db);
-  hardenWorkboardDatabaseFiles(dbPath);
-  return db;
+  let maintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
+  try {
+    maintenance = configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
+      checkpointIntervalMs: 0,
+      databaseLabel: "workboard database",
+      databasePath: dbPath,
+      foreignKeys: true,
+      synchronous: "NORMAL",
+    });
+    ensureWorkboardSchema(db);
+    hardenWorkboardDatabaseFiles(dbPath);
+    return { db, maintenance };
+  } catch (error) {
+    try {
+      maintenance?.close();
+    } finally {
+      db.close();
+    }
+    throw error;
+  }
 }
 
 function childRows(db: DatabaseSync, table: string, cardId: string): Row[] {
@@ -630,6 +666,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
+  const lifecycleStatusSourceUpdatedAt = numberValue(row, "lifecycle_status_source_updated_at");
   return optional({
     ...(attempts.length > 0 ? { attempts } : {}),
     ...(comments.length > 0 ? { comments } : {}),
@@ -660,6 +697,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
       ? { archivedAt: numberValue(row, "archived_at") }
       : {}),
     ...(stale ? { stale } : {}),
+    ...(lifecycleStatusSourceUpdatedAt !== undefined ? { lifecycleStatusSourceUpdatedAt } : {}),
     ...(numberValue(row, "failure_count") !== undefined
       ? { failureCount: numberValue(row, "failure_count") }
       : {}),
@@ -738,14 +776,14 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         execution_id, execution_kind, execution_engine, execution_mode, execution_status,
         execution_model, execution_session_key, execution_run_id, execution_started_at,
         execution_updated_at, automation_json, claim_json, template_id, archived_at, stale_json,
-        failure_count
+        lifecycle_status_source_updated_at, failure_count
       ) VALUES (
         @id, @board_id, @title, @notes, @status, @priority, @agent_id, @session_key, @run_id,
         @task_id, @source_url, @position, @created_at, @updated_at, @started_at, @completed_at,
         @execution_id, @execution_kind, @execution_engine, @execution_mode, @execution_status,
         @execution_model, @execution_session_key, @execution_run_id, @execution_started_at,
         @execution_updated_at, @automation_json, @claim_json, @template_id, @archived_at,
-        @stale_json, @failure_count
+        @stale_json, @lifecycle_status_source_updated_at, @failure_count
       )
       ON CONFLICT(id) DO UPDATE SET
         board_id = excluded.board_id,
@@ -778,6 +816,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         template_id = excluded.template_id,
         archived_at = excluded.archived_at,
         stale_json = excluded.stale_json,
+        lifecycle_status_source_updated_at = excluded.lifecycle_status_source_updated_at,
         failure_count = excluded.failure_count
     `,
   ).run({
@@ -812,6 +851,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     template_id: bindNull(metadata?.templateId),
     archived_at: bindNull(metadata?.archivedAt),
     stale_json: jsonValue(metadata?.stale),
+    lifecycle_status_source_updated_at: bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
     failure_count: bindNull(metadata?.failureCount),
   });
 
@@ -1374,12 +1414,17 @@ export function createWorkboardSqliteStores(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): WorkboardSqliteStores {
-  const db = createDatabase(options.dbPath ?? resolveWorkboardSqlitePath(options.env));
+  const { db, maintenance } = createDatabase(
+    options.dbPath ?? resolveWorkboardSqlitePath(options.env),
+  );
   return {
     cards: new WorkboardSqliteCardStore(db),
     boards: new WorkboardSqliteBoardStore(db),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
-    close: () => db.close(),
+    close: () => {
+      maintenance.close();
+      db.close();
+    },
   };
 }

@@ -1,3 +1,4 @@
+// Tests mention detection and command trigger matching.
 import { describe, expect, it } from "vitest";
 import { stripStructuralPrefixes } from "./mentions.js";
 
@@ -41,10 +42,11 @@ describe("stripStructuralPrefixes", () => {
     expect(stripStructuralPrefixes("just a message")).toBe("just a message");
   });
 
-  it("flattens multiline soft reset commands before downstream parsing", () => {
+  it("preserves real line breaks in slash commands for downstream command parsing", () => {
     expect(stripStructuralPrefixes("/reset soft\nre-read persona files")).toBe(
-      "/reset soft re-read persona files",
+      "/reset soft\nre-read persona files",
     );
-    expect(stripStructuralPrefixes("/reset \nsoft")).toBe("/reset soft");
+    expect(stripStructuralPrefixes("/skill demo\nline two")).toBe("/skill demo\nline two");
+    expect(stripStructuralPrefixes("/reset \\nsoft")).toBe("/reset soft");
   });
 });

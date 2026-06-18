@@ -1,3 +1,4 @@
+// Plugin compatibility registry tests cover compatibility metadata loading and validation.
 import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
@@ -212,6 +213,16 @@ const knownDeprecatedSurfaceMarkers = [
     code: "channel-messaging-targets-subpath",
     file: "src/plugin-sdk/messaging-targets.ts",
     marker: "openclaw/plugin-sdk/channel-targets",
+  },
+  {
+    code: "whatsapp-web-inbound-flat-message-aliases",
+    file: "extensions/whatsapp/src/inbound/types.ts",
+    marker: "DeprecatedWebInboundMessageFlatAliases",
+  },
+  {
+    code: "whatsapp-web-inbound-admission-top-level-fields",
+    file: "extensions/whatsapp/src/inbound/types.ts",
+    marker: "DeprecatedWebInboundAdmissionTopLevelFields",
   },
 ] as const;
 

@@ -1,14 +1,19 @@
+// Tool subscription helper tests cover error extraction, sanitized tool results,
+// and safe lifecycle payloads for embedded tool events.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
   buildToolLifecycleErrorResult,
   extractToolErrorCode,
   extractToolErrorMessage,
+  isToolResultError,
   sanitizeToolArgs,
   sanitizeToolResult,
 } from "./embedded-agent-subscribe.tools.js";
 
 afterEach(() => {
+  // Logging config spies are global module state; restore after every sanitizer
+  // and lifecycle helper case.
   vi.restoreAllMocks();
 });
 
@@ -121,7 +126,25 @@ describe("extractToolErrorMessage", () => {
   });
 });
 
+describe("isToolResultError", () => {
+  it("recognizes returned failures and nonzero exits", () => {
+    expect(isToolResultError({ details: { status: "failed" } })).toBe(true);
+    expect(isToolResultError({ details: { status: "blocked" } })).toBe(true);
+    expect(isToolResultError({ details: { status: "approval-unavailable" } })).toBe(true);
+    expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
+    expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(true);
+    expect(isToolResultError({ details: { status: "completed", exitCode: 0 } })).toBe(false);
+    expect(isToolResultError({ details: { ok: true, status: "cancelled" } })).toBe(false);
+    expect(isToolResultError({ details: { success: true, status: "canceled" } })).toBe(false);
+    expect(isToolResultError({ details: { ok: false, status: "completed" } })).toBe(true);
+    expect(isToolResultError({ details: { ok: true, status: "cancelled", timedOut: true } })).toBe(
+      true,
+    );
+  });
+});
+
 function getTextContent(result: unknown, index = 0): string {
+  // Sanitizer tests assert text redaction while keeping the result shape opaque.
   const record = result as { content: Array<{ text: string }> };
   return record.content[index].text;
 }

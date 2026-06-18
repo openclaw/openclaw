@@ -1,3 +1,5 @@
+// Media-understanding entry execution handles provider/CLI attempts, auth
+// rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -29,17 +31,22 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import {
+  estimateBase64Size,
+  resolveVideoMaxBase64Bytes,
+} from "../../packages/media-understanding-common/src/video.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
-import { extractGeminiResponse } from "./output-extract.js";
+import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -50,9 +57,8 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
-import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
-export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
 type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
@@ -364,6 +370,7 @@ function resolveProviderQuery(params: {
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
+/** Builds the normalized decision record for one provider or CLI model attempt. */
 export function buildModelDecision(params: {
   entry: MediaUnderstandingModelConfig;
   entryType: "provider" | "cli";
@@ -441,7 +448,15 @@ type ProviderExecutionAuth =
       providerConfig?: ModelProviderConfig;
     };
 
+function resolveProviderExecutionAuthModelApi(params: {
+  capability: MediaUnderstandingCapability;
+  providerId: string;
+}): string | undefined {
+  return resolveOpenAiAudioAuthModelApi(params);
+}
+
 async function resolveProviderExecutionAuth(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -450,6 +465,10 @@ async function resolveProviderExecutionAuth(params: {
   workspaceDir?: string;
 }): Promise<ProviderExecutionAuth> {
   const providerConfig = params.cfg.models?.providers?.[params.providerId];
+  const modelApi = resolveProviderExecutionAuthModelApi({
+    capability: params.capability,
+    providerId: params.providerId,
+  });
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -518,6 +537,7 @@ async function resolveProviderExecutionAuth(params: {
       preferredProfile: params.entry.preferredProfile,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      modelApi,
     });
     const apiKey = requireApiKey(auth, params.providerId);
     return {
@@ -545,6 +565,7 @@ async function resolveProviderExecutionAuth(params: {
 }
 
 async function resolveProviderExecutionContext(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -554,6 +575,7 @@ async function resolveProviderExecutionContext(params: {
   workspaceDir?: string;
 }) {
   const auth = await resolveProviderExecutionAuth({
+    capability: params.capability,
     providerId: params.providerId,
     provider: params.provider,
     cfg: params.cfg,
@@ -577,6 +599,7 @@ async function resolveProviderExecutionContext(params: {
   return { auth, baseUrl, headers, request };
 }
 
+/** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
   const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
   const total = attachments.length;
@@ -593,6 +616,7 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
 }
 
+/** Returns the first non-empty attempt reason, optionally filtered by outcome. */
 export function findDecisionReason(
   decision: MediaUnderstandingDecision,
   outcome?: MediaUnderstandingModelDecision["outcome"],
@@ -613,6 +637,7 @@ export function findDecisionReason(
   return undefined;
 }
 
+/** Trims provider/runtime error prefixes into a stable human-readable reason. */
 export function normalizeDecisionReason(reason?: string): string | undefined {
   const trimmed = typeof reason === "string" ? reason.trim() : "";
   if (!trimmed) {
@@ -622,6 +647,7 @@ export function normalizeDecisionReason(reason?: string): string | undefined {
   return normalized || undefined;
 }
 
+/** Produces the short reason token used in status and decision summary output. */
 export function summarizeDecisionReason(reason?: string): string | undefined {
   const normalized = normalizeDecisionReason(reason);
   if (!normalized) {
@@ -640,6 +666,7 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+/** Executes one provider-backed media-understanding entry for one attachment. */
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -734,6 +761,7 @@ export async function runProviderEntry(params: {
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+      capability,
       providerId,
       provider,
       cfg,
@@ -816,6 +844,7 @@ export async function runProviderEntry(params: {
     );
   }
   const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+    capability,
     providerId,
     provider,
     cfg,
@@ -860,6 +889,7 @@ export async function runProviderEntry(params: {
   };
 }
 
+/** Executes one CLI-backed media-understanding entry for one attachment. */
 export async function runCliEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;

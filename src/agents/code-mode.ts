@@ -1,3 +1,7 @@
+/**
+ * Host-side Code Mode controller for isolated QuickJS execution with bridged
+ * tool search/call/yield support.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,6 +22,7 @@ import {
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
+import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeApiVirtualFiles,
   createCodeModeNamespaceRuntime,
@@ -64,6 +69,7 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
+/** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
   enabled: boolean;
   runtime: "quickjs-wasi";
@@ -191,6 +197,7 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
   return languages.length > 0 ? uniqueValues(languages) : ["javascript", "typescript"];
 }
 
+/** Resolves Code Mode runtime limits and language support from config. */
 export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId);
   const maxSearchLimit = clampInteger(
@@ -281,37 +288,8 @@ function reserveActiveRunSlot(): () => void {
   };
 }
 
-function toJsonSafe(value: unknown): unknown {
-  if (value === undefined) {
-    return null;
-  }
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
-  } catch {
-    if (value instanceof Error) {
-      return { name: value.name, message: value.message };
-    }
-    if (value === null) {
-      return null;
-    }
-    switch (typeof value) {
-      case "string":
-      case "number":
-      case "boolean":
-        return value;
-      case "bigint":
-      case "symbol":
-      case "function":
-        return String(value);
-      default:
-        return Object.prototype.toString.call(value);
-    }
-  }
-}
-
 function jsonByteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(toJsonSafe(value)) ?? "null", "utf8");
+  return Buffer.byteLength(JSON.stringify(toCodeModeJsonSafe(value)) ?? "null", "utf8");
 }
 
 class CodeModeLimitError extends ToolInputError {
@@ -383,6 +361,8 @@ function readRunId(args: unknown): string {
 }
 
 function maskCodeLiteralsAndComments(code: string): string {
+  // Module access detection should ignore strings and comments so examples or
+  // prose containing `import`/`require` do not reject otherwise valid code.
   let masked = "";
   let index = 0;
   while (index < code.length) {
@@ -592,7 +572,7 @@ async function runBridgeRequest(params: {
         break;
       }
     }
-    return { id: params.request.id, ok: true, value: toJsonSafe(value) };
+    return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
   } catch (error) {
     return { id: params.request.id, ok: false, error: errorMessage(error) };
   }
@@ -649,10 +629,15 @@ async function runCodeModeWorker(
   timeoutMs: number,
   workerUrl?: URL,
 ): Promise<CodeModeWorkerResult> {
+  const resolvedWorkerUrl = workerUrl ?? codeModeWorkerUrl();
+  const sourceWorkerExecArgv = resolvedWorkerUrl.pathname.endsWith(".ts")
+    ? ["--import", "tsx"]
+    : undefined;
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl ?? codeModeWorkerUrl(), {
+    worker = new Worker(resolvedWorkerUrl, {
       workerData,
+      execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
     return failedCodeModeWorkerResult(error, "runtime_unavailable");
@@ -758,6 +743,8 @@ function createPendingBridgeStates(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): PendingBridgeState[] {
   return params.pendingRequests.map((request) => {
+    // Bridge calls start immediately while the VM snapshot is stored. Their
+    // settled values are later replayed into QuickJS by the wait tool.
     const promise = runBridgeRequest({
       runtime: params.runtime,
       namespaceRuntime: params.namespaceRuntime,
@@ -945,6 +932,8 @@ async function settleCodeModeResult(params: {
   const output = params.output;
   let namespaceRounds = 0;
   const settleDeadline = Date.now() + params.config.timeoutMs;
+  // Namespace calls are trusted synchronous-looking plugin helpers. Resolve
+  // them inline when possible so the model avoids unnecessary wait turns.
   while (
     result.status === "waiting" &&
     result.pendingRequests.length > 0 &&
@@ -1115,6 +1104,7 @@ async function runWait(params: {
   }
 }
 
+/** Create the exec/wait control tools for one Code Mode run context. */
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
@@ -1182,6 +1172,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   return [execTool, waitTool];
 }
 
+/** Compact normal tools behind Code Mode exec/wait controls. */
 export function applyCodeModeCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -1235,6 +1226,7 @@ export function applyCodeModeCatalog(params: {
   return compacted;
 }
 
+/** Move client-side tool definitions into the active Code Mode catalog. */
 export function addClientToolsToCodeModeCatalog(params: {
   tools: ToolDefinition[];
   config?: OpenClawConfig;
@@ -1250,6 +1242,7 @@ export function addClientToolsToCodeModeCatalog(params: {
   });
 }
 
+/** Test-only hooks and state accessors for Code Mode worker orchestration. */
 export const testing = {
   activeRuns,
   resumingRunIds,

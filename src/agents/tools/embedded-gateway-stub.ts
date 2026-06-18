@@ -1,10 +1,18 @@
+/**
+ * Embedded-mode Gateway method stub.
+ *
+ * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
+ */
 import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
+import type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadScope,
+} from "../../gateway/session-transcript-readers.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -66,9 +74,7 @@ interface EmbeddedGatewayRuntime {
     entry: Record<string, unknown> | undefined;
   };
   readSessionMessagesAsync: (
-    sessionId: string,
-    storePath: string,
-    sessionFile: string | undefined,
+    scope: SessionTranscriptReadScope,
     opts: ReadSessionMessagesAsyncOptions,
   ) => Promise<unknown[]>;
   resolveSessionModelRef: (
@@ -82,6 +88,7 @@ let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
+    // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
     runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
   }
   return runtimeMod;
@@ -111,6 +118,9 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   });
   if (!resolved.ok) {
     throw new Error(resolved.error.message);
+  }
+  if ("missing" in resolved) {
+    return { ok: false };
   }
   return { ok: true, key: resolved.key };
 }
@@ -149,13 +159,17 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const localMessages =
     sessionId && storePath
       ? await rt.readSessionMessagesAsync(
-          sessionId,
-          storePath,
-          entry?.sessionFile as string | undefined,
+          {
+            agentId: sessionAgentId,
+            sessionFile: entry?.sessionFile as string | undefined,
+            sessionId,
+            storePath,
+          },
           {
             mode: "recent",
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
           },
         )
       : [];
@@ -168,6 +182,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
 
+  // Mirror Gateway chat.history trimming so embedded mode has the same byte ceilings.
   const normalized = rt.augmentChatHistoryWithCanvasBlocks(
     rt.projectRecentChatDisplayMessages(rawMessages, {
       maxChars: effectiveMaxChars,
@@ -193,6 +208,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   };
 }
 
+/** Creates a local callGateway replacement for supported session methods. */
 export function createEmbeddedCallGateway(): EmbeddedCallGateway {
   return async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
     const method = opts.method?.trim();

@@ -1,9 +1,12 @@
+// Covers outbound delivery core: hooks, queue cleanup, durable capability
+// checks, adapter sends, transcript mirroring, and payload outcomes.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
@@ -28,7 +31,9 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
+    async () => ({ ok: true, sessionFile: "x", messageId: "m" }),
+  ),
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -1184,6 +1189,59 @@ describe("deliverOutboundPayloads", () => {
     expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
     expect(mediaAccessOptions?.messageProvider).toBeUndefined();
     expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
+    resolveMediaAccessSpy.mockRestore();
+  });
+
+  it("uses the base policy key for isolated heartbeat group media read denies", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+        channels: {
+          matrix: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "id:attacker": {
+                    deny: ["read"],
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig["channels"],
+      },
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "heartbeat media", mediaUrl: "file:///tmp/policy.png" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:group:ops:heartbeat",
+        policyKey: "agent:main:matrix:group:ops",
+        requesterSenderId: "attacker",
+      },
+    });
+
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:group:ops");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(sendOptions.mediaReadFile).toBeUndefined();
+    expect((sendOptions.mediaLocalRoots as readonly string[] | undefined) ?? []).not.toContain(
+      "/tmp",
+    );
     resolveMediaAccessSpy.mockRestore();
   });
 
@@ -3068,6 +3126,64 @@ describe("deliverOutboundPayloads", () => {
     expect(appendOptions?.text).toBe("report.pdf");
     expect(appendOptions?.idempotencyKey).toBe("idem-deliver-1");
     expect(appendOptions?.config).toBe(cfg);
+  });
+
+  it("does not fail the channel send when the post-delivery transcript mirror throws", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("session file changed while embedded prompt lock was released"),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "done" }],
+      deps: { matrix: sendMatrix },
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "done",
+        idempotencyKey: "idem-89626",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toContain(
+      "failed to mirror outbound delivery into session transcript; channel send already succeeded",
+    );
+    expect(warnCall[1]).toMatchObject({ channel: "matrix", sessionKey: "agent:main:main" });
+  });
+
+  it("does not fail the channel send when the transcript mirror reports not-ok", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+      ok: false,
+      reason: "session locked",
+    });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "done" }],
+      deps: { matrix: sendMatrix },
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "done",
+        idempotencyKey: "idem-89626-b",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toContain(
+      "failed to mirror outbound delivery into session transcript; channel send already succeeded",
+    );
   });
 
   it("emits message_sent success for text-only deliveries", async () => {

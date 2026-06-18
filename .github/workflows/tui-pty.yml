@@ -27,15 +27,16 @@ env:
 jobs:
   tui-pty:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
+    env:
+      OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
 
       - name: Run TUI PTY tests
-        run: timeout --kill-after=30s 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+        run: timeout --kill-after=30s 240s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts

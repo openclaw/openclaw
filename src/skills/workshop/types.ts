@@ -1,15 +1,17 @@
+// Workshop types define generated skill draft, policy, and config contracts.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillScanFinding } from "../security/scanner.js";
 
+/** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
 export const SKILL_WORKSHOP_MANIFEST_SCHEMA =
   "openclaw.skill-workshop.proposals-manifest.v1" as const;
 export const SKILL_WORKSHOP_ROLLBACK_SCHEMA = "openclaw.skill-workshop.rollback.v1" as const;
 
-export type SkillProposalKind = "create" | "update";
+type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
-export type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
-export type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
+type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
+type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
 
 export type SkillProposalOrigin = {
   agentId?: string;
@@ -27,7 +29,7 @@ export type SkillProposalScan = {
   findings: SkillScanFinding[];
 };
 
-export type SkillProposalTarget = {
+type SkillProposalTarget = {
   skillName: string;
   skillKey: string;
   skillDir: string;
@@ -149,6 +151,7 @@ export type SkillProposalReviseInput = {
 
 export type SkillProposalActionInput = {
   workspaceDir: string;
+  config?: OpenClawConfig;
   proposalId: string;
   reason?: string;
 };

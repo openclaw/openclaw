@@ -1,3 +1,4 @@
+// Observes and recovers config files that appear missing, corrupt, or clobbered.
 import crypto from "node:crypto";
 import path from "node:path";
 import { isRecord } from "../utils.js";
@@ -11,6 +12,7 @@ import {
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
+import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { resolveStateDir } from "./paths.js";
 import {
@@ -19,6 +21,7 @@ import {
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
+/** Dependencies injected into config recovery observation for testable filesystem behavior. */
 export type ObserveRecoveryDeps = {
   fs: {
     promises: {
@@ -131,6 +134,9 @@ type ConfigReadRecoveryParams = {
   configPath: string;
   raw: string;
   parsed: unknown;
+  validateBackup?: (backup: { raw: string; parsed: unknown }) => Promise<boolean>;
+  validateBackupSync?: (backup: { raw: string; parsed: unknown }) => boolean;
+  allowBackupRecovery?: () => Promise<boolean>;
 };
 
 type ConfigReadRecoveryResult = {
@@ -505,49 +511,6 @@ function createBackupRestoreAuditAppendParams(params: {
   });
 }
 
-function isUpdateChannelOnlyRoot(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const keys = Object.keys(value);
-  if (keys.length !== 1 || keys[0] !== "update") {
-    return false;
-  }
-  const update = value.update;
-  if (!isRecord(update)) {
-    return false;
-  }
-  const updateKeys = Object.keys(update);
-  return updateKeys.length === 1 && typeof update.channel === "string";
-}
-
-function resolveConfigObserveSuspiciousReasons(params: {
-  bytes: number;
-  hasMeta: boolean;
-  gatewayMode: string | null;
-  parsed: unknown;
-  lastKnownGood?: ConfigHealthFingerprint;
-}): string[] {
-  const reasons: string[] = [];
-  const baseline = params.lastKnownGood;
-  if (!baseline) {
-    return reasons;
-  }
-  if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
-    reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
-  }
-  if (baseline.hasMeta && !params.hasMeta) {
-    reasons.push("missing-meta-vs-last-good");
-  }
-  if (baseline.gatewayMode && !params.gatewayMode) {
-    reasons.push("gateway-mode-missing-vs-last-good");
-  }
-  if (baseline.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
-    reasons.push("update-channel-only-root");
-  }
-  return reasons;
-}
-
 function resolveSuspiciousSignature(
   current: ConfigHealthFingerprint,
   suspicious: string[],
@@ -710,8 +673,17 @@ export async function maybeRecoverSuspiciousConfigRead(
   if (!backupParse) {
     return returnOriginalConfigRead(params);
   }
+  if (
+    params.validateBackup &&
+    !(await params.validateBackup({ raw: backupRaw, parsed: backupParse.parsed }))
+  ) {
+    return returnOriginalConfigRead(params);
+  }
   const backup = backupBaseline ?? (await readConfigFingerprintForPath(params.deps, backupPath));
   if (!backup?.gatewayMode) {
+    return returnOriginalConfigRead(params);
+  }
+  if (params.allowBackupRecovery && !(await params.allowBackupRecovery())) {
     return returnOriginalConfigRead(params);
   }
 
@@ -725,7 +697,10 @@ export async function maybeRecoverSuspiciousConfigRead(
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
-    await params.deps.fs.promises.copyFile(backupPath, params.configPath);
+    await params.deps.fs.promises.writeFile(params.configPath, backupRaw, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
     restoredFromBackup = true;
   } catch (error) {
@@ -811,6 +786,12 @@ export function maybeRecoverSuspiciousConfigReadSync(
   if (!backupParse) {
     return returnOriginalConfigRead(params);
   }
+  if (
+    params.validateBackupSync &&
+    !params.validateBackupSync({ raw: backupRaw, parsed: backupParse.parsed })
+  ) {
+    return returnOriginalConfigRead(params);
+  }
   const backup = backupBaseline ?? readConfigFingerprintForPathSync(params.deps, backupPath);
   if (!backup?.gatewayMode) {
     return returnOriginalConfigRead(params);
@@ -826,7 +807,10 @@ export function maybeRecoverSuspiciousConfigReadSync(
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
-    params.deps.fs.copyFileSync(backupPath, params.configPath);
+    params.deps.fs.writeFileSync(params.configPath, backupRaw, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     try {
       params.deps.fs.chmodSync?.(params.configPath, 0o600);
     } catch {}
@@ -977,7 +961,10 @@ export async function recoverConfigFromLastKnownGood(params: {
     raw: snapshot.raw,
     observedAt: now,
   });
-  await deps.fs.promises.copyFile(lastGoodPath, snapshot.path);
+  await deps.fs.promises.writeFile(snapshot.path, backupRaw, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
   await deps.fs.promises.chmod?.(snapshot.path, 0o600).catch(() => {});
   const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(

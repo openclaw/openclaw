@@ -1,3 +1,4 @@
+// Skill types expose the shared skill contracts used by discovery, loading, and runtime flows.
 import type { Skill } from "./loading/skill-contract.js";
 
 export type SkillInstallSpec = {
@@ -98,6 +99,8 @@ export type SkillEligibilityContext = {
   };
 };
 
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 1;
+
 export type SkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
@@ -105,4 +108,5 @@ export type SkillSnapshot = {
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+  promptFormatVersion?: number;
 };

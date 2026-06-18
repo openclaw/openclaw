@@ -1,0 +1,26 @@
+title: Plugin lifecycle probe evidence
+
+scenario:
+  id: plugin-lifecycle-probe
+  surface: plugins
+  coverage:
+    primary:
+      - plugins.lifecycle
+    secondary:
+      - plugin-validation-and-repair
+      - plugin-setup
+  objective: Exercise strict plugin load/uninstall proof parsing through QA Lab evidence.
+  successCriteria:
+    - Enabled loaded plugin inspect JSON is accepted as proof.
+    - Pending or missing inspect JSON is rejected instead of treated as loaded.
+    - Malformed config during uninstall proof fails with a bounded diagnostic.
+  docsRefs:
+    - docs/plugins/manifest.md
+    - docs/cli/plugins.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
+    summary: Vitest coverage for plugin lifecycle proof parsing.

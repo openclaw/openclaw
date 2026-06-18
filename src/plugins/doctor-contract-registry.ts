@@ -1,3 +1,4 @@
+// Loads plugin doctor contracts from manifest-owned metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -243,6 +244,13 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
     }
   }
 
+  const modelProviders = asNullableRecord(asNullableRecord(root.models)?.providers);
+  if (modelProviders) {
+    for (const providerId of Object.keys(modelProviders)) {
+      ids.add(providerId);
+    }
+  }
+
   if (hasLegacyElevenLabsTalkFields(root)) {
     ids.add("elevenlabs");
   }
@@ -273,6 +281,13 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
     }
     if (first === "plugins") {
       if (second !== "entries" || !third) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      ids.add(third);
+      continue;
+    }
+    if (first === "models") {
+      if (second !== "providers" || !third) {
         return collectRelevantDoctorPluginIds(params.raw);
       }
       ids.add(third);
@@ -405,15 +420,6 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
     }
   }
   return [...owners.values()].toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
-export function listPluginDoctorStateMigrations(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): PluginDoctorStateMigration[] {
-  return listPluginDoctorStateMigrationEntries(params).map((entry) => entry.migration);
 }
 
 export function listPluginDoctorStateMigrationEntries(params?: {

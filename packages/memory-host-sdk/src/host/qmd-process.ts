@@ -1,3 +1,4 @@
+// Memory Host SDK module implements qmd process behavior.
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
@@ -8,6 +9,11 @@ export type CliSpawnInvocation = {
   argv: string[];
   shell?: boolean;
   windowsHide?: boolean;
+};
+
+type QmdChildProcess = {
+  pid?: number;
+  kill: (signal?: NodeJS.Signals) => boolean;
 };
 
 export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
@@ -91,10 +97,11 @@ export async function checkQmdBinaryAvailability(params: {
       shell: spawnInvocation.shell,
       windowsHide: spawnInvocation.windowsHide,
       stdio: "ignore",
+      detached: shouldUseQmdProcessGroup(),
     });
     const timeoutMs = resolveSafeTimeoutDelayMs(params.timeoutMs ?? 2_000, { minMs: 0 });
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      signalQmdProcessTree(child, "SIGKILL");
       finish({
         available: false,
         reason: "binary",
@@ -107,7 +114,7 @@ export async function checkQmdBinaryAvailability(params: {
     });
     child.once("spawn", () => {
       didSpawn = true;
-      child.kill();
+      signalQmdProcessTree(child);
       finish({ available: true });
     });
     child.once("close", () => {
@@ -161,6 +168,7 @@ export async function runCliCommand(params: {
       cwd: params.cwd,
       shell: params.spawnInvocation.shell,
       windowsHide: params.spawnInvocation.windowsHide,
+      detached: shouldUseQmdProcessGroup(),
     });
     let stdout = "";
     let stderr = "";
@@ -171,7 +179,7 @@ export async function runCliCommand(params: {
       params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
     const timer = timeoutMs
       ? setTimeout(() => {
-          child.kill("SIGKILL");
+          signalQmdProcessTree(child, "SIGKILL");
           reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`));
         }, timeoutMs)
       : null;
@@ -221,6 +229,30 @@ export async function runCliCommand(params: {
       }
     });
   });
+}
+
+function shouldUseQmdProcessGroup(): boolean {
+  return process.platform !== "win32";
+}
+
+function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): void {
+  if (shouldUseQmdProcessGroup() && typeof child.pid === "number") {
+    try {
+      if (signal === undefined) {
+        process.kill(-child.pid);
+      } else {
+        process.kill(-child.pid, signal);
+      }
+      return;
+    } catch {
+      // Fall back to the direct child if the process group already disappeared.
+    }
+  }
+  if (signal === undefined) {
+    child.kill();
+  } else {
+    child.kill(signal);
+  }
 }
 
 class CliCommandError extends Error {

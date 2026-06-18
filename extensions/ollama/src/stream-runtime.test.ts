@@ -1,3 +1,4 @@
+// Ollama tests cover stream runtime plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -1629,9 +1630,9 @@ describe("createOllamaStreamFn streaming events", () => {
         const textStartEvent = events.find((e) => e.type === "text_start");
         expect(textStartEvent?.partial.content).toStrictEqual([]);
 
-        // text_delta partials accumulate content progressively
-        expect(deltas[0].partial.content).toEqual([{ type: "text", text: "Hello" }]);
-        expect(deltas[1].partial.content).toEqual([{ type: "text", text: "Hello world" }]);
+        // text_delta events stay lightweight; text_end/done carry the full snapshot.
+        expect(deltas[0]).not.toHaveProperty("partial");
+        expect(deltas[1]).not.toHaveProperty("partial");
 
         // done event contains the final message
         const doneEvent = events.at(-1);
@@ -2105,7 +2106,7 @@ describe("createOllamaStreamFn streaming events", () => {
     );
   });
 
-  it("sanitizes Kimi inline reasoning in text_delta, text_end, partial, and done output", async () => {
+  it("sanitizes Kimi inline reasoning in text_delta, text_end, and done output", async () => {
     await withMockNdjsonFetch(
       [
         JSON.stringify({
@@ -2148,8 +2149,8 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(deltas).toHaveLength(2);
         expect(deltas[0]?.delta).toBe("Final answer");
         expect(deltas[1]?.delta).toBe(" only.");
-        expect(deltas[0]?.partial.content).toEqual([{ type: "text", text: "Final answer" }]);
-        expect(deltas[1]?.partial.content).toEqual([{ type: "text", text: "Final answer only." }]);
+        expect(deltas[0]).not.toHaveProperty("partial");
+        expect(deltas[1]).not.toHaveProperty("partial");
 
         const textEnd = events.find((e) => e.type === "text_end");
         expect(textEnd?.content).toBe("Final answer only.");

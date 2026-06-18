@@ -1,28 +1,11 @@
-import {
-  type ChildProcess,
-  type ChildProcessByStdio,
-  spawn as nodeSpawn,
-  type SpawnOptions,
-  type SpawnOptionsWithStdioTuple,
-  type StdioNull,
-  type StdioPipe,
-} from "node:child_process";
-import type { Readable } from "node:stream";
-import crossSpawn from "cross-spawn";
+/**
+ * Child-process compatibility helpers for agent utilities.
+ *
+ * Wraps platform-specific spawn behavior and safe close handling for inherited stdio.
+ */
+import type { ChildProcess } from "node:child_process";
 
 const EXIT_STDIO_GRACE_MS = 100;
-
-export function spawnProcess(
-  command: string,
-  args: string[],
-  options: SpawnOptionsWithStdioTuple<StdioNull, StdioPipe, StdioPipe>,
-): ChildProcessByStdio<null, Readable, Readable>;
-export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess;
-export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess {
-  return process.platform === "win32"
-    ? crossSpawn(command, args, options)
-    : nodeSpawn(command, args, options);
-}
 
 /**
  * Wait for a child process to terminate without hanging on inherited stdio handles.

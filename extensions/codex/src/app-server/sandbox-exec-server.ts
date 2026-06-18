@@ -1,3 +1,7 @@
+/**
+ * Hosts the local OpenClaw sandbox exec-server that Codex app-server native
+ * execution can register as an external environment.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
@@ -37,13 +41,16 @@ import type {
 } from "./sandbox-exec-server/types.js";
 import { MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION } from "./version.js";
 
+/** Codex environment metadata registered for one sandbox exec-server lease. */
 export type CodexSandboxExecEnvironment = {
   environmentId: string;
   cwd: string;
 };
 
 const SANDBOX_EXEC_SERVERS = new Map<string, Promise<OpenClawExecServer>>();
+export const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 
+/** Closes all cached sandbox exec-server instances for deterministic tests. */
 export async function closeCodexSandboxExecServersForTests(): Promise<void> {
   const servers = await Promise.allSettled(SANDBOX_EXEC_SERVERS.values());
   SANDBOX_EXEC_SERVERS.clear();
@@ -57,6 +64,7 @@ export async function closeCodexSandboxExecServersForTests(): Promise<void> {
   );
 }
 
+/** Starts or reuses a sandbox exec-server and registers it with Codex app-server. */
 export async function ensureCodexSandboxExecServerEnvironment(params: {
   client: CodexAppServerClient;
   sandbox: SandboxContext | null;
@@ -99,6 +107,7 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   };
 }
 
+/** Releases the sandbox exec-server lease associated with a sandbox runtime. */
 export async function releaseCodexSandboxExecServerEnvironment(
   sandbox: SandboxContext | null | undefined,
 ): Promise<void> {
@@ -185,7 +194,13 @@ function startAndRememberOpenClawExecServer(sandbox: SandboxContext): Promise<Op
 }
 
 async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const server = new WebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    // Match ws' historical default: Codex fs/writeFile sends one base64 JSON-RPC
+    // frame, while the socket error handler below makes oversize frames nonfatal.
+    maxPayload: CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
+  });
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -204,6 +219,8 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
     server,
   };
   server.on("connection", (socket, request) => {
+    // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
+    socket.on("error", handleExecServerSocketError);
     if (!isAuthorizedExecServerRequest(execServer, request)) {
       socket.close(1008, "unauthorized");
       return;
@@ -276,6 +293,10 @@ function handleConnection(execServer: OpenClawExecServer, socket: WebSocket): vo
       process.abortController.abort();
     }
   });
+}
+
+function handleExecServerSocketError(error: unknown): void {
+  embeddedAgentLog.debug("codex sandbox exec-server websocket failed", { error });
 }
 
 async function handleMessage(

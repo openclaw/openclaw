@@ -1,3 +1,4 @@
+// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -177,6 +178,7 @@ export function buildFastReplyCommandContext(params: {
     surface,
     channel,
     channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: [],
     senderIsOwner: false,
     isAuthorizedSender: commandAuthorized,

@@ -1,3 +1,8 @@
+/**
+ * Low-level Docker command helpers for sandbox runtimes.
+ *
+ * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
+ */
 import { spawn } from "node:child_process";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -559,6 +564,7 @@ async function createSandboxContainer(params: {
   workspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   scopeKey: string;
   configHash?: string;
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
@@ -579,6 +585,7 @@ async function createSandboxContainer(params: {
     args,
     workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
@@ -618,6 +625,7 @@ export async function ensureSandboxContainer(params: {
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
@@ -627,6 +635,7 @@ export async function ensureSandboxContainer(params: {
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
   });
@@ -684,6 +693,7 @@ export async function ensureSandboxContainer(params: {
       workspaceDir: params.workspaceDir,
       workspaceAccess: params.cfg.workspaceAccess,
       agentWorkspaceDir: params.agentWorkspaceDir,
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
       readOnlyWorkspaceSkillMounts,

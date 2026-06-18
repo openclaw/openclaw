@@ -1,4 +1,9 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+// Msteams plugin module implements monitor handler behavior.
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
@@ -24,16 +29,43 @@ export type MSTeamsActivityHandler = {
   run?: (context: unknown) => Promise<void>;
 };
 
+function extractAdaptiveCardSubmittedData(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const action = isRecord(value.action) ? value.action : undefined;
+  if (action && normalizeOptionalLowercaseString(action.type) === "action.submit" && "data" in action) {
+    return action.data;
+  }
+  return value;
+}
+
+function readMSTeamsImBackValue(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const msteams = isRecord(value.msteams) ? value.msteams : undefined;
+  if (!msteams || normalizeOptionalLowercaseString(msteams.type) !== "imback") {
+    return null;
+  }
+  return normalizeOptionalString(msteams.value) ?? null;
+}
+
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
+  const submittedValue = extractAdaptiveCardSubmittedData(value);
+  if (typeof submittedValue === "string") {
+    const trimmed = submittedValue.trim();
     return trimmed ? trimmed : null;
   }
-  if (value === undefined) {
+  const imBackValue = readMSTeamsImBackValue(submittedValue);
+  if (imBackValue) {
+    return imBackValue;
+  }
+  if (submittedValue == null) {
     return null;
   }
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(submittedValue);
   } catch {
     return null;
   }

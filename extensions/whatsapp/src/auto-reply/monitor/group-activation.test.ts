@@ -1,6 +1,8 @@
+// Whatsapp tests cover group activation plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
@@ -20,7 +22,9 @@ async function makeSessionStore(
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
   const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
+  await saveSessionStore(storePath, entries as Record<string, SessionEntry>, {
+    skipMaintenance: true,
+  });
   return {
     storePath,
     cleanup: async () => {

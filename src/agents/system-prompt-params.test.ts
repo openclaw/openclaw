@@ -1,3 +1,5 @@
+// System prompt params tests cover runtime metadata assembly, especially repo
+// root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +30,7 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
   });
 }
 
-describe("buildSystemPromptParams repo root", () => {
+describe("buildSystemPromptParams", () => {
   it("detects repo root from workspaceDir", async () => {
     const temp = await makeTempDir("workspace");
     const repoRoot = path.join(temp, "repo");
@@ -75,6 +77,8 @@ describe("buildSystemPromptParams repo root", () => {
   });
 
   it("ignores invalid repoRoot config and auto-detects", async () => {
+    // Invalid explicit roots must not poison runtime metadata; auto-detection
+    // still finds the real repository root from the workspace path.
     const temp = await makeTempDir("invalid");
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(repoRoot, "workspace");
@@ -100,5 +104,23 @@ describe("buildSystemPromptParams repo root", () => {
     const { runtimeInfo } = buildParams({ workspaceDir });
 
     expect(runtimeInfo.repoRoot).toBeUndefined();
+  });
+
+  it("carries session identity into runtime info", () => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      agentId: "main",
+      runtime: {
+        sessionKey: "agent:main:main",
+        sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionKey).toBe("agent:main:main");
+    expect(runtimeInfo.sessionId).toBe("23ae7fce-3c27-4a51-b58e-d800d8ca091f");
   });
 });

@@ -1,3 +1,4 @@
+// Openrouter provider module implements model/runtime integration.
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -328,7 +329,3 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     },
   };
 }
-
-export const openRouterMusicTestInternals = {
-  readOpenRouterAudioStream,
-};

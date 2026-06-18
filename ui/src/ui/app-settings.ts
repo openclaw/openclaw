@@ -1,3 +1,4 @@
+// Control UI module implements app settings behavior.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -56,9 +57,13 @@ import {
   loadSkillWorkshopProposals,
   type SkillWorkshopState,
 } from "./controllers/skill-workshop.ts";
-import { loadSkills, type SkillsState } from "./controllers/skills.ts";
+import { loadSkills, reconcileSkillsAgentId, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
-import { loadWorkboard } from "./controllers/workboard.ts";
+import {
+  loadWorkboard,
+  stopWorkboardLifecycleRefresh,
+  stopWorkboardPolling,
+} from "./controllers/workboard.ts";
 import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
@@ -416,7 +421,7 @@ function loadConfigSchemaAfterPrimary(
   );
 }
 
-export async function refreshActiveTab(host: SettingsHost) {
+export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?: boolean }) {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.tab);
   try {
@@ -449,6 +454,7 @@ export async function refreshActiveTab(host: SettingsHost) {
             client: app.client,
             force: true,
             requestUpdate: host.requestUpdate,
+            refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
           }),
         ]);
         break;
@@ -468,6 +474,8 @@ export async function refreshActiveTab(host: SettingsHost) {
         await loadCron(host);
         break;
       case "skills":
+        await loadAgents(app);
+        reconcileSkillsAgentId(app, app.agentsList);
         await loadSkills(app);
         break;
       case "skillWorkshop":
@@ -492,7 +500,10 @@ export async function refreshActiveTab(host: SettingsHost) {
         break;
       case "chat": {
         try {
-          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
+          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+            awaitHistory: opts?.chatStartup === true,
+            startup: opts?.chatStartup === true,
+          });
           scheduleChatScroll(
             host as unknown as Parameters<typeof scheduleChatScroll>[0],
             !host.chatHasAutoScrolled,
@@ -705,6 +716,12 @@ function applyTabSelection(
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
   );
+  if (next !== "workboard") {
+    stopWorkboardPolling(host as unknown as Parameters<typeof stopWorkboardPolling>[0]);
+    stopWorkboardLifecycleRefresh(
+      host as unknown as Parameters<typeof stopWorkboardLifecycleRefresh>[0],
+    );
+  }
 
   if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);

@@ -89,10 +89,11 @@ reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`,
 `NO_COLOR`, `FORCE_COLOR`).
 
 For `allow-always` decisions in allowlist mode, known dispatch wrappers (`env`,
-`nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path instead
-of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are unwrapped for
-shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or multiplexer
-cannot be safely unwrapped, no allowlist entry is persisted automatically.
+`flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path
+instead of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are
+unwrapped for shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or
+multiplexer cannot be safely unwrapped, no allowlist entry is persisted
+automatically.
 
 If you allowlist interpreters like `python3` or `node`, prefer
 `tools.exec.strictInlineEval=true` so inline eval still requires an explicit
@@ -115,7 +116,7 @@ Configuration location:
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
 - `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
-- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
+- allowlist entries live in the host-local approvals file under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
 - `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
 
@@ -287,6 +288,9 @@ Generic model:
 - Slack plugin approvals can use Slack's native approval client when the request comes from Slack
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
+- Google Chat native approval cards handle exec and plugin approvals that originate from Google
+  Chat spaces or threads when stable `users/<id>` approvers resolve from `dm.allowFrom` or
+  `defaultTo`; they do not use reaction events for decisions
 - WhatsApp and Signal reaction approval delivery are gated by `approvals.exec` and
   `approvals.plugin`; they do not have `channels.<channel>.execApprovals` blocks
 
@@ -306,6 +310,8 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Discord: `channels.discord.execApprovals.*`
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
+- Google Chat: configure stable approvers with `channels.googlechat.dm.allowFrom` or
+  `channels.googlechat.defaultTo`; no `execApprovals` block is required
 - WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp
 - Signal: use `approvals.exec` and `approvals.plugin` to route approval prompts to Signal
 
@@ -325,6 +331,9 @@ Shared behavior:
   routing, not Slack exec approvers
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
+- Google Chat native cards preserve the manual `/approve` fallback in message text but card button
+  callbacks carry only opaque action tokens; approval id and decision are recovered from server-side
+  pending state
 - WhatsApp emoji approvals handle both exec and plugin prompts only when the matching top-level
   forwarding family is enabled and routes to WhatsApp; target-only WhatsApp forwarding stays on
   the shared forwarding path unless it matches the same native origin target

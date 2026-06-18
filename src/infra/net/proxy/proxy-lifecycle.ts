@@ -1,3 +1,5 @@
+// Managed proxy lifecycle installs Proxyline, injects process proxy env, and
+// restores inherited/direct routing when owner handles stop.
 import {
   installGlobalProxy,
   type ProxylineHandle,
@@ -5,7 +7,7 @@ import {
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
-export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
+type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";

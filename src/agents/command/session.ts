@@ -1,3 +1,6 @@
+/**
+ * Resolves command session ids, keys, stores, and persisted thinking state.
+ */
 import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
@@ -6,7 +9,10 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  resolveSessionLifecycleTimestamps,
+} from "../../config/sessions/lifecycle.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -23,6 +29,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
+  classifySessionKeyShape,
   DEFAULT_AGENT_ID,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -31,8 +38,10 @@ import {
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
+import { clearAllCliSessions } from "../cli-session.js";
 
-export type SessionResolution = {
+/** Resolved command session identity plus backing store metadata. */
+type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: SessionEntry;
@@ -49,12 +58,34 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
+function clearRotatedTerminalMainSessionMetadata(
+  entry: SessionEntry | undefined,
+): SessionEntry | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  const next = {
+    ...entry,
+    sessionFile: undefined,
+    status: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    abortedLastRun: undefined,
+    sessionStartedAt: undefined,
+    lastInteractionAt: undefined,
+  };
+  clearAllCliSessions(next);
+  return next;
+}
+
 type SessionIdMatchSet = {
   matches: Array<[string, SessionEntry]>;
   primaryStoreMatches: Array<[string, SessionEntry]>;
   storeByKey: Map<string, SessionKeyResolution>;
 };
 
+/** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
@@ -207,6 +238,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
+/** Resolves the session key/store targeted by one command request. */
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -221,8 +253,14 @@ export function resolveSessionKeyForRequest(opts: {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const requestedSessionKey = opts.sessionKey?.trim() || undefined;
+  const toSessionKey =
+    !requestedSessionKey && !requestedSessionId && classifySessionKeyShape(opts.to) === "agent"
+      ? opts.to?.trim()
+      : undefined;
   const explicitSessionKey =
-    opts.sessionKey?.trim() ||
+    requestedSessionKey ||
+    toSessionKey ||
     (!requestedSessionId
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
@@ -301,6 +339,7 @@ export function resolveSessionKeyForRequest(opts: {
   return { sessionKey, sessionStore, storePath };
 }
 
+/** Resolves or creates the session used by one agent command request. */
 export function resolveSession(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -321,6 +360,9 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
+  const sessionAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveAgentIdFromSessionKey(sessionKey);
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
@@ -332,12 +374,25 @@ export function resolveSession(opts: {
     resetType,
     resetOverride: channelReset,
   });
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const terminalMainTranscriptNewerThanRegistry =
+    sessionEntry && !requestedSessionId
+      ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+          entry: sessionEntry,
+          sessionScope: sessionCfg?.scope,
+          sessionKey,
+          agentId: sessionAgentId,
+          mainKey: sessionCfg?.mainKey,
+          storePath,
+        })
+      : false;
   const fresh = sessionEntry
-    ? evaluateSessionFreshness({
+    ? !terminalMainTranscriptNewerThanRegistry &&
+      evaluateSessionFreshness({
         updatedAt: sessionEntry.updatedAt,
         ...resolveSessionLifecycleTimestamps({
           entry: sessionEntry,
-          agentId: opts.agentId,
+          agentId: sessionAgentId,
           storePath,
         }),
         now,
@@ -345,8 +400,11 @@ export function resolveSession(opts: {
       }).fresh
     : false;
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
+  const isNewSession = !fresh && !requestedSessionId;
+  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
+    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
+    : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
@@ -365,7 +423,7 @@ export function resolveSession(opts: {
   return {
     sessionId,
     sessionKey,
-    sessionEntry,
+    sessionEntry: resolvedSessionEntry,
     sessionStore,
     storePath,
     isNewSession,

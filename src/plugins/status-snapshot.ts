@@ -1,3 +1,4 @@
+/** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -7,9 +8,10 @@ import {
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { buildSnapshotPluginDependencyStatus } from "./status-snapshot-dependencies.js";
+import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 
+/** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
 export type PluginRegistryStatusReport = PluginRegistry & {
   workspaceDir?: string;
   registrySource: PluginRegistrySnapshotSource;
@@ -115,8 +117,8 @@ function buildPluginRecordFromInstalledIndex(
     httpRoutes: 0,
     hookCount: 0,
     configSchema: false,
-    contracts: {},
-    dependencyStatus: buildSnapshotPluginDependencyStatus({
+    contracts: manifest?.contracts,
+    dependencyStatus: buildPluginDependencyStatus({
       rootDir: plugin.rootDir,
       dependencies: manifest?.packageDependencies,
       optionalDependencies: manifest?.packageOptionalDependencies,
@@ -124,6 +126,7 @@ function buildPluginRecordFromInstalledIndex(
   };
 }
 
+/** Resolves the best available plugin registry snapshot and annotates dependency status. */
 export function buildPluginRegistrySnapshotReport(
   params?: PluginRegistrySnapshotReportParams,
 ): PluginRegistryStatusReport {

@@ -1,3 +1,4 @@
+// Fetches and validates ClawHub package metadata and artifacts.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -15,6 +16,7 @@ import { createTempDownloadTarget } from "./temp-download.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
+const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
 
@@ -305,6 +307,36 @@ export type ClawHubSkillDetail = {
   } | null;
 };
 
+export type ClawHubSkillInstallResolutionResponse =
+  | {
+      ok: true;
+      slug: string;
+      installKind: "archive";
+      archive: {
+        version: string;
+        downloadUrl: string;
+      };
+    }
+  | {
+      ok: true;
+      slug: string;
+      installKind: "github";
+      github: {
+        repo: string;
+        path: string;
+        commit: string;
+        contentHash: string;
+        sourceUrl: string;
+      };
+    }
+  | {
+      ok: false;
+      slug: string;
+      reason: string;
+      message: string;
+      status: number;
+    };
+
 export type ClawHubSkillVerificationDecision = "pass" | "fail" | (string & {});
 
 export type ClawHubSkillVerificationResponse = {
@@ -354,27 +386,6 @@ export type ClawHubSkillSecurityVerdictsResponse = {
   items: ClawHubSkillSecurityVerdictItem[];
 };
 
-export type ClawHubSkillListResponse = {
-  items: Array<{
-    slug: string;
-    displayName: string;
-    summary?: string;
-    tags?: Record<string, string>;
-    latestVersion?: {
-      version: string;
-      createdAt: number;
-      changelog?: string;
-    } | null;
-    metadata?: {
-      os?: string[] | null;
-      systems?: string[] | null;
-    } | null;
-    createdAt: number;
-    updatedAt: number;
-  }>;
-  nextCursor?: string | null;
-};
-
 export type ClawHubDownloadResult = {
   archivePath: string;
   integrity: string;
@@ -386,6 +397,10 @@ export type ClawHubDownloadResult = {
   npmShasum?: string;
   npmTarballName?: string;
   cleanup: () => Promise<void>;
+};
+
+export type ClawHubInstallTelemetrySkill = {
+  version?: string | null;
 };
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -435,6 +450,14 @@ function normalizeBaseUrl(baseUrl?: string): string {
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
+}
+
+function normalizeGitHubCodeloadBaseUrl(): string {
+  const value =
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
+    normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
+    DEFAULT_GITHUB_CODELOAD_URL;
+  return value.replace(/\/+$/, "") || DEFAULT_GITHUB_CODELOAD_URL;
 }
 
 function extractTokenFromClawHubConfig(value: unknown): string | undefined {
@@ -548,13 +571,13 @@ function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
 }
 
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
-  const normalizedCorrection = normalizeCalVerNumericCorrectionForPluginApi(version);
+  const normalizedCorrection = normalizeOpenClawNumericCorrectionForPluginApi(version);
   if (normalizedCorrection) {
     return normalizedCorrection;
   }
   return shouldPreservePluginApiPrereleaseFloor(target)
     ? version
-    : normalizeCalVerCorrectionForPluginApi(version);
+    : normalizeOpenClawReleaseSuffixForPluginApi(version);
 }
 
 function satisfiesComparator(version: string, token: string): boolean {
@@ -612,18 +635,18 @@ function satisfiesSemverRange(version: string, range: string): boolean {
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
-  /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
-const OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+const OPENCLAW_RELEASE_SUFFIX_PATTERN =
+  /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
+const OPENCLAW_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)-\d+$/;
 
-function normalizeCalVerNumericCorrectionForPluginApi(
+function normalizeOpenClawNumericCorrectionForPluginApi(
   pluginApiVersion: string,
 ): string | undefined {
-  return OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
+  return OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
 }
 
-function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
-  const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
+function normalizeOpenClawReleaseSuffixForPluginApi(pluginApiVersion: string): string {
+  const match = OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(pluginApiVersion.trim());
   return match?.[1] ?? pluginApiVersion;
 }
 
@@ -765,20 +788,41 @@ async function readClawHubResponseBytes(params: {
   });
 }
 
+/** Resolves the configured ClawHub base URL, falling back to the default public host. */
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
+}
+
+export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
+  return normalizeBaseUrl(baseUrl) === normalizeBaseUrl(DEFAULT_CLAWHUB_URL);
 }
 
 function buildVersionOrTagSearch(params: {
   version?: string;
   tag?: string;
-}): { version?: string; tag?: string } | undefined {
+  ownerHandle?: string;
+}): { version?: string; tag?: string; ownerHandle?: string } | undefined {
   const version = normalizeOptionalString(params.version);
+  const ownerHandle = normalizeOptionalString(params.ownerHandle);
   if (version) {
-    return { version };
+    return { version, ...(ownerHandle ? { ownerHandle } : {}) };
   }
   const tag = normalizeOptionalString(params.tag);
-  return tag ? { tag } : undefined;
+  if (tag) {
+    return { tag, ...(ownerHandle ? { ownerHandle } : {}) };
+  }
+  return ownerHandle ? { ownerHandle } : undefined;
+}
+
+function buildGitHubZipUrl(repo: string, commit: string): string {
+  const url = new URL(`${normalizeGitHubCodeloadBaseUrl()}/`);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  const repoPath = repo
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  url.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(commit)}`;
+  return url.toString();
 }
 
 function formatSha256Integrity(bytes: Uint8Array): string {
@@ -812,6 +856,7 @@ function safePackageTarballName(name: string, version: string): string {
   return `${base || "package"}-${version}.tgz`;
 }
 
+/** Normalizes ClawHub SHA-256 metadata into Subresource Integrity format. */
 export function normalizeClawHubSha256Integrity(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -839,6 +884,7 @@ export function normalizeClawHubSha256Integrity(value: string): string | null {
   return null;
 }
 
+/** Normalizes ClawHub SHA-256 metadata into lowercase hex form. */
 export function normalizeClawHubSha256Hex(value: string): string | null {
   const trimmed = value.trim();
   if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
@@ -984,6 +1030,7 @@ export async function searchClawHubSkills(params: {
 
 export async function fetchClawHubSkillDetail(params: {
   slug: string;
+  ownerHandle?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -995,11 +1042,44 @@ export async function fetchClawHubSkillDetail(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
+}
+
+export async function fetchClawHubSkillInstallResolution(params: {
+  slug: string;
+  ownerHandle?: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+  forceInstall?: boolean;
+}): Promise<ClawHubSkillInstallResolutionResponse> {
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    search: {
+      ownerHandle: params.ownerHandle,
+      forceInstall: params.forceInstall ? "1" : undefined,
+    },
+  });
+  const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
+  if (!response.ok && !isStructuredBlock) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  try {
+    return (await response.json()) as ClawHubSkillInstallResolutionResponse;
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
 }
 
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1039,6 +1119,7 @@ export async function fetchClawHubSkillSecurityVerdicts(params: {
 
 export async function fetchClawHubSkillCard(params: {
   slug?: string;
+  ownerHandle?: string;
   url?: string;
   version?: string;
   tag?: string;
@@ -1078,25 +1159,6 @@ export async function fetchClawHubSkillCard(params: {
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
   return new TextDecoder().decode(bytes);
-}
-
-export async function listClawHubSkills(params: {
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-  limit?: number;
-}): Promise<ClawHubSkillListResponse> {
-  return await fetchJson<ClawHubSkillListResponse>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/skills",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1227,6 +1289,7 @@ export async function downloadClawHubPackageArchive(params: {
 
 export async function downloadClawHubSkillArchive(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1242,6 +1305,7 @@ export async function downloadClawHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
     search: {
       slug: params.slug,
+      ownerHandle: params.ownerHandle,
       version: params.version,
       tag: params.version ? undefined : params.tag,
     },
@@ -1270,17 +1334,155 @@ export async function downloadClawHubSkillArchive(params: {
   };
 }
 
+export async function downloadClawHubSkillArchiveUrl(params: {
+  url: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubDownloadResult> {
+  const explicitToken = normalizeOptionalString(params.token);
+  const requestUrl = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
+  const registryOrigin = new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
+  const skipAuth = explicitToken == null && requestUrl.origin !== registryOrigin;
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    url: params.url,
+    token: explicitToken,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    skipAuth,
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `skill archive download at ${url.pathname}`,
+  });
+  const sha256Hex = formatSha256Hex(bytes);
+  const target = await createTempDownloadTarget({
+    prefix: "openclaw-clawhub-skill",
+    fileName: "skill.zip",
+    tmpDir: os.tmpdir(),
+  });
+  await fs.writeFile(target.path, bytes);
+  return {
+    archivePath: target.path,
+    integrity: formatSha256Integrity(bytes),
+    sha256Hex,
+    artifact: "archive",
+    cleanup: target.cleanup,
+  };
+}
+
+export async function downloadClawHubGitHubSkillArchive(params: {
+  repo: string;
+  commit: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubDownloadResult> {
+  const downloadUrl = buildGitHubZipUrl(params.repo, params.commit);
+  const { response, url, hasToken } = await clawhubRequest({
+    url: downloadUrl,
+    skipAuth: true,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `GitHub source archive for ${params.repo}@${params.commit}`,
+  });
+  const sha256Hex = formatSha256Hex(bytes);
+  const target = await createTempDownloadTarget({
+    prefix: "openclaw-clawhub-github-skill",
+    fileName: `${params.commit}.zip`,
+    tmpDir: os.tmpdir(),
+  });
+  await fs.writeFile(target.path, bytes);
+  return {
+    archivePath: target.path,
+    integrity: formatSha256Integrity(bytes),
+    sha256Hex,
+    artifact: "archive",
+    cleanup: target.cleanup,
+  };
+}
+
+export async function reportClawHubSkillInstallTelemetry(params: {
+  baseUrl?: string;
+  token?: string;
+  root: string;
+  skills: Record<string, ClawHubInstallTelemetrySkill>;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<void> {
+  const token = normalizeOptionalString(params.token) ?? (await resolveClawHubAuthToken());
+  if (!token || isClawHubTelemetryDisabled()) {
+    return;
+  }
+  const skills = Object.entries(params.skills)
+    .map(([slug, entry]) => ({
+      slug,
+      version: entry.version ?? null,
+    }))
+    .filter((entry) => entry.slug.length > 0);
+
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: "/api/cli/telemetry/install",
+    method: "POST",
+    token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    json: {
+      roots: [
+        {
+          rootId: createHash("sha256").update(path.resolve(params.root)).digest("hex"),
+          label: formatTelemetryRootLabel(params.root),
+          skills,
+        },
+      ],
+    },
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+}
+
+function isClawHubTelemetryDisabled(): boolean {
+  const raw = process.env.CLAWHUB_DISABLE_TELEMETRY ?? process.env.CLAWDHUB_DISABLE_TELEMETRY;
+  if (!raw) {
+    return false;
+  }
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+function formatTelemetryRootLabel(root: string): string {
+  const home = os.homedir();
+  const absolute = path.resolve(root);
+  if (absolute === home) {
+    return "~";
+  }
+  const normalized = absolute.replaceAll("\\", "/");
+  const normalizedHome = home.replaceAll("\\", "/");
+  const withinHome = normalized.startsWith(`${normalizedHome}/`);
+  const stripped = withinHome ? normalized.slice(normalizedHome.length + 1) : normalized;
+  const tail = stripped.split("/").filter(Boolean).slice(-2).join("/");
+  return withinHome ? `~/${tail}` : tail || absolute;
+}
+
+/** Resolves the preferred latest package version from detail metadata. */
 export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): string | null {
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
 }
 
-export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
-  if ("package" in detail) {
-    return detail.package?.family === "skill";
-  }
-  return Boolean(detail.skill);
-}
-
+/** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */
 export function satisfiesPluginApiRange(
   pluginApiVersion: string,
   pluginApiRange?: string | null,
@@ -1291,6 +1493,7 @@ export function satisfiesPluginApiRange(
   return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
+/** Checks whether the current gateway version satisfies a package minimum gateway version. */
 export function satisfiesGatewayMinimum(
   currentVersion: string,
   minGatewayVersion?: string | null,

@@ -1,7 +1,9 @@
+// Skill index helpers map normalized skill names to loaded skill entries.
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
 import type { SkillEntry } from "../types.js";
 
+/** Indexed skill metadata used for runtime visibility and command lookup. */
 export type SkillIndexEntry = {
   entry: SkillEntry;
   name: string;
@@ -16,7 +18,7 @@ export type SkillIndexEntry = {
   userInvocable: boolean;
 };
 
-export type SkillIndex = {
+type SkillIndex = {
   entries: SkillIndexEntry[];
   runtimeEntries: SkillEntry[];
   promptVisibleEntries: SkillEntry[];
@@ -25,11 +27,12 @@ export type SkillIndex = {
   byNormalizedName: ReadonlyMap<string, readonly SkillIndexEntry[]>;
 };
 
-export type BuildSkillIndexOptions = {
+type BuildSkillIndexOptions = {
   bundledNames?: ReadonlySet<string>;
   agentSkillFilter?: readonly string[];
 };
 
+/** Normalizes a skill name to the comparable key used by filters and commands. */
 export function normalizeSkillIndexName(value: string): string {
   return value
     .trim()

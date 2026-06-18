@@ -1,3 +1,4 @@
+// Browser tests cover chrome mcp plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -119,6 +120,25 @@ function createFakeSession(): ChromeMcpSession {
   } as unknown as ChromeMcpSession;
 }
 
+function createToolErrorSession(message: string): ChromeMcpSession {
+  const callTool = vi.fn(async () => ({
+    isError: true,
+    content: [{ type: "text", text: message }],
+  }));
+  return {
+    client: {
+      callTool,
+      listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+      close: vi.fn().mockResolvedValue(undefined),
+      connect: vi.fn().mockResolvedValue(undefined),
+    },
+    transport: {
+      pid: 123,
+    },
+    ready: Promise.resolve(),
+  } as unknown as ChromeMcpSession;
+}
+
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
@@ -150,6 +170,33 @@ describe("chrome MCP page parsing", () => {
         type: "page",
       },
     ]);
+  });
+
+  it("suggests cdpUrl when auto-connect cannot read DevToolsActivePort", async () => {
+    setChromeMcpSessionFactoryForTest(async () =>
+      createToolErrorSession(
+        "Could not connect to Chrome in /tmp/chrome-profile. Cause: ENOENT: no such file or directory, open '/tmp/chrome-profile/DevToolsActivePort'",
+      ),
+    );
+
+    await expect(
+      listChromeMcpTabs("chrome-live", { userDataDir: "/tmp/chrome-profile" }),
+    ).rejects.toThrow(/set browser\.profiles\.chrome-live\.cdpUrl/);
+  });
+
+  it("names the configured endpoint when endpoint attach fails", async () => {
+    setChromeMcpSessionFactoryForTest(async () =>
+      createToolErrorSession("Could not connect to Chrome: ECONNREFUSED"),
+    );
+
+    await expect(
+      listChromeMcpTabs("chrome-live", {
+        cdpUrl:
+          "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+      }),
+    ).rejects.toThrow(
+      /configured Chrome endpoint \(https:\/\/example\.com\/chrome\?token=\*\*\*\)/,
+    );
   });
 
   it("reads screenshot files with the extension written by chrome-devtools-mcp", async () => {

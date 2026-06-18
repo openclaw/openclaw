@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Verifies published plugin npm packages include built runtime entries and
+// metadata expected by OpenClaw.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -196,7 +198,13 @@ export function resolveNpmPackFilename(output) {
     .split(/\r?\n/u)
     .findLast((line) => line.trim().length > 0)
     ?.trim();
-  if (typeof filename !== "string" || !filename.endsWith(".tgz")) {
+  if (
+    typeof filename !== "string" ||
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
     throw new Error(`npm pack did not report a tarball filename`);
   }
   return filename;

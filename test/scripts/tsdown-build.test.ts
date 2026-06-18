@@ -1,3 +1,4 @@
+// Tsdown Build tests cover tsdown build script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -36,6 +37,41 @@ async function expectPathMissing(targetPath: string) {
   expect(Reflect.get(statError, "code")).toBe("ENOENT");
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
 describe("resolveTsdownBuildInvocation", () => {
   it("parses wrapper help before any tsdown work", () => {
     expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
@@ -61,6 +97,7 @@ describe("resolveTsdownBuildInvocation", () => {
   it("forwards explicit tsdown args after wrapper args are parsed", () => {
     const result = resolveTsdownBuildInvocation({
       args: ["--format", "esm"],
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: {},
@@ -101,13 +138,38 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: { NODE_OPTIONS: "--max-old-space-size=12288" },
+        env: { NODE_OPTIONS: "--max-old-space-size=8192" },
       },
     });
   });
 
+  it("keeps inherited Windows tsdown heap settings at the Windows build cap", () => {
+    const result = resolveTsdownBuildInvocation({
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath: "C:\\repo\\pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("clamps explicit Windows tsdown heap settings to the Windows build cap", () => {
+    const result = resolveTsdownBuildInvocation({
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath: "C:\\repo\\pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
   it("preserves explicit tsdown heap settings", () => {
     const result = resolveTsdownBuildInvocation({
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
@@ -119,6 +181,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it("raises inherited lower tsdown heap settings to the build default", () => {
     const result = resolveTsdownBuildInvocation({
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
@@ -130,6 +193,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it("raises split inherited lower tsdown heap settings to the build default", () => {
     const result = resolveTsdownBuildInvocation({
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
@@ -187,6 +251,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it("can run tsdown without invoking pnpm", () => {
     const result = resolveTsdownBuildInvocation({
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
       ...NO_MEMORY_LIMIT,
@@ -301,10 +366,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     const outputRoots = listTsdownOutputRoots();
     expect(outputRoots).toEqual(
-      expect.arrayContaining([
-        path.join("packages", "agent-core", "dist"),
-        path.join("packages", "net-policy", "dist"),
-      ]),
+      expect.arrayContaining(["packages/agent-core/dist", "packages/net-policy/dist"]),
     );
     expect(outputRoots).not.toContain(path.join("packages", "plugin-sdk", "dist"));
 
@@ -509,6 +571,52 @@ describe("runTsdownBuildInvocation", () => {
     expect(output.chunks.join("")).toContain("stdout-ok");
   });
 
+  it("rejects malformed OPENCLAW_TSDOWN_TIMEOUT_MS values", async () => {
+    const invocation = {
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        env: process.env,
+      },
+    };
+
+    for (const value of ["1.5", "1e3", "10ms", "0"]) {
+      await expect(
+        runTsdownBuildInvocation(invocation, {
+          env: {
+            ...process.env,
+            OPENCLAW_TSDOWN_TIMEOUT_MS: value,
+          },
+        }),
+      ).rejects.toThrow("OPENCLAW_TSDOWN_TIMEOUT_MS must be");
+    }
+  });
+
+  it("rejects malformed OPENCLAW_TSDOWN_HEARTBEAT_MS values", async () => {
+    const invocation = {
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        env: process.env,
+      },
+    };
+
+    for (const value of ["1.5", "1e3", "10ms", "-1"]) {
+      await expect(
+        runTsdownBuildInvocation(invocation, {
+          env: {
+            ...process.env,
+            OPENCLAW_TSDOWN_HEARTBEAT_MS: value,
+          },
+        }),
+      ).rejects.toThrow("OPENCLAW_TSDOWN_HEARTBEAT_MS must be");
+    }
+  });
+
   it("terminates the child when OPENCLAW_TSDOWN_TIMEOUT_MS elapses", async () => {
     const output = createWriteSink();
     const result = await runTsdownBuildInvocation(
@@ -537,4 +645,58 @@ describe("runTsdownBuildInvocation", () => {
     expect(result.signal).toBe("SIGTERM");
     expect(output.chunks.join("")).toContain("timeout after 50ms");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "kills timed-out tsdown process groups when the wrapper exits first",
+    async () => {
+      const rootDir = createTempDir("openclaw-tsdown-timeout-");
+      const childPidPath = path.join(rootDir, "child.pid");
+      let childPid = 0;
+      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      try {
+        const output = createWriteSink();
+        const runPromise = runTsdownBuildInvocation(
+          {
+            command: process.execPath,
+            args: ["-e", parentScript],
+            options: {
+              stdio: ["ignore", "pipe", "pipe"],
+              shell: false,
+              env: process.env,
+            },
+          },
+          {
+            stdout: output.sink,
+            stderr: output.sink,
+            env: {
+              ...process.env,
+              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+              OPENCLAW_TSDOWN_TIMEOUT_MS: "50",
+            },
+          },
+        );
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+        const result = await runPromise;
+
+        expect(result.timedOut).toBe(true);
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
 });

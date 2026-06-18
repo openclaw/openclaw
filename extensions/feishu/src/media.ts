@@ -1,3 +1,4 @@
+// Feishu plugin module implements media behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -479,7 +480,11 @@ async function saveMessageResourceWithType(params: {
     errorPrefix: "Feishu message resource download failed",
     maxBytes: params.maxBytes,
     contentType: meta.contentType,
-    fileName: meta.fileName ?? params.originalFilename,
+    fileName:
+      meta.fileName ??
+      (params.originalFilename
+        ? recoverUtf8FileNameFromLatin1Header(params.originalFilename)
+        : undefined),
   });
   return { saved, ...meta };
 }

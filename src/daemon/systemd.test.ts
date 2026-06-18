@@ -1,3 +1,4 @@
+// Systemd tests cover Linux service install, start, stop, and status behavior.
 import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -320,6 +321,26 @@ describe("systemd availability", () => {
         SUDO_USER: "debian",
         USER: "root-env-stale",
         LOGNAME: "root-env-stale",
+      }),
+    ).resolves.toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
+    mockEffectiveUid(0);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        HOME: "/root",
+        USER: "root",
+        LOGNAME: "root",
+        SUDO_USER: "debian",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
       }),
     ).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
@@ -2046,6 +2067,27 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ SUDO_USER: "debian" });
+  });
+
+  it("restarts root user services directly when stale SUDO_USER is paired with root bus environment", async () => {
+    mockEffectiveUid(0);
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    await assertRestartSuccess({
+      HOME: "/root",
+      USER: "root",
+      LOGNAME: "root",
+      SUDO_USER: "debian",
+      XDG_RUNTIME_DIR: "/run/user/0",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+    });
   });
 
   it("keeps direct --user scope when SUDO_USER is root", async () => {

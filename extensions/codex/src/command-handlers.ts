@@ -1,3 +1,4 @@
+// Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -682,6 +683,7 @@ async function bindConversation(
     workspaceDir,
     agentDir: scope.agentDir,
     sessionKey: ctx.sessionKey,
+    agentId: scope.sessionAgentId,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,
@@ -1035,13 +1037,17 @@ async function resolveControlSessionFile(ctx: PluginCommandContext): Promise<str
   return (await resolveControlTarget(ctx))?.sessionFile;
 }
 
-function resolveCodexConversationControlScope(ctx: PluginCommandContext): { agentDir: string } {
+function resolveCodexConversationControlScope(ctx: PluginCommandContext): {
+  agentDir: string;
+  sessionAgentId: string;
+} {
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: ctx.sessionKey,
     config: ctx.config,
   });
   return {
     agentDir: resolveAgentDir(ctx.config, sessionAgentId),
+    sessionAgentId,
   };
 }
 

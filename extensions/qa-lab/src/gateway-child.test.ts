@@ -1,3 +1,4 @@
+// Qa Lab tests cover gateway child plugin behavior.
 import { EventEmitter } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -975,6 +976,47 @@ describe("buildQaRuntimeEnv", () => {
       expect(processKill).toHaveBeenCalledWith(-12345, "SIGKILL");
     }
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
+  });
+
+  it("does not trust an exited gateway wrapper while its process group is alive", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 12346,
+      exitCode: 0 as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+    });
+    let sawForceKill = false;
+    let postKillLivenessChecks = 0;
+    const processKill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === "SIGKILL") {
+        sawForceKill = true;
+        return true;
+      }
+      if (signal === 0 && sawForceKill) {
+        postKillLivenessChecks += 1;
+        if (postKillLivenessChecks >= 2) {
+          throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+        }
+      }
+      return true;
+    });
+
+    await testing.stopQaGatewayChildProcessTree(
+      child as unknown as Parameters<typeof testing.stopQaGatewayChildProcessTree>[0],
+      {
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 50,
+      },
+    );
+
+    if (process.platform === "win32") {
+      expect(child.kill).not.toHaveBeenCalled();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-12346, "SIGTERM");
+      expect(processKill).toHaveBeenCalledWith(-12346, "SIGKILL");
+      expect(postKillLivenessChecks).toBe(2);
+      expect(child.kill).not.toHaveBeenCalled();
+    }
   });
 
   it("treats bind collisions as retryable gateway startup errors", () => {

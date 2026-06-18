@@ -1,6 +1,7 @@
+// Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildMarkdownCard } from "./send.js";
+import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -62,6 +63,49 @@ let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+
+describe("buildFeishuPostMessagePayload", () => {
+  it("prepends structured mention targets as native post at elements", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "hello **world**",
+      mentions: [
+        { openId: "ou_alice", name: "Alice", key: "@_user_1" },
+        { openId: " ou_bob ", name: " Bob ", key: "@_user_2" },
+      ],
+    });
+
+    expect(payload.msgType).toBe("post");
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_alice", user_name: "Alice" },
+            { tag: "at", user_id: "ou_bob", user_name: "Bob" },
+            { tag: "md", text: "hello **world**" },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("leaves body-supplied at tags literal in the markdown element", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: 'please keep <at user_id="ou_body">Body User</at> literal',
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_target", user_name: "Target User" },
+            { tag: "md", text: 'please keep <at user_id="ou_body">Body User</at> literal' },
+          ],
+        ],
+      },
+    });
+  });
+});
 
 describe("getMessageFeishu", () => {
   beforeAll(async () => {
@@ -172,6 +216,83 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("sends automatic mentions as native post elements without rewriting body text", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: 'body <at user_id="ou_body">Body User</at>',
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    expect(mockConvertMarkdownTables).toHaveBeenCalledWith(
+      'body <at user_id="ou_body">Body User</at>',
+      "preserve",
+    );
+    expect(create).toHaveBeenCalledWith({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: "oc_send",
+        msg_type: "post",
+        content: JSON.stringify({
+          zh_cn: {
+            content: [
+              [
+                { tag: "at", user_id: "ou_target", user_name: "Target User" },
+                { tag: "md", text: 'body <at user_id="ou_body">Body User</at>' },
+              ],
+            ],
+          },
+        }),
+      },
+    });
+    expect(typeof result.receipt.sentAt).toBe("number");
+    expect(result).toEqual({
+      messageId: "om_mentions",
+      chatId: "oc_send",
+      receipt: {
+        primaryPlatformMessageId: "om_mentions",
+        platformMessageIds: ["om_mentions"],
+        parts: [
+          {
+            platformMessageId: "om_mentions",
+            kind: "text",
+            index: 0,
+            raw: {
+              channel: "feishu",
+              messageId: "om_mentions",
+              chatId: "oc_send",
+              conversationId: "oc_send",
+            },
+            threadId: "oc_send",
+          },
+        ],
+        threadId: "oc_send",
+        sentAt: result.receipt.sentAt,
+        raw: [
+          {
+            channel: "feishu",
+            messageId: "om_mentions",
+            chatId: "oc_send",
+            conversationId: "oc_send",
+          },
+        ],
+      },
+    });
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
@@ -199,6 +320,10 @@ describe("getMessageFeishu", () => {
       messageId: "om_1",
     });
 
+    expect(mockClientGet).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
+      path: { message_id: "om_1" },
+    });
     expect(result).toEqual({
       messageId: "om_1",
       chatId: "oc_1",
@@ -469,6 +594,15 @@ describe("getMessageFeishu", () => {
       rootMessageId: "om_root",
     });
 
+    expect(mockClientList).toHaveBeenCalledWith({
+      params: {
+        container_id_type: "thread",
+        container_id: "omt_1",
+        sort_type: "ByCreateTimeDesc",
+        page_size: 21,
+        card_msg_content_type: "user_card_content",
+      },
+    });
     expect(result).toEqual([
       {
         messageId: "om_file",

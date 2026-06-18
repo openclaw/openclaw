@@ -1,3 +1,4 @@
+// Cron run log tests cover persisted run log entries and summaries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,14 +6,15 @@ import { describe, expect, it } from "vitest";
 import { migrateLegacyCronRunLogsToSqlite } from "../commands/doctor/cron/legacy-run-log-migration.js";
 import {
   appendCronRunLog,
-  DEFAULT_CRON_RUN_LOG_KEEP_LINES,
-  DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
   readCronRunLogEntriesPage,
   readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
 } from "./run-log.js";
+
+const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
+const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
 
 describe("cron run log", () => {
   it("resolves prune options from config with defaults", () => {

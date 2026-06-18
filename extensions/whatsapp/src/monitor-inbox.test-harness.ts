@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox harness behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -20,7 +21,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
-      allowFrom: ["*"],
+      allowFrom: ["*"] as string[],
     },
   },
   messages: {

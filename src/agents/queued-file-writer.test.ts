@@ -1,12 +1,14 @@
+// Verifies queued file writes keep append logs bounded and symlink-safe.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getQueuedFileWriter, resolveQueuedFileAppendFlags } from "./queued-file-writer.js";
+import { getQueuedFileWriter } from "./queued-file-writer.js";
 
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
+  // Real temp dirs let symlink and permission checks exercise filesystem behavior.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queued-writer-"));
   tempDirs.push(dir);
   return dir;
@@ -19,16 +21,6 @@ afterEach(() => {
 });
 
 describe("getQueuedFileWriter", () => {
-  it("keeps append flags usable when O_NOFOLLOW is unavailable", () => {
-    expect(
-      resolveQueuedFileAppendFlags({
-        O_APPEND: 0x01,
-        O_CREAT: 0x02,
-        O_WRONLY: 0x04,
-      }),
-    ).toBe(0x07);
-  });
-
   it("creates log files with restrictive permissions", async () => {
     const tmpDir = makeTempDir();
     const filePath = path.join(tmpDir, "trace.jsonl");
@@ -56,6 +48,7 @@ describe("getQueuedFileWriter", () => {
   });
 
   it("refuses to append through a symlinked parent directory", async () => {
+    // Parent directory symlinks are as dangerous as leaf-file symlinks.
     const tmpDir = makeTempDir();
     const targetDir = path.join(tmpDir, "target");
     const linkDir = path.join(tmpDir, "link");

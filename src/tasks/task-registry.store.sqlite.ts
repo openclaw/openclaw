@@ -1,3 +1,4 @@
+// Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -43,6 +44,7 @@ type TaskRegistryDatabase = {
   path: string;
 };
 
+// SQLite-backed task store mirrors task records and delivery state into openclaw-state.db.
 const TASK_RUN_SELECT_COLUMNS = [
   "task_id",
   "runtime",
@@ -55,6 +57,7 @@ const TASK_RUN_SELECT_COLUMNS = [
   "parent_flow_id",
   "parent_task_id",
   "agent_id",
+  "requester_agent_id",
   "run_id",
   "label",
   "task",
@@ -92,6 +95,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const cleanupAfter = normalizeNumber(row.cleanup_after);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
+  // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
@@ -106,6 +110,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.parent_flow_id ? { parentFlowId: row.parent_flow_id } : {}),
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    ...(row.requester_agent_id ? { requesterAgentId: row.requester_agent_id } : {}),
     ...(row.run_id ? { runId: row.run_id } : {}),
     ...(row.label ? { label: row.label } : {}),
     task: row.task,
@@ -147,6 +152,7 @@ function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
     parent_flow_id: record.parentFlowId ?? null,
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
+    requester_agent_id: record.requesterAgentId ?? null,
     run_id: record.runId ?? null,
     label: record.label ?? null,
     task: record.task,
@@ -235,6 +241,7 @@ function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
           parent_flow_id: (eb) => eb.ref("excluded.parent_flow_id"),
           parent_task_id: (eb) => eb.ref("excluded.parent_task_id"),
           agent_id: (eb) => eb.ref("excluded.agent_id"),
+          requester_agent_id: (eb) => eb.ref("excluded.requester_agent_id"),
           run_id: (eb) => eb.ref("excluded.run_id"),
           label: (eb) => eb.ref("excluded.label"),
           task: (eb) => eb.ref("excluded.task"),

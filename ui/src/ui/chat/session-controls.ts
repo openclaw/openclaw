@@ -1,3 +1,4 @@
+// Control UI chat module implements session controls behavior.
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
@@ -738,7 +739,7 @@ function renderChatSessionPickerPopover(
   `;
 }
 
-function renderChatQuotaPill(state: AppViewState) {
+export function renderChatQuotaPill(state: AppViewState) {
   const windows = collectQuotaWindowsFromAuthStatus(
     state.modelAuthStatusResult,
     isMonitoredAuthProvider,

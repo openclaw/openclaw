@@ -1,3 +1,4 @@
+// Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -188,5 +189,25 @@ describe("ClickClack gateway", () => {
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
     abort.abort();
     await run;
+  });
+
+  it("clears running status when backlog polling fails", async () => {
+    mocks.client.events.mockRejectedValue(new Error("clickclack unavailable"));
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+
+    await expect(startClickClackGatewayAccount(ctx)).rejects.toThrow("clickclack unavailable");
+
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      running: true,
+      configured: true,
+      enabled: true,
+      baseUrl: "https://clickclack.example",
+    });
+    expect(ctx.setStatus).toHaveBeenLastCalledWith({
+      accountId: "default",
+      running: false,
+    });
   });
 });

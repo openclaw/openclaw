@@ -92,7 +92,7 @@ Runtime send helpers also live on `channel-outbound`:
 - `sendDurableMessageBatch(...)`
 - `withDurableMessageSendContext(...)`
 - `deliverInboundReplyWithMessageSendContext(...)`
-- draft streaming/progress helpers such as `resolveChannelStreamingPreviewChunk(...)`
+- draft streaming/progress helpers such as `resolveChannelDraftStreamingChunking(...)`
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 

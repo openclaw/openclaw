@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements login qr behavior.
 import { randomUUID } from "node:crypto";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -5,6 +6,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { getActiveWebListener } from "./active-listener.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -13,6 +15,8 @@ import {
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
+  formatError,
+  logoutWeb,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -326,12 +330,31 @@ export async function startWebLoginWithQr(
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     };
   }
-  if (authState.exists && !opts.force) {
+  if (authState.exists && !opts.force && getActiveWebListener(account.accountId)) {
     const selfId = readWebSelfId(account.authDir);
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {
       message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
     };
+  }
+  if (authState.exists && opts.force) {
+    try {
+      const cleared = await logoutWeb({
+        authDir: account.authDir,
+        isLegacyAuthDir: account.isLegacyAuthDir,
+        runtime,
+      });
+      if (!cleared) {
+        return {
+          message:
+            "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
+        };
+      }
+    } catch (err) {
+      return {
+        message: `WhatsApp login failed: ${formatError(err)}`,
+      };
+    }
   }
 
   const existing = activeLogins.get(account.accountId);

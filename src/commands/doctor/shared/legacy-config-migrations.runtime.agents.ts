@@ -1,3 +1,4 @@
+// Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
@@ -12,7 +13,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
@@ -1136,6 +1137,7 @@ function addProfileConfiguredSectionGrantsWithConfiguredGrants(
   }
 }
 
+/** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tools.profile-configured-sections-alsoAllow",

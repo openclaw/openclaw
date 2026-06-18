@@ -1,3 +1,4 @@
+// Overflow helpers classify provider overflow errors and retryable responses.
 import type { AssistantMessage } from "../types.js";
 
 /**
@@ -148,11 +149,4 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
   }
 
   return false;
-}
-
-/**
- * Get the overflow patterns for testing purposes.
- */
-export function getOverflowPatterns(): RegExp[] {
-  return [...OVERFLOW_PATTERNS];
 }

@@ -1,3 +1,4 @@
+// Cron service job tests cover job creation, updates, and runtime scheduling.
 import { describe, expect, it } from "vitest";
 import {
   applyJobPatch,
@@ -7,8 +8,9 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function expectCronStaggerMs(job: CronJob, expected: number): void {
   expect(job.schedule.kind).toBe("cron");
@@ -365,6 +367,50 @@ describe("applyJobPatch", () => {
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.toolsAllow).toBeUndefined();
+    }
+  });
+
+  it("clears agentTurn payload.model when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-model-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      model: "openai/gpt-5.5",
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        model: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.model).toBeUndefined();
+    }
+  });
+
+  it("omits null model when patch builds a replacement agentTurn payload", () => {
+    const job = createMainSystemEventJob("job-model-replace", { mode: "none" });
+
+    applyJobPatch(job, {
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        model: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.model).toBeUndefined();
     }
   });
 

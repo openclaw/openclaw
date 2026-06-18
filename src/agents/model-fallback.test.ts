@@ -1,3 +1,4 @@
+// Covers model fallback ordering, error classification, and auth cooldown behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,8 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.js";
 import { MissingAgentHarnessError } from "./harness/errors.js";
+import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
+import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   FallbackSummaryError,
@@ -28,6 +31,7 @@ import {
   runWithImageModelFallback,
   runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
+import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -60,6 +64,8 @@ const authSourceCheckMock = vi.hoisted(() => ({
 vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
 
 const authRuntimeMock = vi.hoisted(() => {
+  // In-memory auth runtime mirrors cooldown/disabled semantics without writing
+  // real profile stores during fallback unit tests.
   const stores = new Map<string, AuthProfileStore>();
   const keyFor = (agentDir?: string) => agentDir ?? "__main__";
   const now = () => Date.now();
@@ -190,7 +196,10 @@ afterAll(() => {
 });
 
 function resetModelFallbackTestState(): void {
+  // Fallback state has process-level caches for skip markers, harnesses, auth,
+  // and plugin normalization. Reset every surface between tests.
   resetFallbackSkipCacheForTest();
+  clearAgentHarnesses();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
@@ -211,6 +220,8 @@ function createModelNormalizerSnapshot(params: {
   manifestHash: string;
   prefix: string;
 }): PluginMetadataSnapshot {
+  // Builds a process-stable plugin metadata snapshot with one model normalizer
+  // so fallback can prove manifest-policy cache invalidation.
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   const index: InstalledPluginIndex = {
     version: 1,
@@ -459,16 +470,24 @@ function createOverrideFailureRun(params: {
 function makeSingleProviderStore(params: {
   provider: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
+  credentialType?: "api_key" | "token";
 }): AuthProfileStore {
   const profileId = `${params.provider}:default`;
   return {
     version: AUTH_STORE_VERSION,
     profiles: {
-      [profileId]: {
-        type: "api_key",
-        provider: params.provider,
-        key: "test-key",
-      },
+      [profileId]:
+        params.credentialType === "token"
+          ? {
+              type: "token",
+              provider: params.provider,
+              token: "test-token",
+            }
+          : {
+              type: "api_key",
+              provider: params.provider,
+              key: "test-key",
+            },
     },
     usageStats: {
       [profileId]: params.usageStat,
@@ -489,12 +508,15 @@ async function expectSkippedUnavailableProvider(params: {
   providerPrefix: string;
   usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
   expectedReason: string;
+  credentialType?: "api_key" | "token";
+  expectedAuthMode?: "token";
 }) {
   const provider = `${params.providerPrefix}-${crypto.randomUUID()}`;
   const cfg = makeProviderFallbackCfg(provider);
   const primaryStore = makeSingleProviderStore({
     provider,
     usageStat: params.usageStat,
+    credentialType: params.credentialType,
   });
   // Include fallback provider profile so the fallback is attempted (not skipped as no-profile).
   const store: AuthProfileStore = {
@@ -520,6 +542,7 @@ async function expectSkippedUnavailableProvider(params: {
   expect(result.result).toBe("ok");
   expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
+  expect(result.attempts[0]?.authMode).toBe(params.expectedAuthMode);
 }
 
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
@@ -971,6 +994,68 @@ describe("runWithModelFallback", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("lets external plugin harnesses bypass stale provider auth cooldowns", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-tmux" } },
+          },
+        },
+      },
+    });
+    registerAgentHarness(
+      {
+        id: "claude-tmux",
+        label: "Claude tmux",
+        supports: ({ provider }) =>
+          provider === "anthropic" ? { supported: true } : { supported: false },
+        runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+          throw new Error("fallback test should not invoke the harness runtime");
+        }),
+      },
+      { ownerPluginId: "claude-tmux-test" },
+    );
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { rate_limit: 4 },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (provider: string) => {
+      if (provider === "anthropic") {
+        return "external cli ok";
+      }
+      throw new Error(`unexpected provider: ${provider}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      agentDir: tempDir,
+      run,
+    });
+
+    expect(result.result).toBe("external cli ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(result.attempts).toStrictEqual([]);
+  });
+
   it("lets configured CLI runtimes reach the run callback", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1419,6 +1504,7 @@ describe("runWithModelFallback", () => {
       payloads: [],
       meta: {
         durationMs: 1,
+        replayInvalid: true,
         toolSummary: {
           calls: 1,
           tools: ["mcp_write"],
@@ -1501,6 +1587,11 @@ describe("runWithModelFallback", () => {
       ],
       meta: {
         durationMs: 1,
+        error: {
+          kind: "incomplete_turn",
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+        },
       },
     };
 
@@ -1781,9 +1872,9 @@ describe("runWithModelFallback", () => {
       { provider: "openai", model: "gpt-4.1-mini" },
       { provider: "tui-pty-mock", model: "gpt-5.5" },
     ]);
-    expect(providerModelNormalizationMock.normalizeProviderModelIdWithRuntime).not.toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "tui-pty-mock" }),
-    );
+    expect(
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+    ).not.toHaveBeenCalledWith(expect.objectContaining({ provider: "tui-pty-mock" }));
   });
 
   it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {
@@ -1932,6 +2023,30 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.reason).toBe("billing");
+  });
+
+  it("preserves auth mode metadata in fallback attempts", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("credit balance too low", {
+          reason: "billing",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          authMode: "oauth",
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.attempts[0]?.authMode).toBe("oauth");
   });
 
   it("falls back on OpenRouter API-key budget limit errors", async () => {
@@ -2131,6 +2246,8 @@ describe("runWithModelFallback", () => {
         failureCounts: { rate_limit: 4 },
       },
       expectedReason: "billing",
+      credentialType: "token",
+      expectedAuthMode: "token",
     });
   });
 
@@ -2488,6 +2605,25 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fall back on restart aborts", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(createAgentRunRestartAbortError())
+      .mockResolvedValueOnce("fallback should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("agent run aborted for restart");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fall back when the caller abort signal timed out", async () => {
     const cfg = makeCfg();
     const timeoutReason = new Error("chat run timed out");
@@ -2540,6 +2676,35 @@ describe("runWithModelFallback", () => {
         classifyResult,
       }),
     ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(classifyResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when a restart abort is classified from the result", async () => {
+    const cfg = makeProviderFallbackCfg("openai");
+    const controller = new AbortController();
+    controller.abort(createAgentRunRestartAbortError());
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback should not run" }] });
+    const classifyResult = vi.fn(() => ({
+      message: "empty response",
+      reason: "format" as const,
+      code: "empty_result",
+    }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "m1",
+        abortSignal: controller.signal,
+        run,
+        classifyResult,
+      }),
+    ).rejects.toThrow("empty response");
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(classifyResult).toHaveBeenCalledTimes(1);

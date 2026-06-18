@@ -1,3 +1,4 @@
+// Shared harness and mocks for embedded attempt spawn-workspace tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +46,8 @@ type BootstrapContext = {
 };
 
 function normalizeMockProviderId(providerId?: string): string {
+  // Provider ids in mocked model routing follow the same lowercase normalization
+  // as production helpers.
   return normalizeLowercaseStringOrEmpty(providerId);
 }
 
@@ -56,6 +59,7 @@ type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -95,15 +99,19 @@ type AttemptSpawnWorkspaceHoisted = {
   sessionManager: SessionManagerMocks;
 };
 
-export function createSubscriptionMock(): SubscriptionMock {
+function createSubscriptionMock(): SubscriptionMock {
+  // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
+  // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
+    getLastAssistantTextMessageIndex: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
+    waitForPendingEvents: async () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -111,6 +119,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
@@ -130,6 +139,8 @@ export function createSubscriptionMock(): SubscriptionMock {
 }
 
 const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
+  // Hoisted mocks must exist before the runner module graph is imported, because
+  // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
@@ -198,6 +209,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendCustomEntry: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -455,7 +467,7 @@ vi.mock("../tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("../../session-file-repair.js", () => ({
-  repairSessionFileIfNeeded: async () => {},
+  repairSessionFileIfNeeded: async () => ({ repaired: false, droppedLines: 0 }),
 }));
 
 vi.mock("../session-manager-cache.js", () => ({
@@ -681,6 +693,7 @@ vi.mock("../../tool-policy.js", async (importOriginal) => {
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
+    repairToolUseResultPairing: true,
   }),
   shouldAllowProviderOwnedThinkingReplay: () => false,
 }));
@@ -783,10 +796,14 @@ vi.mock("../sandbox-info.js", () => ({
   resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
-vi.mock("../thinking.js", () => ({
-  dropReasoningFromHistory: <T>(messages: T) => messages,
-  dropThinkingBlocks: <T>(messages: T) => messages,
-}));
+vi.mock("../thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking.js")>();
+  return {
+    ...actual,
+    dropReasoningFromHistory: <T>(messages: T) => messages,
+    dropThinkingBlocks: <T>(messages: T) => messages,
+  };
+});
 
 vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
@@ -815,13 +832,6 @@ vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
 
 vi.mock("./compaction-timeout.js", () => ({
   resolveRunTimeoutDuringCompaction: () => "abort",
-  resolveRunTimeoutWithCompactionGraceMs: ({
-    runTimeoutMs,
-    compactionTimeoutMs,
-  }: {
-    runTimeoutMs: number;
-    compactionTimeoutMs: number;
-  }) => runTimeoutMs + compactionTimeoutMs,
   selectCompactionTimeoutSnapshot: ({
     currentSnapshot,
     currentSessionId,
@@ -841,7 +851,7 @@ vi.mock("./history-image-prune.js", () => ({
   pruneProcessedHistoryImages: () => null,
 }));
 
-export type MutableSession = {
+type MutableSession = {
   sessionId: string;
   messages: unknown[];
   isCompacting: boolean;
@@ -1126,7 +1136,7 @@ export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessi
   expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
-export const testModel = {
+const testModel = {
   api: "openai-completions",
   provider: "openai",
   compat: {},

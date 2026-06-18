@@ -1,3 +1,4 @@
+// Tests info-style commands that report context, status, skills, and trajectory exports.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -8,7 +9,7 @@ import {
   handleSkillCommandUsage,
   handleStatusCommand,
 } from "./commands-info.js";
-import { buildStatusReply } from "./commands-status.js";
+import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
@@ -30,6 +31,7 @@ vi.mock("./commands-export-trajectory.js", () => ({
 }));
 
 vi.mock("./commands-status.js", () => ({
+  buildStatusPluginsReply: vi.fn(async () => ({ text: "plugins status reply" })),
   buildStatusReply: vi.fn(async () => ({ text: "status reply" })),
 }));
 
@@ -402,6 +404,26 @@ describe("info command handlers", () => {
       "buildStatusReply",
     ) as Parameters<typeof buildStatusReply>[0];
     expect(statusReplyParams.resolvedFastMode).toBe(true);
+  });
+
+  it("routes /status plugins to the plugin health summary", async () => {
+    const params = buildInfoParams("/status plugins", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult).toEqual({
+      shouldContinue: false,
+      reply: { text: "plugins status reply" },
+    });
+    expect(buildStatusPluginsReply).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      command: params.command,
+      workspaceDir: params.workspaceDir,
+    });
+    expect(buildStatusReply).not.toHaveBeenCalled();
   });
 
   it("uses the canonical target session agent when listing /commands", async () => {

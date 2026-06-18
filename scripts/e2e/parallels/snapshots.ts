@@ -1,8 +1,42 @@
+// Snapshots script supports OpenClaw repository automation.
 import { die, run } from "./host-command.ts";
+import type { Mode } from "./types.ts";
 import type { SnapshotInfo } from "./types.ts";
 
+const SNAPSHOT_LIST_TIMEOUT_MS = 120_000;
+export const SKIP_SNAPSHOT_RESTORE_ENV = "OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE";
+
+export function shouldSkipSnapshotRestore(): boolean {
+  return /^(1|true|yes|on)$/iu.test(process.env[SKIP_SNAPSHOT_RESTORE_ENV] ?? "");
+}
+
+export function validateSnapshotRestoreMode(mode: Mode, platform: string): void {
+  if (!shouldSkipSnapshotRestore() || mode !== "both") {
+    return;
+  }
+  die(
+    `${SKIP_SNAPSHOT_RESTORE_ENV}=1 requires --mode fresh or --mode upgrade for ${platform}; --mode both would reuse the same mutated guest for both lanes`,
+  );
+}
+
+export function currentRunningSnapshotInfo(vmName: string): SnapshotInfo {
+  return {
+    id: "current-running-vm",
+    name: `current running ${vmName}`,
+    state: "running",
+  };
+}
+
 export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
-  const output = run("prlctl", ["snapshot-list", vmName, "--json"], { quiet: true }).stdout;
+  const output = run("prlctl", ["snapshot-list", vmName, "--json"], {
+    quiet: true,
+    timeoutMs: SNAPSHOT_LIST_TIMEOUT_MS,
+  }).stdout;
+  if (!output.trim()) {
+    die(
+      `prlctl snapshot-list ${vmName} --json returned no snapshots; create/restore a snapshot or set ${SKIP_SNAPSHOT_RESTORE_ENV}=1 for an already-started guest`,
+    );
+  }
   const payload = JSON.parse(output) as Record<string, { name?: string; state?: string }>;
   let best: SnapshotInfo | null = null;
   let bestScore = -1;

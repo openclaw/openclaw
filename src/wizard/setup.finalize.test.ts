@@ -1,3 +1,4 @@
+// Setup finalize tests cover writing final onboarding config and artifacts.
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -187,6 +188,7 @@ function createWebSearchProviderEntry(
     | "placeholder"
     | "signupUrl"
     | "credentialPath"
+    | "requiresCredential"
   >,
 ): PluginWebSearchProviderEntry {
   return {
@@ -539,10 +541,10 @@ describe("finalizeSetupWizard", () => {
     ).rejects.toThrow("TUI exited with code 1");
 
     expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
-      resumeStdinIfPaused: true,
+      resumeStdinIfPaused: false,
     });
     expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
-      resumeStdinIfPaused: true,
+      resumeStdinIfPaused: false,
     });
   });
 
@@ -836,6 +838,49 @@ describe("finalizeSetupWizard", () => {
         type: "oauth",
       }),
     );
+  });
+
+  it("reports a keyless provider as ready without prompting for an API key", async () => {
+    listConfiguredWebSearchProviders.mockReturnValue([
+      createWebSearchProviderEntry({
+        id: "parallel-free",
+        label: "Parallel Search (Free)",
+        hint: "Free web search via Parallel's hosted Search MCP",
+        envVars: [],
+        placeholder: "",
+        signupUrl: "https://parallel.ai",
+        credentialPath: "",
+        requiresCredential: false,
+      }),
+    ]);
+
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: {
+          tools: { web: { search: { provider: "parallel-free", enabled: true } } },
+        },
+        prompter,
+      }),
+    );
+
+    expectNoteContains(
+      prompter,
+      "Web search is ready — this provider works with no API key.",
+      "Web search",
+    );
+    // The credential-required warning must NOT appear for a keyless provider.
+    expect(
+      vi
+        .mocked(prompter.note)
+        .mock.calls.some(
+          ([message, title]) =>
+            title === "Web search" &&
+            (message.includes("no API key was found") ||
+              message.includes("will not work until a key is added")),
+        ),
+    ).toBe(false);
   });
 
   it("uses the setup token for health checks to avoid local env token drift", async () => {

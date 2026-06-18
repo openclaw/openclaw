@@ -1,3 +1,4 @@
+// Buffers streaming reply blocks before coalesced final delivery.
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -8,6 +9,7 @@ import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
+/** Streaming block reply pipeline that tracks sent content and media. */
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
@@ -16,15 +18,18 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  hasSentExactPayload?: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
 };
 
-export type BlockReplyBuffer = {
+/** Optional buffering strategy used before payloads enter block delivery. */
+type BlockReplyBuffer = {
   shouldBuffer: (payload: ReplyPayload) => boolean;
   onEnqueue?: (payload: ReplyPayload) => void;
   finalize?: (payload: ReplyPayload) => ReplyPayload;
 };
 
+/** Buffers audio payloads so final delivery can preserve voice presentation. */
 export function createAudioAsVoiceBuffer(params: {
   isAudioPayload: (payload: ReplyPayload) => boolean;
 }): BlockReplyBuffer {
@@ -40,6 +45,7 @@ export function createAudioAsVoiceBuffer(params: {
   };
 }
 
+/** Creates a stable duplicate key for a complete outbound payload. */
 export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
@@ -53,6 +59,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   });
 }
 
+/** Creates a duplicate key that ignores reply target for final suppression. */
 export function createBlockReplyContentKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   // Content-only key used for final-payload suppression after block streaming.
@@ -88,6 +95,7 @@ const withTimeout = async <T>(
   }
 };
 
+/** Creates the ordered block reply delivery pipeline for streamed payloads. */
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
@@ -138,6 +146,7 @@ export function createBlockReplyPipeline(params: {
     }
     pendingKeys.add(payloadKey);
 
+    // Preserve outbound order by chaining sends; abort after timeout to avoid stale blocks.
     const timeoutError = new Error(`block reply delivery timed out after ${timeoutMs}ms`);
     const abortController = new AbortController();
     sendChain = sendChain
@@ -307,6 +316,7 @@ export function createBlockReplyPipeline(params: {
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
+    hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyContentKey(payload);
       if (sentContentKeys.has(payloadKey)) {

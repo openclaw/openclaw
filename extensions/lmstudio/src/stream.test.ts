@@ -1,3 +1,4 @@
+// Lmstudio tests cover stream plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -124,7 +125,7 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function createWrappedLmstudioStream(
   baseStream: StreamFn,
-  params?: { baseUrl?: string },
+  params?: { baseUrl?: string; thinkingLevel?: string },
 ): StreamFn {
   return wrapLmstudioInferencePreload({
     provider: "lmstudio",
@@ -140,8 +141,26 @@ function createWrappedLmstudioStream(
       },
     },
     streamFn: baseStream,
+    thinkingLevel: params?.thinkingLevel,
   } as never);
 }
+
+function buildPayloadStreamFn(payload: Record<string, unknown>): StreamFn {
+  return vi.fn((model, _context, options) => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      options?.onPayload?.(payload, model);
+      stream.push({ type: "done", reason: "stop", message: {} as never });
+      stream.end();
+    });
+    return stream;
+  });
+}
+
+const BINARY_REASONING_COMPAT = {
+  supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+  reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+};
 
 function runWrappedLmstudioStream(
   wrapped: StreamFn,
@@ -680,5 +699,70 @@ describe("lmstudio stream wrapper", () => {
         delta: rawToolText,
       },
     );
+  });
+
+  it("rewrites reasoning_effort to the disabled effort when thinking is off", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "off" });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("none");
+  });
+
+  it("drops reasoning_effort on thinking off when the model has no disabled effort", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "off" });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {
+        compat: {
+          supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: { adaptive: "xhigh", max: "xhigh" },
+        },
+      }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect("reasoning_effort" in payload).toBe(false);
+  });
+
+  it("keeps reasoning_effort untouched for enabled thinking levels", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "high" });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("high");
+  });
+
+  it("keeps reasoning_effort untouched without a thinking level", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("high");
   });
 });

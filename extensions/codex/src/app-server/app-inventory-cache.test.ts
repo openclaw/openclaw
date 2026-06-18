@@ -1,3 +1,4 @@
+// Codex tests cover app inventory cache plugin behavior.
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -50,6 +51,35 @@ describe("Codex app inventory cache", () => {
     expect(read.state).toBe("missing");
     expect(read.refreshScheduled).toBe(false);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("stops paginated refresh once target app ids are found", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
+      if (!params.cursor) {
+        return { data: [app("app-1")], nextCursor: "page-2" } satisfies v2.AppsListResponse;
+      }
+      if (params.cursor === "page-2") {
+        return {
+          data: [app("google-calendar-app")],
+          nextCursor: "page-3",
+        } satisfies v2.AppsListResponse;
+      }
+      return { data: [app("app-3")], nextCursor: null } satisfies v2.AppsListResponse;
+    });
+
+    const snapshot = await cache.refreshNow({
+      key: "runtime",
+      request,
+      targetAppIds: ["google-calendar-app"],
+    });
+
+    expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "google-calendar-app"]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([, params]) => params.cursor ?? null)).toEqual([
+      null,
+      "page-2",
+    ]);
   });
 
   it("uses stale inventory for the current read while still refreshing asynchronously", async () => {

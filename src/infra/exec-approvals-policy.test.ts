@@ -1,3 +1,5 @@
+// Tests execution approval policy matching and persistence.
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -23,6 +25,9 @@ let normalizeExecMode: typeof import("./exec-approvals.js").normalizeExecMode;
 let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
 let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
 let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
+let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").normalizeExecApprovalUnavailableDecisions;
+let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
+let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
 let resolveExecPolicyForMode: typeof import("./exec-approvals.js").resolveExecPolicyForMode;
@@ -47,6 +52,11 @@ async function loadActualExecApprovalModules(): Promise<void> {
   normalizeExecTarget = execApprovals.normalizeExecTarget;
   normalizeExecSecurity = execApprovals.normalizeExecSecurity;
   requiresExecApproval = execApprovals.requiresExecApproval;
+  normalizeExecApprovalUnavailableDecisions =
+    execApprovals.normalizeExecApprovalUnavailableDecisions;
+  resolveExecApprovalUnavailableDecisions = execApprovals.resolveExecApprovalUnavailableDecisions;
+  resolveExecApprovalRequestAllowedDecisions =
+    execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
   resolveExecModePolicy = execApprovals.resolveExecModePolicy;
   resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
@@ -210,6 +220,41 @@ describe("exec approvals policy helpers", () => {
       ask: "always",
       autoReview: false,
     });
+  });
+
+  it("treats unavailable request decisions as optional approvals only", () => {
+    expect(
+      normalizeExecApprovalUnavailableDecisions(["allow-once", "deny", "allow-always", "bad"]),
+    ).toEqual(["allow-always"]);
+    expect(
+      resolveExecApprovalRequestAllowedDecisions({
+        ask: "on-miss",
+        unavailableDecisions: ["allow-always"],
+      }),
+    ).toEqual(["allow-once", "deny"]);
+    expect(
+      resolveExecApprovalRequestAllowedDecisions({
+        ask: "on-miss",
+        unavailableDecisions: ["allow-once", "deny", "allow-always", "bad"],
+      }),
+    ).toEqual(["allow-once", "deny"]);
+    expect(
+      resolveExecApprovalRequestAllowedDecisions({
+        ask: "always",
+        unavailableDecisions: ["allow-always"],
+      }),
+    ).toEqual(["allow-once", "deny"]);
+  });
+
+  it("derives unavailable optional decisions from effective approval policy", () => {
+    expect(resolveExecApprovalUnavailableDecisions({ ask: "on-miss" })).toEqual([]);
+    expect(resolveExecApprovalUnavailableDecisions({ ask: "always" })).toEqual(["allow-always"]);
+    expect(
+      resolveExecApprovalUnavailableDecisions({
+        ask: "on-miss",
+        allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      }),
+    ).toEqual(["allow-always"]);
   });
 
   it.each([
@@ -549,6 +594,37 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
+  it("uses OPENCLAW_STATE_DIR when reporting default host sources", () => {
+    const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = path.join(process.cwd(), ".tmp-openclaw-state");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const summary = resolveExecPolicyScopeSummary({
+        approvals: {
+          version: 1,
+          defaults: {
+            security: "allowlist",
+          },
+        },
+        scopeExecConfig: {
+          security: "full",
+        },
+        configPath: "tools.exec",
+        scopeLabel: "tools.exec",
+      });
+
+      expect(summary.security.hostSource).toBe(
+        `${path.join(stateDir, "exec-approvals.json")} defaults.security`,
+      );
+    } finally {
+      if (originalOpenClawStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+      }
+    }
+  });
+
   it("does not let host ask=off suppress a stricter requested ask", () => {
     const summary = resolveExecPolicyScopeSummary({
       approvals: {
@@ -693,8 +769,8 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(summary.askFallback).toEqual({
-      effective: "full",
-      source: "OpenClaw default (full)",
+      effective: "deny",
+      source: "OpenClaw default (deny)",
     });
   });
 

@@ -1,3 +1,4 @@
+// CLI respawn skip policy for help, interactive TTY commands, and foreground Gateway runs.
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { getCommandPositionalsWithRootOptions } from "./argv.js";
 
@@ -28,6 +29,19 @@ const GATEWAY_RUN_VALUE_FLAGS = [
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
 
+export function isInteractiveTtyCommandArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  return invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
+}
+
+export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
+    return false;
+  }
+  return invocation.primary === null || INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
+}
+
 function isForegroundGatewayRunArgv(argv: string[]): boolean {
   const positionals = getCommandPositionalsWithRootOptions(argv, {
     commandPath: ["gateway"],
@@ -47,7 +61,7 @@ export function shouldSkipRespawnForArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return (
     invocation.hasHelpOrVersion ||
-    (invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary)) ||
+    isInteractiveTtyCommandArgv(argv) ||
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }

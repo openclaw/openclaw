@@ -1,3 +1,4 @@
+// Discord tests cover handle action plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -121,10 +122,82 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+  it("rejects non-Discord requester ids for Discord guild admin actions", async () => {
+    const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps no-context Discord guild admin actions on the manual runtime path", async () => {
     const cfg = discordConfig({ channels: true });
     await handleDiscordMessageAction({
       action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+      },
+      cfg,
+      senderIsOwner: true,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects no-context Discord guild admin actions without owner trust", async () => {
+    const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Discord requester ids for Discord moderation actions", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5,
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps read-only guild lookups available from non-Discord requesters", async () => {
+    const cfg = discordConfig({ channelInfo: true });
+    await handleDiscordMessageAction({
+      action: "channel-info",
       params: {
         channelId: "channel-1",
       },
@@ -134,11 +207,7 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expectDiscordActionCall({
-      payload: {
-        action: "channelDelete",
-        accountId: undefined,
-        channelId: "channel-1",
-      },
+      payload: { action: "channelInfo", accountId: undefined, channelId: "channel-1" },
       cfg,
     });
   });
@@ -544,5 +613,60 @@ describe("handleDiscordMessageAction", () => {
     ).rejects.toThrow(/messageId required/i);
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not add session channel to search when explicit channelIds are provided", async () => {
+    handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
+    await handleDiscordMessageAction({
+      action: "search",
+      params: {
+        query: "test query",
+        channelIds: ["ch-1", "ch-2"],
+        guildId: "g1",
+      },
+      cfg: discordConfig(),
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "session-ch",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      action: "searchMessages",
+      content: "test query",
+      guildId: "g1",
+      channelIds: ["ch-1", "ch-2"],
+    });
+    // Session channel must NOT appear as channelId when explicit channelIds exist.
+    expect(payload.channelId).toBeUndefined();
+  });
+
+  it("does not inject session channel when guildId is explicit and no channel filters are provided", async () => {
+    handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
+    await handleDiscordMessageAction({
+      action: "search",
+      params: {
+        query: "guild-wide query",
+        guildId: "g1",
+      },
+      cfg: discordConfig(),
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "session-ch",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      action: "searchMessages",
+      content: "guild-wide query",
+      guildId: "g1",
+    });
+    // Guild-wide search must NOT be narrowed to the session channel.
+    expect(payload.channelId).toBeUndefined();
+    expect(payload.channelIds).toBeUndefined();
   });
 });
