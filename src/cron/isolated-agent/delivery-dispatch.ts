@@ -637,19 +637,16 @@ function canonicalizeDirectCronRouteSessionKey(params: {
   return `${canonicalBase}:thread:${thread.threadId}`;
 }
 
-export async function resolveDirectCronDeliverySessionKey(params: {
+// Resolves the session for a concrete visible delivery target and ensures the
+// outbound session exists before cron awareness or transcript code references it.
+async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
-  job: CronJob;
+  jobId: string;
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
+  warningContext: string;
 }): Promise<string> {
-  if (isCustomCronSessionTarget(params.job.sessionTarget)) {
-    // Custom session targets are already caller-selected; do not remap them
-    // through outbound routing or the explicit session identity would drift.
-    return params.agentSessionKey;
-  }
-
   try {
     const { resolveOutboundSessionRoute, ensureOutboundSessionEntry } =
       await loadOutboundSessionRuntime();
@@ -696,10 +693,34 @@ export async function resolveDirectCronDeliverySessionKey(params: {
     return canonicalRouteSessionKey;
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.job.id}] failed to resolve destination session for direct delivery mirror: ${formatErrorMessage(err)}`,
+      `[cron:${params.jobId}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
     );
     return params.agentSessionKey;
   }
+}
+
+/** Resolves the transcript mirror session for direct cron delivery. */
+export async function resolveDirectCronDeliverySessionKey(params: {
+  cfg: OpenClawConfig;
+  job: CronJob;
+  agentId: string;
+  agentSessionKey: string;
+  delivery: SuccessfulDeliveryTarget;
+}): Promise<string> {
+  if (isCustomCronSessionTarget(params.job.sessionTarget)) {
+    // Custom session targets are already caller-selected; do not remap them
+    // through outbound routing or the explicit session identity would drift.
+    return params.agentSessionKey;
+  }
+
+  return await resolveCronDeliveryRouteSessionKey({
+    cfg: params.cfg,
+    jobId: params.job.id,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
+    delivery: params.delivery,
+    warningContext: "direct delivery mirror",
+  });
 }
 
 function resolveCronMessageToolAwarenessTarget(params: {
@@ -780,12 +801,13 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       continue;
     }
     seen.add(dedupeKey);
-    const targetSessionKey = await resolveDirectCronDeliverySessionKey({
+    const targetSessionKey = await resolveCronDeliveryRouteSessionKey({
       cfg: params.cfg,
-      job: params.job,
+      jobId: params.job.id,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
       delivery: target,
+      warningContext: "message-tool delivery awareness",
     });
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,

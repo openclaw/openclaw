@@ -580,6 +580,61 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("routes session-targeted message-tool awareness to the visible delivery target", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+
+    await queueCronMessageToolDeliveryAwareness({
+      cfg: {} as never,
+      job: {
+        id: "test-job",
+        name: "Test Job",
+        sessionTarget: "session:agent:main:main",
+        deleteAfterRun: false,
+        payload: { kind: "agentTurn", message: "hello" },
+      } as never,
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      runStartedAt: 1_000,
+      resolvedDelivery: makeResolvedDelivery(),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "telegram",
+              to: "123456",
+              text: "Session-targeted off-plan update.",
+            },
+            verifiedTarget: false,
+          },
+        ],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: true,
+      },
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentSessionKey: "agent:main:main",
+        channel: "telegram",
+        target: "123456",
+      }),
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled cron job delivered this message to this channel:\nSession-targeted off-plan update.",
+      {
+        sessionKey: "agent:main:telegram:direct:123456",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      },
+    );
+  });
+
   it("queues message-tool awareness for verified media-only deliveries", async () => {
     mockResolvedOutboundRoute();
 
