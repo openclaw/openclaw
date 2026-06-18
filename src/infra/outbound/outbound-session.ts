@@ -128,8 +128,14 @@ function inferPeerKind(params: {
     const chatTypes = plugin?.capabilities?.chatTypes ?? [];
     const supportsChannel = chatTypes.includes("channel");
     const supportsGroup = chatTypes.includes("group");
+    const supportsDirect = chatTypes.includes("direct");
     if (supportsChannel && !supportsGroup) {
       return "channel";
+    }
+    // Direct-only channels should never produce group sessions. Downgrade
+    // to "direct" when the channel does not actually support groups (#92384).
+    if (supportsDirect && !supportsGroup && !supportsChannel) {
+      return "direct";
     }
     return "group";
   }

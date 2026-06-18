@@ -326,4 +326,24 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     expect(formatTargetDisplay({ channel: "forum", target: "forum:12345" })).toBe("12345");
   });
+
+  it("defaults bare ids to user kind for direct-only channels (#92384)", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct"] },
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+    });
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "wechat",
+      input: "o9cq802hhmfc@im.wechat",
+    });
+    expect(result.target.kind).toBe("user");
+    expect(result.target.to).toBe("o9cq802hhmfc@im.wechat");
+    expect(result.target.source).toBe("normalized");
+  });
 });

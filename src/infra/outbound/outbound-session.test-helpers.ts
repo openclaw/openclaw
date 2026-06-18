@@ -595,6 +595,19 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
     },
     {
       ...createChannelTestPluginBase({
+        id: "dmonly",
+        label: "DM Only",
+        capabilities: { chatTypes: ["direct"] },
+      }),
+      messaging: {
+        targetResolver: {
+          looksLikeId: (raw: string) => raw.endsWith("@im.chat"),
+        },
+        targetPrefixes: ["dmonly"],
+      },
+    },
+    {
+      ...createChannelTestPluginBase({
         id: "legacyparser",
         label: "Legacy Parser",
         capabilities: { chatTypes: ["direct", "group", "channel"] },

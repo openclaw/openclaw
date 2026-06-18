@@ -191,6 +191,31 @@ function detectTargetKind(
   return "group";
 }
 
+// When a bare ID reaches the normalized fallback with no plugin-specific
+// resolution, override the default "group" kind for channels that declare a
+// single chat type. This prevents direct-only channels from producing phantom
+// group sessions (#92384).
+function resolveIdFallbackKind(
+  defaultKind: TargetResolveKind,
+  plugin?: ChannelPlugin,
+): TargetResolveKind {
+  if (defaultKind !== "group") {
+    return defaultKind;
+  }
+  const chatTypes = plugin?.capabilities?.chatTypes?.filter(
+    (t): t is "direct" | "group" | "channel" => t !== "thread",
+  );
+  if (chatTypes?.length === 1) {
+    if (chatTypes[0] === "direct") {
+      return "user";
+    }
+    if (chatTypes[0] === "channel") {
+      return "channel";
+    }
+  }
+  return defaultKind;
+}
+
 function normalizeDirectoryEntryId(
   channel: ChannelId,
   entry: ChannelDirectoryEntry,
@@ -416,9 +441,14 @@ export async function resolveMessagingTarget(params: {
         target: resolvedIdLikeTarget,
       };
     }
+    // When a bare ID reaches the normalized fallback (no plugin resolveTarget),
+    // respect the channel's declared chatTypes instead of defaulting to "group".
+    // Direct-only channels (e.g. SMS, WeChat DM) should not produce phantom
+    // group sessions for bare IDs (#92384).
+    const effectiveKind = resolveIdFallbackKind(kind, plugin ?? getChannelPlugin(params.channel));
     return buildNormalizedResolveResult({
       normalized,
-      kind,
+      kind: effectiveKind,
     });
   }
   const query = stripTargetPrefixes(raw);

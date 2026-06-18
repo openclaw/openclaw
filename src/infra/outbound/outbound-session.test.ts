@@ -523,6 +523,25 @@ describe("resolveOutboundSessionRoute", () => {
       }),
     ).rejects.toThrow(/Ambiguous Guild Chat recipient/);
   });
+
+  it("routes bare ids as direct for direct-only channels (#92384)", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "dmonly",
+      agentId: "main",
+      target: "user123@im.chat",
+      resolvedTarget: {
+        to: "user123@im.chat",
+        kind: "group" as const,
+        source: "normalized" as const,
+        resolutionSource: "normalized" as const,
+      },
+    });
+
+    expect(route.chatType).toBe("direct");
+    expect(route.sessionKey).toContain(":direct:");
+    expect(route.sessionKey).not.toContain(":group:");
+  });
 });
 
 describe("ensureOutboundSessionEntry", () => {
