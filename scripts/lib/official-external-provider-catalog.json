@@ -126,6 +126,7 @@
         "providers": [
           {
             "id": "gmi",
+            "aliases": ["gmi-cloud", "gmicloud"],
             "name": "GMI Cloud",
             "docs": "/providers/gmi",
             "categories": ["cloud", "llm"],
