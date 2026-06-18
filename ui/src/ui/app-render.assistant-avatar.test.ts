@@ -344,7 +344,7 @@ describe("renderApp assistant avatar routing", () => {
 
     render(renderApp(createState({ routeId: "logs" })), container);
 
-    const content = container.querySelector<HTMLElement>("main.content");
+    const content = container.querySelector<HTMLElement>(".content--logs");
     expect(content?.classList.contains("content--logs")).toBe(true);
     expect(content?.classList.contains("content--chat")).toBe(false);
   });

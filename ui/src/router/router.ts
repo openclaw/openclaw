@@ -1,8 +1,16 @@
-import type { Route } from "./types.ts";
+import type { MaybePromise, Route } from "./types.ts";
 
 type RouterOptions<TRouteId extends string, TLoadContext, TRenderContext> = {
   routes: readonly Route<TRouteId, TLoadContext, TRenderContext>[];
 };
+
+type TransitionOptions = {
+  shouldContinue?: () => boolean;
+};
+
+function isPromiseLike(value: MaybePromise<void>): value is Promise<void> {
+  return Boolean(value && typeof (value as Promise<void>).then === "function");
+}
 
 export function createRouter<
   TRouteId extends string,
@@ -27,12 +35,30 @@ export function createRouter<
     routes: options.routes,
     getRoute: (id: TRouteId) => byId.get(id) ?? null,
     matchPath: (path: string) => byPath.get(path) ?? null,
-    async transition(from: TRouteId, to: TRouteId, context: TLoadContext): Promise<void> {
+    transition(
+      from: TRouteId,
+      to: TRouteId,
+      context: TLoadContext,
+      transitionOptions?: TransitionOptions,
+    ): MaybePromise<void> {
       if (from === to) {
         return;
       }
-      await byId.get(from)?.onLeave?.(context);
-      await byId.get(to)?.onEnter?.(context);
+      const enter = () => {
+        if (transitionOptions?.shouldContinue?.() === false) {
+          return;
+        }
+        return byId.get(to)?.onEnter?.(context);
+      };
+      try {
+        const leaveResult = byId.get(from)?.onLeave?.(context);
+        if (isPromiseLike(leaveResult)) {
+          return leaveResult.then(() => enter());
+        }
+        return enter();
+      } catch (err) {
+        return Promise.reject(err);
+      }
     },
   };
 }

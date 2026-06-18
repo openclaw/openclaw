@@ -6,20 +6,30 @@ const {
   applySettingsFromUrlMock,
   connectGatewayMock,
   loadBootstrapMock,
+  routeEnterMock,
   restoreComposerMock,
   scheduleChatScrollMock,
   startNodesPollingMock,
 } = vi.hoisted(() => ({
-    applySettingsFromUrlMock: vi.fn(),
-    connectGatewayMock: vi.fn(),
-    loadBootstrapMock: vi.fn(),
-    restoreComposerMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
-    scheduleChatScrollMock: vi.fn(),
-    startNodesPollingMock: vi.fn(),
-  }));
+  applySettingsFromUrlMock: vi.fn(),
+  connectGatewayMock: vi.fn(),
+  loadBootstrapMock: vi.fn(),
+  routeEnterMock: vi.fn(),
+  restoreComposerMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
+  scheduleChatScrollMock: vi.fn(),
+  startNodesPollingMock: vi.fn(),
+}));
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
+}));
+
+vi.mock("../router/index.ts", () => ({
+  appRouter: {
+    getRoute: vi.fn((routeId: string) =>
+      routeId === "logs" || routeId === "debug" ? { onEnter: routeEnterMock } : null,
+    ),
+  },
 }));
 
 vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
@@ -109,6 +119,7 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    routeEnterMock.mockReset();
     restoreComposerMock.mockReset();
     restoreComposerMock.mockReturnValue(false);
     startNodesPollingMock.mockReset();
@@ -204,17 +215,26 @@ describe("handleConnected", () => {
     expect(connectGatewayMock).toHaveBeenCalledWith(host);
   });
 
-  it("starts Nodes polling only when the Nodes tab is active on connect", () => {
+  it("starts active route polling on connect", () => {
     loadBootstrapMock.mockResolvedValue(undefined);
     const chatHost = createHost();
 
     handleConnected(chatHost as never);
     expect(startNodesPollingMock).not.toHaveBeenCalled();
+    expect(routeEnterMock).not.toHaveBeenCalled();
 
     const nodesHost = createHost();
     nodesHost.routeId = "nodes";
     handleConnected(nodesHost as never);
     expect(startNodesPollingMock).toHaveBeenCalledWith(nodesHost);
+
+    const logsHost = createHost();
+    logsHost.routeId = "logs";
+    handleConnected(logsHost as never);
+    expect(routeEnterMock).toHaveBeenCalledWith({
+      host: logsHost,
+      app: logsHost,
+    });
   });
 
   it("keeps realtime Talk turns pinned in the chat flow", () => {

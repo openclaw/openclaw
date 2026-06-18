@@ -3,16 +3,15 @@ import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
+import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { appRouter } from "../router/index.ts";
 import {
-  iconForRoute,
   isSettingsRoute,
   normalizeBasePath,
   pathForRoute,
   ROUTE_GROUPS,
-  SETTINGS_ROUTES,
   subtitleForRoute,
   titleForRoute,
   type RouteId,
@@ -111,7 +110,6 @@ import {
   updateCronJobsFilter,
   updateCronRunsFilter,
 } from "./controllers/cron.ts";
-import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
   approveDevicePairing,
   closeDevicePairSetup,
@@ -142,7 +140,6 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
-import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
@@ -180,6 +177,7 @@ import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import "./components/dashboard-header.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -242,55 +240,6 @@ function runUiTask<Args extends unknown[]>(
   return (...args) => {
     void task(...args);
   };
-}
-
-function renderSettingsSectionNav(state: AppViewState) {
-  if (!isSettingsRoute(state.routeId)) {
-    return nothing;
-  }
-  return html`
-    <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
-      ${SETTINGS_ROUTES.map((routeId) => {
-        const active = state.routeId === routeId;
-        const href = pathForRoute(routeId, state.basePath);
-        return html`
-          <a
-            href=${href}
-            class="settings-section-nav__item ${active ? "settings-section-nav__item--active" : ""}"
-            @click=${(event: MouseEvent) => {
-              if (
-                event.defaultPrevented ||
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              ) {
-                return;
-              }
-              event.preventDefault();
-              state.setRoute(routeId);
-            }}
-            title=${titleForRoute(routeId)}
-          >
-            <span class="settings-section-nav__icon" aria-hidden="true"
-              >${icons[iconForRoute(routeId)]}</span
-            >
-            <span class="settings-section-nav__label">${titleForRoute(routeId)}</span>
-          </a>
-        `;
-      })}
-    </nav>
-  `;
-}
-
-function renderSettingsWorkspace(state: AppViewState, body: unknown) {
-  return html`
-    <section class="settings-workspace">
-      ${renderSettingsSectionNav(state)}
-      <div class="settings-workspace__body">${body}</div>
-    </section>
-  `;
 }
 
 function isSidebarSessionBusy(state: AppViewState) {
@@ -615,9 +564,7 @@ const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyV
 const lazyActivity = createLazyView(() => import("./views/activity.ts"), notifyLazyViewChanged);
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
-const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
 const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
-const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
@@ -2628,9 +2575,9 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main
-        class="content ${isChat ? "content--chat" : ""} ${state.routeId === "logs"
-          ? "content--logs"
-          : ""} ${state.routeId === "workboard" ? "content--workboard" : ""}"
+        class="content ${isChat ? "content--chat" : ""} ${state.routeId === "workboard"
+          ? "content--workboard"
+          : ""}"
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
@@ -3813,58 +3760,9 @@ export function renderApp(state: AppViewState) {
                 }),
             )
           : nothing}
-        ${isSettingsRoute(state.routeId) && state.routeId !== "debug" && state.routeId !== "logs"
+        ${isSettingsRoute(state.routeId) && !routedPage
           ? renderSettingsWorkspace(state, renderConfigTabForActiveTab())
           : renderConfigTabForActiveTab()}
-        ${state.routeId === "debug"
-          ? renderSettingsWorkspace(
-              state,
-              renderLazyView(lazyDebug, (m) =>
-                m.renderDebug({
-                  loading: state.debugLoading,
-                  status: state.debugStatus,
-                  health: state.debugHealth,
-                  models: state.debugModels,
-                  heartbeat: state.debugHeartbeat,
-                  eventLog: state.eventLog,
-                  methods: (state.hello?.features?.methods ?? []).toSorted(),
-                  callMethod: state.debugCallMethod,
-                  callParams: state.debugCallParams,
-                  callResult: state.debugCallResult,
-                  callError: state.debugCallError,
-                  onCallMethodChange: (next) => (state.debugCallMethod = next),
-                  onCallParamsChange: (next) => (state.debugCallParams = next),
-                  onRefresh: () => void loadDebug(state),
-                  onCall: () => void callDebugMethod(state),
-                }),
-              ),
-            )
-          : nothing}
-        ${state.routeId === "logs"
-          ? renderSettingsWorkspace(
-              state,
-              renderLazyView(lazyLogs, (m) =>
-                m.renderLogs({
-                  loading: state.logsLoading,
-                  error: state.logsError,
-                  file: state.logsFile,
-                  entries: state.logsEntries,
-                  filterText: state.logsFilterText,
-                  levelFilters: state.logsLevelFilters,
-                  autoFollow: state.logsAutoFollow,
-                  truncated: state.logsTruncated,
-                  onFilterTextChange: (next) => (state.logsFilterText = next),
-                  onLevelToggle: (level, enabled) => {
-                    state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
-                  },
-                  onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
-                  onRefresh: () => void loadLogs(state, { reset: true }),
-                  onExport: (lines, label) => state.exportLogs(lines, label),
-                  onScroll: (event) => state.handleLogsScroll(event),
-                }),
-              ),
-            )
-          : nothing}
         ${state.routeId === "dreams"
           ? renderDreaming({
               active: dreamingOn,

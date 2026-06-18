@@ -1,12 +1,13 @@
+import { cancelActiveRouteTransition } from "../app/active-route.ts";
+import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
+import { appRouter } from "../router/index.ts";
 import type { RouteId } from "../routes/route-registry.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {
-  startLogsPolling,
   startNodesPolling,
   stopLogsPolling,
   stopNodesPolling,
-  startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
 import {
@@ -124,12 +125,12 @@ export function handleConnected(host: LifecycleHost) {
   if (host.routeId === "nodes") {
     startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   }
-  if (host.routeId === "logs") {
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  }
-  if (host.routeId === "debug") {
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  }
+  void Promise.resolve(
+    appRouter.getRoute(host.routeId)?.onEnter?.({
+      host: host as unknown as SettingsHost,
+      app: host as unknown as SettingsAppHost,
+    }),
+  ).catch(() => undefined);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
     host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],
   );
@@ -198,6 +199,7 @@ function scheduleChatComposerDraftPersistence(host: LifecycleHost) {
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   host.controlUiRoutePaintSeq = (host.controlUiRoutePaintSeq ?? 0) + 1;
+  cancelActiveRouteTransition(host as unknown as SettingsHost);
   flushPendingChatComposerPersistence(host);
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);

@@ -746,18 +746,25 @@
     max-height: 380px;
   }
 
-  .content.content--logs {
+  .content.content:has(> .content--logs) {
     display: block;
     overflow-y: auto;
   }
 
-  .content.content--logs .settings-workspace {
+  .content.content > .content--logs {
+    display: block;
+    height: auto;
+    min-height: auto;
+    overflow-y: auto;
+  }
+
+  .content.content > .content--logs .settings-workspace {
     display: block;
     height: auto;
     flex: initial;
   }
 
-  .content.content--logs .settings-workspace__body {
+  .content.content > .content--logs .settings-workspace__body {
     display: block;
     flex: initial;
   }

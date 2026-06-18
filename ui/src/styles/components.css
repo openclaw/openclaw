@@ -3742,7 +3742,7 @@ td.data-table-key-col {
 }
 
 /* Fill-height card: flex column that consumes the remaining settings-workspace
-   body height. `.content--logs` owns the ancestor chain. */
+   body height. The logs route owns the `.content--logs` ancestor chain. */
 .card--fill-height {
   display: flex;
   flex-direction: column;

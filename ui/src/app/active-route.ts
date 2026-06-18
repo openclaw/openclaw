@@ -1,20 +1,14 @@
 // Control UI active route lifecycle and refresh orchestration.
 import { t } from "../i18n/index.ts";
+import { appRouter } from "../router/index.ts";
 import type { RouteId } from "../routes/route-registry.ts";
 import {
   createChatSessionsLoadOverrides,
   refreshChat,
   scopedAgentListParamsForSession,
 } from "../ui/app-chat.ts";
-import {
-  startDebugPolling,
-  startLogsPolling,
-  startNodesPolling,
-  stopDebugPolling,
-  stopLogsPolling,
-  stopNodesPolling,
-} from "../ui/app-polling.ts";
-import { scheduleChatScroll, scheduleLogsScroll } from "../ui/app-scroll.ts";
+import { startNodesPolling, stopNodesPolling } from "../ui/app-polling.ts";
+import { scheduleChatScroll } from "../ui/app-scroll.ts";
 import {
   beginControlUiRefresh,
   controlUiNowMs,
@@ -23,7 +17,6 @@ import {
   roundedControlUiDurationMs,
   scheduleControlUiRouteVisibleTiming,
 } from "../ui/control-ui-performance.ts";
-import { appRouter } from "../router/index.ts";
 import { loadAgentFiles } from "../ui/controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "../ui/controllers/agent-identity.ts";
 import { loadAgentSkills } from "../ui/controllers/agent-skills.ts";
@@ -40,7 +33,6 @@ import {
   loadWikiMemoryPalace,
 } from "../ui/controllers/dreaming.ts";
 import { loadExecApprovals } from "../ui/controllers/exec-approvals.ts";
-import { loadLogs } from "../ui/controllers/logs.ts";
 import { loadModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
 import { loadNodes } from "../ui/controllers/nodes.ts";
 import { loadPresence } from "../ui/controllers/presence.ts";
@@ -70,7 +62,7 @@ const refreshSettingsRoute: ActiveRouteLoader = async ({ host, app }) => {
   await primaryRefresh;
 };
 
-type AppRefreshRouteId = Exclude<RouteId, "skill-workshop">;
+type AppRefreshRouteId = Exclude<RouteId, "skill-workshop" | "debug" | "logs">;
 
 const ACTIVE_ROUTE_REFRESHERS = {
   config: refreshSettingsRoute,
@@ -143,16 +135,23 @@ const ACTIVE_ROUTE_REFRESHERS = {
       }
     }
   },
-  debug: async ({ host, app }) => {
-    await loadDebug(app);
-    host.eventLog = host.eventLogBuffer;
-  },
-  logs: async ({ host, app }) => {
-    host.logsAtBottom = true;
-    await loadLogs(app, { reset: true });
-    scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
-  },
 } satisfies Record<AppRefreshRouteId, ActiveRouteLoader>;
+
+function isAppRefreshRoute(routeId: RouteId): routeId is AppRefreshRouteId {
+  return routeId in ACTIVE_ROUTE_REFRESHERS;
+}
+
+const activeRouteTransitionSeq = new WeakMap<SettingsHost, number>();
+
+function beginActiveRouteTransition(host: SettingsHost) {
+  const seq = (activeRouteTransitionSeq.get(host) ?? 0) + 1;
+  activeRouteTransitionSeq.set(host, seq);
+  return seq;
+}
+
+export function cancelActiveRouteTransition(host: SettingsHost): void {
+  beginActiveRouteTransition(host);
+}
 
 export function applyActiveRouteTransition(
   host: SettingsHost,
@@ -171,14 +170,21 @@ export function applyActiveRouteTransition(
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
   }
-  (next === "logs" ? startLogsPolling : stopLogsPolling)(
-    host as unknown as Parameters<typeof startLogsPolling>[0],
+  const transitionSeq = beginActiveRouteTransition(host);
+  const transition = appRouter.transition(
+    previous,
+    next,
+    { host, app: host as unknown as SettingsAppHost },
+    {
+      shouldContinue: () =>
+        activeRouteTransitionSeq.get(host) === transitionSeq && host.routeId === next,
+    },
   );
+  if (transition) {
+    void transition.catch(() => undefined);
+  }
   (next === "nodes" ? startNodesPolling : stopNodesPolling)(
     host as unknown as Parameters<typeof startNodesPolling>[0],
-  );
-  (next === "debug" ? startDebugPolling : stopDebugPolling)(
-    host as unknown as Parameters<typeof startDebugPolling>[0],
   );
   if (next !== "workboard") {
     stopWorkboardPolling(host as unknown as Parameters<typeof stopWorkboardPolling>[0]);
@@ -192,7 +198,7 @@ export async function refreshActiveRoute(host: SettingsHost): Promise<void> {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.routeId);
   try {
-    if (host.routeId !== "skill-workshop") {
+    if (isAppRefreshRoute(host.routeId)) {
       await ACTIVE_ROUTE_REFRESHERS[host.routeId]?.({ host, app });
     }
     await appRouter.getRoute(host.routeId)?.load?.({ host, app });

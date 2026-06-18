@@ -404,7 +404,7 @@ describe("refreshActiveRoute", () => {
     expect(mocks.loadSkillsMock).toHaveBeenCalledWith(host);
   });
 
-  it("starts node polling and stops inactive tab pollers on tab changes", () => {
+  it("runs route lifecycle polling on tab changes", () => {
     vi.useFakeTimers();
     const host = createHost();
     host.routeId = "workboard";
@@ -415,8 +415,6 @@ describe("refreshActiveRoute", () => {
 
     expect(host.sessionsChangedReloadTimer).toBeNull();
     expect(mocks.startNodesPollingMock).toHaveBeenCalledWith(host);
-    expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
-    expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopWorkboardPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopWorkboardLifecycleRefreshMock).toHaveBeenCalledWith(host);
     vi.advanceTimersByTime(1_000);
@@ -424,6 +422,16 @@ describe("refreshActiveRoute", () => {
 
     setRoute(host as never, "sessions");
     expect(mocks.stopNodesPollingMock).toHaveBeenCalledWith(host);
+
+    setRoute(host as never, "logs");
+    expect(mocks.startLogsPollingMock).toHaveBeenCalledWith(host);
+
+    setRoute(host as never, "debug");
+    expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.startDebugPollingMock).toHaveBeenCalledWith(host);
+
+    setRoute(host as never, "sessions");
+    expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
   });
 
   it("does not wait for secondary overview refreshes before resolving", async () => {
