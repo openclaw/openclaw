@@ -688,14 +688,17 @@ export async function runSearchSetupFlow(
     ...config.tools?.web?.search,
     provider: choice,
   };
-  return {
-    ...config,
-    tools: {
-      ...config.tools,
-      web: {
-        ...config.tools?.web,
-        search,
+  return applySearchProviderSelectionConfig(
+    {
+      ...config,
+      tools: {
+        ...config.tools,
+        web: {
+          ...config.tools?.web,
+          search,
+        },
       },
     },
-  };
+    entry,
+  );
 }
