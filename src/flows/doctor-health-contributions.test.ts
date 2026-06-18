@@ -1023,8 +1023,9 @@ describe("doctor health contributions", () => {
       expect(log).not.toHaveBeenCalled();
     });
 
-    it("does not write or print the doctor --fix trailer for non-repair drift without pending config changes", async () => {
+    it("writes health-phase config drift without printing the doctor --fix trailer", async () => {
       const log = vi.fn();
+      const nextConfig = { gateway: { mode: "remote" } };
       const ctx = {
         runtime: { log, error: vi.fn(), exit: vi.fn() },
         options: {},
@@ -1034,7 +1035,7 @@ describe("doctor health contributions", () => {
           shouldWriteConfig: false,
           pendingChanges: false,
         },
-        cfg: { gateway: { mode: "remote" } },
+        cfg: nextConfig,
         cfgForPersistence: { gateway: { mode: "local" } },
         sourceConfigValid: true,
         configPath: "/tmp/openclaw-doctor-trailer.json",
@@ -1043,7 +1044,11 @@ describe("doctor health contributions", () => {
 
       await writeConfigContribution.run(ctx);
 
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig,
+        }),
+      );
       expect(log).not.toHaveBeenCalled();
     });
 
