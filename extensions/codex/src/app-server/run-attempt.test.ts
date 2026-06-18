@@ -2523,7 +2523,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).toContain("continue from there");
   });
 
-  it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
+  it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md in bounded context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentsGuidance = "Follow AGENTS guidance.";
@@ -2585,9 +2585,8 @@ describe("runCodexAppServerAttempt", () => {
       "If the needed memory tool is deferred and not currently callable, use `tool_search` to load it, then call that memory tool.",
     );
     expect(collaborationInstructions).not.toContain(memorySummary);
-    expect(inputText).not.toContain("OpenClaw runtime context for this turn:");
-    expect(inputText).not.toContain("does not override Codex system/developer instructions");
-    expect(inputText).not.toContain("not developer policy");
+    expect(inputText).toContain("OpenClaw runtime context for this turn:");
+    expect(inputText).toContain("OpenClaw Workspace Context");
     expect(inputText).not.toContain(soulGuidance);
     expect(inputText).not.toContain(identityGuidance);
     expect(inputText).not.toContain(toolGuidance);
@@ -2597,7 +2596,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("MEMORY.md exists in the active agent workspace");
     expect(inputText).not.toContain("memory_search");
     expect(inputText).not.toContain("memory_get");
-    expect(inputText).not.toContain("Codex loads AGENTS.md natively");
+    expect(inputText).toContain("Codex loads AGENTS.md natively");
     expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).not.toBe("hello");
     expect(systemPromptReport.systemPrompt.chars).toBe(
