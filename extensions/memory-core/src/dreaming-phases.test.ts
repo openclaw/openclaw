@@ -445,7 +445,10 @@ describe("memory-core dreaming phases", () => {
         "utf-8",
       );
       expect(dailyContent).toContain("## Light Sleep");
-      expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
+      // After cycle 1, the freshness filter prevents re-emission of the same
+      // entries (lastRecalledAt ≤ lastLightAt).  Subsequent cycles replace the
+      // light block with the fallback body.
+      expect(dailyContent).toContain("- No notable updates.");
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
     });
   });
