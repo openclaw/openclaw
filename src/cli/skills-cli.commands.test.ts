@@ -399,6 +399,48 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("passes owner-qualified ClawHub skill refs through to the installer", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "@demo-owner/calendar"]);
+
+    const installArgs = mockFirstObjectArg(installSkillFromClawHubMock);
+    expectObjectFields(installArgs, {
+      workspaceDir: "/tmp/workspace",
+      slug: "@demo-owner/calendar",
+      force: false,
+    });
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) =>
+        line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
+      ),
+    ).toBe(true);
+  });
+
+  it("documents owner-qualified ClawHub install refs in command help", () => {
+    const skillsCommand = createProgram().commands.find((command) => command.name() === "skills");
+    const installCommand = skillsCommand?.commands.find((command) => command.name() === "install");
+    const output: string[] = [];
+
+    installCommand?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    installCommand?.outputHelp();
+    const help = output.join("");
+
+    expect(help).toContain("<skill-ref>");
+    expect(help).toContain("@owner/slug");
+    expect(help).toContain("openclaw skills install @owner/weather");
+    expect(help).not.toContain("openclaw skills install weather");
+  });
+
   it("installs a skill from a git source into the active workspace", async () => {
     installSkillFromSourceMock.mockResolvedValue({
       ok: true,
@@ -834,6 +876,34 @@ describe("skills cli commands", () => {
       },
     });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("passes owner-qualified installed verification targets to ClawHub verification", async () => {
+    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://private.example.com/clawhub",
+      version: "1.2.3",
+      tag: undefined,
+      resolution: {
+        source: "installed",
+        selector: "installed-version",
+        registry: "https://private.example.com/clawhub",
+        skillDir: "/tmp/workspace/skills/weather",
+        installedVersion: "1.2.3",
+      },
+    });
+
+    await runCommand(["skills", "verify", "weather"]);
+
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.2.3",
+      tag: undefined,
+      baseUrl: "https://private.example.com/clawhub",
+    });
   });
 
   it("passes explicit verify selectors and shared workspace options to the resolver", async () => {

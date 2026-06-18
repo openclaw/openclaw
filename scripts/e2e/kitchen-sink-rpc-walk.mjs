@@ -31,6 +31,7 @@ const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
@@ -380,47 +381,92 @@ export function runCommand(command, args, options = {}) {
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
-      clearTimeout(forceKillTimer);
-      void stopResourceSampling().then((resourceSampleFailure) => {
-        if (!timedOut && status === 0) {
-          if (resourceSampleFailure) {
-            reject(resourceSampleFailure);
+      const finish = () => {
+        clearTimeout(forceKillTimer);
+        void stopResourceSampling().then((resourceSampleFailure) => {
+          if (!timedOut && status === 0) {
+            if (resourceSampleFailure) {
+              reject(resourceSampleFailure);
+              return;
+            }
+            resolve({
+              stdout: stdout.text,
+              stderr: stderr.text,
+              stdoutTruncatedChars: stdout.truncatedChars,
+              stderrTruncatedChars: stderr.truncatedChars,
+            });
             return;
           }
-          resolve({
-            stdout: stdout.text,
-            stderr: stderr.text,
-            stdoutTruncatedChars: stdout.truncatedChars,
-            stderrTruncatedChars: stderr.truncatedChars,
-          });
-          return;
-        }
-        const detail = [
-          formatCapturedOutput("stdout", stdout),
-          formatCapturedOutput("stderr", stderr),
-        ]
-          .filter(Boolean)
-          .join("\n")
-          .trim();
-        const failure = timedOut
-          ? `timed out after ${timeoutMs}ms`
-          : `failed with ${signal || status}`;
-        reject(
-          Object.assign(
-            new Error(
-              `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          const detail = [
+            formatCapturedOutput("stdout", stdout),
+            formatCapturedOutput("stderr", stderr),
+          ]
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+          const failure = timedOut
+            ? `timed out after ${timeoutMs}ms`
+            : `failed with ${signal || status}`;
+          reject(
+            Object.assign(
+              new Error(
+                `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+              ),
+              {
+                signal,
+                status,
+                stderr: stderr.text,
+                stdout: stdout.text,
+              },
             ),
-            {
-              signal,
-              status,
-              stderr: stderr.text,
-              stdout: stdout.text,
-            },
-          ),
-        );
-      });
+          );
+        });
+      };
+
+      if (timedOut) {
+        void finishTimedOutCommandProcessTree(child, timeoutKillGraceMs).then(finish, finish);
+        return;
+      }
+
+      finish();
     });
   });
+}
+
+async function finishTimedOutCommandProcessTree(child, timeoutKillGraceMs) {
+  if (!commandProcessTreeIsAlive(child)) {
+    return;
+  }
+  signalProcessGroup(child, "SIGKILL");
+  await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+async function waitForCommandProcessTreeExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!commandProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !commandProcessTreeIsAlive(child);
+}
+
+function commandProcessTreeIsAlive(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return !hasChildExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
 }
 
 function signalProcessGroup(child, signal) {

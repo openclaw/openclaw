@@ -315,7 +315,42 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12346, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12346, "SIGTERM");
-      expect(kill).toHaveBeenLastCalledWith(-12346, "SIGKILL");
+      expect(kill).toHaveBeenCalledWith(-12346, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    }
+  });
+
+  it("waits for the process group to disappear after force kill", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      pid: 12350,
+      signalCode: null,
+    });
+    let sawForceKill = false;
+    let postKillLivenessChecks = 0;
+    const kill = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+      if (signal === "SIGKILL") {
+        sawForceKill = true;
+        return true;
+      }
+      if (signal === 0 && sawForceKill) {
+        postKillLivenessChecks += 1;
+        if (postKillLivenessChecks >= 2) {
+          throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+        }
+      }
+      return true;
+    });
+
+    await stopGateway(child, { forceKillGraceMs: 50, killGraceMs: 1, killProcess: kill });
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    } else {
+      expect(kill).toHaveBeenCalledWith(-12350, "SIGKILL");
+      expect(postKillLivenessChecks).toBe(2);
       expect(child.kill).not.toHaveBeenCalled();
     }
   });
@@ -336,7 +371,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12347, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
-      expect(kill).toHaveBeenLastCalledWith(-12347, "SIGKILL");
+      expect(kill).toHaveBeenCalledWith(-12347, "SIGKILL");
       expect(child.kill).not.toHaveBeenCalled();
     }
   });

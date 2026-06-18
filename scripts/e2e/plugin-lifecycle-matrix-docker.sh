@@ -17,12 +17,10 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz plugin-lifecycle-matrix "${OPENCLA
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" plugin-lifecycle-matrix "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
-OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 plugin-lifecycle-matrix empty)"
 DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e OPENCLAW_SKIP_CHANNELS=1
   -e OPENCLAW_SKIP_PROVIDERS=1
-  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
 )
 if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS:-}" ]; then
   DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS=$OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS")
@@ -45,6 +43,6 @@ docker_e2e_run_with_harness \
   "${DOCKER_ENV_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
-  bash scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh
+  tsx test/e2e/qa-lab/plugins/plugin-lifecycle-probe-runtime.ts --lifecycle-matrix
 
 echo "Plugin lifecycle matrix Docker E2E passed."
