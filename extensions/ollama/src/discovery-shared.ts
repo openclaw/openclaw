@@ -139,6 +139,22 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   );
 }
 
+const HOSTED_OLLAMA_CLOUD_HOSTNAMES = new Set(["ollama.com", "api.ollama.com"]);
+
+export function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return HOSTED_OLLAMA_CLOUD_HOSTNAMES.has(host) || host.endsWith(".ollama.com");
+}
+
 function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return true;
@@ -242,11 +258,12 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }
-  // When the base URL is a remote/cloud Ollama instance (not local/loopback),
-  // skip auto-discovery. Cloud instances are shared tenants where available
-  // models are managed by the provider; only use explicitly configured models.
+  // When the base URL points to hosted Ollama Cloud, skip auto-discovery.
+  // Cloud instances are shared tenants where available models are managed
+  // by the provider; only use explicitly configured models.
+  // Remote self-hosted Ollama endpoints still auto-discover as before.
   const resolvedBaseUrl = readProviderBaseUrl(explicit);
-  if (!hasExplicitModels && resolvedBaseUrl && !isLocalOllamaBaseUrl(resolvedBaseUrl)) {
+  if (!hasExplicitModels && resolvedBaseUrl && isHostedOllamaCloud(resolvedBaseUrl)) {
     return null;
   }
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);

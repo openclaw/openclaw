@@ -1,7 +1,11 @@
 // Ollama tests cover discovery shared plugin behavior.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
-import { isLocalOllamaBaseUrl, resolveOllamaDiscoveryResult } from "./discovery-shared.js";
+import {
+  isHostedOllamaCloud,
+  isLocalOllamaBaseUrl,
+  resolveOllamaDiscoveryResult,
+} from "./discovery-shared.js";
 
 describe("isLocalOllamaBaseUrl", () => {
   it.each([
@@ -42,7 +46,32 @@ describe("isLocalOllamaBaseUrl", () => {
   });
 });
 
-describe("resolveOllamaDiscoveryResult — remote base URL guard", () => {
+describe("isHostedOllamaCloud", () => {
+  it.each([
+    "https://ollama.com",
+    "https://ollama.com:11434",
+    "https://api.ollama.com",
+    "https://api.ollama.com/v1",
+    "https://sub.ollama.com",
+  ])("classifies %s as hosted cloud", (baseUrl) => {
+    expect(isHostedOllamaCloud(baseUrl)).toBe(true);
+  });
+
+  it.each([
+    undefined,
+    "",
+    "http://localhost:11434",
+    "http://127.0.0.1:11434",
+    "https://ollama.mycompany.com",
+    "https://ollama.example.com",
+    "http://10.0.0.5:11434",
+    "not a url",
+  ])("classifies %s as not hosted cloud", (baseUrl) => {
+    expect(isHostedOllamaCloud(baseUrl)).toBe(false);
+  });
+});
+
+describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
   const discoveredModel = {
     id: "discovered-model",
     name: "discovered-model",
@@ -156,6 +185,30 @@ describe("resolveOllamaDiscoveryResult — remote base URL guard", () => {
     });
     expect(result).toBeNull();
     expect(providerCalled).toBe(false);
+  });
+
+  it("still auto-discovers for remote self-hosted base URL when no explicit models", async () => {
+    const result = await resolveOllamaDiscoveryResult({
+      ctx: {
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.mycompany.com",
+                apiKey: "test-key",
+                api: "ollama",
+              },
+            },
+          },
+        },
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "test-key" }),
+      },
+      pluginConfig: {},
+      buildProvider: buildMockProvider,
+    });
+    // Remote self-hosted base URL should still reach the discovery path
+    expect(result).not.toBeNull();
   });
 
   it("still auto-discovers for local base URL when no explicit models", async () => {
