@@ -578,7 +578,7 @@ const openAIOAuthTlsCheck: HealthCheck = {
       formatOpenAIOAuthTlsPreflightFix,
       runOpenAIOAuthTlsPreflight,
       shouldRunOpenAIOAuthTlsPrerequisites,
-    } = await import("../commands/oauth-tls-preflight.js");
+    } = await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
     if (!shouldRunOpenAIOAuthTlsPrerequisites({ cfg: ctx.cfg, deep: ctx.mode === "doctor" })) {
       return [];
     }
@@ -604,7 +604,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   source: "doctor",
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
-      await import("../commands/doctor-cron.js");
+      await import("../commands/doctor/cron/index.js");
     const warning = await collectLegacyWhatsAppCrontabHealthWarning();
     if (!warning) {
       return [];

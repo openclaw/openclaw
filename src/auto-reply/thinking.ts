@@ -257,12 +257,6 @@ export function resolveThinkingProfile(params: {
   return profile;
 }
 
-/** Return whether provider/model exposes only off/on thinking controls. */
-export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
-}
-
 function supportsThinkingLevel(
   provider: string | null | undefined,
   model: string | null | undefined,

@@ -19,7 +19,7 @@ import {
   readWebProviderEnvValue,
   resolveWebProviderConfig,
   resolveWebProviderDefinition,
-} from "../web/provider-runtime-shared.js";
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 
 // Runtime provider selection for the web_fetch tool. It resolves config,
 // credentials, runtime metadata, and sandbox-safe bundled provider scopes.

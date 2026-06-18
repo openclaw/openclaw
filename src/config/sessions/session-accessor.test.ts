@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -16,6 +17,7 @@ import {
   loadTranscriptEvents,
   patchSessionEntry,
   persistSessionTranscriptTurn,
+  purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
@@ -79,6 +81,39 @@ describe("session accessor file-backed seam", () => {
       model: "sonnet-4.6",
       sessionId: "session-1",
       updatedAt: expect.any(Number),
+    });
+  });
+
+  it("purges deleted-agent entries from the current locked store", async () => {
+    const cfg = {
+      session: { store: storePath },
+      agents: {
+        list: [
+          { id: "main", workspace: path.join(tempDir, "main") },
+          { id: "ops", workspace: path.join(tempDir, "ops") },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const now = Date.now();
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        main: { sessionId: "main-legacy", updatedAt: now },
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: now },
+      }),
+      "utf8",
+    );
+
+    const result = await purgeDeletedAgentSessionEntries({
+      cfg,
+      agentId: "ops",
+      storeAgentId: "main",
+      storePath,
+    });
+
+    expect(result.removedSessionKeys).toEqual(["agent:ops:main"]);
+    expect(loadSessionStore(storePath)).toEqual({
+      main: expect.objectContaining({ sessionId: "main-legacy" }),
     });
   });
 
