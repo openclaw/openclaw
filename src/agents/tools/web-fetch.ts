@@ -218,10 +218,11 @@ const BODY_TAG_RAW_TEXT_CONTAINERS = new Set([
   "script",
   "style",
   "textarea",
-  "template",
   "title",
   "xmp",
 ]);
+
+const BODY_TAG_INERT_CONTAINERS = new Set(["template"]);
 
 type HtmlTagRead = {
   tagName: string;
@@ -276,6 +277,40 @@ function findRawTextElementEnd(html: string, tagName: string, from: number): num
   return closeMatch ? from + closeMatch.index + closeMatch[0].length : html.length;
 }
 
+function findNestedElementEnd(html: string, tagName: string, from: number): number {
+  let depth = 1;
+  let cursor = from;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      return html.length;
+    }
+    if (html.startsWith("<!--", tagStart)) {
+      cursor = skipHtmlComment(html, tagStart);
+      continue;
+    }
+    const tag = readHtmlTag(html, tagStart);
+    if (!tag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    if (tag.tagName === tagName) {
+      depth += tag.closing ? -1 : 1;
+      if (depth === 0) {
+        return tag.end + 1;
+      }
+    }
+    cursor = tag.end + 1;
+  }
+  return html.length;
+}
+
+function skipHtmlContainer(html: string, tagName: string, from: number): number {
+  return BODY_TAG_INERT_CONTAINERS.has(tagName)
+    ? findNestedElementEnd(html, tagName, from)
+    : findRawTextElementEnd(html, tagName, from);
+}
+
 function skipHtmlComment(html: string, start: number): number {
   const end = html.indexOf("-->", start + 4);
   return end < 0 ? html.length : end + 3;
@@ -300,8 +335,11 @@ function findDocumentBodyClose(html: string, from: number): number {
     if (tag.closing && tag.tagName === "body") {
       return tagStart;
     }
-    if (!tag.closing && BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName)) {
-      cursor = findRawTextElementEnd(html, tag.tagName, tag.end + 1);
+    if (
+      !tag.closing &&
+      (BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName) || BODY_TAG_INERT_CONTAINERS.has(tag.tagName))
+    ) {
+      cursor = skipHtmlContainer(html, tag.tagName, tag.end + 1);
       continue;
     }
     cursor = tag.end + 1;
@@ -329,8 +367,11 @@ function extractHtmlBody(html: string): string | undefined {
       const bodyStart = tag.end + 1;
       return html.slice(bodyStart, findDocumentBodyClose(html, bodyStart));
     }
-    if (!tag.closing && BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName)) {
-      cursor = findRawTextElementEnd(html, tag.tagName, tag.end + 1);
+    if (
+      !tag.closing &&
+      (BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName) || BODY_TAG_INERT_CONTAINERS.has(tag.tagName))
+    ) {
+      cursor = skipHtmlContainer(html, tag.tagName, tag.end + 1);
       continue;
     }
     cursor = tag.end + 1;
