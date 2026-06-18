@@ -1019,10 +1019,11 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
 - Slack route bindings accept raw peer IDs plus Slack target forms such as `channel:C12345678`, `user:U12345678`, and `<@U12345678>`.
 - With default `session.dmScope=main`, Slack DMs collapse to agent main session.
-- Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
-- Ordinary top-level channel messages stay on the per-channel session, even when `replyToMode` is non-`off`.
-- Slack thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`), even when outbound reply threading is disabled with `replyToMode="off"`.
-- OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
+- Channel sessions are scoped by Slack thread root:
+  `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>`.
+- Top-level channel messages use their Slack message `ts` as the root thread id.
+- Slack thread replies use the parent Slack `thread_ts` for the same session suffix, even when `replyToMode="off"`.
+- Normal agent responses to Slack channel messages are always posted with Slack `thread_ts`, so the agent does not create unthreaded channel replies for conversation turns.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 - `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
@@ -1043,7 +1044,7 @@ For explicit Slack thread replies from the `message` tool, set `replyBroadcast: 
 When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to `replyToMode`. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.
 
 <Note>
-`replyToMode="off"` disables outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. It does not flatten inbound Slack thread sessions: messages already posted inside a Slack thread still route to the `:thread:<threadTs>` session. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
+`replyToMode="off"` disables optional outbound Slack reply threading, including explicit `[[reply_to_*]]` tags, but public Slack channel conversations still force replies into the channel root thread. It does not flatten inbound Slack thread sessions: messages posted inside a Slack thread still route to the `:thread:<threadTs>` session. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
 </Note>
 
 ## Ack reactions

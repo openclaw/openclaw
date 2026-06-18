@@ -298,7 +298,26 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
   });
 
-  it("does not force Slack assistant context onto top-level channel replies when replyToMode is off", async () => {
+  it("forces top-level channel replies into the root thread when replyToMode is off", async () => {
+    const prepared = await prepareMessageWith(
+      createDefaultSlackCtx(),
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        ts: "10.100",
+        text: "<@B1> top-level channel message",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c123:thread:10.100");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.100");
+    expect(prepared.ctxPayload.ReplyToId).toBe("10.100");
+    expect(prepared.forcedReplyThreadTs).toBe("10.100");
+  });
+
+  it("prefers the channel root thread over Slack assistant context on channel replies", async () => {
     const prepared = await prepareMessageWith(
       createDefaultSlackCtx(),
       createSlackAccount({ replyToMode: "off" }),
@@ -320,7 +339,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     assertPrepared(prepared);
     const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
-    expect(prepared.forcedReplyThreadTs).toBeUndefined();
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c123:thread:10.100");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.100");
+    expect(prepared.forcedReplyThreadTs).toBe("10.100");
     expect(payload.SlackAssistantThread).toBe(true);
     expect(payload.SlackAssistantThreadContextChannelId).toBe("C999");
     expect(payload.SlackAssistantThreadContextTeamId).toBe("T1");
@@ -2972,7 +2993,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.WasMentioned).toBe(true);
   });
 
-  it("preserves single-use reply mode metadata on seeded top-level roots", async () => {
+  it("preserves single-use reply mode metadata on top-level channel roots", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
 
@@ -3006,8 +3027,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared.ctxPayload.SessionKey).toBe(
         "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
       );
-      expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+      expect(prepared.ctxPayload.MessageThreadId).toBe(rootTs);
       expect(prepared.ctxPayload.ReplyToId).toBe(rootTs);
+      expect(prepared.forcedReplyThreadTs).toBe(rootTs);
     }
   });
 });

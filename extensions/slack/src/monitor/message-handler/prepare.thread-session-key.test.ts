@@ -210,7 +210,7 @@ describe("thread-level session keys", () => {
     expect(routing.sessionKey).not.toContain(":thread:");
   });
 
-  it("keeps top-level channel turns in one session when replyToMode=off", () => {
+  it("routes top-level channel turns to distinct thread sessions when replyToMode=off", () => {
     const ctx = buildCtx({ replyToMode: "off" });
     const account = buildAccount("off");
 
@@ -233,10 +233,11 @@ describe("thread-level session keys", () => {
       isRoomish: true,
     });
 
-    const firstSessionKey = first.sessionKey;
-    const secondSessionKey = second.sessionKey;
-    expect(firstSessionKey).toBe(secondSessionKey);
-    expect(firstSessionKey).not.toContain(":thread:");
+    expect(first.sessionKey).toBe("agent:main:slack:channel:c123:thread:1770408518.451689");
+    expect(second.sessionKey).toBe("agent:main:slack:channel:c123:thread:1770408520.000001");
+    expect(first.sessionKey).not.toBe(second.sessionKey);
+    expect(first.routedThreadId).toBe("1770408518.451689");
+    expect(second.routedThreadId).toBe("1770408520.000001");
   });
 
   it("uses parent thread_ts for thread replies even when replyToMode=off", () => {
@@ -299,7 +300,7 @@ describe("thread-level session keys", () => {
     expect(routing.threadContext.messageThreadId).toBe(rootTs);
   });
 
-  it("keeps top-level channel messages on the per-channel session regardless of replyToMode", () => {
+  it("routes top-level channel messages to per-root sessions regardless of replyToMode", () => {
     for (const mode of ["all", "first", "off", "batched"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
       const account = buildAccount(mode);
@@ -323,14 +324,13 @@ describe("thread-level session keys", () => {
         isRoomish: true,
       });
 
-      const firstKey = first.sessionKey;
-      const secondKey = second.sessionKey;
-      expect(firstKey).toBe(secondKey);
-      expect(firstKey).not.toContain(":thread:");
+      expect(first.sessionKey).toBe("agent:main:slack:channel:c123:thread:1770408530.000000");
+      expect(second.sessionKey).toBe("agent:main:slack:channel:c123:thread:1770408531.000000");
+      expect(first.sessionKey).not.toBe(second.sessionKey);
     }
   });
 
-  it("keeps unseeded top-level room messages with self thread_ts on the channel session", () => {
+  it("routes top-level room messages with self thread_ts to the root thread session", () => {
     const ctx = buildCtx({ replyToMode: "off" });
     const account = buildAccount("off");
 
@@ -347,7 +347,8 @@ describe("thread-level session keys", () => {
       isRoomish: true,
     });
 
-    expect(routing.sessionKey).toBe("agent:main:slack:channel:c123");
+    expect(routing.sessionKey).toBe("agent:main:slack:channel:c123:thread:1777244692.409919");
+    expect(routing.routedThreadId).toBe("1777244692.409919");
     expect(routing.threadContext.messageThreadId).toBeUndefined();
   });
 
@@ -368,14 +369,13 @@ describe("thread-level session keys", () => {
       isGroupDm: true,
       isRoom: false,
       isRoomish: true,
-      seedTopLevelRoomThread: true,
     });
 
     expect(routing.sessionKey).toBe("agent:main:slack:group:g123");
     expect(routing.sessionKey).not.toContain(":thread:");
   });
 
-  it("routes a seeded thread root and replies with the same Slack thread_ts to one parent session", () => {
+  it("routes a thread root and replies with the same Slack thread_ts to one parent session", () => {
     const ctx = buildCtx({ replyToMode: "all" });
     const account = buildAccount("all");
     const rootTs = "1777244692.409919";
@@ -393,7 +393,6 @@ describe("thread-level session keys", () => {
       isGroupDm: false,
       isRoom: true,
       isRoomish: true,
-      seedTopLevelRoomThread: true,
     });
     const followUp = resolveSlackRoutingContext({
       ctx,
@@ -419,7 +418,7 @@ describe("thread-level session keys", () => {
     expect(new Set([root.sessionKey, followUp.sessionKey]).size).toBe(1);
   });
 
-  it("seeds top-level app mentions into the same parent session used by later thread replies", () => {
+  it("routes top-level app mentions into the same parent session used by later thread replies", () => {
     const ctx = buildCtx({ replyToMode: "all" });
     const account = buildAccount("all");
     const rootTs = "1777244692.409919";
@@ -436,7 +435,6 @@ describe("thread-level session keys", () => {
       isGroupDm: false,
       isRoom: true,
       isRoomish: true,
-      seedTopLevelRoomThread: true,
     });
     const urlFollowUp = resolveSlackRoutingContext({
       ctx,
