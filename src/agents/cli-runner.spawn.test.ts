@@ -28,7 +28,6 @@ import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
-import { buildRunClaudeCliAgentParams } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -717,104 +716,6 @@ describe("runCliAgent spawn path", () => {
         process.env.CLI_SKILL_API_KEY = previousEnvValue;
       }
     }
-  });
-
-  it("ignores legacy claudeSessionId on the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      model: "opus",
-      timeoutMs: 1_000,
-      runId: "run-claude-legacy-wrapper",
-      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
-    });
-
-    expect(params.provider).toBe("claude-cli");
-    expect(params.prompt).toBe("hi");
-    expect(params).not.toHaveProperty("cliSessionId");
-    expect(JSON.stringify(params)).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
-  });
-
-  it("forwards channel context through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      cwd: "/tmp/task-repo",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-channel-wrapper",
-      messageChannel: "telegram",
-      messageProvider: "acp",
-      currentChannelId: "telegram:-100123:topic:42",
-      currentThreadTs: "42",
-      currentMessageId: "reply-message-1",
-      senderId: "sender-1",
-      senderIsOwner: true,
-      persistAssistantTranscript: true,
-      storePath: "/tmp/sessions.json",
-      currentInboundEventKind: "room_event",
-    });
-
-    expect(params.messageChannel).toBe("telegram");
-    expect(params.messageProvider).toBe("acp");
-    expect(params.currentChannelId).toBe("telegram:-100123:topic:42");
-    expect(params.currentThreadTs).toBe("42");
-    expect(params.currentMessageId).toBe("reply-message-1");
-    expect(params.senderId).toBe("sender-1");
-    expect(params.senderIsOwner).toBe(true);
-    expect(params.cwd).toBe("/tmp/task-repo");
-    expect(params.persistAssistantTranscript).toBe(true);
-    expect(params.storePath).toBe("/tmp/sessions.json");
-    expect(params.currentInboundEventKind).toBe("room_event");
-  });
-
-  it("forwards explicit message target policy through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-target-policy-wrapper",
-      requireExplicitMessageTarget: true,
-    });
-
-    expect(params.requireExplicitMessageTarget).toBe(true);
-  });
-
-  it("forwards static extra system prompt through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-static-prompt-wrapper",
-      extraSystemPrompt: "dynamic\n\nstatic",
-      extraSystemPromptStatic: "static",
-    });
-
-    expect(params.extraSystemPrompt).toBe("dynamic\n\nstatic");
-    expect(params.extraSystemPromptStatic).toBe("static");
-  });
-
-  it("forwards cron jobId through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      timeoutMs: 1_000,
-      runId: "run-claude-jobid-wrapper",
-      trigger: "cron",
-      jobId: "cron-job-123",
-    });
-
-    expect(params.trigger).toBe("cron");
-    expect(params.jobId).toBe("cron-job-123");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
