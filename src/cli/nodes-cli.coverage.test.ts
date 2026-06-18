@@ -123,6 +123,35 @@ describe("nodes-cli coverage", () => {
     });
   });
 
+  it("explains unknown nodes approve request ids with the current pending requests", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
+        paired: [],
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unknown requestId"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      )
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
+        paired: [],
+      });
+
+    await expect(
+      sharedProgram.parseAsync(["nodes", "approve", "stale-request"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("Pending requestIds: current-request");
+    expect(output).toContain("openclaw nodes pairing pending");
+    expect(output).not.toContain("nodes approve failed: Error:");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
