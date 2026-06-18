@@ -867,8 +867,8 @@
           },
           {
             "id": "minimax-m2.7",
-            "api": "openai-completions",
-            "baseUrl": "https://opencode.ai/zen/v1",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "MiniMax M2.7",
             "reasoning": true,
             "input": [
@@ -890,8 +890,8 @@
           },
           {
             "id": "minimax-m2.5",
-            "api": "openai-completions",
-            "baseUrl": "https://opencode.ai/zen/v1",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "MiniMax M2.5",
             "reasoning": true,
             "input": [
@@ -1101,8 +1101,8 @@
           },
           {
             "id": "minimax-m3-free",
-            "api": "openai-completions",
-            "baseUrl": "https://opencode.ai/zen/v1",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "MiniMax M3 Free",
             "reasoning": true,
             "input": [
