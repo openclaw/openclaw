@@ -10,7 +10,7 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {

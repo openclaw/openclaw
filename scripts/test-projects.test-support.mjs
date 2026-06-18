@@ -476,6 +476,106 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "scripts/e2e/codex-media-path-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/codex-media-path-client.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/codex-npm-plugin-live-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/codex-on-demand-docker.sh",
+    ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
+  ],
+  [
+    "scripts/e2e/crestodian-first-run-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/docker-e2e-crestodian.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/crestodian-first-run-docker-client.ts",
+    [
+      "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/cli/run-main.test.ts",
+      "src/cli/run-main.exit.test.ts",
+      "src/crestodian/crestodian.test.ts",
+      "src/crestodian/operations.test.ts",
+      "src/crestodian/overview.test.ts",
+      "src/crestodian/audit.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/crestodian-first-run-spec.json",
+    [
+      "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/crestodian/operations.test.ts",
+      "src/crestodian/audit.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/crestodian-planner-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/docker-e2e-crestodian.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/crestodian-planner-docker-client.mjs",
+    [
+      "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/crestodian/assistant.test.ts",
+      "src/crestodian/crestodian.test.ts",
+      "src/crestodian/operations.test.ts",
+      "src/crestodian/audit.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/crestodian-rescue-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/docker-e2e-crestodian.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/crestodian-rescue-docker-client.ts",
+    [
+      "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/crestodian/rescue-policy.test.ts",
+      "src/crestodian/rescue-message.test.ts",
+      "src/crestodian/operations.test.ts",
+      "src/crestodian/audit.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/commitments-safety-docker-client.ts",
+    [
+      "test/scripts/docker-e2e-clients.test.ts",
+      "src/commitments/runtime.test.ts",
+      "src/commitments/store.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/session-runtime-context-docker-client.ts",
+    [
+      "test/scripts/docker-e2e-clients.test.ts",
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
+      "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
+    ],
+  ],
+  [
     "scripts/e2e/mcp-channels-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
@@ -511,6 +611,27 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/e2e/mcp-code-mode-gateway-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
+  [
+    "scripts/e2e/cron-mcp-cleanup-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-observability.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+      "test/scripts/docker-e2e-seeds.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+    [
+      "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+      "src/gateway/server.cron.test.ts",
+      "src/gateway/server-methods/agent.test.ts",
+      "src/cron/isolated-agent/run.fast-mode.test.ts",
+      "src/cron/active-jobs-manual-run.test.ts",
+    ],
+  ],
   [
     "scripts/mcp-code-mode-gateway-e2e.ts",
     [
@@ -651,6 +772,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
+    "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/bundled-plugin-install-uninstall-probe.test.ts",
+    ],
+  ],
+  [
     "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
     ["test/scripts/plugin-lifecycle-measure.test.ts"],
   ],
@@ -702,6 +832,32 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/plugin-update/unchanged-scenario.sh",
     ["test/scripts/plugin-update-unchanged-docker.test.ts"],
   ],
+  [
+    "scripts/e2e/plugin-update-unchanged-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/plugin-update-unchanged-docker.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/update-corrupt-plugin-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-update-unchanged-docker.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/plugins-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugins-assertions.test.ts",
+    ],
+  ],
   ["scripts/e2e/lib/plugins/clawhub.sh", ["test/scripts/plugins-assertions.test.ts"]],
   ["scripts/e2e/lib/plugins/fixtures.sh", ["test/scripts/plugins-assertions.test.ts"]],
   ["scripts/e2e/lib/plugins/marketplace.sh", ["test/scripts/plugins-assertions.test.ts"]],
@@ -717,6 +873,40 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/update-channel-switch/assertions.mjs",
     ["test/scripts/docker-build-helper.test.ts"],
   ],
+  [
+    "scripts/e2e/live-plugin-tool-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/live-plugin-tool-assertions.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/openai-image-auth-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/openai-image-auth-docker-client.test.ts",
+      "extensions/openai/image-generation-provider.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/openai-image-auth-docker-client.ts",
+    [
+      "test/scripts/openai-image-auth-docker-client.test.ts",
+      "extensions/openai/image-generation-provider.test.ts",
+      "src/image-generation/openai-compatible-image-provider.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/plugin-binding-command-escape-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
+  ],
+  ["scripts/e2e/qr-import-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
     "scripts/e2e/release-media-memory-docker.sh",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/release-media-memory-scenario.test.ts"],

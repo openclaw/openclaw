@@ -450,11 +450,132 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/lib/mcp-code-mode-validation.ts",
         ["test/scripts/mcp-code-mode-gateway-client.test.ts"],
       ],
+      [
+        "scripts/e2e/codex-media-path-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/codex-media-path-client.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/codex-npm-plugin-live-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/codex-on-demand-docker.sh",
+        ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
+      ],
+      [
+        "scripts/e2e/crestodian-first-run-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/docker-e2e-crestodian.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-first-run-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/cli/run-main.test.ts",
+          "src/cli/run-main.exit.test.ts",
+          "src/crestodian/crestodian.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/overview.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-first-run-spec.json",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-planner-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/docker-e2e-crestodian.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-planner-docker-client.mjs",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/crestodian/assistant.test.ts",
+          "src/crestodian/crestodian.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-rescue-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/docker-e2e-crestodian.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/crestodian-rescue-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/crestodian/rescue-policy.test.ts",
+          "src/crestodian/rescue-message.test.ts",
+          "src/crestodian/operations.test.ts",
+          "src/crestodian/audit.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/commitments-safety-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-clients.test.ts",
+          "src/commitments/runtime.test.ts",
+          "src/commitments/store.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/session-runtime-context-docker-client.ts",
+        [
+          "test/scripts/docker-e2e-clients.test.ts",
+          "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
+          "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
+        ],
+      ],
       ["scripts/e2e/mcp-channels-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
       ["scripts/e2e/docker-openai-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
       [
         "scripts/e2e/mcp-code-mode-gateway-seed.ts",
         ["test/scripts/docker-e2e-seeds.test.ts"],
+      ],
+      [
+        "scripts/e2e/cron-mcp-cleanup-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-observability.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+          "test/scripts/docker-e2e-seeds.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+        [
+          "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+          "src/gateway/server.cron.test.ts",
+          "src/gateway/server-methods/agent.test.ts",
+          "src/cron/isolated-agent/run.fast-mode.test.ts",
+          "src/cron/active-jobs-manual-run.test.ts",
+        ],
       ],
       ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
       [
@@ -462,6 +583,15 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/e2e-shell-tempfiles.test.ts", "test/scripts/openclaw-test-state.test.ts"],
       ],
       ["scripts/e2e/lib/package-compat.mjs", ["test/scripts/docker-build-helper.test.ts"]],
+      [
+        "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/bundled-plugin-install-uninstall-probe.test.ts",
+        ],
+      ],
       [
         "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
         ["test/scripts/plugin-update-unchanged-docker.test.ts"],
@@ -473,6 +603,32 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "scripts/e2e/lib/plugin-update/unchanged-scenario.sh",
         ["test/scripts/plugin-update-unchanged-docker.test.ts"],
+      ],
+      [
+        "scripts/e2e/plugin-update-unchanged-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugin-prerelease-test-plan.test.ts",
+          "test/scripts/plugin-update-unchanged-docker.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/update-corrupt-plugin-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/plugin-update-unchanged-docker.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/plugins-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/plugins-assertions.test.ts",
+        ],
       ],
       ["scripts/e2e/lib/plugins/clawhub.sh", ["test/scripts/plugins-assertions.test.ts"]],
       ["scripts/e2e/lib/plugins/fixtures.sh", ["test/scripts/plugins-assertions.test.ts"]],
@@ -498,6 +654,40 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/lib/update-channel-switch/assertions.mjs",
         ["test/scripts/docker-build-helper.test.ts"],
       ],
+      [
+        "scripts/e2e/live-plugin-tool-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/live-plugin-tool-assertions.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/openai-image-auth-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/openai-image-auth-docker-client.test.ts",
+          "extensions/openai/image-generation-provider.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/openai-image-auth-docker-client.ts",
+        [
+          "test/scripts/openai-image-auth-docker-client.test.ts",
+          "extensions/openai/image-generation-provider.test.ts",
+          "src/image-generation/openai-compatible-image-provider.test.ts",
+        ],
+      ],
+      [
+        "scripts/e2e/plugin-binding-command-escape-docker.sh",
+        [
+          "test/scripts/docker-build-helper.test.ts",
+          "test/scripts/docker-e2e-plan.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+        ],
+      ],
+      ["scripts/e2e/qr-import-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
     ]);
 
     for (const [source, targets] of expectedTargets) {
@@ -1140,6 +1330,9 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
       "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
+      "scripts/e2e/cron-mcp-cleanup-docker.sh",
+      "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+      "scripts/e2e/cron-mcp-cleanup-seed.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -1155,6 +1348,84 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+        "src/gateway/server.cron.test.ts",
+        "src/gateway/server-methods/agent.test.ts",
+        "src/cron/isolated-agent/run.fast-mode.test.ts",
+        "src/cron/active-jobs-manual-run.test.ts",
+      ],
+    });
+  });
+
+  it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/openai-image-auth-docker.sh",
+      "scripts/e2e/openai-image-auth-docker-client.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/openai-image-auth-docker-client.test.ts",
+        "extensions/openai/image-generation-provider.test.ts",
+        "src/image-generation/openai-compatible-image-provider.test.ts",
+      ],
+    });
+  });
+
+  it("routes package-backed Docker shell targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/codex-media-path-docker.sh",
+      "scripts/e2e/codex-npm-plugin-live-docker.sh",
+      "scripts/e2e/codex-on-demand-docker.sh",
+      "scripts/e2e/live-plugin-tool-docker.sh",
+      "scripts/e2e/plugin-binding-command-escape-docker.sh",
+      "scripts/e2e/qr-import-docker.sh",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/codex-media-path-client.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/live-plugin-tool-assertions.test.ts",
+      ],
+    });
+  });
+
+  it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/crestodian-first-run-docker.sh",
+      "scripts/e2e/crestodian-first-run-docker-client.ts",
+      "scripts/e2e/crestodian-first-run-spec.json",
+      "scripts/e2e/crestodian-planner-docker.sh",
+      "scripts/e2e/crestodian-planner-docker-client.mjs",
+      "scripts/e2e/crestodian-rescue-docker.sh",
+      "scripts/e2e/crestodian-rescue-docker-client.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/docker-e2e-crestodian.test.ts",
+        "src/cli/run-main.test.ts",
+        "src/cli/run-main.exit.test.ts",
+        "src/crestodian/crestodian.test.ts",
+        "src/crestodian/operations.test.ts",
+        "src/crestodian/overview.test.ts",
+        "src/crestodian/audit.test.ts",
+        "src/crestodian/assistant.test.ts",
+        "src/crestodian/rescue-policy.test.ts",
+        "src/crestodian/rescue-message.test.ts",
       ],
     });
   });
