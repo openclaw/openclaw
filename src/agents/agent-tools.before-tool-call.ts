@@ -37,7 +37,7 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getGlobalHookRunner, getGlobalPluginRegistry } from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunner, getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -206,7 +206,7 @@ export type BeforeToolCallPolicyDiagnosticState = {
 
 /** Return whether before_tool_call hooks or trusted policies are active. */
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
-  const policyRegistry = getGlobalPluginRegistry() ?? undefined;
+  const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
     trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(policyRegistry),
@@ -1114,7 +1114,7 @@ export async function runBeforeToolCallHook(args: {
   const hookRunner = getGlobalHookRunner();
   try {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
-    const policyRegistry = getGlobalPluginRegistry() ?? undefined;
+    const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
     const initialCorePolicyResult = resolveSkillWorkshopToolApproval({

@@ -128,6 +128,43 @@ function composeLiveHookRegistry(
       claimOwner(hook.pluginId, index);
     }
   });
+  const policyOwnerSourceIndexByPluginId = new Map<string, number>();
+  const claimPolicyOwner = (pluginId: string, index: number) => {
+    if (!policyOwnerSourceIndexByPluginId.has(pluginId)) {
+      policyOwnerSourceIndexByPluginId.set(pluginId, index);
+    }
+  };
+  const trustedPolicyPluginIdsBySource = sources.map((registry) => {
+    const ids = new Set<string>();
+    for (const registration of registry.trustedToolPolicies ?? []) {
+      ids.add(registration.pluginId);
+    }
+    return ids;
+  });
+  sources.forEach((registry, index) => {
+    for (const plugin of registry.plugins) {
+      if (plugin.status === "loaded" && trustedPolicyPluginIdsBySource[index].has(plugin.id)) {
+        claimPolicyOwner(plugin.id, index);
+      }
+    }
+  });
+  sources.forEach((registry, index) => {
+    for (const plugin of registry.plugins) {
+      if (plugin.status === "loaded") {
+        claimPolicyOwner(plugin.id, index);
+      }
+    }
+  });
+  sources.forEach((registry, index) => {
+    for (const plugin of registry.plugins) {
+      claimPolicyOwner(plugin.id, index);
+    }
+  });
+  sources.forEach((registry, index) => {
+    for (const registration of registry.trustedToolPolicies ?? []) {
+      claimPolicyOwner(registration.pluginId, index);
+    }
+  });
   return {
     hooks: sources.flatMap((registry, index) =>
       registry.hooks.filter((hook) => ownerSourceIndexByPluginId.get(hook.pluginId) === index),
@@ -137,6 +174,11 @@ function composeLiveHookRegistry(
     ),
     plugins: sources.flatMap((registry, index) =>
       registry.plugins.filter((plugin) => ownerSourceIndexByPluginId.get(plugin.id) === index),
+    ),
+    trustedToolPolicies: sources.flatMap((registry, index) =>
+      (registry.trustedToolPolicies ?? []).filter(
+        (registration) => policyOwnerSourceIndexByPluginId.get(registration.pluginId) === index,
+      ),
     ),
   };
 }
@@ -155,6 +197,9 @@ function createComposedHookRegistryFacade(state: HookRunnerGlobalState): GlobalH
     },
     get plugins() {
       return composeLiveHookRegistry(state.registry).plugins;
+    },
+    get trustedToolPolicies() {
+      return composeLiveHookRegistry(state.registry).trustedToolPolicies;
     },
   };
 }
@@ -206,6 +251,15 @@ export function getGlobalHookRunner(): HookRunner | null {
  */
 export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
   return getState().registry;
+}
+
+/**
+ * Get the composed registry that backs global hook dispatch.
+ * Returns null if plugins haven't been loaded yet.
+ */
+export function getGlobalHookRunnerRegistry(): GlobalHookRunnerRegistry | null {
+  const state = getState();
+  return state.registry ? createComposedHookRegistryFacade(state) : null;
 }
 
 /**
