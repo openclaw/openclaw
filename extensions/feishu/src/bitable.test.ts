@@ -172,3 +172,55 @@ describe("feishu bitable create app cleanup", () => {
     expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("feishu bitable write tool schemas", () => {
+  // AWS Bedrock enforces strict JSON Schema draft 2020-12 and rejects empty
+  // sub-schemas (`{}`). `Type.Record(Type.String(), Type.Any())` previously
+  // serialized to `patternProperties: { "^.*$": {} }` with an empty value
+  // sub-schema (Type.Any() -> `{}`), which Bedrock rejects, failing the
+  // entire tool list. Verify the bitable write tools emit a non-empty value
+  // sub-schema for every record-typed parameter.
+  function recordValueSchema(parameters: unknown, paramKey: string): unknown {
+    const param = (parameters as { properties?: Record<string, unknown> }).properties?.[paramKey];
+    // Type.Optional(Type.Record(...)) wraps the record in anyOf; unwrap it.
+    const recordSchema = (param as { anyOf?: unknown[] })?.anyOf?.[0] ?? param;
+    return (recordSchema as { patternProperties?: { "^.*$"?: unknown } }).patternProperties?.["^.*$"];
+  }
+
+  it("create_record fields value schema is non-empty (no empty patternProperties sub-schema)", () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_record");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+
+    const valueSchema = recordValueSchema(parameters, "fields");
+    expect(valueSchema).not.toEqual({});
+    expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
+    // No empty sub-schema as the patternProperties value anywhere in the tool.
+    expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
+  });
+
+  it("update_record fields value schema is non-empty", () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_update_record");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+
+    const valueSchema = recordValueSchema(parameters, "fields");
+    expect(valueSchema).not.toEqual({});
+    expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
+    expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
+  });
+
+  it("create_field property value schema is non-empty", () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_field");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+
+    const valueSchema = recordValueSchema(parameters, "property");
+    expect(valueSchema).not.toEqual({});
+    expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
+    expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
+  });
+});

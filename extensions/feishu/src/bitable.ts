@@ -490,6 +490,23 @@ async function updateRecord(
 
 // ============ Schemas ============
 
+// Bitable field values are free-form by field type: text -> string, numbers ->
+// number, multi-select -> array, formula/lookup -> nested object, etc. We model
+// the value as a non-empty union rather than `Type.Any()` because `Type.Any()`
+// serializes to the empty schema `{}`, and `Type.Record(Type.String(), Type.Any())`
+// then produces `patternProperties: { "^.*$": {} }` with an empty sub-schema.
+// Strict JSON Schema (draft 2020-12) validators such as AWS Bedrock reject empty
+// sub-schemas, which fails the entire tool list. Every branch below serializes to
+// a non-empty schema (no bare `{}`).
+const BitableFieldValueSchema = Type.Union([
+  Type.String(),
+  Type.Number(),
+  Type.Boolean(),
+  Type.Null(),
+  Type.Array(Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()])),
+  Type.Object({}, { additionalProperties: true }),
+]);
+
 const GetMetaSchema = Type.Object({
   url: Type.String({
     description: "Bitable URL. Supports both formats: /base/XXX?table=YYY or /wiki/XXX?table=YYY",
@@ -530,7 +547,7 @@ const CreateRecordSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description:
       "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
   }),
@@ -560,7 +577,7 @@ const CreateFieldSchema = Type.Object({
     minimum: 1,
   }),
   property: Type.Optional(
-    Type.Record(Type.String(), Type.Any(), {
+    Type.Record(Type.String(), BitableFieldValueSchema, {
       description: "Field-specific properties (e.g., options for SingleSelect, format for Number)",
     }),
   ),
@@ -572,7 +589,7 @@ const UpdateRecordSchema = Type.Object({
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description: "Field values to update (same format as create_record)",
   }),
 });
