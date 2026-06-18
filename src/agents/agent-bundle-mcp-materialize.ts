@@ -1,9 +1,13 @@
 /** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { mediaKindFromMime, maxBytesForKind } from "@openclaw/media-core/constants";
+import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { resolveOutboundAttachmentFromBuffer } from "../media/outbound-attachment.js";
 import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   buildSafeToolName,
@@ -17,10 +21,105 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { registerHostOwnedMcpMediaPath } from "./mcp-tool-result-media.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ToolResultContentBlock = AgentToolResult<unknown>["content"][number];
+type McpRelayMediaAttachment = {
+  type: "image" | "audio" | "resource";
+  mediaUrl: string;
+  mimeType?: string;
+  uri?: string;
+};
+type McpRelayMedia = {
+  source: "mcp";
+  hostOwned: true;
+  attachments: McpRelayMediaAttachment[];
+};
+type McpContentBlockMaterialization = {
+  content: ToolResultContentBlock;
+  attachments: McpRelayMediaAttachment[];
+};
+
+function decodeBoundedBase64Data(data: string, maxBytes: number): Buffer | undefined {
+  const estimatedBytes = estimateBase64DecodedBytes(data);
+  if (estimatedBytes === 0) {
+    return undefined;
+  }
+  if (estimatedBytes > maxBytes) {
+    throw new Error(`MCP content too large: ${estimatedBytes} bytes (limit: ${maxBytes} bytes)`);
+  }
+  const canonicalBase64 = canonicalizeBase64(data);
+  if (!canonicalBase64) {
+    throw new Error("MCP content has invalid base64 data");
+  }
+  const buffer = Buffer.from(canonicalBase64, "base64");
+  if (buffer.byteLength > maxBytes) {
+    throw new Error(`MCP content too large: ${buffer.byteLength} bytes (limit: ${maxBytes} bytes)`);
+  }
+  return buffer;
+}
+
+function maxBytesForMime(mimeType: string | undefined): number {
+  const kind = mediaKindFromMime(mimeType) ?? "document";
+  return maxBytesForKind(kind);
+}
+
+function mcpAttachmentFileName(params: {
+  serverName: string;
+  toolName: string;
+  index: number;
+  mimeType?: string;
+}): string {
+  const ext = extensionForMime(params.mimeType);
+  return `${params.serverName}-${params.toolName}-${params.index}${ext ?? ""}`.replace(
+    /[^a-zA-Z0-9._-]+/g,
+    "-",
+  );
+}
+
+async function stageMcpBinaryAttachment(params: {
+  serverName: string;
+  toolName: string;
+  index: number;
+  type: McpRelayMediaAttachment["type"];
+  data: string;
+  mimeType?: string;
+  uri?: string;
+}): Promise<McpRelayMediaAttachment | undefined> {
+  const mimeType = normalizeMimeType(params.mimeType);
+  const maxBytes = maxBytesForMime(mimeType);
+  try {
+    const buffer = decodeBoundedBase64Data(params.data, maxBytes);
+    if (!buffer) {
+      return undefined;
+    }
+    const staged = await resolveOutboundAttachmentFromBuffer(buffer, maxBytes, {
+      ...(mimeType ? { contentType: mimeType } : {}),
+      filename: mcpAttachmentFileName({
+        serverName: params.serverName,
+        toolName: params.toolName,
+        index: params.index,
+        mimeType,
+      }),
+    });
+    registerHostOwnedMcpMediaPath(staged.path);
+    return {
+      type: params.type,
+      mediaUrl: staged.path,
+      ...((staged.contentType ?? mimeType) ? { mimeType: staged.contentType ?? mimeType } : {}),
+      ...(params.uri ? { uri: params.uri } : {}),
+    };
+  } catch (error) {
+    logWarn(
+      `bundle-mcp: could not stage ${params.type} content from ${params.serverName}/${params.toolName}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return undefined;
+  }
+}
 
 // AgentToolResult only carries text/image, but an MCP CallToolResult can also
 // return resource_link, resource, and audio blocks (MCP SDK ContentBlock union).
@@ -28,42 +127,113 @@ type ToolResultContentBlock = AgentToolResult<unknown>["content"][number];
 // downstream provider converters never build an image block with undefined
 // data/media_type, which makes Anthropic 400 and poisons the whole session
 // history (every later turn replays the bad block and 400s too). See #90710.
-function mcpContentBlockToToolResult(block: ContentBlock): ToolResultContentBlock {
+async function mcpContentBlockToToolResult(params: {
+  serverName: string;
+  toolName: string;
+  block: ContentBlock;
+  index: number;
+}): Promise<McpContentBlockMaterialization> {
+  const { block } = params;
+  const attachments: McpRelayMediaAttachment[] = [];
   switch (block.type) {
     case "text":
-      return { type: "text", text: block.text };
+      return { content: { type: "text", text: block.text }, attachments };
     case "image":
       // Only emit an image when the base64 source is actually present.
       if (block.data && block.mimeType) {
-        return { type: "image", data: block.data, mimeType: block.mimeType };
+        const attachment = await stageMcpBinaryAttachment({
+          serverName: params.serverName,
+          toolName: params.toolName,
+          index: params.index,
+          type: "image",
+          data: block.data,
+          mimeType: block.mimeType,
+        });
+        if (attachment) {
+          attachments.push(attachment);
+        }
+        return {
+          content: { type: "image", data: block.data, mimeType: block.mimeType },
+          attachments,
+        };
       }
-      return { type: "text", text: JSON.stringify(block) };
-    case "audio":
-      return { type: "text", text: `[audio ${block.mimeType}]` };
+      return { content: { type: "text", text: JSON.stringify(block) }, attachments };
+    case "audio": {
+      const attachment = block.data
+        ? await stageMcpBinaryAttachment({
+            serverName: params.serverName,
+            toolName: params.toolName,
+            index: params.index,
+            type: "audio",
+            data: block.data,
+            mimeType: block.mimeType,
+          })
+        : undefined;
+      if (attachment) {
+        attachments.push(attachment);
+      }
+      return { content: { type: "text", text: `[audio ${block.mimeType}]` }, attachments };
+    }
     case "resource_link": {
       const label = block.title ?? block.name;
-      return { type: "text", text: label ? `[${label}] ${block.uri}` : block.uri };
+      return {
+        content: { type: "text", text: label ? `[${label}] ${block.uri}` : block.uri },
+        attachments,
+      };
     }
     case "resource": {
       const resource = block.resource;
       const text = "text" in resource ? resource.text : undefined;
-      return { type: "text", text: text ?? resource.uri };
+      if ("blob" in resource && typeof resource.blob === "string") {
+        const mimeType =
+          "mimeType" in resource && typeof resource.mimeType === "string"
+            ? resource.mimeType
+            : undefined;
+        const attachment = await stageMcpBinaryAttachment({
+          serverName: params.serverName,
+          toolName: params.toolName,
+          index: params.index,
+          type: "resource",
+          data: resource.blob,
+          mimeType,
+          uri: resource.uri,
+        });
+        if (attachment) {
+          attachments.push(attachment);
+        }
+      }
+      return { content: { type: "text", text: text ?? resource.uri }, attachments };
     }
     default:
       // Forward-compat / untrusted-server guard: stringify any block type the
       // installed MCP SDK union does not cover instead of dropping it.
-      return { type: "text", text: JSON.stringify(block) };
+      return { content: { type: "text", text: JSON.stringify(block) }, attachments };
   }
 }
 
-function toAgentToolResult(params: {
+async function toAgentToolResult(params: {
   serverName: string;
   toolName: string;
   result: CallToolResult;
-}): AgentToolResult<unknown> {
-  const content: AgentToolResult<unknown>["content"] = Array.isArray(params.result.content)
-    ? params.result.content.map(mcpContentBlockToToolResult)
+}): Promise<AgentToolResult<unknown>> {
+  const materializedBlocks: McpContentBlockMaterialization[] = Array.isArray(params.result.content)
+    ? await Promise.all(
+        params.result.content.map((block, index) =>
+          mcpContentBlockToToolResult({
+            serverName: params.serverName,
+            toolName: params.toolName,
+            block,
+            index,
+          }),
+        ),
+      )
     : [];
+  const content: AgentToolResult<unknown>["content"] = materializedBlocks.map(
+    (block) => block.content,
+  );
+  const mediaAttachments: McpRelayMediaAttachment[] = materializedBlocks.flatMap(
+    (block) => block.attachments,
+  );
   const structuredContentBlock =
     params.result.structuredContent !== undefined
       ? ({
@@ -97,6 +267,13 @@ function toAgentToolResult(params: {
   };
   if (params.result.structuredContent !== undefined) {
     details.structuredContent = params.result.structuredContent;
+  }
+  if (mediaAttachments.length > 0) {
+    details.media = {
+      source: "mcp",
+      hostOwned: true,
+      attachments: mediaAttachments,
+    } satisfies McpRelayMedia;
   }
   if (params.result.isError === true) {
     details.status = "error";
@@ -404,7 +581,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      return toAgentToolResult({
+      return await toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
