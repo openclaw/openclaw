@@ -65,6 +65,7 @@ describe("session accessor boundary guard", () => {
         "src/agents/command/session-store.ts",
         "src/agents/embedded-agent-runner/run.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/agents/main-session-restart-recovery.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
         "src/auto-reply/reply/agent-runner-execution.ts",

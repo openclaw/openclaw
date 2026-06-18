@@ -146,31 +146,6 @@ export function findPendingApproval(
 }
 
 /**
- * Check if there's already a pending approval for the same ship/channel/group combo.
- * Used to avoid sending duplicate notifications.
- */
-export function hasDuplicatePending(
-  pendingApprovals: PendingApproval[],
-  type: ApprovalType,
-  requestingShip: string,
-  channelNest?: string,
-  groupFlag?: string,
-): boolean {
-  return pendingApprovals.some((approval) => {
-    if (approval.type !== type || approval.requestingShip !== requestingShip) {
-      return false;
-    }
-    if (type === "channel" && approval.channelNest !== channelNest) {
-      return false;
-    }
-    if (type === "group" && approval.groupFlag !== groupFlag) {
-      return false;
-    }
-    return true;
-  });
-}
-
-/**
  * Remove a pending approval from the list by ID.
  */
 export function removePendingApproval(

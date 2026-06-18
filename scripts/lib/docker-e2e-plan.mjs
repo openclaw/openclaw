@@ -28,6 +28,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:gemini": 4,
   "live:opencode": 4,
   "live:openai": 1,
+  "live:telegram": 1,
   npm: 5,
   service: 7,
 };
@@ -350,6 +351,9 @@ function laneCredentialRequirements(poolLane) {
   }
   if (resources.includes("live:opencode")) {
     credentials.push("opencode");
+  }
+  if (resources.includes("live:telegram")) {
+    credentials.push("telegram");
   }
   return credentials;
 }

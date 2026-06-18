@@ -14,6 +14,7 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
+import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -284,6 +285,27 @@ export type SessionEntryPatchOptions = {
 export type SessionEntryPatchContext = {
   /** Present when the patched entry already existed before fallback synthesis. */
   existingEntry?: SessionEntry;
+};
+
+export type RestartRecoveryLifecycleEntry = {
+  /** Exact persisted key for the restart recovery candidate row. */
+  sessionKey: string;
+  /** Detached entry snapshot; mutating it does not persist unless returned as a replacement. */
+  entry: SessionEntry;
+};
+
+export type RestartRecoveryLifecycleReplacement = {
+  /** Exact persisted key to replace. Missing keys are ignored. */
+  sessionKey: string;
+  /** Full replacement row to persist for this restart recovery lifecycle step. */
+  entry: SessionEntry;
+};
+
+export type RestartRecoveryLifecycleUpdate<T> = {
+  /** Caller-owned result returned after replacements are persisted. */
+  result: T;
+  /** Exact rows to replace inside the storage transaction. */
+  replacements?: Iterable<RestartRecoveryLifecycleReplacement>;
 };
 
 export type SessionEntryCreateWithTranscriptContext = {
@@ -587,6 +609,46 @@ export async function applySessionPatchProjection<
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
   return await applyFileSessionEntryPatchProjection(params);
+}
+
+/**
+ * Applies restart-recovery lifecycle replacements without exposing the backing
+ * store shape. The file backend runs selection and replacement under one writer
+ * lock; the SQLite backend can map the same callback to a transaction.
+ */
+export async function applyRestartRecoveryLifecycle<T>(params: {
+  storePath: string;
+  update: (
+    entries: RestartRecoveryLifecycleEntry[],
+  ) => Promise<RestartRecoveryLifecycleUpdate<T>> | RestartRecoveryLifecycleUpdate<T>;
+  requireWriteSuccess?: boolean;
+  skipMaintenance?: boolean;
+}): Promise<T> {
+  const writerResult = await updateSessionStore(
+    params.storePath,
+    async (store) => {
+      const entries = Object.entries(store).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry: structuredClone(entry),
+      }));
+      const operation = await params.update(entries);
+      let changed = false;
+      for (const replacement of operation.replacements ?? []) {
+        if (!Object.hasOwn(store, replacement.sessionKey)) {
+          continue;
+        }
+        store[replacement.sessionKey] = structuredClone(replacement.entry);
+        changed = true;
+      }
+      return { changed, result: operation.result };
+    },
+    {
+      requireWriteSuccess: params.requireWriteSuccess,
+      skipMaintenance: params.skipMaintenance ?? true,
+      skipSaveWhenResult: (result) => !result.changed,
+    },
+  );
+  return writerResult.result;
 }
 
 /** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */
@@ -913,34 +975,6 @@ function classifyGeneratedTranscriptCandidate(
     return "custom";
   }
   return transcriptSessionId === sessionId ? "current" : "stale";
-}
-
-function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
-  const trimmed = sessionFile?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const base = path.basename(trimmed);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const withoutExt = base.slice(0, -".jsonl".length);
-  const topicIndex = withoutExt.indexOf("-topic-");
-  if (topicIndex > 0) {
-    const topicSessionId = withoutExt.slice(0, topicIndex);
-    return looksLikeGeneratedSessionId(topicSessionId) ? topicSessionId : undefined;
-  }
-  const forkMatch = withoutExt.match(
-    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
-  );
-  if (forkMatch?.[2]) {
-    return looksLikeGeneratedSessionId(forkMatch[2]) ? forkMatch[2] : undefined;
-  }
-  return looksLikeGeneratedSessionId(withoutExt) ? withoutExt : undefined;
-}
-
-function looksLikeGeneratedSessionId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 /**

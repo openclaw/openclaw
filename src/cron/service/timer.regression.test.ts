@@ -550,6 +550,49 @@ describe("cron service timer regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
+  it("retries recurring jobs after isolated setup timeouts before the next scheduled slot", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-06-08T13:00:00.000Z");
+    const everySixHoursMs = 6 * 60 * 60 * 1_000;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-setup-timeout-retry",
+      name: "ShadowTrader Auto Channel Bug Monitor",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: everySixHoursMs, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "monitor bugs" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    const now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValueOnce({
+      status: "error",
+      error: "cron: isolated agent setup timed out before runner start",
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["timeout"] },
+      },
+    });
+
+    await onTimer(state);
+    const jobAfterRetry = requireJob(state, "recurring-setup-timeout-retry");
+    expect(jobAfterRetry.enabled).toBe(true);
+    expect(jobAfterRetry.state.lastStatus).toBe("error");
+    expect(jobAfterRetry.state.lastError).toContain("setup timed out before runner start");
+    expect(jobAfterRetry.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+    expect(jobAfterRetry.state.nextRunAtMs).toBeLessThan(scheduledAt + everySixHoursMs);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the normal recurring schedule after transient retry attempts are exhausted", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");

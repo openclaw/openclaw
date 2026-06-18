@@ -68,6 +68,34 @@ type SpawnFn = (
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
 ) => BridgeProcess;
 
+function terminateBridgeProcess(proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (proc.killed && signal !== "SIGKILL") {
+    return;
+  }
+  let exited = false;
+  proc.on("exit", () => {
+    exited = true;
+  });
+  try {
+    proc.kill(signal);
+  } catch {
+    return;
+  }
+  if (signal === "SIGKILL") {
+    return;
+  }
+  const timer = setTimeout(() => {
+    if (!exited) {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // Process may have exited after the grace check.
+      }
+    }
+  }, 1000);
+  timer.unref?.();
+}
+
 export type ChromeRealtimeAudioBridgeHandle = {
   providerId: string;
   inputCommand: string[];
@@ -549,34 +577,6 @@ export async function startCommandAgentAudioBridge(params: {
     }),
   );
 
-  const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
-    if (proc.killed && signal !== "SIGKILL") {
-      return;
-    }
-    let exited = false;
-    proc.on("exit", () => {
-      exited = true;
-    });
-    try {
-      proc.kill(signal);
-    } catch {
-      return;
-    }
-    if (signal === "SIGKILL") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!exited) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Process may have exited after the grace check.
-        }
-      }
-    }, 1000);
-    timer.unref?.();
-  };
-
   const stop = async () => {
     if (stopped) {
       return;
@@ -595,8 +595,8 @@ export async function startCommandAgentAudioBridge(params: {
       final: true,
       payload: { meetingSessionId: params.meetingSessionId },
     });
-    terminateProcess(inputProcess);
-    terminateProcess(outputProcess);
+    terminateBridgeProcess(inputProcess);
+    terminateBridgeProcess(outputProcess);
   };
 
   const fail = (label: string) => (error: Error) => {
@@ -876,34 +876,6 @@ export async function startCommandRealtimeAudioBridge(params: {
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
   };
 
-  const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
-    if (proc.killed && signal !== "SIGKILL") {
-      return;
-    }
-    let exited = false;
-    proc.on("exit", () => {
-      exited = true;
-    });
-    try {
-      proc.kill(signal);
-    } catch {
-      return;
-    }
-    if (signal === "SIGKILL") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!exited) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Process may have exited after the grace check.
-        }
-      }
-    }, 1000);
-    timer.unref?.();
-  };
-
   const stop = async () => {
     if (stopped) {
       return;
@@ -917,10 +889,10 @@ export async function startCommandRealtimeAudioBridge(params: {
         `[google-meet] realtime voice bridge close ignored: ${formatErrorMessage(error)}`,
       );
     }
-    terminateProcess(inputProcess);
-    terminateProcess(outputProcess);
+    terminateBridgeProcess(inputProcess);
+    terminateBridgeProcess(outputProcess);
     if (bargeInInputProcess) {
-      terminateProcess(bargeInInputProcess);
+      terminateBridgeProcess(bargeInInputProcess);
     }
   };
 
@@ -970,7 +942,7 @@ export async function startCommandRealtimeAudioBridge(params: {
     params.logger.debug?.(
       `[google-meet] cleared realtime audio output buffer by restarting playback command`,
     );
-    terminateProcess(previousOutput, "SIGKILL");
+    terminateBridgeProcess(previousOutput, "SIGKILL");
   };
   const writeOutputAudio = (audio: Buffer) => {
     try {
