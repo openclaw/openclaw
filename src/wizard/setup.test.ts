@@ -1063,6 +1063,44 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("does not pin an inherited workspace when recovering the configured default agent", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            workspace: "/tmp/main-workspace",
+          },
+          list: [{ id: "ops", default: true }],
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+
+    const readinessConfig = getMockCallArg(hasRunnableLocalAgent, 0, 0, "default agent readiness");
+    const agents = requireRecord(
+      requireRecord(readinessConfig, "default agent readiness").agents,
+      "default agent readiness agents",
+    );
+    const list = agents.list as Array<Record<string, unknown>>;
+    expect(requireRecord(agents.defaults, "default agent readiness defaults").workspace).toBe(
+      "/tmp/main-workspace",
+    );
+    expect(list.find((entry) => entry.id === "ops")).not.toHaveProperty("workspace");
+    vi.clearAllMocks();
+  });
+
   it("applies a custom provider model only to the selected secondary agent", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",

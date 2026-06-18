@@ -691,7 +691,12 @@ export async function runSetupWizard(
     let localConfig = applyLocalSetupWorkspaceConfig(
       config,
       workspaceDir,
-      setupAgentId ? { agentId: setupAgentId } : undefined,
+      setupAgentId
+        ? {
+            agentId: setupAgentId,
+            preserveInheritedAgentWorkspace: flow === "quickstart" && opts.workspace === undefined,
+          }
+        : undefined,
     );
     if (opts.skipBootstrap) {
       localConfig = applySkipBootstrapConfig(localConfig);

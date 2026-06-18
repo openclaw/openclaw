@@ -91,4 +91,28 @@ describe("applyLocalSetupWorkspaceConfig", () => {
       "/tmp/ops-workspace",
     );
   });
+
+  it("preserves an inherited selected-agent workspace during recovery", () => {
+    const baseConfig: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/tmp/main-workspace" },
+        list: [{ id: "ops", default: true }],
+      },
+    };
+    const recoveryOptions = {
+      agentId: "ops",
+      preserveInheritedAgentWorkspace: true,
+    };
+
+    const result = applyLocalSetupWorkspaceConfig(
+      baseConfig,
+      "/tmp/main-workspace",
+      recoveryOptions,
+    );
+
+    expect(result.agents?.defaults?.workspace).toBe("/tmp/main-workspace");
+    expect(result.agents?.list?.find((entry) => entry.id === "ops")).not.toHaveProperty(
+      "workspace",
+    );
+  });
 });

@@ -20,6 +20,7 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   readGatewayProcessArgsSync,
 } from "../infra/gateway-processes.js";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { spawnWithFallback } from "../process/spawn-utils.js";
@@ -250,47 +251,52 @@ async function probeVerifiedExistingGateway(params: {
     return false;
   }
   // Do not let cached device credentials prove a listener that rejects the
-  // active config's shared secret. The synthetic state path is never created.
-  const env = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: path.join(os.tmpdir(), `openclaw-setup-gateway-probe-${randomUUID()}`),
-  };
-  const expected = await probeGateway({
-    url: params.url,
-    auth: params.auth,
-    timeoutMs: 1500,
-    detailLevel: "full",
-    env,
-  });
-  if (
-    !expected.ok ||
-    !snapshotMatchesGatewaySettings({
-      configSnapshot: expected.configSnapshot,
-      config: params.config,
-      settings: params.settings,
-    })
-  ) {
-    return false;
-  }
-  if (!listenerStillOwnsPort()) {
-    return false;
-  }
-  if (!invalidAuth) {
-    return true;
-  }
-  if (!listenerStillOwnsPort()) {
-    return false;
-  }
-  const invalid = await probeGateway({
-    url: params.url,
-    auth: invalidAuth,
-    timeoutMs: 1500,
-    detailLevel: "none",
-    env,
-  });
-  return (
-    listenerStillOwnsPort() &&
-    invalidAuthProbeProvesEnforcement({ settings: params.settings, probe: invalid })
+  // active config's shared secret.
+  return await withTempWorkspace(
+    { rootDir: os.tmpdir(), prefix: "openclaw-setup-gateway-probe-" },
+    async (stateWorkspace) => {
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateWorkspace.dir,
+      };
+      const expected = await probeGateway({
+        url: params.url,
+        auth: params.auth,
+        timeoutMs: 1500,
+        detailLevel: "full",
+        env,
+      });
+      if (
+        !expected.ok ||
+        !snapshotMatchesGatewaySettings({
+          configSnapshot: expected.configSnapshot,
+          config: params.config,
+          settings: params.settings,
+        })
+      ) {
+        return false;
+      }
+      if (!listenerStillOwnsPort()) {
+        return false;
+      }
+      if (!invalidAuth) {
+        return true;
+      }
+      if (!listenerStillOwnsPort()) {
+        return false;
+      }
+      const invalid = await probeGateway({
+        url: params.url,
+        auth: invalidAuth,
+        timeoutMs: 1500,
+        detailLevel: "none",
+        env,
+      });
+      return (
+        listenerStillOwnsPort() &&
+        invalidAuthProbeProvesEnforcement({ settings: params.settings, probe: invalid })
+      );
+    },
   );
 }
 
