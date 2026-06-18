@@ -5,6 +5,7 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+  materializePluginAutoEnableCandidates: vi.fn(),
   collectActiveToolSchemaProjectionWarnings: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
 }));
 
 vi.mock("../doctor-plugin-registry.js", () => ({
@@ -212,6 +214,12 @@ describe("doctor repair sequencing", () => {
       config: params.config,
       changes: [],
     }));
+    mocks.materializePluginAutoEnableCandidates.mockImplementation(
+      (params: { config: OpenClawConfig }) => ({
+        config: params.config,
+        changes: [],
+      }),
+    );
     mocks.ensureAuthProfileStore.mockReturnValue({
       profiles: {},
       usageStats: {},
@@ -565,6 +573,50 @@ describe("doctor repair sequencing", () => {
     expect(result.changeNotes).toStrictEqual([
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
       "brave web search provider selected, enabled automatically.",
+    ]);
+  });
+
+  it("explicitly enables plugins repaired from env-only configuration", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ['Installed missing configured plugin "exa" from @openclaw/exa-plugin.'],
+      warnings: [],
+      repairedPluginIds: ["exa"],
+    });
+    mocks.materializePluginAutoEnableCandidates.mockImplementationOnce(
+      (params: { config: OpenClawConfig }) => ({
+        config: {
+          ...params.config,
+          plugins: {
+            ...params.config.plugins,
+            entries: {
+              ...params.config.plugins?.entries,
+              exa: { enabled: true },
+            },
+          },
+        },
+        changes: ["exa installed for existing configuration, enabled automatically."],
+      }),
+    );
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.materializePluginAutoEnableCandidates).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+      candidates: [{ pluginId: "exa", kind: "configured-plugin-repaired" }],
+    });
+    expect(result.state.candidate.plugins?.entries?.exa).toEqual({ enabled: true });
+    expect(result.changeNotes).toStrictEqual([
+      'Installed missing configured plugin "exa" from @openclaw/exa-plugin.',
+      "exa installed for existing configuration, enabled automatically.",
     ]);
   });
 

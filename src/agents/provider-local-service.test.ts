@@ -6,6 +6,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
@@ -301,6 +302,8 @@ describe("provider local service", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-restart-"));
     const startsPath = path.join(tempDir, "starts.txt");
     const statusPath = path.join(tempDir, "status.txt");
+    const forkedPidPath = path.join(tempDir, "forked.pid");
+    let firstForkedPid: number | undefined;
     const model = attachModelProviderLocalService(
       {
         id: "demo",
@@ -312,7 +315,9 @@ describe("provider local service", () => {
         command: process.execPath,
         args: [
           "-e",
-          `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(${JSON.stringify(
+          `const fs=require("node:fs");const http=require("node:http");const {spawn}=require("node:child_process");const fork=spawn(process.execPath,["-e","setInterval(() => {}, 1000)"],{stdio:"ignore"});fs.writeFileSync(${JSON.stringify(
+            forkedPidPath,
+          )},String(fork.pid));fs.appendFileSync(${JSON.stringify(
             startsPath,
           )},"start\\n");fs.writeFileSync(${JSON.stringify(
             statusPath,
@@ -330,6 +335,7 @@ describe("provider local service", () => {
       const firstLease = await ensureModelProviderLocalService(model);
       firstLease?.release();
       expect((await fetch(healthUrl)).ok).toBe(true);
+      firstForkedPid = await readPidFile(forkedPidPath);
 
       await fs.writeFile(statusPath, "down", "utf8");
       expect((await fetch(healthUrl)).status).toBe(503);
@@ -339,11 +345,13 @@ describe("provider local service", () => {
         throw new Error("Expected restarted provider local service lease");
       }
       expect((await fetch(healthUrl)).ok).toBe(true);
+      expect(await waitForPidToExit(firstForkedPid)).toBe(true);
       secondLease.release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(2);
     } finally {
+      killPidIfAlive(firstForkedPid);
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });

@@ -105,9 +105,7 @@ const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as Mo
 const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
-const renderGatewayServiceCleanupHints = vi
-  .fn()
-  .mockReturnValue(["cleanup"]) as unknown as MockFn;
+const renderGatewayServiceCleanupHints = vi.fn().mockReturnValue(["cleanup"]) as unknown as MockFn;
 const auditGatewayServiceConfig = vi
   .fn()
   .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
@@ -223,6 +221,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     pluginInstallIndex: {
       sourcePath: "/tmp/state/plugins/installs.json",
+      hasLegacy: false,
+    },
+    debugProxyCaptureSidecar: {
+      sourcePath: "/tmp/state/debug-proxy/capture.sqlite",
+      blobDir: "/tmp/state/debug-proxy/blobs",
       hasLegacy: false,
     },
     stateSchema: {

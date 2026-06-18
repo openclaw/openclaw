@@ -780,6 +780,41 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, "node --version");
   });
 
+  it("bootstraps Bun for raw AWS macOS bun commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "bun", "--version"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("bun_version=1.3.14");
+    expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
+    expect(remoteCommand).toContain(
+      'npm install --global --prefix "$bun_root" "bun@${bun_version}"',
+    );
+    expect(remoteCommand).toContain("bun --version >&2 || return 1");
+    expect(remoteCommand).not.toContain("corepack enable");
+    expectGroupedShellCommand(remoteCommand, "bun --version");
+  });
+
+  it("bootstraps Bun for raw AWS macOS env-prefixed bun commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "env", "-i", "bun", "--version"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("bun --version >&2 || return 1");
+    expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -i bun --version");
+  });
+
   it("bootstraps Corepack for raw AWS macOS pnpm commands", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -791,7 +826,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain(
-      "bootstrapping a pinned user-local Node toolchain before the command",
+      "bootstrapping pinned user-local JavaScript tooling before the command",
     );
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
@@ -1178,7 +1213,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args).not.toContain("--script-stdin");
     expect(output.args).toContain("--script");
     expect(result.stderr).toContain(
-      "bootstrapping a pinned user-local Node toolchain before the command",
+      "bootstrapping pinned user-local JavaScript tooling before the command",
     );
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.scriptContent).toContain('if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR"');
@@ -1208,6 +1243,24 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.scriptContent).toContain('chmod 700 "$tmp_script" || exit $?');
     expect(output.scriptContent).toContain('"$tmp_script" "$@"');
     expect(output.args.at(-1)).toBe("arg1");
+  });
+
+  it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
+    const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.scriptContent).toContain("bun_version=1.3.14");
+    expect(output.scriptContent).toContain(
+      'npm install --global --prefix "$bun_root" "bun@${bun_version}"',
+    );
+    expect(output.scriptContent).toContain("bun --version >&2 || return 1");
+    expect(output.scriptContent).not.toContain("corepack enable");
   });
 
   it("does not treat run option values as AWS macOS script-stdin flags", () => {

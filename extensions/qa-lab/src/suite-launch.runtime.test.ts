@@ -74,7 +74,7 @@ describe("qa suite runtime launcher", () => {
     runQaTestFileScenarios.mockImplementation(
       async (params: {
         outputDir: string;
-        scenarios: Array<{ id: string; execution: { kind: "vitest" | "playwright" } }>;
+        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
       }) => {
         const [scenario] = params.scenarios;
         if (!scenario) {

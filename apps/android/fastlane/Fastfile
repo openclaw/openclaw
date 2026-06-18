@@ -6,6 +6,7 @@ require "supply/client"
 
 default_platform(:android)
 
+ANDROID_FASTLANE_ROOT = File.expand_path(__dir__, Dir.pwd)
 DEFAULT_PLAY_PACKAGE_NAME = "ai.openclaw.app"
 DEFAULT_PLAY_TRACK = "internal"
 DEFAULT_PLAY_RELEASE_STATUS = "completed"
@@ -35,7 +36,7 @@ def env_present?(value)
 end
 
 def android_root
-  File.expand_path("..", __dir__)
+  File.expand_path("..", ANDROID_FASTLANE_ROOT)
 end
 
 def repo_root
@@ -147,7 +148,7 @@ def sync_android_versioning!
 end
 
 def android_release_notes_path
-  File.join(__dir__, "metadata", "android", "en-US", "release_notes.txt")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "release_notes.txt")
 end
 
 def validate_android_release_notes!
@@ -157,7 +158,7 @@ def validate_android_release_notes!
 end
 
 def android_changelog_path(version_code)
-  File.join(__dir__, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
 end
 
 def sync_android_changelog!(version_code)
@@ -170,7 +171,7 @@ def sync_android_changelog!(version_code)
 end
 
 def play_metadata_path
-  File.join(__dir__, "metadata", "android")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
 end
 
 def play_screenshot_paths
@@ -303,7 +304,7 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
   )
 end
 
-load_env_file(File.join(__dir__, ".env"))
+load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))
 
 platform :android do
   desc "Validate Google Play API credentials"

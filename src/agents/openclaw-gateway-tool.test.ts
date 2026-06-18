@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -183,6 +183,118 @@ describe("gateway tool", () => {
     for (const action of ["restart", "config.get", "config.patch", "config.apply"]) {
       expect(values.has(action)).toBe(true);
     }
+  });
+
+  it("scopes config.get output to the requested path and keeps metadata compact", async () => {
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call-config-get", {
+      action: "config.get",
+      path: "tools.exec",
+    });
+
+    expect(result.details).toEqual({ ok: true });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ok: true,
+            result: {
+              hash: "hash-1",
+              path: "tools.exec",
+              config: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
+  });
+
+  it("rejects config.get paths that do not exist", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-missing-config-path", {
+        action: "config.get",
+        path: "tools.missing",
+      }),
+    ).rejects.toThrow("config path not found: tools.missing");
+  });
+
+  it("rejects config.get paths with no segments", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-empty-config-path", {
+        action: "config.get",
+        path: "...",
+      }),
+    ).rejects.toThrow("config path not found: ...");
+  });
+
+  it("rejects config.get paths that resolve through the prototype chain", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-inherited-config-path", {
+        action: "config.get",
+        path: "constructor.prototype",
+      }),
+    ).rejects.toThrow("config path not found: constructor.prototype");
+  });
+
+  it("reads config.get paths with bracketed array indexes", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      config: {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+      },
+    });
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call-indexed-config-path", {
+      action: "config.get",
+      path: "agents.list[0].id",
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ok: true,
+            result: {
+              path: "agents.list[0].id",
+              config: "ops",
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ]);
+  });
+
+  it("requires a narrower config.get path for oversized output", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      config: { oversized: "x".repeat(100_000) },
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-large-config", {
+        action: "config.get",
+      }),
+    ).rejects.toThrow(
+      "config.get response is too large; use path to request a narrower config subtree",
+    );
   });
 
   it("schedules SIGUSR1 restart", async () => {
@@ -395,15 +507,13 @@ describe("gateway tool", () => {
   it("distinguishes explicit terminal array consent from indexed consent", () => {
     expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
     expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[0]");
-    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe(
-      "agents.list[].skills",
-    );
+    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe("agents.list[].skills");
     expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[]"))).toBe(
       "bindings",
     );
-    expect(
-      normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]")),
-    ).toBe("bindings[0]");
+    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]"))).toBe(
+      "bindings[0]",
+    );
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {

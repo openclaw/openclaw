@@ -39,7 +39,3 @@ export function resolveSplitChannelExtensionShard(root) {
     (spec) => bundledPluginRoot(spec.id) === normalizedRoot,
   );
 }
-
-export function isSplitChannelExtensionRoot(root) {
-  return Boolean(resolveSplitChannelExtensionShard(root));
-}

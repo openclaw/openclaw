@@ -1,12 +1,12 @@
 // OAuth TLS preflight tests cover timeout handling, TLS diagnostics, and suggested fixes.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../test-utils/env.js";
 import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
   shouldRunOpenAIOAuthTlsPrerequisites,
-} from "./oauth-tls-preflight.js";
+} from "../plugins/provider-openai-chatgpt-oauth-tls.js";
+import { withEnv } from "../test-utils/env.js";
 
 describe("runOpenAIOAuthTlsPreflight", () => {
   beforeEach(() => {

@@ -8,8 +8,10 @@ import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecSecurity,
+  maxAsk,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -129,6 +131,7 @@ export async function executeNodeHostCommand(
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv,
+    allowAlwaysPersistence,
   } = approvalAnalysis;
   // Detect autonomous sessions (cron jobs, subagents) for issue #94599.
   // These sessions shouldn't require repeated manual approval for explicitly
@@ -136,6 +139,18 @@ export async function executeNodeHostCommand(
   const autonomousSession =
     isCronSessionKey(prepared.sessionKey) || isSubagentSessionKey(prepared.sessionKey);
 
+  const approvalDecisionAsk =
+    nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
+  const allowedDecisions = resolveExecApprovalAllowedDecisions({
+    ask: approvalDecisionAsk,
+    allowAlwaysPersistence,
+  });
+  const unavailableDecisions = resolveExecApprovalUnavailableDecisions({
+    ask: approvalDecisionAsk,
+    allowAlwaysPersistence,
+  });
+  const unavailableDecisionRequestParams =
+    unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -165,6 +180,7 @@ export async function executeNodeHostCommand(
       nodeId: target.nodeId,
       security: hostSecurity,
       ask: hostAsk,
+      ...unavailableDecisionRequestParams,
       commandHighlighting: params.commandHighlighting,
       ...buildExecApprovalRequesterContext({
         agentId: prepared.agentId,
@@ -444,7 +460,7 @@ export async function executeNodeHostCommand(
           initiatingSurface,
           sentApproverDms,
           unavailableReason,
-          allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+          allowedDecisions,
           nodeId: target.nodeId,
         });
       }

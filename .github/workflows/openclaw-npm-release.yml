@@ -87,7 +87,7 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
@@ -354,7 +354,7 @@ jobs:
           node --import tsx scripts/openclaw-npm-prepublish-verify.ts "$TARBALL_PATH" "$PACKAGE_VERSION"
 
       - name: Upload dependency release evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
@@ -362,14 +362,14 @@ jobs:
 
       - name: Upload dependency release evidence tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
 
       - name: Upload prepared npm publish bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
@@ -377,7 +377,7 @@ jobs:
 
       - name: Upload prepared npm publish bundle tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-npm-preflight-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
@@ -391,7 +391,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
 
@@ -492,7 +492,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -611,7 +611,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
           path: full-release-validation
@@ -677,6 +677,8 @@ jobs:
 
       - name: Verify full release validation target
         if: ${{ inputs.full_release_validation_run_id != '' }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -689,6 +691,8 @@ jobs:
           WORKFLOW_NAME="$(jq -r '.workflowName // ""' "$MANIFEST_FILE")"
           TARGET_SHA="$(jq -r '.targetSha // ""' "$MANIFEST_FILE")"
           RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
+          RUN_RELEASE_SOAK="$(jq -r '.runReleaseSoak // ""' "$MANIFEST_FILE")"
+          PERFORMANCE_BLOCKING="$(jq -r '.controls.performanceBlocking // false' "$MANIFEST_FILE")"
           if [[ "$WORKFLOW_NAME" != "Full Release Validation" ]]; then
             echo "Full release validation manifest workflow mismatch: $WORKFLOW_NAME" >&2
             exit 1
@@ -699,6 +703,14 @@ jobs:
           fi
           if [[ "$RERUN_GROUP" != "all" ]]; then
             echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
+            exit 1
+          fi
+          if [[ "$PERFORMANCE_BLOCKING" != "true" ]]; then
+            echo "Full release validation manifest does not record blocking product performance evidence." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* && "$RUN_RELEASE_SOAK" != "true" ]]; then
+            echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
             exit 1
           fi
 

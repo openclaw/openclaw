@@ -287,7 +287,10 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("install")
     .description("Install a skill from ClawHub, git, or a local directory")
-    .argument("<slug>", "ClawHub skill slug, git:<repo>, or local skill directory")
+    .argument(
+      "<skill-ref>",
+      "ClawHub skill ref (@owner/slug), git:<repo>, or local skill directory",
+    )
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
     .option(
@@ -298,6 +301,7 @@ export function registerSkillsCli(program: Command) {
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
+    .addHelpText("after", "\nExamples:\n  openclaw skills install @owner/weather\n")
     .action(
       async (
         slug: string,
@@ -480,6 +484,7 @@ export function registerSkillsCli(program: Command) {
           } else {
             const verification = await fetchClawHubSkillVerification({
               slug: target.slug,
+              ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,

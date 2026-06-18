@@ -59,6 +59,13 @@ function pdfAttachment(overrides: Partial<ChatAttachment> = {}): ChatAttachment 
   };
 }
 
+function oversizedPngBase64(): string {
+  const pngHeader = PNG_1x1.slice(0, 64);
+  let base64Length = Math.ceil(((MAX_IMAGE_BYTES + 1) * 4) / 3);
+  base64Length += (4 - (base64Length % 4)) % 4;
+  return `${pngHeader}${"A".repeat(base64Length - pngHeader.length)}`;
+}
+
 async function parseWithWarnings(
   message: string,
   attachments: ChatAttachment[],
@@ -248,7 +255,7 @@ describe("parseMessageWithAttachments", () => {
   });
 
   it("rejects oversized images before offload", async () => {
-    const big = Buffer.alloc(MAX_IMAGE_BYTES + 1, 1).toString("base64");
+    const big = oversizedPngBase64();
 
     await expect(
       parseMessageWithAttachments(

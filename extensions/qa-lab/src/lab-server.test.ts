@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaJsonBody } from "./bus-server.js";
 import {
   startQaLabServer,
@@ -12,7 +12,23 @@ import {
   type QaLabServerStartParams,
 } from "./lab-server.js";
 
-vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
+const qaChannelMock = vi.hoisted(() => ({
+  resolveAccount: vi.fn(),
+  setRuntime: vi.fn(),
+  startAccount: vi.fn(),
+}));
+
+vi.mock("./runtime-api.js", () => ({
+  qaChannelPlugin: {
+    config: {
+      resolveAccount: qaChannelMock.resolveAccount,
+    },
+    gateway: {
+      startAccount: qaChannelMock.startAccount,
+    },
+  },
+  setQaChannelRuntime: qaChannelMock.setRuntime,
+}));
 
 const captureMock = vi.hoisted(() => {
   const sessions: Array<Record<string, unknown>> = [];
@@ -134,8 +150,6 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   }),
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
-    dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",
-    blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR ?? "",
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
     sessionId: "qa-lab-test",
   }),
@@ -149,6 +163,31 @@ async function startQaLabServerForTest(params?: QaLabServerStartParams) {
     ...params,
   });
 }
+
+beforeEach(() => {
+  qaChannelMock.resolveAccount.mockReset();
+  qaChannelMock.resolveAccount.mockImplementation((_cfg: unknown, accountId: string) => ({
+    accountId,
+    configured: true,
+    enabled: true,
+  }));
+  qaChannelMock.setRuntime.mockReset();
+  qaChannelMock.startAccount.mockReset();
+  qaChannelMock.startAccount.mockImplementation(
+    async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+      await new Promise<void>((resolve) => {
+        if (!abortSignal) {
+          resolve();
+          return;
+        }
+        if (abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  );
+});
 
 afterEach(async () => {
   captureMock.reset();
@@ -289,6 +328,49 @@ async function createQaLabRepoRootFixture(params?: {
 }
 
 describe("qa-lab server", () => {
+  it("cleans up capture state when embedded gateway setup fails", async () => {
+    qaChannelMock.resolveAccount.mockImplementationOnce(() => {
+      throw new Error("embedded setup failed");
+    });
+
+    await expect(
+      startQaLabServer({
+        host: "127.0.0.1",
+        port: 0,
+      }),
+    ).rejects.toThrow("embedded setup failed");
+
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the server and capture state when embedded gateway stop fails", async () => {
+    qaChannelMock.startAccount.mockImplementationOnce(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+        await new Promise<void>((_resolve, reject) => {
+          if (!abortSignal) {
+            return;
+          }
+          if (abortSignal.aborted) {
+            reject(new Error("gateway stop failed"));
+            return;
+          }
+          abortSignal.addEventListener("abort", () => reject(new Error("gateway stop failed")), {
+            once: true,
+          });
+        }),
+    );
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    await expect(lab.stop()).rejects.toThrow("gateway stop failed");
+
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+  });
+
   it("serves bootstrap state and message state", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
     cleanups.push(async () => {
@@ -790,8 +872,6 @@ describe("qa-lab server", () => {
     cleanups.push(async () => {
       await rm(tempDir, { recursive: true, force: true });
     });
-    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
-    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
     const store = captureMock.store;
     store.upsertSession({
       id: "qa-capture-session",
@@ -799,8 +879,6 @@ describe("qa-lab server", () => {
       mode: "proxy-run",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
-      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
-      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
     });
     store.recordEvent({
       sessionId: "qa-capture-session",
@@ -868,8 +946,6 @@ describe("qa-lab server", () => {
       port: 0,
     });
     cleanups.push(async () => {
-      delete process.env.OPENCLAW_DEBUG_PROXY_DB_PATH;
-      delete process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
       await lab.stop();
     });
 

@@ -71,9 +71,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -179,6 +177,21 @@ function turnStartResult(turnId = "turn-1", status = "inProgress") {
   };
 }
 
+function getMockServerVersion() {
+  return "0.132.0";
+}
+
+function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
 ) {
@@ -202,6 +215,7 @@ function createStartedThreadHarness(
   setCodexAppServerClientFactoryForTest(
     async () =>
       ({
+        ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: (handler: typeof notify) => {
           notify = handler;

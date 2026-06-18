@@ -49,7 +49,7 @@ Recommended workflow:
 3. Update `apps/android/CHANGELOG.md`, then run `pnpm android:version:sync` again if needed.
 4. Run `MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull` to materialize encrypted Android signing assets from `apps-signing`.
 5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
-6. Run `pnpm android:screenshots` to refresh raw Google Play screenshots.
+6. Run `ANDROID_SCREENSHOT_AVD=<avd-name> pnpm android:screenshots` to refresh raw Google Play screenshots with a script-managed emulator, or run `pnpm android:screenshots` when exactly one ADB device is already connected.
 7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
 8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
 9. Promote to production manually in Google Play Console.

@@ -99,7 +99,6 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
-  "agents.defaults.memorySearch.store.path",
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",
   "agents.defaults.memorySearch.documentInputType",
@@ -733,9 +732,6 @@ describe("config help copy quality", () => {
     expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
-    expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
-      "~/.openclaw/memory/{agentId}.sqlite",
-    );
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {

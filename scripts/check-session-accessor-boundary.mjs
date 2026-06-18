@@ -41,6 +41,14 @@ const sessionCreateLifecycleWriterNames = new Set([
   "updateSessionStoreEntry",
   "ensureSessionTranscriptFile",
 ]);
+const legacyManualCompactTrimNames = new Set([
+  "archiveFileOnDisk",
+  "readRecentSessionTranscriptLines",
+]);
+const legacyLifecycleCleanupNames = new Set([
+  "archiveRemovedSessionTranscripts",
+  "cleanupArchivedSessionTranscripts",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
@@ -82,6 +90,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/command/session-store.ts",
   "src/agents/embedded-agent-runner/run.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
+  "src/agents/main-session-restart-recovery.ts",
   "src/auto-reply/reply/abort-cutoff.runtime.ts",
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
   "src/auto-reply/reply/agent-runner-execution.ts",
@@ -100,6 +109,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-updates.ts",
   "src/auto-reply/reply/session-usage.ts",
   "src/tui/embedded-backend.ts",
+  "src/config/sessions/cleanup-service.ts",
 ]);
 
 export const migratedTranscriptWriterFiles = new Set([
@@ -109,6 +119,16 @@ export const migratedTranscriptWriterFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",
   "src/sessions/user-turn-transcript.ts",
+]);
+
+export const migratedSessionCompactManualTrimFiles = new Set([
+  "src/gateway/server-methods/sessions.ts",
+]);
+
+export const migratedSessionLifecycleCleanupFiles = new Set([
+  "src/config/sessions/cleanup-service.ts",
+  "src/cron/session-reaper.ts",
+  "src/infra/heartbeat-runner.ts",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -280,6 +300,24 @@ export function findGatewaySessionCreateLifecycleViolations(content, fileName = 
   return violations;
 }
 
+export function findSessionCompactManualTrimBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedSessionStoreViolations(
+    content,
+    fileName,
+    legacyManualCompactTrimNames,
+    "manual compact trim",
+  );
+}
+
+export function findSessionLifecycleCleanupBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedSessionStoreViolations(
+    content,
+    fileName,
+    legacyLifecycleCleanupNames,
+    "lifecycle cleanup",
+  );
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const readSourceRoots = resolveSourceRoots(repoRoot, [
@@ -297,6 +335,7 @@ export async function main() {
   const writeSourceRoots = resolveSourceRoots(repoRoot, [
     "src/agents",
     "src/auto-reply",
+    "src/config/sessions",
     "src/tui",
   ]);
   const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, [
@@ -342,11 +381,31 @@ export async function main() {
       "src/gateway/server-methods/sessions.ts",
     findViolations: findGatewaySessionCreateLifecycleViolations,
   });
+  const manualCompactTrimViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
+    skipFile: (filePath) =>
+      !migratedSessionCompactManualTrimFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findSessionCompactManualTrimBoundaryViolations,
+  });
+  const lifecycleCleanupViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: readSourceRoots,
+    skipFile: (filePath) =>
+      !migratedSessionLifecycleCleanupFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findSessionLifecycleCleanupBoundaryViolations,
+  });
   const violations = [
     ...readViolations,
     ...writeViolations,
     ...transcriptWriterViolations,
     ...sessionCreateLifecycleViolations,
+    ...manualCompactTrimViolations,
+    ...lifecycleCleanupViolations,
   ];
 
   if (violations.length === 0) {

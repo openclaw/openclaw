@@ -12,11 +12,7 @@ import {
   type UploadPrepareResponse,
 } from "../types.js";
 import type { ApiClient } from "./api-client.js";
-import {
-  ChunkedMediaApi,
-  UploadDailyLimitExceededError,
-  isChunkedUploadImplemented,
-} from "./media-chunked.js";
+import { ChunkedMediaApi, UploadDailyLimitExceededError } from "./media-chunked.js";
 import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
 import type { TokenManager } from "./token.js";
@@ -112,12 +108,6 @@ describe("media-chunked: UploadDailyLimitExceededError", () => {
     expect(err.filePath).toBe("/tmp/x.mp4");
     expect(err.fileSize).toBe(123);
     expect(err.message).toBe("quota exceeded");
-  });
-});
-
-describe("media-chunked: isChunkedUploadImplemented", () => {
-  it("returns true for the filled-in module", () => {
-    expect(isChunkedUploadImplemented()).toBe(true);
   });
 });
 

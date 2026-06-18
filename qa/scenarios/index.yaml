@@ -22,9 +22,9 @@ title: OpenClaw QA Scenario Pack
 # - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 # - avoid copying the scenario title into coverage IDs
 # - use `pnpm openclaw qa coverage` to render the current inventory
-# - use `scenario.execution.kind: vitest` or `scenario.execution.kind: playwright`
-#   plus `scenario.execution.path` for native test files that provide evidence without
-#   a top-level `flow`
+# - use `scenario.execution.kind: vitest`, `playwright`, or `script`
+#   plus `scenario.execution.path` for native tests or evidence producers that
+#   provide evidence without a top-level `flow`
 # - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
 #   `optional`, `live-only`, or `soak`
 # - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
