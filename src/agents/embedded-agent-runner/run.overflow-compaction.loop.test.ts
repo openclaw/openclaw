@@ -395,7 +395,7 @@ describe("overflow compaction in run loop", () => {
       truncatedCount: 1,
     });
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runEmbeddedAgent({
       ...baseParams,
       currentMessageId: "telegram-msg-51026",
     });
@@ -424,7 +424,7 @@ describe("overflow compaction in run loop", () => {
       }),
     );
 
-    const result = await runEmbeddedPiAgent(baseParams);
+    const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);

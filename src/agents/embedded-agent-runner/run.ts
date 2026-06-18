@@ -2507,7 +2507,7 @@ async function runEmbeddedAgentInternal(
                     params.currentMessageId !== undefined &&
                     params.currentMessageId === lastPersistedCurrentMessageId
                   ) {
-                    // The failed attempt reached Pi far enough to persist this user turn.
+                    // The failed attempt reached the embedded agent far enough to persist this user turn.
                     // Retrying the original prompt would replay it, so resume from the
                     // truncated transcript and suppress the next user append.
                     nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
