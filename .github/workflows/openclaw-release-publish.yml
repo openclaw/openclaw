@@ -290,7 +290,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.publish_openclaw_npm }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
           path: ${{ runner.temp }}/full-release-validation-manifest
@@ -299,7 +299,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Checkout release tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -359,6 +359,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
           EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
           EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
@@ -377,6 +378,8 @@ jobs:
           target_sha="$(jq -r '.targetSha // ""' "$manifest")"
           release_profile="$(jq -r '.releaseProfile // ""' "$manifest")"
           rerun_group="$(jq -r '.rerunGroup // ""' "$manifest")"
+          run_release_soak="$(jq -r '.runReleaseSoak // ""' "$manifest")"
+          performance_blocking="$(jq -r '.controls.performanceBlocking // false' "$manifest")"
           if [[ "$workflow_name" != "Full Release Validation" ]]; then
             echo "Full release validation manifest workflow mismatch: $workflow_name" >&2
             exit 1
@@ -391,6 +394,14 @@ jobs:
           fi
           if [[ "$rerun_group" != "all" ]]; then
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
+            exit 1
+          fi
+          if [[ "$performance_blocking" != "true" ]]; then
+            echo "Full release validation manifest does not record blocking product performance evidence." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != *"-alpha."* && "$RELEASE_TAG" != *"-beta."* && "$run_release_soak" != "true" ]]; then
+            echo "Stable releases require Full Release Validation with runReleaseSoak=true." >&2
             exit 1
           fi
           echo "release_profile=$release_profile" >> "$GITHUB_OUTPUT"
@@ -455,11 +466,21 @@ jobs:
     environment: npm-release
     steps:
       - name: Checkout release SHA
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.resolve_release_target.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Download full release validation manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}
+          path: ${{ runner.temp }}/full-release-validation-manifest
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -484,6 +505,7 @@ jobs:
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+          FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
         run: |
           set -euo pipefail
 
@@ -1060,11 +1082,73 @@ jobs:
               exit 1
             fi
 
-            (cd "${download_dir}" && zip -qr "${asset_path}" dependency-evidence)
-            gh release upload "${RELEASE_TAG}" "${asset_path}#${asset_name}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --clobber
+            (
+              cd "${download_dir}"
+              find dependency-evidence -type f -print | LC_ALL=C sort | zip -X -q "${asset_path}" -@
+            )
+            attach_or_verify_release_asset "${asset_path}" "${asset_name}"
             echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          attach_or_verify_release_asset() {
+            local source_path="$1"
+            local asset_name="$2"
+            local existing_dir="${RUNNER_TEMP}/openclaw-release-existing-assets/${asset_name}"
+            local existing_path="${existing_dir}/${asset_name}"
+
+            if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets |
+              jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
+              rm -rf "${existing_dir}"
+              mkdir -p "${existing_dir}"
+              gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --pattern "${asset_name}" --dir "${existing_dir}"
+              cmp --silent "${source_path}" "${existing_path}" || {
+                echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
+                exit 1
+              }
+              return
+            fi
+
+            gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
+          }
+
+          upload_release_evidence_assets() {
+            local release_version manifest_path evidence_path manifest_asset evidence_asset
+            release_version="${RELEASE_TAG#v}"
+            manifest_path="${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json"
+            evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
+            manifest_asset="openclaw-${release_version}-release-manifest.json"
+            evidence_asset="openclaw-${release_version}-postpublish-evidence.json"
+
+            if [[ ! -f "${manifest_path}" ]]; then
+              echo "Full release validation manifest is missing from ${FULL_RELEASE_VALIDATION_MANIFEST_DIR}." >&2
+              exit 1
+            fi
+            if [[ ! -f "${evidence_path}" ]]; then
+              echo "Postpublish release evidence is missing from ${POSTPUBLISH_EVIDENCE_DIR}." >&2
+              exit 1
+            fi
+
+            cp "${manifest_path}" "${RUNNER_TEMP}/${manifest_asset}"
+            cp "${evidence_path}" "${RUNNER_TEMP}/${evidence_asset}"
+            (
+              cd "${RUNNER_TEMP}"
+              sha256sum "${manifest_asset}" > "${manifest_asset}.sha256"
+              sha256sum "${evidence_asset}" > "${evidence_asset}.sha256"
+            )
+
+            attach_or_verify_release_asset "${RUNNER_TEMP}/${manifest_asset}" "${manifest_asset}"
+            attach_or_verify_release_asset \
+              "${RUNNER_TEMP}/${manifest_asset}.sha256" \
+              "${manifest_asset}.sha256"
+            attach_or_verify_release_asset "${RUNNER_TEMP}/${evidence_asset}" "${evidence_asset}"
+            attach_or_verify_release_asset \
+              "${RUNNER_TEMP}/${evidence_asset}.sha256" \
+              "${evidence_asset}.sha256"
+            {
+              echo "- Immutable release manifest: \`${manifest_asset}\`"
+              echo "- Immutable postpublish evidence: \`${evidence_asset}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           }
 
           verify_published_release() {
@@ -1105,6 +1189,10 @@ jobs:
             fi
 
             pnpm "${verify_args[@]}"
+            jq --arg release_publish_run_id "$GITHUB_RUN_ID" \
+              '.releasePublishRunId = $release_publish_run_id' \
+              "${evidence_path}" > "${evidence_path}.next"
+            mv "${evidence_path}.next" "${evidence_path}"
             {
               echo "- Postpublish verification: passed"
               echo "- Postpublish evidence: \`${evidence_path}\`"
@@ -1382,6 +1470,7 @@ jobs:
             fi
             create_or_update_github_release
             upload_dependency_evidence_release_asset
+            upload_release_evidence_assets
             if ! promote_windows_release_assets; then
               failed=1
             fi
@@ -1398,7 +1487,7 @@ jobs:
 
       - name: Upload postpublish evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence

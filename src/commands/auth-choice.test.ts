@@ -95,9 +95,12 @@ vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/tmp/openclaw-workspace",
 }));
 
-vi.mock("../plugins/setup-browser.js", () => ({
-  isRemoteEnvironment: () => false,
+vi.mock("../infra/browser-open.js", () => ({
   openUrl: vi.fn(async () => {}),
+}));
+
+vi.mock("../infra/remote-env.js", () => ({
+  isRemoteEnvironment: () => false,
 }));
 
 vi.mock("../plugins/provider-oauth-flow.js", () => ({

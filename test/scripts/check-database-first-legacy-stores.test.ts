@@ -32,6 +32,33 @@ describe("check-database-first-legacy-stores", () => {
     }
   });
 
+  it("skips generated extension asset bundles", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
+    try {
+      await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "extensions", "diffs", "assets", "viewer-runtime.js"),
+        "export const bundled = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "diffs", "src", "runtime.js"),
+        "export const runtime = true;\n",
+      );
+
+      const files = await collectDatabaseFirstLegacyStoreSourceFiles([
+        path.join(root, "extensions"),
+      ]);
+      const relativeFiles = files
+        .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
+        .toSorted();
+
+      expect(relativeFiles).toEqual(["extensions/diffs/src/runtime.js"]);
+    } finally {
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("ignores deeply nested type-only syntax", () => {
     const nestedType = Array.from({ length: 600 }).reduce((type) => `Readonly<${type}>`, "string");
     const violations = collectDatabaseFirstLegacyStoreViolations(

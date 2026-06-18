@@ -120,16 +120,48 @@ describe("collectClawHubPublishablePluginPackages", () => {
 describe("OpenClaw dual-published plugin metadata", () => {
   const dualPublishedPlugins = [
     {
+      extensionId: "cohere",
+      packageName: "@openclaw/cohere-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/cohere-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/cohere-provider",
+      },
+    },
+    {
       extensionId: "diagnostics-otel",
       packageName: "@openclaw/diagnostics-otel",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-otel",
+      },
     },
     {
       extensionId: "diagnostics-prometheus",
       packageName: "@openclaw/diagnostics-prometheus",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-prometheus",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-prometheus",
+      },
+    },
+    {
+      extensionId: "gmi",
+      packageName: "@openclaw/gmi-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/gmi-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/gmi-provider",
+      },
     },
   ] as const;
 
-  it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
+  it("keeps dual-published plugins selectable through both ClawHub and npm release paths", () => {
     const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
     const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
       packageNames,
@@ -149,6 +181,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
           install?: {
             clawhubSpec?: string;
             defaultChoice?: string;
+            minHostVersion?: string;
             npmSpec?: string;
           };
           release?: {
@@ -158,12 +191,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toEqual({
-        clawhubSpec: `clawhub:${plugin.packageName}`,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.4.25",
-        npmSpec: plugin.packageName,
-      });
+      expect(packageJson.openclaw?.install).toEqual(plugin.install);
       expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,

@@ -11,6 +11,7 @@ const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/ac
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
@@ -24,6 +25,9 @@ const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
+const SETUP_NODE_V6 = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
+const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 
 type WorkflowStep = {
   "continue-on-error"?: boolean | string;
@@ -95,6 +99,80 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
 }
 
 describe("package acceptance workflow", () => {
+  it("verifies immutable postpublish evidence before stable closeout reads it", () => {
+    const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
+    const checksumIndex = workflow.indexOf(
+      'sha256sum --strict --status -c "$evidence_checksum_asset"',
+    );
+    const evidenceReadIndex = workflow.indexOf('evidence_release_tag="$(jq -r');
+    const releaseVersionGateIndex = workflow.indexOf(
+      'if [[ "$main_version" != "$release_package_version" &&',
+    );
+    const evidenceDownloadIndex = workflow.indexOf(
+      'if ! gh release download "$evidence_source_tag"',
+    );
+    const partialRepairIndex = workflow.indexOf('if [[ -f "$closeout_json_path" ]]; then');
+    const existingCloseoutEvidenceMatchIndex = workflow.indexOf(
+      'if [[ -n "$existing_closeout_full_release_validation_run_id" &&',
+    );
+
+    expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
+    expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
+    expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
+    expect(workflow).toContain(
+      'tag_package_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"',
+    );
+    expect(workflow).toContain('evidence_source_tag="v$fallback_package_version"');
+    expect(workflow).toContain('gh release download "$evidence_source_tag"');
+    expect(workflow).toContain("Checkout fallback evidence tag");
+    expect(workflow).toContain("Bind fallback correction to the published package source");
+    expect(workflow).toContain(
+      "Fallback correction ${{ needs.resolve.outputs.tag }} must point to the same source commit",
+    );
+    expect(workflow).toContain("main_ref: ${{ steps.inputs.outputs.main_ref }}");
+    expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
+    expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
+    expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
+    expect(workflow).toContain(
+      "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence.",
+    );
+    expect(workflow).toContain("Stable closeout is required for $tag");
+    expect(workflow).toContain('closeout_checksum_asset="${closeout_asset}.sha256"');
+    expect(workflow).toContain('expected_closeout_digest="$(awk');
+    expect(workflow).toContain('actual_closeout_digest="$(sha256sum "$closeout_json_path"');
+    expect(workflow).toContain(
+      "Stable closeout manifest for $tag is incomplete; refusing to repair it.",
+    );
+    expect(workflow).toContain(
+      'if [[ -f "$closeout_checksum_path" && ! -f "$closeout_json_path" ]]; then',
+    );
+    expect(workflow).toContain(
+      "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it.",
+    );
+    expect(workflow).toContain("repair_partial_closeout=false");
+    expect(workflow).toContain(
+      "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it.",
+    );
+    expect(workflow).toContain(
+      "REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}",
+    );
+    expect(workflow).toContain('--allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT"');
+    expect(workflow).toContain(
+      'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
+    );
+    expect(workflow).toContain("attach_or_verify \\");
+    expect(checksumIndex).toBeGreaterThan(-1);
+    expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
+    expect(existingCloseoutEvidenceMatchIndex).toBeGreaterThan(evidenceReadIndex);
+    expect(workflow.slice(checksumIndex, existingCloseoutEvidenceMatchIndex)).not.toContain(
+      'echo "should_closeout=false"',
+    );
+    expect(releaseVersionGateIndex).toBeGreaterThan(-1);
+    expect(partialRepairIndex).toBeGreaterThan(-1);
+    expect(partialRepairIndex).toBeLessThan(releaseVersionGateIndex);
+    expect(evidenceDownloadIndex).toBeGreaterThan(releaseVersionGateIndex);
+  });
+
   it("keeps pnpm version selection sourced from packageManager", () => {
     const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
       packageManager?: string;
@@ -145,7 +223,7 @@ describe("package acceptance workflow", () => {
     expect(hydrate.if).toBe(
       "${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}",
     );
-    expect(workflowStep(hydrate, "Setup Node.js").uses).toBe("actions/setup-node@v6");
+    expect(workflowStep(hydrate, "Setup Node.js").uses).toBe(SETUP_NODE_V6);
     expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
@@ -184,7 +262,7 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
     expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
-    expect(workflowStep(hydrateWindowsDaemon, "Setup Node.js").uses).toBe("actions/setup-node@v6");
+    expect(workflowStep(hydrateWindowsDaemon, "Setup Node.js").uses).toBe(SETUP_NODE_V6);
     const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
@@ -395,6 +473,10 @@ describe("package acceptance workflow", () => {
   it("requires pinned full release child workflows to run at the resolved target SHA", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const performanceJob = workflow.slice(
+      workflow.indexOf("  performance:\n"),
+      workflow.indexOf("\n  summary:"),
+    );
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
@@ -419,10 +501,19 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
     );
-    expect(workflow).toContain(
+    expect(performanceJob).toContain(
+      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(performanceJob).toContain('-f dispatch_id="$dispatch_id"');
+    expect(performanceJob).toContain(
+      'DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET',
+    );
+    expect(performanceJob).toContain(".display_title == env.DISPATCH_RUN_NAME");
+    expect(performanceJob).toContain("Could not find dispatched run for ${dispatch_run_name}.");
+    expect(performanceJob).not.toContain("BEFORE_IDS=");
+    expect(performanceJob).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
     );
-    expect(workflow).not.toContain("BEFORE_IDS=");
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -1130,6 +1221,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''",
     );
+    expect(workflow).toContain(
+      'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
+    );
+    expect(workflow).toContain("forced on for release_profile=stable and full");
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
     expect(workflow).toContain("disabled_required_lanes=()");
@@ -1357,7 +1452,7 @@ describe("package artifact reuse", () => {
     expect(currentRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
       name: "Download package-under-test artifact",
-      uses: "actions/download-artifact@v8",
+      uses: DOWNLOAD_ARTIFACT_V8,
       with: {
         name: "${{ inputs.package_artifact_name }}",
         path: ".artifacts/telegram-package-under-test",
@@ -1366,7 +1461,7 @@ describe("package artifact reuse", () => {
     expect(releaseRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
       name: "Download package-under-test artifact from release run",
-      uses: "actions/download-artifact@v8",
+      uses: DOWNLOAD_ARTIFACT_V8,
       with: {
         "github-token": "${{ github.token }}",
         name: "${{ inputs.package_artifact_name }}",
@@ -1462,7 +1557,7 @@ describe("package artifact reuse", () => {
 
       const uploadStep = workflowStep(job, "Upload advisory status");
       expect(uploadStep.if, jobName).toBe("always()");
-      expect(uploadStep.uses, jobName).toBe("actions/upload-artifact@v7");
+      expect(uploadStep.uses, jobName).toBe(UPLOAD_ARTIFACT_V7);
       expect(uploadStep.with?.name, jobName).toContain("release-check-status-");
       expect(uploadStep.with?.path, jobName).toMatch(
         /^\.artifacts\/release-check-status\/.+\.env$/u,
@@ -1474,7 +1569,7 @@ describe("package artifact reuse", () => {
     expect(summary.permissions?.actions).toBe("read");
     const downloadStep = workflowStep(summary, "Download advisory status artifacts");
     expect(downloadStep["continue-on-error"]).toBe(true);
-    expect(downloadStep.uses).toBe("actions/download-artifact@v8");
+    expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     expect(downloadStep.with?.pattern).toBe("release-check-status-*");
     expect(downloadStep.with?.["merge-multiple"]).toBe(true);
 

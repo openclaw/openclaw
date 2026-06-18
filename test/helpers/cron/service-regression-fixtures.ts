@@ -181,10 +181,6 @@ export function createIsolatedRegressionJob(params: {
   };
 }
 
-export async function writeCronJobs(storePath: string, jobs: CronJob[]) {
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
-}
-
 export async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {
   await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }

@@ -3,6 +3,7 @@
  * Redacts and summarizes arguments into short labels/details for chat and UI
  * tool update streams.
  */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -10,7 +11,6 @@ import {
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
-import { asRecord } from "./tool-display-record.js";
 
 type ToolDisplayActionSpec = {
   label?: string;

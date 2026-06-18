@@ -6,7 +6,7 @@ import { createCohereCompletionsWrapper } from "./stream.js";
 export default defineSingleProviderPluginEntry({
   id: "cohere",
   name: "Cohere Provider",
-  description: "Bundled Cohere provider plugin",
+  description: "Cohere provider plugin",
   provider: {
     label: "Cohere",
     docsPath: "/providers/cohere",

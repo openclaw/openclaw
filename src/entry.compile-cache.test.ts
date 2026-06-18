@@ -113,7 +113,42 @@ describe("entry compile cache", () => {
         NODE_DISABLE_COMPILE_CACHE: "1",
         OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
       },
+      detachForProcessTree: true,
     });
+  });
+
+  it("keeps interactive no-cache respawn plans attached to the terminal", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-interactive-");
+    const entryFile = path.join(root, "dist", "entry.js");
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "entry.ts"), "export {};\n", "utf8");
+
+    const plan = buildOpenClawCompileCacheRespawnPlan({
+      currentFile: entryFile,
+      env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
+      execPath: "/usr/bin/node",
+      installRoot: root,
+      argv: ["/usr/bin/node", entryFile, "tui"],
+    });
+
+    expect(plan?.detachForProcessTree).toBe(false);
+  });
+
+  it("keeps bare-root no-cache respawn plans attached to the terminal", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-root-");
+    const entryFile = path.join(root, "dist", "entry.js");
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "entry.ts"), "export {};\n", "utf8");
+
+    const plan = buildOpenClawCompileCacheRespawnPlan({
+      currentFile: entryFile,
+      env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
+      execPath: "/usr/bin/node",
+      installRoot: root,
+      argv: ["/usr/bin/node", entryFile],
+    });
+
+    expect(plan?.detachForProcessTree).toBe(false);
   });
 
   it("does not respawn unaffected packaged installs when NODE_COMPILE_CACHE is configured", () => {
@@ -152,6 +187,7 @@ describe("entry compile cache", () => {
         NODE_DISABLE_COMPILE_CACHE: "1",
         OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
       },
+      detachForProcessTree: false,
     });
   });
 
@@ -184,6 +220,7 @@ describe("entry compile cache", () => {
         command: "/usr/bin/node",
         args: ["/repo/openclaw/dist/entry.js", "status"],
         env: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        detachForProcessTree: true,
       },
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
@@ -199,6 +236,7 @@ describe("entry compile cache", () => {
       {
         stdio: "inherit",
         env: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(
@@ -224,6 +262,7 @@ describe("entry compile cache", () => {
         command: "/usr/bin/node",
         args: ["/repo/openclaw/dist/entry.js"],
         env: {},
+        detachForProcessTree: true,
       },
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
@@ -253,6 +292,7 @@ describe("entry compile cache", () => {
           command: "/usr/bin/node",
           args: ["/repo/openclaw/dist/entry.js"],
           env: {},
+          detachForProcessTree: false,
         },
         {
           spawn: spawn as unknown as typeof import("node:child_process").spawn,

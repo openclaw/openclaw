@@ -1,0 +1,28 @@
+title: QA OTEL smoke evidence
+
+scenario:
+  id: qa-otel-smoke
+  surface: telemetry
+  coverage:
+    primary:
+      - telemetry.otel
+    secondary:
+      - harness.qa-lab
+      - plugin-sdk-diagnostic-runtime-exports
+  objective: Exercise bounded local OTLP capture and OpenTelemetry smoke assertions through QA Lab evidence.
+  successCriteria:
+    - Package-manager forwarded QA OTEL smoke arguments parse correctly.
+    - Body-size limits are strict positive integers.
+    - Local OTLP receiver rejects malformed, oversized, or truncated protobuf payloads with bounded diagnostics.
+    - Captured OTLP body text is bounded and leak needles remain detectable.
+    - Active local receiver sockets close during cleanup.
+    - Smoke assertions fail on non-2xx OTLP requests and missing release-critical signals.
+  docsRefs:
+    - docs/gateway/opentelemetry.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts
+    summary: Vitest coverage for QA OTEL smoke receiver bounds and signal assertions.

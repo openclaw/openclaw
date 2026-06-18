@@ -71,6 +71,11 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_AGENT_ID = "main";
+const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
+const LEADING_DASH_PATTERN = /^-+/;
+const TRAILING_DASH_PATTERN = /-+$/;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
@@ -98,6 +103,7 @@ type CodexConversationStartParams = {
   workspaceDir?: string;
   agentDir?: string;
   sessionKey?: string;
+  agentId?: string;
   threadId?: string;
   model?: string;
   modelProvider?: string;
@@ -114,6 +120,7 @@ type BoundTurnResult = {
 type CodexConversationConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];
+type ResolvedCodexConversationConfig = NonNullable<CodexConversationConfig>;
 
 type CodexConversationGlobalState = {
   queues: Map<string, Promise<void>>;
@@ -198,6 +205,7 @@ export async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
   } else {
     await createThread({
@@ -213,12 +221,14 @@ export async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
   }
   return createCodexConversationBindingData({
     sessionFile: params.sessionFile,
     workspaceDir,
     ...(agentDir ? { agentDir } : {}),
+    agentId: params.agentId,
   });
 }
 
@@ -248,6 +258,7 @@ export async function handleCodexConversationInboundClaim(
       : resolveCodexNativeExecutionBlock({
           config: options.config,
           sessionKey: event.sessionKey ?? ctx.sessionKey,
+          agentId: data.agentId,
           surface: "Codex app-server conversation binding",
         });
   if (nativeExecutionBlock) {
@@ -574,6 +585,7 @@ async function runBoundTurn(params: {
   const { execPolicy, runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
     config: params.config,
+    agentId: params.data.agentId,
     sessionKey: params.sessionKey,
     workspaceDir,
     modelProvider: reviewerModelProvider,
@@ -802,6 +814,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
     const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
     const execPolicy = resolveConversationExecPolicy({
       config: params.config,
+      agentId: params.data.agentId,
       sessionKey: params.sessionKey,
     });
     const useCurrentRuntimePolicy = execPolicy.touched;
@@ -818,6 +831,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       serviceTier: binding?.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.data.agentId,
     });
     return await runBoundTurn(params);
   }
@@ -857,6 +871,15 @@ function readSessionExecOverrides(params: {
   if (!params.config || !sessionKey) {
     return undefined;
   }
+  if (
+    !canReadSessionExecOverrides({
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey,
+    })
+  ) {
+    return undefined;
+  }
   const storePath = resolveStorePath(params.config.session?.store, { agentId: params.agentId });
   const entry = resolveSessionStoreEntry({
     store: loadSessionStore(storePath, { skipCache: true }),
@@ -869,6 +892,76 @@ function readSessionExecOverrides(params: {
     security: entry.execSecurity,
     ask: entry.execAsk,
   };
+}
+
+function canReadSessionExecOverrides(params: {
+  config: ResolvedCodexConversationConfig;
+  agentId?: string;
+  sessionKey: string;
+}): boolean {
+  const agentId = normalizeAgentIdOrDefault(params.agentId);
+  if (!agentId) {
+    return true;
+  }
+  const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
+  if (!sessionAgentId) {
+    return isDefaultAgentSessionKeyForAgent({ config: params.config, agentId });
+  }
+  return sessionAgentId === agentId;
+}
+
+function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
+  const raw = sessionKey?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parts = raw.toLowerCase().split(":").filter(Boolean);
+  if (parts.length < 3 || parts[0] !== "agent" || !parts[2]) {
+    return undefined;
+  }
+  return normalizeAgentIdOrDefault(parts[1]);
+}
+
+function isDefaultAgentSessionKeyForAgent(params: {
+  config: ResolvedCodexConversationConfig;
+  agentId: string;
+}): boolean {
+  return normalizeAgentId(params.agentId) === resolveDefaultPolicyAgentId(params.config);
+}
+
+function resolveDefaultPolicyAgentId(config: ResolvedCodexConversationConfig): string {
+  const agents = (config.agents?.list ?? []).filter(
+    (
+      entry,
+    ): entry is NonNullable<
+      NonNullable<ResolvedCodexConversationConfig["agents"]>["list"]
+    >[number] => entry !== null && typeof entry === "object",
+  );
+  const defaultEntry = agents.find((entry) => entry?.default) ?? agents[0];
+  return normalizeAgentId(defaultEntry?.id);
+}
+
+function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
+  const normalized = normalizeAgentId(value);
+  return normalized === DEFAULT_AGENT_ID && !(value ?? "").trim() ? undefined : normalized;
+}
+
+function normalizeAgentId(value?: string | null): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return DEFAULT_AGENT_ID;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (VALID_AGENT_ID_PATTERN.test(trimmed)) {
+    return normalized;
+  }
+  return (
+    normalized
+      .replace(INVALID_AGENT_ID_CHARS_PATTERN, "-")
+      .replace(LEADING_DASH_PATTERN, "")
+      .replace(TRAILING_DASH_PATTERN, "")
+      .slice(0, 64) || DEFAULT_AGENT_ID
+  );
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {

@@ -33,12 +33,7 @@ export * from "./types.js";
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
-import type {
-  OAuthCredentials,
-  OAuthProviderId,
-  OAuthProviderInfo,
-  OAuthProviderInterface,
-} from "./types.js";
+import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
   anthropicOAuthProvider,
@@ -65,21 +60,6 @@ export function registerOAuthProvider(provider: OAuthProviderInterface): void {
 }
 
 /**
- * Unregister an OAuth provider.
- *
- * If the provider is built-in, restores the built-in implementation.
- * Custom providers are removed completely.
- */
-export function unregisterOAuthProvider(id: string): void {
-  const builtInProvider = BUILT_IN_OAUTH_PROVIDERS.find((provider) => provider.id === id);
-  if (builtInProvider) {
-    oauthProviderRegistry.set(id, builtInProvider);
-    return;
-  }
-  oauthProviderRegistry.delete(id);
-}
-
-/**
  * Reset OAuth providers to built-ins.
  */
 export function resetOAuthProviders(): void {
@@ -96,35 +76,9 @@ export function getOAuthProviders(): OAuthProviderInterface[] {
   return Array.from(oauthProviderRegistry.values());
 }
 
-/**
- * @deprecated Use getOAuthProviders() which returns OAuthProviderInterface[]
- */
-export function getOAuthProviderInfoList(): OAuthProviderInfo[] {
-  return getOAuthProviders().map((p) => ({
-    id: p.id,
-    name: p.name,
-    available: true,
-  }));
-}
-
 // ============================================================================
 // High-level API (uses provider registry)
 // ============================================================================
-
-/**
- * Refresh token for unknown OAuth provider.
- * @deprecated Use getOAuthProvider(id).refreshToken() instead
- */
-export async function refreshOAuthToken(
-  providerId: OAuthProviderId,
-  credentials: OAuthCredentials,
-): Promise<OAuthCredentials> {
-  const provider = getOAuthProvider(providerId);
-  if (!provider) {
-    throw new Error(`Unknown OAuth provider: ${providerId}`);
-  }
-  return provider.refreshToken(credentials);
-}
 
 /**
  * Get API key for a provider from OAuth credentials.

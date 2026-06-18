@@ -177,6 +177,21 @@ function turnStartResult(turnId = "turn-1", status = "inProgress") {
   };
 }
 
+function getMockServerVersion() {
+  return "0.132.0";
+}
+
+function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
 ) {
@@ -200,6 +215,7 @@ function createStartedThreadHarness(
   setCodexAppServerClientFactoryForTest(
     async () =>
       ({
+        ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: (handler: typeof notify) => {
           notify = handler;

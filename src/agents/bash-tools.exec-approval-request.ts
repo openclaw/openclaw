@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type {
   ExecApprovalCommandSpan,
+  ExecApprovalUnavailableDecision,
   ExecAsk,
   ExecSecurity,
   SystemRunApprovalPlan,
@@ -55,6 +56,7 @@ type RequestExecApprovalDecisionParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -87,6 +89,9 @@ function buildExecApprovalRequestToolParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans: params.commandSpans,
+    ...(params.unavailableDecisions?.length
+      ? { unavailableDecisions: params.unavailableDecisions }
+      : {}),
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -183,17 +188,6 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   return await waitForExecApprovalDecision(params.approvalId);
 }
 
-/** Registers an approval request and waits unless the gateway returned a final decision. */
-export async function requestExecApprovalDecision(
-  params: RequestExecApprovalDecisionParams,
-): Promise<string | null> {
-  const registration = await registerExecApprovalRequest(params);
-  if (Object.hasOwn(registration, "finalDecision")) {
-    return registration.finalDecision ?? null;
-  }
-  return await waitForExecApprovalDecision(registration.id);
-}
-
 type HostExecApprovalParams = {
   approvalId: string;
   command?: string;
@@ -207,6 +201,7 @@ type HostExecApprovalParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
@@ -315,6 +310,7 @@ async function buildHostApprovalDecisionParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans,
+    unavailableDecisions: params.unavailableDecisions,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
