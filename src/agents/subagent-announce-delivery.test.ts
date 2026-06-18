@@ -4632,3 +4632,336 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 });
+
+describe("capDirectTextContent", () => {
+  it("returns short text unchanged", () => {
+    const shortText = "Hello, world!";
+    expect(testing.capDirectTextContent(shortText)).toBe(shortText);
+  });
+
+  it("caps long text with head/tail preview", () => {
+    const longText = "x".repeat(5000);
+    const capped = testing.capDirectTextContent(longText);
+
+    expect(capped.length).toBeLessThanOrEqual(4000);
+    expect(capped).toContain("... [truncated 1000 chars] ...");
+    expect(capped.startsWith("x".repeat(2600))).toBe(true);
+    expect(capped.endsWith("x".repeat(1000))).toBe(true);
+  });
+
+  it("uses default maxChars of 4000", () => {
+    const text = "y".repeat(5000);
+    const capped = testing.capDirectTextContent(text);
+    expect(capped.length).toBeLessThanOrEqual(4000);
+  });
+
+  it("respects custom maxChars parameter", () => {
+    const text = "z".repeat(3000);
+    const capped = testing.capDirectTextContent(text, 2000);
+    expect(capped.length).toBeLessThanOrEqual(2000);
+    expect(capped).toContain("... [truncated 1000 chars] ...");
+  });
+
+  it("handles edge case of exactly maxChars", () => {
+    const text = "a".repeat(4000);
+    const capped = testing.capDirectTextContent(text);
+    expect(capped).toBe(text);
+    expect(capped.length).toBe(4000);
+  });
+});
+
+describe("active wake failure fallback", () => {
+  it("tries direct text delivery when active wake fails with no_active_run", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn(
+      async () =>
+        ({
+          queued: false,
+          reason: "no_active_run",
+        }) as EmbeddedAgentQueueMessageOutcome,
+    );
+
+    testing.setDepsForTest({
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-wake-fail",
+        isActive: true, // Session is active but wake fails
+      }),
+    });
+
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "test task",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "test completion output",
+        replyInstruction: "Summarize the result.",
+      },
+    ];
+
+    const result = await deliverSubagentAnnouncement({
+      sessionId: "requester-session-wake-fail",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "wake-fail-test",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterSessionKey: "agent:main:telegram:123456789",
+      targetRequesterSessionKey: "agent:main:telegram:123456789",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      requesterSessionOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      directOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      completionDirectOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      internalEvents,
+    });
+
+    // Should attempt direct text delivery
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "test completion output",
+        channel: "telegram",
+        to: "user:123",
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+  });
+
+  it("tries direct text delivery when session is locked", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    // Use no_active_run instead of compacting to avoid long retry loops in tests
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn(
+      async () =>
+        ({
+          queued: false,
+          reason: "no_active_run",
+        }) as EmbeddedAgentQueueMessageOutcome,
+    );
+    const callGateway = createGatewayMock({
+      status: "error",
+      error: "session_file_locked",
+    });
+
+    testing.setDepsForTest({
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-locked",
+        isActive: true, // Session is active but locked
+      }),
+    });
+
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "test task",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "locked session output",
+        replyInstruction: "Summarize.",
+      },
+    ];
+
+    await deliverSubagentAnnouncement({
+      sessionId: "requester-session-locked",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "locked-test",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterSessionKey: "agent:main:telegram:123456789",
+      targetRequesterSessionKey: "agent:main:telegram:123456789",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      requesterSessionOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      directOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      completionDirectOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      internalEvents,
+    });
+
+    // Should attempt direct text delivery as fallback
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "locked session output",
+        channel: "telegram",
+        to: "user:123",
+      }),
+    );
+  });
+
+  it("caps long text output in direct delivery", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn(
+      async () =>
+        ({
+          queued: false,
+          reason: "no_active_run",
+        }) as EmbeddedAgentQueueMessageOutcome,
+    );
+
+    testing.setDepsForTest({
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-long",
+        isActive: true, // Session is active but wake fails
+      }),
+    });
+
+    const longOutput = "x".repeat(6000);
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "long output task",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: longOutput,
+        replyInstruction: "Summarize.",
+      },
+    ];
+
+    await deliverSubagentAnnouncement({
+      sessionId: "requester-session-long",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "long-output-test",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterSessionKey: "agent:main:telegram:123456789",
+      targetRequesterSessionKey: "agent:main:telegram:123456789",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      requesterSessionOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      directOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      completionDirectOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      internalEvents,
+    });
+
+    // Verify text was capped
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("... [truncated 2000 chars] ..."),
+      }),
+    );
+  });
+
+  it("returns delivered: false when direct delivery fails", async () => {
+    const sendMessage = vi.fn(async () => {
+      throw new Error("Channel unavailable");
+    });
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn(
+      async () =>
+        ({
+          queued: false,
+          reason: "no_active_run",
+        }) as EmbeddedAgentQueueMessageOutcome,
+    );
+
+    testing.setDepsForTest({
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:worker:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "fail test",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "test output",
+        replyInstruction: "Summarize.",
+      },
+    ];
+
+    const result = await deliverSubagentAnnouncement({
+      sessionId: "requester-session-fail",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "fail-test",
+      requesterSessionKey: "agent:main:telegram:123456789",
+      targetRequesterSessionKey: "agent:main:telegram:123456789",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "user:123",
+        accountId: "default",
+      },
+      internalEvents,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: false,
+        path: "direct",
+      }),
+    );
+  });
+});
