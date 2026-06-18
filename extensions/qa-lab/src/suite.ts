@@ -891,6 +891,7 @@ async function writeQaSuiteArtifacts(params: {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const channelDriverSmoke = params.channelDriverSelection
     ? await runQaCrablineChannelDriverSmoke(params.channelDriverSelection, {
+        env: params.transport.createChannelDriverSmokeEnv?.(process.env) ?? process.env,
         outputDir: params.outputDir,
       })
     : undefined;

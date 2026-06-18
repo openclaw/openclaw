@@ -124,6 +124,7 @@ describe("crabline transport", () => {
     });
 
     expect(transport.id).toBe("crabline");
+    expect(transport.createChannelDriverSmokeEnv?.({}).TELEGRAM_BOT_TOKEN).toBe("driver-token");
     expect(transport.requiredPluginIds).toEqual(["telegram"]);
     expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
       channels: {
@@ -195,6 +196,9 @@ describe("crabline transport", () => {
       },
     });
 
+    expect(transport.createChannelDriverSmokeEnv?.({}).TELEGRAM_BOT_TOKEN).toBe(
+      "driver-token-from-convex",
+    );
     await transport.cleanup?.();
     expect(fetchCredentialLease.mock.calls.map(([input]) => fetchInputUrl(input))).toEqual(
       expect.arrayContaining([

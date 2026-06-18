@@ -21,6 +21,8 @@ export const QA_CRABLINE_CHANNEL_CAPABILITY_MATRIX_PATH = "crabline-channel-capa
 export const QA_CRABLINE_CHANNEL_SMOKE_PATH = "crabline-channel-smoke.json";
 export const QA_CRABLINE_MANIFEST_PATH = "crabline-smoke.json";
 export const QA_CRABLINE_DEFAULT_CHANNEL = "telegram";
+const QA_CRABLINE_TELEGRAM_DRIVER_BOT_TOKEN_ENV = "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN";
+const TELEGRAM_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN";
 
 export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriverId | null {
   const normalized = input?.trim().toLowerCase();
@@ -120,6 +122,23 @@ function createCrablineManifest(selection: QaCrablineChannelDriverSelection) {
       },
     },
     userName: "openclaw-qa",
+  };
+}
+
+function createCrablineSmokeCommandEnv(
+  env: NodeJS.ProcessEnv,
+  selection: QaCrablineChannelDriverSelection,
+): NodeJS.ProcessEnv {
+  if (
+    selection.channel !== QA_CRABLINE_DEFAULT_CHANNEL ||
+    env[TELEGRAM_BOT_TOKEN_ENV]?.trim() ||
+    !env[QA_CRABLINE_TELEGRAM_DRIVER_BOT_TOKEN_ENV]?.trim()
+  ) {
+    return env;
+  }
+  return {
+    ...env,
+    [TELEGRAM_BOT_TOKEN_ENV]: env[QA_CRABLINE_TELEGRAM_DRIVER_BOT_TOKEN_ENV],
   };
 }
 
@@ -240,6 +259,7 @@ export async function runQaCrablineChannelDriverSmoke(
     outputDir: string;
   },
 ): Promise<QaCrablineChannelDriverSmokeResult> {
+  const env = createCrablineSmokeCommandEnv(params.env ?? process.env, selection);
   const manifestPath = path.join(params.outputDir, QA_CRABLINE_MANIFEST_PATH);
   await fs.writeFile(
     manifestPath,
@@ -249,12 +269,12 @@ export async function runQaCrablineChannelDriverSmoke(
   const providers = await runCrablineJsonCommand({
     args: ["--config", manifestPath, "providers"],
     cwd: params.outputDir,
-    env: params.env,
+    env,
   });
   const doctor = await runCrablineJsonCommand({
     args: ["--config", manifestPath, "doctor"],
     cwd: params.outputDir,
-    env: params.env,
+    env,
   });
   return {
     capabilityReport: {

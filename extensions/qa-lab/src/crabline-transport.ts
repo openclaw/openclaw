@@ -571,6 +571,7 @@ function createCrablineTelegramGatewayConfig(params: {
 class QaCrablineTelegramTransport extends QaStateBackedTransportAdapter {
   readonly #cleanupCredentialLease: () => Promise<void>;
   readonly #driverIdentity: TelegramBotIdentity;
+  readonly #driverToken: string;
   readonly #groupId: string;
   readonly #sutToken: string;
   readonly #state: QaTransportState & { cleanup: () => Promise<void> };
@@ -578,6 +579,7 @@ class QaCrablineTelegramTransport extends QaStateBackedTransportAdapter {
   constructor(params: {
     cleanupCredentialLease: () => Promise<void>;
     driverIdentity: TelegramBotIdentity;
+    driverToken: string;
     groupId: string;
     state: QaTransportState & { cleanup: () => Promise<void> };
     sutToken: string;
@@ -591,6 +593,7 @@ class QaCrablineTelegramTransport extends QaStateBackedTransportAdapter {
     });
     this.#cleanupCredentialLease = params.cleanupCredentialLease;
     this.#driverIdentity = params.driverIdentity;
+    this.#driverToken = params.driverToken;
     this.#groupId = params.groupId;
     this.#state = params.state;
     this.#sutToken = params.sutToken;
@@ -602,6 +605,12 @@ class QaCrablineTelegramTransport extends QaStateBackedTransportAdapter {
       groupId: this.#groupId,
       sutToken: this.#sutToken,
     });
+
+  createChannelDriverSmokeEnv = (env: NodeJS.ProcessEnv) => ({
+    ...env,
+    OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: this.#driverToken,
+    ...(env.TELEGRAM_BOT_TOKEN?.trim() ? {} : { TELEGRAM_BOT_TOKEN: this.#driverToken }),
+  });
 
   waitReady = (params: {
     gateway: QaTransportGatewayClient;
@@ -711,6 +720,7 @@ export async function createQaCrablineTransportAdapter(params: {
     return new QaCrablineTelegramTransport({
       cleanupCredentialLease,
       driverIdentity,
+      driverToken,
       groupId,
       state: createCrablineTelegramState({
         driverIdentity,

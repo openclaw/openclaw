@@ -182,6 +182,7 @@ export type QaTransportAdapter = {
     accountId?: string | null;
   }) => Promise<unknown>;
   createReportNotes: (params: QaTransportReportParams) => string[];
+  createChannelDriverSmokeEnv?: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   cleanup?: () => Promise<void>;
 };
 

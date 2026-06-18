@@ -99,7 +99,8 @@ describe("crabline channel driver metadata", () => {
           env: {
             ...process.env,
             OPENCLAW_QA_CRABLINE_BIN: crablineBin,
-            TELEGRAM_BOT_TOKEN: "telegram-token",
+            OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "telegram-token",
+            TELEGRAM_BOT_TOKEN: "",
           },
           outputDir,
         },
