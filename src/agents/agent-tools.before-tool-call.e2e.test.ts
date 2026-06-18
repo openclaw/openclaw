@@ -235,7 +235,7 @@ describe("before_tool_call loop detection behavior", () => {
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
-      detector: "ping_pong" | "known_poll_no_progress";
+      detector: "ping_pong" | "known_poll_no_progress" | "global_circuit_breaker";
       toolName: string;
       count?: number;
     },
@@ -383,6 +383,63 @@ describe("before_tool_call loop detection behavior", () => {
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+  });
+
+  it("blocks a different wrapped tool when aggregate no-progress reaches the global breaker", async () => {
+    const crossToolLoopContext = {
+      agentId: "main",
+      sessionKey: "cross-tool-global-breaker",
+      loopDetection: {
+        enabled: true,
+        warningThreshold: 1,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      },
+    };
+    const readTool = createWrappedTool(
+      "read",
+      vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "same read output" }],
+        details: { ok: true },
+      }),
+      crossToolLoopContext,
+    );
+    const listTool = createWrappedTool(
+      "list",
+      vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "same list output" }],
+        details: { ok: true },
+      }),
+      crossToolLoopContext,
+    );
+    const execExecute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "should not execute" }],
+      details: { ok: true },
+    });
+    const execTool = createWrappedTool("exec", execExecute, crossToolLoopContext);
+
+    await expectUnblockedToolExecution(readTool, "read-1", { path: "/tmp/a.txt" });
+    await expectUnblockedToolExecution(listTool, "list-1", { path: "/tmp" });
+    await expectUnblockedToolExecution(readTool, "read-2", { path: "/tmp/a.txt" });
+    await expectUnblockedToolExecution(listTool, "list-2", { path: "/tmp" });
+
+    await withToolLoopEvents(async (emitted) => {
+      const result = await execTool.execute(
+        "exec-after-cross-tool-loop",
+        { command: "date" },
+        undefined,
+        undefined,
+      );
+
+      expectToolLoopBlockedResult(result, "global circuit breaker");
+      expect(execExecute).not.toHaveBeenCalled();
+      expectCriticalLoopEvent(emitted.at(-1), {
+        detector: "global_circuit_breaker",
+        toolName: "exec",
+        count: 4,
+      });
+    });
   });
 
   it("does not carry loop history across run ids", async () => {

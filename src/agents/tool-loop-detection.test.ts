@@ -569,6 +569,154 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks a different next tool after aggregate cross-tool no-progress reaches the global breaker", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 1,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.txt" },
+        { content: [{ type: "text", text: "same read output" }], details: { status: "ok" } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same list output" }], details: { status: "ok" } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.txt" },
+        { content: [{ type: "text", text: "same read output" }], details: { status: "ok" } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same list output" }], details: { status: "ok" } },
+        3,
+      );
+
+      const loopResult = detectToolCallLoop(state, "exec", { command: "date" }, config);
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(4);
+        expect(loopResult.warningKey).toMatch(/^global:session:2:/);
+      }
+    });
+
+    it("does not count one-off successful calls as aggregate no-progress", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 1,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.txt" },
+        { content: [{ type: "text", text: "read output" }], details: { status: "ok" } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "list output" }], details: { status: "ok" } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "pwd" },
+        {
+          content: [{ type: "text", text: "/workspace" }],
+          details: { status: "completed", exitCode: 0, aggregated: "/workspace" },
+        },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "search",
+        { query: "openclaw" },
+        { content: [{ type: "text", text: "search output" }], details: { status: "ok" } },
+        3,
+      );
+
+      const loopResult = detectToolCallLoop(state, "message", { action: "send" }, config);
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("resets aggregate no-progress when a repeated tool pattern starts progressing", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 1,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.txt" },
+        { content: [{ type: "text", text: "same read output" }], details: { status: "ok" } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same list output" }], details: { status: "ok" } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.txt" },
+        { content: [{ type: "text", text: "same read output" }], details: { status: "ok" } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same list output" }], details: { status: "ok" } },
+        3,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/tmp/a.txt" },
+        { content: [{ type: "text", text: "new read output" }], details: { status: "ok" } },
+        4,
+      );
+
+      const loopResult = detectToolCallLoop(state, "exec", { command: "date" }, config);
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("blocks repeated completed exec calls despite volatile runtime details", () => {
       const state = createState();
       const params = { command: "grafana-api.sh datasources" };
