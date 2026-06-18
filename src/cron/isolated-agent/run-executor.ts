@@ -328,6 +328,7 @@ export function createCronPromptExecutor(params: {
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            allowEmptyAssistantReplyAsSilent: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -407,6 +408,7 @@ export function createCronPromptExecutor(params: {
           disableMessageTool: !params.sourceDelivery.messageTool.enabled,
           forceMessageTool: params.sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          allowEmptyAssistantReplyAsSilent: true,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
           onExecutionPhase: params.onExecutionPhase,
