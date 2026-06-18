@@ -423,10 +423,12 @@ describe("bot-native-command-menu", () => {
     expect(hashCommandList(a)).not.toBe(hashCommandList(b));
   });
 
-  it("skips sync when command hash is unchanged and remote is populated (#32017)", async () => {
+  it("cached-hash skips sync when default and group remote command states are populated (#32017)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
-    const getMyCommands = vi.fn(async () => [{ command: "skip_test", description: "Skip test command" }]);
+    const getMyCommands = vi.fn(async () => [
+      { command: "skip_test", description: "Skip test command" },
+    ]);
     const runtimeLog = vi.fn();
 
     const accountId = `test-skip-${Date.now()}`;
@@ -446,7 +448,7 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalledTimes(2);
     });
 
-    // Second sync: hash matches AND getMyCommands returns non-empty → skip
+    // Second sync: hash matches and every remote scope is non-empty.
     syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
@@ -462,6 +464,8 @@ describe("bot-native-command-menu", () => {
       expect(getMyCommands).toHaveBeenCalled();
     });
     expect(setMyCommands).toHaveBeenCalledTimes(2);
+    expect(getMyCommands).toHaveBeenCalledWith(undefined);
+    expect(getMyCommands).toHaveBeenCalledWith({ scope: { type: "all_group_chats" } });
   });
 
   it("does not reuse cached hash across different bot identities", async () => {
@@ -621,7 +625,7 @@ describe("bot-native-command-menu", () => {
     );
   });
 
-  it("re-syncs when remote command state is empty despite matching hash (#92944)", async () => {
+  it("cached-hash re-syncs when default remote command state is empty despite matching hash (#92944)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const getMyCommands = vi.fn(async () => []);
@@ -629,23 +633,66 @@ describe("bot-native-command-menu", () => {
     const accountId = `test-empty-remote-${Date.now()}`;
     const commands = [{ command: "test", description: "Test" }];
 
-    // First sync — populates hash
     syncMenuCommandsWithMocks({
-      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
-      commandsToRegister: commands, accountId, botIdentity: "bot-a",
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
 
-    // Second sync — hash matches but getMyCommands returns empty → should re-sync
     syncMenuCommandsWithMocks({
-      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
-      commandsToRegister: commands, accountId, botIdentity: "bot-a",
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
     expect(getMyCommands).toHaveBeenCalled();
   });
 
-  it("skips sync when remote command state is non-empty and hash matches", async () => {
+  it("cached-hash re-syncs when group remote command state is empty despite matching hash (#92944)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const getMyCommands = vi.fn(async (opts?: { scope?: { type?: string } }) =>
+      opts?.scope?.type === "all_group_chats" ? [] : [{ command: "test", description: "Test" }],
+    );
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-group-remote-${Date.now()}`;
+    const commands = [{ command: "test", description: "Test" }];
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-group",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-group",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(getMyCommands).toHaveBeenCalledWith(undefined);
+    expect(getMyCommands).toHaveBeenCalledWith({ scope: { type: "all_group_chats" } });
+  });
+
+  it("cached-hash skips sync when remote command state is non-empty and hash matches", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const getMyCommands = vi.fn(async () => [{ command: "test", description: "Test" }]);
@@ -653,60 +700,121 @@ describe("bot-native-command-menu", () => {
     const accountId = `test-populated-remote-${Date.now()}`;
     const commands = [{ command: "test", description: "Test" }];
 
-    // First sync — populates hash
     syncMenuCommandsWithMocks({
-      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
-      commandsToRegister: commands, accountId, botIdentity: "bot-b",
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-b",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
 
-    // Second sync — hash matches AND getMyCommands returns non-empty → skip
     syncMenuCommandsWithMocks({
-      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
-      commandsToRegister: commands, accountId, botIdentity: "bot-b",
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-b",
     });
-    // No additional setMyCommands calls — sync was skipped
     await vi.waitFor(() => {
       expect(getMyCommands).toHaveBeenCalled();
     });
     expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
 
-  it("re-syncs when localized command variant is empty despite base scopes being populated (#92945)", async () => {
+  it("cached-hash re-syncs when localized command variant is empty despite base scopes being populated (#92945)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
-    // getMyCommands returns populated for base scopes but empty for localized variant
     const getMyCommands = vi.fn(async (opts?: { language_code?: string }) => {
       if (opts?.language_code === "ko") {
-        return []; // Localized variant is empty — stale!
+        return [];
       }
       return [{ command: "test", description: "Test" }];
     });
     const runtimeLog = vi.fn();
     const accountId = `test-localized-empty-${Date.now()}`;
-    const commands = [{
-      command: "test",
-      description: "Test",
-      descriptionLocalizations: { ko: "테스트" },
-    }];
+    const commands = [
+      {
+        command: "test",
+        description: "Test",
+        descriptionLocalizations: { ko: "테스트" },
+      },
+    ];
 
-    // First sync — populates hash
     syncMenuCommandsWithMocks({
-      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
-      commandsToRegister: commands, accountId, botIdentity: "bot-c",
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-c",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
 
-    // Second sync — hash matches, base scopes populated, but ko variant empty → re-sync
     syncMenuCommandsWithMocks({
-      deleteMyCommands, setMyCommands, getMyCommands, runtimeLog,
-      commandsToRegister: commands, accountId, botIdentity: "bot-c",
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-c",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(8));
-    // Verify the localized language_code query was made
     const langCodeCalls = getMyCommands.mock.calls.filter(
       (c: unknown[]) => (c[0] as Record<string, unknown>)?.language_code === "ko",
     );
     expect(langCodeCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("cached-hash re-syncs when localized group command variant is empty (#92945)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const getMyCommands = vi.fn(
+      async (opts?: { scope?: { type?: string }; language_code?: string }) =>
+        opts?.scope?.type === "all_group_chats" && opts.language_code === "ko"
+          ? []
+          : [{ command: "test", description: "Test" }],
+    );
+    const runtimeLog = vi.fn();
+    const accountId = `test-localized-group-empty-${Date.now()}`;
+    const commands = [
+      {
+        command: "test",
+        description: "Test",
+        descriptionLocalizations: { ko: "테스트" },
+      },
+    ];
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-d",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      getMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-d",
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(8));
+    expect(getMyCommands).toHaveBeenCalledWith({
+      scope: { type: "all_group_chats" },
+      language_code: "ko",
+    });
   });
 });
