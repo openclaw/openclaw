@@ -41,6 +41,7 @@ import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { extractInlineButtons } from "../../shared/text/extract-inline-buttons.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,

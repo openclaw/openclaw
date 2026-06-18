@@ -1,6 +1,7 @@
 /** Builds final reply payloads after sanitization, media normalization, and dedupe. */
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { extractInlineButtons } from "../../shared/text/extract-inline-buttons.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -142,9 +143,43 @@ function copyPayloadWithSanitizedText(
   text: string | undefined,
 ): ReplyPayload {
   const sanitizedText = sanitizeFinalReplyText(payload, text);
+
+  // Extract inline button JSON from model text output and inject into
+  // the presentation field. Some models (e.g. Gemini) emit button
+  // definitions like [[{"text":"X","callback_data":"Y"}]] as raw text
+  // in the reply body instead of using the interactive blocks parameter.
+  let extractedButtons: ReturnType<typeof extractInlineButtons> | undefined;
+  let cleanedText = sanitizedText;
+  if (sanitizedText && sanitizedText.includes("[[")) {
+    extractedButtons = extractInlineButtons(sanitizedText);
+    if (extractedButtons.buttons.length > 0) {
+      cleanedText = extractedButtons.text;
+    }
+  }
+
+  // Build presentation blocks from extracted inline buttons, merging
+  // with any existing presentation content on the payload.
+  let presentation = payload.presentation;
+  if (extractedButtons?.buttons.length > 0) {
+    const existingBlocks = presentation?.blocks ?? [];
+    const buttonBlocks = extractedButtons.buttons.map((row) => ({
+      type: "buttons" as const,
+      buttons: row.map((btn) => ({
+        label: btn.text,
+        value: btn.callback_data,
+        ...(btn.style ? { style: btn.style } : {}),
+      })),
+    }));
+    presentation = {
+      ...presentation,
+      blocks: [...existingBlocks, ...buttonBlocks],
+    };
+  }
+
   const next = copyReplyPayloadMetadata(payload, {
     ...payload,
-    text: sanitizedText,
+    text: cleanedText,
+    ...(presentation !== payload.presentation ? { presentation } : {}),
   });
   const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
   if (!mirror?.text) {
