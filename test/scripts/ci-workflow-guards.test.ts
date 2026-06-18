@@ -38,6 +38,10 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
+function readWorkflow(path: string) {
+  return parse(readFileSync(path, "utf8"));
+}
+
 function readTrackedText(relativePath: string): string {
   if (existsSync(relativePath)) {
     return readFileSync(relativePath, "utf8");
@@ -84,6 +88,46 @@ function findUnpinnedExternalActions(): string[] {
 }
 
 describe("ci workflow guards", () => {
+  it("routes PR edited metadata only to interested automation", () => {
+    const autoResponse = readWorkflow(".github/workflows/auto-response.yml");
+    const clawsweeperDispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    const labeler = readWorkflow(".github/workflows/labeler.yml");
+    const realBehaviorProof = readWorkflow(".github/workflows/real-behavior-proof.yml");
+
+    expect(autoResponse.on.pull_request_target.types).toContain("edited");
+    expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.title");
+    expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.body");
+    expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.base");
+
+    expect(clawsweeperDispatch.on.pull_request_target.types).toContain("edited");
+    expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.body");
+    expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.base");
+    expect(clawsweeperDispatch.jobs.dispatch.if).not.toContain("github.event.changes.title");
+
+    expect(realBehaviorProof.on.pull_request_target.types).toContain("edited");
+    expect(realBehaviorProof.jobs["real-behavior-proof"].if).toContain("github.event.changes.body");
+    expect(realBehaviorProof.jobs["real-behavior-proof"].if).toContain("github.event.changes.base");
+    expect(realBehaviorProof.jobs["real-behavior-proof"].if).not.toContain(
+      "github.event.changes.title",
+    );
+
+    expect(labeler.on.pull_request_target.types).toContain("edited");
+    expect(labeler.jobs.label.if).toContain("github.event.changes.title");
+    expect(labeler.jobs.label.if).toContain("github.event.changes.base");
+    expect(labeler.jobs.label.if).not.toContain("github.event.changes.body");
+
+    const labelerSteps = labeler.jobs.label.steps;
+    expect(labelerSteps.find((step) => step.uses?.startsWith("actions/labeler@"))?.if).toBe(
+      "${{ github.event.action != 'edited' || github.event.changes.base }}",
+    );
+    expect(labelerSteps.find((step) => step.name === "Apply PR size label")?.if).toBe(
+      "${{ github.event.action != 'edited' || github.event.changes.base }}",
+    );
+    expect(labelerSteps.find((step) => step.name === "Apply beta-blocker title label")?.if).toBe(
+      "${{ github.event.action != 'edited' || github.event.changes.title }}",
+    );
+  });
+
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
     const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
