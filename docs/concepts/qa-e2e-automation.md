@@ -57,6 +57,10 @@ the resolved scenarios through `qa suite`. `--surface` and
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
 entries remain the source of truth for the tests, coverage roles, and results.
+Taxonomy feature rows are one-ID proof targets, not aliases for equivalent
+behaviors. Primary scenario coverage fulfills the exact matching feature ID;
+secondary coverage is advisory context and still shows as missing primary
+evidence until a scenario covers that ID as primary.
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 

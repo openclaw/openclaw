@@ -31,10 +31,15 @@ out of this repo. If a score needs private evidence, use the redacted
 - `taxonomy.yaml` is the hand-edited source of truth for surfaces, levels,
   QA profiles, categories, feature coverage IDs, docs refs, LTS overrides, and
   completeness-instruction paths.
-- Feature `coverageIds` are conjunctive proof targets, not aliases. Prefer one
-  tightly scoped coverage ID per feature. If a taxonomy feature needs multiple
+- Feature `coverageIds` are conjunctive proof targets, not aliases. Keep one
+  tightly scoped coverage ID per feature row. If a feature needs multiple
   proofs, split it into separately named feature rows so missing proof lowers
   coverage without hiding which behavior is absent.
+- Name split feature rows for the behavior being proved, not for the old group
+  they came from. Avoid generated names like `Runtime activation - Plugin
+lifecycle`; prefer `Plugin lifecycle` or another direct behavior name.
+- Within one category, do not repeat the same coverage ID across multiple
+  feature rows. A repeated same-ID row over-counts one proof target.
 - `docs/maturity-scores.yaml` is the aggregate score source committed in this
   repo. It is the only committed score data; do not add generated inventory
   directories.
