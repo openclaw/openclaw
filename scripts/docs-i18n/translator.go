@@ -63,14 +63,14 @@ func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, think
 }
 
 func (t *CodexTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
-	return t.translate(ctx, text, t.translateMasked)
+	return t.translate(ctx, text, tgtLang, t.translateMasked)
 }
 
 func (t *CodexTranslator) TranslateRaw(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
-	return t.translate(ctx, text, t.translateRaw)
+	return t.translate(ctx, text, tgtLang, t.translateRaw)
 }
 
-func (t *CodexTranslator) translate(ctx context.Context, text string, run func(context.Context, string) (string, error)) (string, error) {
+func (t *CodexTranslator) translate(ctx context.Context, text, tgtLang string, run func(context.Context, string) (string, error)) (string, error) {
 	prefix, core, suffix := splitWhitespace(text)
 	if core == "" {
 		return text, nil
@@ -84,7 +84,11 @@ func (t *CodexTranslator) translate(ctx context.Context, text string, run func(c
 	if err != nil {
 		return "", err
 	}
-	return prefix + translated + suffix, nil
+	result := prefix + translated + suffix
+	if validationErr := validateTargetLanguageOutput(result, tgtLang); validationErr != nil {
+		return "", validationErr
+	}
+	return result, nil
 }
 
 func exactGlossaryMappings(glossary []GlossaryEntry) map[string]string {
@@ -181,7 +185,7 @@ func isRetryableTranslateError(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
 	}
-	if errors.Is(err, errEmptyTranslation) {
+	if errors.Is(err, errEmptyTranslation) || errors.Is(err, errSuspectedMojibake) {
 		return true
 	}
 	message := strings.ToLower(err.Error())

@@ -119,6 +119,46 @@ func validateNoTranslationTranscriptArtifacts(source, translated string) error {
 	return nil
 }
 
+var errSuspectedMojibake = fmt.Errorf("suspected mojibake in translated output")
+
+func validateTargetLanguageOutput(text, tgtLang string) error {
+	if !strings.EqualFold(tgtLang, "zh-CN") && !strings.EqualFold(tgtLang, "zh-TW") {
+		return nil
+	}
+	cjkCount := 0
+	latin1SupplCount := 0
+	total := 0
+	for _, r := range text {
+		total++
+		if isCJK(r) {
+			cjkCount++
+		}
+		if r >= 0x0080 && r <= 0x00FF {
+			latin1SupplCount++
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	// Latin-1 Supplement characters present but zero CJK characters strongly
+	// indicates MOJIBAKE: UTF-8 multi-byte sequences interpreted as Latin-1.
+	// A single short untranslated English snippet would have latin1SupplCount=0.
+	if latin1SupplCount >= 4 && cjkCount == 0 && total >= 12 {
+		return fmt.Errorf("%w: latin1-suppl=%d cjk=%d total=%d", errSuspectedMojibake, latin1SupplCount, cjkCount, total)
+	}
+	// High ratio of Latin-1 Supplement to CJK characters indicates partial mojibake.
+	if latin1SupplCount >= 8 && cjkCount < latin1SupplCount && total >= 20 {
+		return fmt.Errorf("%w: latin1-suppl=%d cjk=%d total=%d", errSuspectedMojibake, latin1SupplCount, cjkCount, total)
+	}
+	return nil
+}
+
+func isCJK(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) ||
+		(r >= 0x3400 && r <= 0x4DBF) ||
+		(r >= 0xF900 && r <= 0xFAFF)
+}
+
 func fatal(err error) {
 	if err == nil {
 		return

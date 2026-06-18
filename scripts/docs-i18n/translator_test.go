@@ -363,3 +363,54 @@ func TestPreviewCommandOutputRetainsStderrTail(t *testing.T) {
 		t.Fatalf("expected retained stderr tail, got %q", preview)
 	}
 }
+
+func TestCodexTranslatorRetriesOnMojibakeOutput(t *testing.T) {
+	previousDelay := translateRetryDelay
+	translateRetryDelay = func(int) time.Duration { return 0 }
+	defer func() { translateRetryDelay = previousDelay }()
+
+	// Simulate first response is mojibake, second is correct
+	attempts := 0
+	mojibakeText := "éç½®æåææ¡£æµè¯ä¸­æç¿»è¯"
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to Chinese.",
+		thinking:     "high",
+		runPrompt: func(context.Context, codexPromptRequest) (string, error) {
+			attempts++
+			if attempts == 1 {
+				return mojibakeText, nil
+			}
+			return "配置指南文档测试中文翻译", nil
+		},
+	}
+
+	got, err := translator.TranslateRaw(context.Background(), "Configuration guide doc test Chinese translation", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "配置指南文档测试中文翻译" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts (mojibake + retry), got %d", attempts)
+	}
+}
+
+func TestCodexTranslatorSkipsMojibakeValidationForNonChinese(t *testing.T) {
+	// Non-Chinese targets should not trigger mojibake validation
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to German.",
+		thinking:     "high",
+		runPrompt: func(context.Context, codexPromptRequest) (string, error) {
+			return "Konfigurationsleitfaden", nil
+		},
+	}
+
+	got, err := translator.TranslateRaw(context.Background(), "Configuration guide", "en", "de")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned unexpected error: %v", err)
+	}
+	if got != "Konfigurationsleitfaden" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+}
