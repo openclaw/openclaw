@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionEntry as StoreSessionEntry } from "../../config/sessions.js";
+import {
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+} from "../../config/sessions/transcript-tree.js";
 import { resolveSessionFamilyTranscriptReadTargets } from "../../gateway/session-history-family.js";
 import type { AgentMessage, CompactionSummaryMessage } from "../runtime/index.js";
 import type { SessionEntry as TranscriptSessionEntry } from "../sessions/index.js";
-import { readTranscriptFileState } from "./transcript-file-state.js";
 
 type CarryoverCompactionEntry = {
   type: "compaction";
@@ -13,6 +17,8 @@ type CarryoverCompactionEntry = {
   firstKeptEntryId?: string;
   details?: unknown;
 };
+
+const CARRYOVER_SUMMARY_TAIL_BYTES = 512 * 1024;
 
 function isCompactionEntry(
   entry: TranscriptSessionEntry,
@@ -34,17 +40,70 @@ function compactionTimestampMs(entry: CarryoverCompactionEntry): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+async function readTranscriptTailEntries(
+  sessionFile: string,
+  maxBytes = CARRYOVER_SUMMARY_TAIL_BYTES,
+): Promise<TranscriptSessionEntry[]> {
+  const file = await fs.open(sessionFile, "r");
+  try {
+    const stat = await file.stat();
+    const length = Math.min(stat.size, maxBytes);
+    if (length <= 0) {
+      return [];
+    }
+    const start = stat.size - length;
+    const buffer = Buffer.alloc(length);
+    await file.read(buffer, 0, length, start);
+    const text = buffer.toString("utf8");
+    const lines = text.split("\n");
+    if (start > 0) {
+      lines.shift();
+    }
+    return lines.flatMap((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return [];
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return [];
+        }
+        if ((parsed as { type?: unknown }).type === "session") {
+          return [];
+        }
+        return [parsed as TranscriptSessionEntry];
+      } catch {
+        return [];
+      }
+    });
+  } finally {
+    await file.close().catch(() => undefined);
+  }
+}
+
+function selectActiveTailEntries(entries: TranscriptSessionEntry[]): TranscriptSessionEntry[] {
+  const tree = scanSessionTranscriptTree(entries);
+  if (!tree.leafId) {
+    return entries;
+  }
+  const activeBranch = selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(
+    (node) => node.entry,
+  );
+  return activeBranch.length ? activeBranch : entries;
+}
+
 async function readLatestCompactionEntry(
   sessionFile: string | undefined,
 ): Promise<CarryoverCompactionEntry | undefined> {
   if (!sessionFile) {
     return undefined;
   }
-  const state = await readTranscriptFileState(sessionFile).catch(() => undefined);
-  if (!state) {
+  const entries = await readTranscriptTailEntries(sessionFile).catch(() => []);
+  if (!entries.length) {
     return undefined;
   }
-  return state.getBranch().findLast(isCompactionEntry);
+  return selectActiveTailEntries(entries).findLast(isCompactionEntry);
 }
 
 export async function resolveSessionFamilyCarryoverSummary(params: {

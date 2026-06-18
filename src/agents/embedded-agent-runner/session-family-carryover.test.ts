@@ -75,6 +75,63 @@ describe("session family carryover", () => {
     });
   });
 
+  it("reads carryover summaries from the bounded tail of large reset archives", async () => {
+    const dir = makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const ancestorSessionId = "ancestor-large-session";
+    const currentSessionId = "current-session";
+    const activeSessionFile = path.join(dir, currentSessionId + ".jsonl");
+    const archiveFile = path.join(dir, ancestorSessionId + ".jsonl.reset.2026-06-04T01-00-00.000Z");
+    const fillerRows = Array.from({ length: 1_200 }, (_, index) => ({
+      type: "custom",
+      id: `filler-${index}`,
+      parentId: index === 0 ? null : `filler-${index - 1}`,
+      timestamp: "2026-06-04T00:00:00.000Z",
+      key: "carryover-test-filler",
+      value: "x".repeat(512),
+    }));
+    writeTranscript(archiveFile, [
+      {
+        type: "session",
+        version: 1,
+        id: ancestorSessionId,
+        timestamp: "2026-06-04T00:00:00.000Z",
+        cwd: dir,
+      },
+      ...fillerRows,
+      {
+        type: "compaction",
+        id: "tail-carryover",
+        parentId: "filler-1199",
+        timestamp: "2026-06-04T00:30:00.000Z",
+        summary: "Large archive tail summary.",
+        firstKeptEntryId: "tail-msg",
+        tokensBefore: 22_222,
+      },
+    ]);
+    expect(fs.statSync(archiveFile).size).toBeGreaterThan(512 * 1024);
+
+    const entry = {
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      usageFamilySessionIds: [ancestorSessionId, currentSessionId],
+    } as SessionEntry;
+
+    const carryover = await resolveSessionFamilyCarryoverSummary({
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      storePath,
+      entry,
+    });
+
+    expect(carryover).toMatchObject({
+      role: "compactionSummary",
+      summary: "Large archive tail summary.",
+      tokensBefore: 22_222,
+      firstKeptEntryId: "tail-msg",
+    });
+  });
+
   it("ignores unowned reset archives before prompt carryover", async () => {
     const dir = makeTempDir();
     const storePath = path.join(dir, "sessions.json");
