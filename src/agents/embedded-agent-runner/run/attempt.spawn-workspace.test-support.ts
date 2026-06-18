@@ -828,6 +828,9 @@ vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
     timedOut: false,
     aborted: false,
   }),
+  resolveCompactionRetryAggregateTimeoutMs: () => 60_000,
+  COMPACTION_RETRY_AGGREGATE_TIMEOUT_FLOOR_MS: 60_000,
+  COMPACTION_RETRY_AGGREGATE_TIMEOUT_MARGIN_MS: 30_000,
 }));
 
 vi.mock("./compaction-timeout.js", () => ({
