@@ -17,7 +17,6 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
@@ -51,6 +50,7 @@ import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-medi
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import { measureReplyPhaseDiagnostics } from "./reply-phase-diagnostics.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
 import {
@@ -314,10 +314,12 @@ export async function getReplyFromConfig(
     });
   const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     resolverTiming.measure(name, () =>
-      measureDiagnosticsTimelineSpan(name, run, {
-        phase: "agent-turn",
+      measureReplyPhaseDiagnostics(name, run, {
+        timelinePhase: "agent-turn",
         config: cfg,
         attributes: traceAttributes,
+        channel: traceAttributes.surface,
+        sessionKey: resolverTimingSessionKey,
       }),
     );
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>

@@ -31,7 +31,12 @@ type OtlpKeyValue = {
 
 type OtlpSpan = {
   name?: string;
+  traceId?: Uint8Array;
+  spanId?: Uint8Array;
   parentSpanId?: Uint8Array;
+  kind?: number;
+  startTimeUnixNano?: bigint;
+  endTimeUnixNano?: bigint;
   attributes?: OtlpKeyValue[];
 };
 
@@ -69,6 +74,15 @@ type CapturedRequest = {
 type CapturedSpan = {
   name: string;
   parent: boolean;
+  traceId: string;
+  spanId: string;
+  parentSpanId: string;
+  kind?: number;
+  startUnixNano?: string;
+  endUnixNano?: string;
+  startMs?: number;
+  endMs?: number;
+  durationMs?: number;
   attributes: Record<string, string | number | boolean | string[]>;
 };
 
@@ -94,9 +108,21 @@ const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
   "openclaw.harness.run",
   "openclaw.context.assembled",
-  "openclaw.message.delivery",
+  "openclaw.message.processed",
+  "openclaw.reply.phase",
 ] as const;
-const REQUIRED_METRIC_NAMES = ["openclaw.harness.duration_ms"] as const;
+const REQUIRED_METRIC_NAMES = [
+  "openclaw.harness.duration_ms",
+  "openclaw.reply.phase.duration_ms",
+] as const;
+const REQUIRED_LATENCY_SEGMENT_NAMES = [
+  "totalProcessing",
+  "preModel",
+  "modelCall",
+  "postModelDelivery",
+  "contextAssembly",
+] as const;
+const REQUIRED_REPLY_PHASE_GROUP_NAMES = ["dispatch", "resolver", "pre_model"] as const;
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
   "openclaw.chatId",
@@ -114,6 +140,8 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.tool_call_id",
 ]);
 const DISALLOWED_BODY_NEEDLES = ["OTEL-QA-SECRET", "OTEL-QA-OK"];
+const QA_OTEL_SMOKE_CHANNEL_SESSION_KEY = "agent:qa:main";
+const QA_OTEL_SMOKE_QA_CHANNEL_SESSION_KEY = "qa-agent:direct:dm:qa-operator";
 const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
 const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/u;
 const MAX_OTLP_COMPRESSED_BODY_BYTES = readPositiveIntegerEnv(
@@ -227,6 +255,8 @@ function parseArgs(argv: string[]): CliOptions {
 function disallowedBodyNeedles(options: CliOptions): string[] {
   const scenarioId = options.scenarioId.trim();
   const needles = new Set(DISALLOWED_BODY_NEEDLES);
+  needles.add(QA_OTEL_SMOKE_CHANNEL_SESSION_KEY);
+  needles.add(QA_OTEL_SMOKE_QA_CHANNEL_SESSION_KEY);
   if (scenarioId) {
     needles.add(`agent:qa:${scenarioId}`);
     needles.add(`Agent:qa:${scenarioId}`);
@@ -360,6 +390,24 @@ function spanAttributes(span: OtlpSpan): Record<string, string | number | boolea
   return attributes;
 }
 
+function bytesToHex(bytes: Uint8Array | undefined): string {
+  return bytes && bytes.length > 0 ? Buffer.from(bytes).toString("hex") : "";
+}
+
+function unixNanoToMs(value: bigint | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return Number(value) / 1_000_000;
+}
+
+function durationMsFromUnixNano(start: bigint | undefined, end: bigint | undefined) {
+  if (start === undefined || end === undefined || end < start) {
+    return undefined;
+  }
+  return Number(end - start) / 1_000_000;
+}
+
 class ProtoReader {
   private readonly buffer: Uint8Array;
   private offset = 0;
@@ -387,6 +435,20 @@ class ProtoReader {
         return result;
       }
       shift += 7;
+    }
+    throw new Error("truncated protobuf varint");
+  }
+
+  varintBigInt(): bigint {
+    let result = 0n;
+    let shift = 0n;
+    while (this.offset < this.buffer.length) {
+      const byte = this.buffer[this.offset++];
+      result += BigInt(byte & 0x7f) << shift;
+      if ((byte & 0x80) === 0) {
+        return result;
+      }
+      shift += 7n;
     }
     throw new Error("truncated protobuf varint");
   }
@@ -420,6 +482,12 @@ class ProtoReader {
     const start = this.advance(8, "fixed64");
     const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + start, 8);
     return view.getFloat64(0, true);
+  }
+
+  fixed64BigInt(): bigint {
+    const start = this.advance(8, "fixed64");
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + start, 8);
+    return (BigInt(view.getUint32(4, true)) << 32n) + BigInt(view.getUint32(0, true));
   }
 
   skip(wire: number) {
@@ -512,10 +580,24 @@ function decodeSpan(message: Uint8Array): OtlpSpan {
   const span: OtlpSpan = {};
   while (!reader.done()) {
     const { field, wire } = reader.tag();
-    if (field === 4 && wire === 2) {
+    if (field === 1 && wire === 2) {
+      span.traceId = reader.bytes();
+    } else if (field === 2 && wire === 2) {
+      span.spanId = reader.bytes();
+    } else if (field === 4 && wire === 2) {
       span.parentSpanId = reader.bytes();
     } else if (field === 5 && wire === 2) {
       span.name = reader.string();
+    } else if (field === 6 && wire === 0) {
+      span.kind = reader.varint();
+    } else if (field === 7 && wire === 1) {
+      span.startTimeUnixNano = reader.fixed64BigInt();
+    } else if (field === 7 && wire === 0) {
+      span.startTimeUnixNano = reader.varintBigInt();
+    } else if (field === 8 && wire === 1) {
+      span.endTimeUnixNano = reader.fixed64BigInt();
+    } else if (field === 8 && wire === 0) {
+      span.endTimeUnixNano = reader.varintBigInt();
     } else if (field === 9 && wire === 2) {
       span.attributes ??= [];
       span.attributes.push(decodeKeyValue(reader.bytes()));
@@ -573,9 +655,25 @@ function decodeTraceRequest(body: Buffer): CapturedSpan[] {
         if (!name) {
           continue;
         }
+        const startMs = unixNanoToMs(span.startTimeUnixNano);
+        const endMs = unixNanoToMs(span.endTimeUnixNano);
+        const durationMs = durationMsFromUnixNano(span.startTimeUnixNano, span.endTimeUnixNano);
         spans.push({
           name,
           parent: (span.parentSpanId?.length ?? 0) > 0,
+          traceId: bytesToHex(span.traceId),
+          spanId: bytesToHex(span.spanId),
+          parentSpanId: bytesToHex(span.parentSpanId),
+          ...(span.kind !== undefined ? { kind: span.kind } : {}),
+          ...(span.startTimeUnixNano !== undefined
+            ? { startUnixNano: span.startTimeUnixNano.toString() }
+            : {}),
+          ...(span.endTimeUnixNano !== undefined
+            ? { endUnixNano: span.endTimeUnixNano.toString() }
+            : {}),
+          ...(startMs !== undefined ? { startMs } : {}),
+          ...(endMs !== undefined ? { endMs } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
           attributes: spanAttributes(span),
         });
       }
@@ -1384,6 +1482,169 @@ function formatBoundedList(values: readonly string[], maxItems: number): string 
   return `${visible.join(", ")}${suffix}`;
 }
 
+type DurationSummary = {
+  count: number;
+  medianMs?: number;
+  p95Ms?: number;
+  maxMs?: number;
+};
+
+type QaLatencyReport = {
+  traceCount: number;
+  segments: {
+    totalProcessing: DurationSummary;
+    preModel: DurationSummary;
+    modelCall: DurationSummary;
+    postModelDelivery: DurationSummary;
+    contextAssembly: DurationSummary;
+  };
+  replyPhaseGroups: Record<string, DurationSummary>;
+};
+
+function roundedMs(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function summarizeDurations(values: readonly number[]): DurationSummary {
+  const sorted = values
+    .filter(Number.isFinite)
+    .map(roundedMs)
+    .toSorted((a, b) => a - b);
+  if (sorted.length === 0) {
+    return { count: 0 };
+  }
+  const percentile = (rank: number) => sorted[Math.min(sorted.length - 1, Math.ceil(rank) - 1)];
+  return {
+    count: sorted.length,
+    medianMs: percentile(sorted.length * 0.5),
+    p95Ms: percentile(sorted.length * 0.95),
+    maxMs: sorted[sorted.length - 1],
+  };
+}
+
+function spanDuration(span: CapturedSpan | undefined): number | undefined {
+  return typeof span?.durationMs === "number" && Number.isFinite(span.durationMs)
+    ? span.durationMs
+    : undefined;
+}
+
+function spanStart(span: CapturedSpan | undefined): number | undefined {
+  return typeof span?.startMs === "number" && Number.isFinite(span.startMs)
+    ? span.startMs
+    : undefined;
+}
+
+function spanEnd(span: CapturedSpan | undefined): number | undefined {
+  return typeof span?.endMs === "number" && Number.isFinite(span.endMs) ? span.endMs : undefined;
+}
+
+function positiveDeltaMs(end: number | undefined, start: number | undefined): number | undefined {
+  if (end === undefined || start === undefined || end < start) {
+    return undefined;
+  }
+  return end - start;
+}
+
+function pushDuration(target: number[], value: number | undefined): void {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    target.push(value);
+  }
+}
+
+function attributeString(span: CapturedSpan, key: string): string | undefined {
+  const value = span.attributes[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function firstSpanByName(spans: readonly CapturedSpan[], name: string): CapturedSpan | undefined {
+  return spans.find((span) => span.name === name);
+}
+
+function buildLatencyReport(spans: readonly CapturedSpan[]): QaLatencyReport {
+  const byTrace = new Map<string, CapturedSpan[]>();
+  for (const span of spans) {
+    if (!span.traceId) {
+      continue;
+    }
+    const group = byTrace.get(span.traceId) ?? [];
+    group.push(span);
+    byTrace.set(span.traceId, group);
+  }
+
+  const totalProcessing: number[] = [];
+  const preModel: number[] = [];
+  const modelCall: number[] = [];
+  const postModelDelivery: number[] = [];
+  const contextAssembly: number[] = [];
+  const replyPhaseGroupDurations = new Map<string, number[]>();
+
+  for (const traceSpans of byTrace.values()) {
+    const messageProcessed = firstSpanByName(traceSpans, "openclaw.message.processed");
+    const contextAssembled = firstSpanByName(traceSpans, "openclaw.context.assembled");
+    const modelSpan = traceSpans.find(isLatestGenAiModelCallSpan);
+    const delivery = firstSpanByName(traceSpans, "openclaw.message.delivery");
+    const postModelEnd = delivery ?? messageProcessed;
+    const groupTotals = new Map<string, number>();
+
+    pushDuration(totalProcessing, spanDuration(messageProcessed));
+    pushDuration(modelCall, spanDuration(modelSpan));
+    pushDuration(contextAssembly, spanDuration(contextAssembled));
+    pushDuration(preModel, positiveDeltaMs(spanStart(modelSpan), spanStart(messageProcessed)));
+    pushDuration(postModelDelivery, positiveDeltaMs(spanEnd(postModelEnd), spanEnd(modelSpan)));
+
+    for (const span of traceSpans.filter(
+      (candidate) => candidate.name === "openclaw.reply.phase",
+    )) {
+      const phaseGroup = attributeString(span, "openclaw.reply.phase_group") ?? "unknown";
+      const duration = spanDuration(span);
+      if (duration === undefined) {
+        continue;
+      }
+      groupTotals.set(phaseGroup, (groupTotals.get(phaseGroup) ?? 0) + duration);
+    }
+    for (const [phaseGroup, duration] of groupTotals) {
+      const values = replyPhaseGroupDurations.get(phaseGroup) ?? [];
+      values.push(duration);
+      replyPhaseGroupDurations.set(phaseGroup, values);
+    }
+  }
+
+  const replyPhaseGroups: Record<string, DurationSummary> = {};
+  for (const group of ["dispatch", "resolver", "pre_model", "unknown"]) {
+    const values = replyPhaseGroupDurations.get(group);
+    if (values || group !== "unknown") {
+      replyPhaseGroups[group] = summarizeDurations(values ?? []);
+    }
+  }
+
+  return {
+    traceCount: byTrace.size,
+    segments: {
+      totalProcessing: summarizeDurations(totalProcessing),
+      preModel: summarizeDurations(preModel),
+      modelCall: summarizeDurations(modelCall),
+      postModelDelivery: summarizeDurations(postModelDelivery),
+      contextAssembly: summarizeDurations(contextAssembly),
+    },
+    replyPhaseGroups,
+  };
+}
+
+function latencyReportFailures(report: QaLatencyReport): string[] {
+  const failures: string[] = [];
+  for (const segment of REQUIRED_LATENCY_SEGMENT_NAMES) {
+    if ((report.segments[segment]?.count ?? 0) <= 0) {
+      failures.push(`latency report missing ${segment} bucket`);
+    }
+  }
+  for (const group of REQUIRED_REPLY_PHASE_GROUP_NAMES) {
+    if ((report.replyPhaseGroups[group]?.count ?? 0) <= 0) {
+      failures.push(`latency report missing ${group} reply phase group`);
+    }
+  }
+  return failures;
+}
+
 function assertSmoke(params: {
   childExitCode: number;
   disallowedBodyNeedles: string[];
@@ -1440,6 +1701,7 @@ function assertSmoke(params: {
       failures.push(`missing required metric ${name}`);
     }
   }
+  failures.push(...latencyReportFailures(buildLatencyReport(params.spans)));
   const correlatedLogRecords = params.logRecords.filter(
     (record) => record.traceId && record.spanId,
   );
@@ -1564,6 +1826,7 @@ async function main() {
     requests: receiver.capturedRequests,
     bodyText: receiver.capturedBodyText,
   });
+  const latencyReport = buildLatencyReport(receiver.capturedSpans);
   const summary = {
     passed: assertion.passed,
     failures: assertion.failures,
@@ -1583,6 +1846,7 @@ async function main() {
     signalRequestCounts: assertion.signalRequestCounts,
     modelSpanCount: assertion.modelSpanCount,
     modelErrorSpanCount: assertion.modelErrorSpanCount,
+    latencyReport,
     disallowedAttributeKeys: assertion.disallowedAttributeKeys,
     contentAttributeKeys: assertion.contentAttributeKeys,
     leakContexts: assertion.leakContexts,
@@ -1596,6 +1860,13 @@ async function main() {
     spans: receiver.capturedSpans.map((span) => ({
       name: span.name,
       parent: span.parent,
+      traceId: span.traceId,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      kind: span.kind,
+      durationMs: span.durationMs,
+      startUnixNano: span.startUnixNano,
+      endUnixNano: span.endUnixNano,
       attributeKeys: Object.keys(span.attributes).toSorted(),
     })),
     logBodyKinds: [
@@ -1648,8 +1919,11 @@ async function main() {
 export const testing = {
   appendCapturedBodyText,
   assertSmoke,
+  buildLatencyReport,
   createBoundedTextAccumulator,
+  decodeTraceRequest,
   decodeRequestBody,
+  disallowedBodyNeedles,
   parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,

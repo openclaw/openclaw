@@ -35,6 +35,59 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
+  function span(
+    name: string,
+    parent: boolean,
+    attributes: Record<string, string | number | boolean | string[]> = {},
+    timing: { startMs?: number; durationMs?: number } = {},
+    kind = 1,
+  ) {
+    const startMs = timing.startMs ?? 0;
+    const durationMs = timing.durationMs ?? 1;
+    return {
+      name,
+      parent,
+      traceId: "trace",
+      spanId: `${name}-span`,
+      parentSpanId: parent ? "parent" : "",
+      kind,
+      startMs,
+      endMs: startMs + durationMs,
+      startUnixNano: String(startMs * 1_000_000),
+      endUnixNano: String((startMs + durationMs) * 1_000_000),
+      durationMs,
+      attributes,
+    };
+  }
+
+  function protoVarint(value: number): Buffer {
+    const bytes: number[] = [];
+    let remaining = value;
+    while (remaining >= 0x80) {
+      bytes.push((remaining & 0x7f) | 0x80);
+      remaining = Math.floor(remaining / 0x80);
+    }
+    bytes.push(remaining);
+    return Buffer.from(bytes);
+  }
+
+  function protoBytes(field: number, value: Buffer | string): Buffer {
+    const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
+    return Buffer.concat([protoVarint((field << 3) | 2), protoVarint(buffer.length), buffer]);
+  }
+
+  function protoFixed64(field: number, value: bigint): Buffer {
+    const buffer = Buffer.alloc(8);
+    buffer.writeUInt32LE(Number(value & 0xffffffffn), 0);
+    buffer.writeUInt32LE(Number(value >> 32n), 4);
+    return Buffer.concat([protoVarint((field << 3) | 1), buffer]);
+  }
+
+  function otlpStringAttribute(key: string, value: string): Buffer {
+    const anyValue = protoBytes(1, value);
+    return protoBytes(9, Buffer.concat([protoBytes(1, key), protoBytes(2, anyValue)]));
+  }
+
   function makePassingSmokeAssertionInput(): Parameters<typeof testing.assertSmoke>[0] {
     return {
       bodyText: {
@@ -49,7 +102,10 @@ describe("qa-otel-smoke receiver bounds", () => {
           spanId: "span",
         },
       ],
-      metrics: [{ name: "openclaw.harness.duration_ms" }],
+      metrics: [
+        { name: "openclaw.harness.duration_ms" },
+        { name: "openclaw.reply.phase.duration_ms" },
+      ],
       requests: [
         {
           path: "/v1/traces",
@@ -83,20 +139,49 @@ describe("qa-otel-smoke receiver bounds", () => {
         },
       ],
       spans: [
-        { name: "openclaw.run", parent: false, attributes: {} },
-        { name: "openclaw.harness.run", parent: true, attributes: {} },
-        { name: "openclaw.context.assembled", parent: true, attributes: {} },
-        { name: "openclaw.message.delivery", parent: true, attributes: {} },
-        {
-          name: "chat gpt-5.5",
-          parent: true,
-          attributes: {
+        span("openclaw.run", false),
+        span("openclaw.message.processed", false, {}, { startMs: 0, durationMs: 100 }),
+        span("openclaw.harness.run", true),
+        span("openclaw.context.assembled", true, {}, { startMs: 10, durationMs: 20 }),
+        span(
+          "openclaw.reply.phase",
+          true,
+          {
+            "openclaw.reply.phase": "reply.load_runtime_plugins",
+            "openclaw.reply.phase_group": "dispatch",
+          },
+          { startMs: 5, durationMs: 5 },
+        ),
+        span(
+          "openclaw.reply.phase",
+          true,
+          {
+            "openclaw.reply.phase": "reply.init_session_state",
+            "openclaw.reply.phase_group": "resolver",
+          },
+          { startMs: 12, durationMs: 7 },
+        ),
+        span(
+          "openclaw.reply.phase",
+          true,
+          {
+            "openclaw.reply.phase": "reply.build_prompt_bodies",
+            "openclaw.reply.phase_group": "pre_model",
+          },
+          { startMs: 20, durationMs: 15 },
+        ),
+        span("openclaw.message.delivery", true, {}, { startMs: 80, durationMs: 20 }),
+        span(
+          "chat gpt-5.5",
+          true,
+          {
             "gen_ai.operation.name": "chat",
             "gen_ai.request.model": "gpt-5.5",
             "openclaw.model": "gpt-5.5",
             "openclaw.provider": "openai",
           },
-        },
+          { startMs: 40, durationMs: 30 },
+        ),
       ],
     };
   }
@@ -117,6 +202,16 @@ describe("qa-otel-smoke receiver bounds", () => {
       providerMode: "mock-openai",
       scenarioId: "otel-trace-smoke",
     });
+  });
+
+  it("checks the qa-channel smoke session key for raw OTLP leaks", () => {
+    expect(testing.disallowedBodyNeedles(testing.parseArgs([]))).toEqual(
+      expect.arrayContaining([
+        "agent:qa:otel-trace-smoke",
+        "agent:qa:main",
+        "qa-agent:direct:dm:qa-operator",
+      ]),
+    );
   });
 
   it("parses body-size limit env values as strict positive integers", () => {
@@ -167,6 +262,38 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(captured.traces?.[0]).toContain("[captured body text truncated to last 16 bytes]");
     expect(captured.traces?.[0]).toContain("b".repeat(16));
     expect(captured.traces?.[0]).not.toContain("a".repeat(20));
+  });
+
+  it("decodes OTLP trace ids, span ids, parent ids, and timestamps", () => {
+    const spanPayload = Buffer.concat([
+      protoBytes(1, Buffer.from("11111111111111111111111111111111", "hex")),
+      protoBytes(2, Buffer.from("2222222222222222", "hex")),
+      protoBytes(4, Buffer.from("3333333333333333", "hex")),
+      protoBytes(5, "openclaw.reply.phase"),
+      protoVarint((6 << 3) | 0),
+      protoVarint(3),
+      protoFixed64(7, 1_000_000_000n),
+      protoFixed64(8, 1_250_000_000n),
+      otlpStringAttribute("openclaw.reply.phase_group", "pre_model"),
+    ]);
+    const body = protoBytes(1, protoBytes(2, protoBytes(2, spanPayload)));
+
+    expect(testing.decodeTraceRequest(body)).toEqual([
+      expect.objectContaining({
+        name: "openclaw.reply.phase",
+        parent: true,
+        traceId: "11111111111111111111111111111111",
+        spanId: "2222222222222222",
+        parentSpanId: "3333333333333333",
+        kind: 3,
+        startUnixNano: "1000000000",
+        endUnixNano: "1250000000",
+        durationMs: 250,
+        attributes: {
+          "openclaw.reply.phase_group": "pre_model",
+        },
+      }),
+    ]);
   });
 
   it("returns a bounded failure for malformed local OTLP protobuf", async () => {
@@ -304,6 +431,71 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.failures).toEqual([]);
   });
 
+  it("reports latency segments and reply phase group buckets from captured spans", () => {
+    const input = makePassingSmokeAssertionInput();
+
+    expect(testing.buildLatencyReport(input.spans)).toMatchObject({
+      traceCount: 1,
+      segments: {
+        totalProcessing: { count: 1, medianMs: 100, p95Ms: 100, maxMs: 100 },
+        preModel: { count: 1, medianMs: 40, p95Ms: 40, maxMs: 40 },
+        modelCall: { count: 1, medianMs: 30, p95Ms: 30, maxMs: 30 },
+        postModelDelivery: { count: 1, medianMs: 30, p95Ms: 30, maxMs: 30 },
+        contextAssembly: { count: 1, medianMs: 20, p95Ms: 20, maxMs: 20 },
+      },
+      replyPhaseGroups: {
+        dispatch: { count: 1, medianMs: 5, p95Ms: 5, maxMs: 5 },
+        resolver: { count: 1, medianMs: 7, p95Ms: 7, maxMs: 7 },
+        pre_model: { count: 1, medianMs: 15, p95Ms: 15, maxMs: 15 },
+      },
+    });
+  });
+
+  it("fails when required latency report buckets cannot be computed", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.spans = input.spans.map((capturedSpan) => {
+      const { startMs, endMs, durationMs, startUnixNano, endUnixNano, ...rest } = capturedSpan;
+      void startMs;
+      void endMs;
+      void durationMs;
+      void startUnixNano;
+      void endUnixNano;
+      return rest;
+    });
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("latency report missing totalProcessing bucket");
+    expect(assertion.failures).toContain("latency report missing preModel bucket");
+    expect(assertion.failures).toContain("latency report missing dispatch reply phase group");
+  });
+
+  it("reports the post-model tail from message processing when no delivery span exists", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.spans = input.spans.filter((candidate) => candidate.name !== "openclaw.message.delivery");
+
+    expect(testing.assertSmoke(input).passed).toBe(true);
+    expect(testing.buildLatencyReport(input.spans).segments.postModelDelivery).toMatchObject({
+      count: 1,
+      medianMs: 30,
+      p95Ms: 30,
+      maxMs: 30,
+    });
+  });
+
+  it("requires the message processing span used by latency reporting", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.spans = input.spans.filter(
+      (candidate) => candidate.name !== "openclaw.message.processed",
+    );
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("missing required span openclaw.message.processed");
+  });
+
   it("still fails when OTLP log payload text leaks scenario content", () => {
     const input = makePassingSmokeAssertionInput();
     input.bodyText = {
@@ -315,6 +507,19 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.passed).toBe(false);
     expect(assertion.failures).toContain("OTLP logs payload leaked content: OTEL-QA-SECRET");
     expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
+  });
+
+  it("still fails when OTLP raw payload text leaks the qa-channel session key", () => {
+    const input = makePassingSmokeAssertionInput();
+    input.disallowedBodyNeedles = testing.disallowedBodyNeedles(testing.parseArgs([]));
+    input.bodyText = {
+      traces: ["trace payload leaked agent:qa:main"],
+    };
+
+    const assertion = testing.assertSmoke(input);
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("OTLP traces payload leaked content: agent:qa:main");
   });
 
   it("still requires OTLP log records to carry trace correlation", () => {

@@ -41,6 +41,7 @@ import {
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
   redactSensitiveText,
+  resolveDiagnosticReplyPhaseGroup,
 } from "../api.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
@@ -125,6 +126,7 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
+type ReplyPhaseDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "reply.phase.completed" }>;
 type ModelFailoverDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
 type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
@@ -1157,11 +1159,7 @@ function assignOtelSecurityAttributes(
       );
     }
     if (evt.policy.decision) {
-      assignOtelLogAttribute(
-        attributes,
-        "openclaw.security.policy.decision",
-        evt.policy.decision,
-      );
+      assignOtelLogAttribute(attributes, "openclaw.security.policy.decision", evt.policy.decision);
     }
     if (evt.policy.reason) {
       assignOtelLogAttribute(
@@ -1180,11 +1178,7 @@ function assignOtelSecurityAttributes(
       );
     }
     if (evt.control.family) {
-      assignOtelLogAttribute(
-        attributes,
-        "openclaw.security.control.family",
-        evt.control.family,
-      );
+      assignOtelLogAttribute(attributes, "openclaw.security.control.family", evt.control.family);
     }
   }
   assignOtelSecurityEventAttributes(attributes, evt.attributes);
@@ -1493,10 +1487,24 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "ms",
         description: "Agent harness lifecycle duration",
       });
+      const replyPhaseDurationHistogram = meter.createHistogram(
+        "openclaw.reply.phase.duration_ms",
+        {
+          unit: "ms",
+          description: "Auto-reply phase duration",
+        },
+      );
       const contextHistogram = meter.createHistogram("openclaw.context.tokens", {
         unit: "1",
         description: "Context window size and usage",
       });
+      const contextAssemblyDurationHistogram = meter.createHistogram(
+        "openclaw.context.assembly.duration_ms",
+        {
+          unit: "ms",
+          description: "Context assembly duration",
+        },
+      );
       const webhookReceivedCounter = meter.createCounter("openclaw.webhook.received", {
         unit: "1",
         description: "Webhook requests received",
@@ -2552,6 +2560,54 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordReplyPhaseCompleted = (
+        evt: ReplyPhaseDiagnosticEvent,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!metadata.trusted) {
+          return;
+        }
+        if (
+          (evt.outcome !== "completed" && evt.outcome !== "error") ||
+          !Number.isFinite(evt.durationMs) ||
+          evt.durationMs < 0
+        ) {
+          return;
+        }
+        const phaseGroup = resolveDiagnosticReplyPhaseGroup(evt.phase);
+        if (!phaseGroup || evt.phaseGroup !== phaseGroup) {
+          return;
+        }
+        const attrs = {
+          "openclaw.reply.phase": evt.phase,
+          "openclaw.reply.phase_group": phaseGroup,
+          "openclaw.outcome": evt.outcome,
+          ...(evt.channel ? { "openclaw.channel": lowCardinalityAttr(evt.channel) } : {}),
+          ...(evt.provider ? { "openclaw.provider": lowCardinalityAttr(evt.provider) } : {}),
+          ...(evt.model ? { "openclaw.model": lowCardinalityAttr(evt.model) } : {}),
+          ...(evt.trigger ? { "openclaw.trigger": lowCardinalityAttr(evt.trigger) } : {}),
+          ...(evt.errorCategory
+            ? { "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other") }
+            : {}),
+        };
+        replyPhaseDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration("openclaw.reply.phase", attrs, evt.durationMs, {
+          parentContext: activeInternalOrTrustedContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        if (evt.outcome === "error") {
+          const errorType = lowCardinalityAttr(evt.errorCategory, "other");
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: errorType,
+          });
+        }
+        span.end(evt.ts);
+      };
+
       const recordRunStarted = (
         evt: Extract<DiagnosticEventPayload, { type: "run.started" }>,
         metadata: DiagnosticEventMetadata,
@@ -2976,6 +3032,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "context.assembled" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
+        const durationMs = Math.max(0, evt.durationMs ?? 0);
+        contextAssemblyDurationHistogram.record(durationMs, {
+          "openclaw.channel": lowCardinalityAttr(evt.channel),
+          "openclaw.model": lowCardinalityAttr(evt.model),
+          "openclaw.provider": lowCardinalityAttr(evt.provider),
+          "openclaw.trigger": lowCardinalityAttr(evt.trigger),
+        });
         if (!tracesEnabled) {
           return;
         }
@@ -2995,7 +3058,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reserveTokens !== undefined) {
           spanAttrs["openclaw.context.reserve_tokens"] = evt.reserveTokens;
         }
-        const span = spanWithDuration("openclaw.context.assembled", spanAttrs, 0, {
+        const span = spanWithDuration("openclaw.context.assembled", spanAttrs, durationMs, {
           parentContext: activeTrustedParentContext(evt, metadata),
           endTimeMs: evt.ts,
         });
@@ -3581,6 +3644,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "message.delivery.error":
               recordMessageDeliveryError(evt, metadata);
+              return;
+            case "reply.phase.completed":
+              recordReplyPhaseCompleted(evt, metadata);
               return;
             case "talk.event":
               recordTalkEvent(evt, metadata);

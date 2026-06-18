@@ -18,6 +18,7 @@ export {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  resolveDiagnosticReplyPhaseGroup,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 export { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";

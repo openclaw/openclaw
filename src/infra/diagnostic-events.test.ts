@@ -497,8 +497,12 @@ describe("diagnostic-events", () => {
 
   it("dispatches high-frequency tool and model lifecycle events asynchronously", async () => {
     const events: string[] = [];
+    const trustedEvents: string[] = [];
     onDiagnosticEvent((event) => {
       events.push(event.type);
+    });
+    onTrustedInternalDiagnosticEvent((event) => {
+      trustedEvents.push(event.type);
     });
 
     emitDiagnosticEvent({
@@ -512,12 +516,20 @@ describe("diagnostic-events", () => {
       provider: "openai",
       model: "gpt-5.4",
     });
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.build_prompt_bodies",
+      phaseGroup: "pre_model",
+      durationMs: 4,
+      outcome: "completed",
+    });
 
     expect(events).toStrictEqual([]);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
+    expect(trustedEvents).toContain("reply.phase.completed");
   });
 
   it("yields between large high-frequency diagnostic event bursts", async () => {
@@ -687,7 +699,15 @@ describe("diagnostic-events", () => {
       durationMs: 1,
     });
 
-    for (let index = 0; index < 9_999; index += 1) {
+    emitTrustedDiagnosticEvent({
+      type: "reply.phase.completed",
+      phase: "reply.build_prompt_bodies",
+      phaseGroup: "pre_model",
+      durationMs: 4,
+      outcome: "completed",
+    });
+
+    for (let index = 0; index < 9_998; index += 1) {
       emitDiagnosticEvent({
         type: "model.call.started",
         runId: `saturation-run-${index}`,
@@ -742,6 +762,7 @@ describe("diagnostic-events", () => {
       },
     ]);
     expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(9_998);
+    expect(events.filter((event) => event.type === "reply.phase.completed")).toHaveLength(0);
   });
 
   it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {

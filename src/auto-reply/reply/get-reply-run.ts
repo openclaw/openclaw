@@ -30,7 +30,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -87,6 +86,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { measureReplyPhaseDiagnostics } from "./reply-phase-diagnostics.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
@@ -510,10 +510,15 @@ export async function runPreparedReply(
     queueMode: perMessageQueueMode ?? "configured",
   };
   const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
+    measureReplyPhaseDiagnostics(name, run, {
+      timelinePhase: "agent-turn",
       config: cfg,
       attributes: traceAttributes,
+      channel: sessionCtx.Provider,
+      provider,
+      model,
+      sessionKey,
+      sessionId,
     });
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,

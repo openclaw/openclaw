@@ -122,14 +122,25 @@ scenario with the `diagnostics-otel` plugin enabled, then asserts traces,
 metrics, and logs are exported. It decodes the exported protobuf trace spans
 and checks the release-critical shape:
 `openclaw.run`, `openclaw.harness.run`, a latest GenAI semantic-convention
-model-call span, `openclaw.context.assembled`, and `openclaw.message.delivery`
-must be present. The smoke forces
+model-call span, `openclaw.context.assembled`, `openclaw.reply.phase`, and
+`openclaw.message.processed` must be present. The smoke forces
 `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, so the model-call
 span must use the `{gen_ai.operation.name} {gen_ai.request.model}` name;
 model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
 `openclaw.content.*` attributes must stay out of the trace. The raw OTLP
 payloads must not contain the prompt sentinel, response sentinel, or QA session
-key. It writes `otel-smoke-summary.json` next to the QA suite artifacts.
+key.
+
+The summary file includes a `latencyReport` built from the decoded trace/span
+IDs and OTLP span timestamps. It reports count, median, p95, and max for total
+message processing, pre-model overhead, model-call duration, post-model tail
+delivery, context assembly, and reply phase group buckets (`dispatch`,
+`resolver`, and `pre_model`). If no core `openclaw.message.delivery` span is
+present, the post-model tail uses the end of `openclaw.message.processed`. Use
+that report when comparing channel reply
+latency changes; it is measurement-only and should not be treated as an
+optimization benchmark by itself. The full JSON is written to
+`otel-smoke-summary.json` next to the QA suite artifacts.
 
 For a collector-backed OpenTelemetry smoke, run:
 
