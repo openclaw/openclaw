@@ -5,6 +5,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
+  collectConfigProviderModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
 } from "./model-ref-shared.js";
@@ -147,6 +148,111 @@ describe("normalizeStaticProviderModelId", () => {
 
     expect(normalizeStaticProviderModelId("custom", "latest")).toBe("custom/modern-model");
   });
+
+  it("applies config-defined provider prefixWhenBare policy", () => {
+    // #94557: config-defined modelIdNormalization should add a provider prefix
+    // to bare model ids, same as manifest-defined rules.
+    const configProviderPolicies = new Map([["openai", { prefixWhenBare: "openai" }]]);
+    expect(normalizeStaticProviderModelId("openai", "gpt-5.5", { configProviderPolicies })).toBe(
+      "openai/gpt-5.5",
+    );
+  });
+
+  it("preserves already-prefixed model ids with config-defined policies", () => {
+    // #94557: config prefixWhenBare must not double-prefix (same guard as #77167, #84887).
+    const configProviderPolicies = new Map([["openai", { prefixWhenBare: "openai" }]]);
+    expect(
+      normalizeStaticProviderModelId("openai", "openai/gpt-5.5", { configProviderPolicies }),
+    ).toBe("openai/gpt-5.5");
+  });
+
+  it("merges config-defined policies with manifest policies (manifest wins)", () => {
+    // #94557: config-defined policies supplement manifest rules but do not
+    // override them for the same provider.
+    const manifestPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: {
+              prefixWhenBare: "openai-compat",
+            },
+          },
+        },
+      },
+    ];
+    const configProviderPolicies = new Map([["openai", { prefixWhenBare: "openai" }]]);
+    expect(
+      normalizeStaticProviderModelId("openai", "gpt-5.5", {
+        manifestPlugins,
+        configProviderPolicies,
+      }),
+    ).toBe("openai-compat/gpt-5.5");
+  });
+
+  it("applies config-defined policies for a provider not in manifest", () => {
+    // #94557: config-defined policies work even when no manifest policy exists
+    // for that provider.
+    const manifestPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            nvidia: {
+              prefixWhenBare: "nvidia",
+            },
+          },
+        },
+      },
+    ];
+    const configProviderPolicies = new Map([["openai", { prefixWhenBare: "openai" }]]);
+    expect(
+      normalizeStaticProviderModelId("openai", "gpt-5.5", {
+        manifestPlugins,
+        configProviderPolicies,
+      }),
+    ).toBe("openai/gpt-5.5");
+    // Manifest rule for nvidia is unchanged
+    expect(
+      normalizeStaticProviderModelId("nvidia", "nemotron-3", {
+        manifestPlugins,
+        configProviderPolicies,
+      }),
+    ).toBe("nvidia/nemotron-3");
+  });
+});
+
+describe("collectConfigProviderModelIdNormalizationPolicies", () => {
+  it("returns empty map for undefined providers", () => {
+    const result = collectConfigProviderModelIdNormalizationPolicies(undefined);
+    expect(result.size).toBe(0);
+  });
+
+  it("extracts modelIdNormalization from configured providers", () => {
+    const providers = {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
+        modelIdNormalization: {
+          prefixWhenBare: "openai",
+        },
+        models: [{ id: "gpt-5.5" }],
+      },
+    };
+    const result = collectConfigProviderModelIdNormalizationPolicies(providers);
+    expect(result.size).toBe(1);
+    expect(result.get("openai")).toEqual({ prefixWhenBare: "openai" });
+  });
+
+  it("skips providers without modelIdNormalization", () => {
+    const providers = {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
+        models: [{ id: "gpt-5.5" }],
+      },
+    };
+    const result = collectConfigProviderModelIdNormalizationPolicies(providers);
+    expect(result.size).toBe(0);
+  });
 });
 
 describe("normalizeConfiguredProviderCatalogModelId", () => {
@@ -184,5 +290,13 @@ describe("normalizeConfiguredProviderCatalogModelId", () => {
     expect(
       normalizeConfiguredProviderCatalogModelId("kilocode", "kilocode/google/gemini-3-pro-preview"),
     ).toBe("kilocode/google/gemini-3.1-pro-preview");
+  });
+
+  it("applies config-defined provider policies to configured catalog ids", () => {
+    // #94557: configProviderPolicies apply to normalized configured catalog ids.
+    const configProviderPolicies = new Map([["openai", { prefixWhenBare: "openai" }]]);
+    expect(
+      normalizeConfiguredProviderCatalogModelId("openai", "gpt-5.5", { configProviderPolicies }),
+    ).toBe("openai/gpt-5.5");
   });
 });

@@ -78,21 +78,35 @@ function loadManifestModelIdNormalizationPolicies(
   return policies;
 }
 
-/** Normalizes a provider model id using plugin manifest-declared model-id policies. */
+/** Normalizes a provider model id using plugin manifest-declared model-id policies.
+ *  Config-defined provider policies (providerPolicies) supplement manifest rules;
+ *  manifest policies take precedence on the same provider key. */
 export function normalizeProviderModelIdWithManifest(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  providerPolicies?: ReadonlyMap<string, PluginManifestModelIdNormalizationProvider>;
   context: {
     provider: string;
     modelId: string;
   };
 }): string | undefined {
+  const manifestPolicies = loadManifestModelIdNormalizationPolicies(params);
+
+  const policies = new Map(manifestPolicies);
+  if (params.providerPolicies && params.providerPolicies.size > 0) {
+    for (const [key, policy] of params.providerPolicies) {
+      if (!policies.has(key)) {
+        policies.set(key, policy);
+      }
+    }
+  }
+
   return normalizeProviderModelIdWithPolicies({
     provider: params.provider,
-    policies: loadManifestModelIdNormalizationPolicies(params),
+    policies,
     context: {
       modelId: params.context.modelId,
     },

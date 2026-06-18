@@ -10,7 +10,11 @@ import {
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import {
+  modelKey as sharedModelKey,
+  normalizeStaticProviderModelId,
+  type ManifestModelIdNormalizationProvider,
+} from "./model-ref-shared.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 // Shared provider/model normalization facade for agent model selection. It
@@ -22,6 +26,8 @@ export type ModelRef = {
 
 export type ModelManifestNormalizationContext = {
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  /** Per-provider model-id normalization policies from config (models.providers.<id>.modelIdNormalization). */
+  configProviderPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 };
 
 /** Build the canonical provider/model key for model selection. */
@@ -79,6 +85,7 @@ function normalizeProviderModelId(
   const staticModelId = normalizeStaticProviderModelId(provider, providerModel, {
     allowManifestNormalization: options?.allowManifestNormalization,
     manifestPlugins: options?.manifestPlugins,
+    configProviderPolicies: options?.configProviderPolicies,
   });
   if (options?.allowPluginNormalization === false) {
     return staticModelId;

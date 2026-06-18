@@ -20,6 +20,7 @@ import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
+  collectConfigProviderModelIdNormalizationPolicies,
 } from "./model-ref-shared.js";
 import {
   type ModelManifestNormalizationContext,
@@ -212,6 +213,7 @@ export function inferUniqueProviderFromConfiguredModels(
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: false,
         manifestPlugins: params.manifestPlugins,
+        configProviderPolicies: params.configProviderPolicies,
       });
       if (!parsed) {
         continue;
@@ -239,6 +241,7 @@ export function inferUniqueProviderFromConfiguredModels(
         const normalizedModelId = normalizeConfiguredProviderCatalogModelId(providerId, modelId, {
           allowManifestNormalization: params.allowManifestNormalization,
           manifestPlugins: params.manifestPlugins,
+          configProviderPolicies: params.configProviderPolicies,
         });
         if (
           modelId === model ||
@@ -372,6 +375,7 @@ export function resolveConfiguredOpenRouterCompatAlias(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
+      configProviderPolicies: params.configProviderPolicies,
     });
   }
   if (normalized !== OPENROUTER_COMPAT_FREE_ALIAS || !params.cfg) {
@@ -410,6 +414,7 @@ function parseModelRefWithCompatAlias(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
+      configProviderPolicies: params.configProviderPolicies,
     })
   );
 }
@@ -459,10 +464,12 @@ function normalizeExactConfiguredProviderRef(
       normalizeStaticProviderModelId(provider, modelRaw.trim(), {
         allowManifestNormalization: params.allowManifestNormalization,
         manifestPlugins: params.manifestPlugins,
+        configProviderPolicies: params.configProviderPolicies,
       }),
       {
         allowManifestNormalization: params.allowManifestNormalization,
         manifestPlugins: params.manifestPlugins,
+        configProviderPolicies: params.configProviderPolicies,
       },
     ),
   };
@@ -735,6 +742,7 @@ export function resolveModelRefFromString(
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
+    configProviderPolicies: params.configProviderPolicies,
   });
   if (!parsed) {
     return null;
@@ -752,6 +760,9 @@ export function resolveConfiguredModelRef(
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef {
+  const configProviderPolicies = collectConfigProviderModelIdNormalizationPolicies(
+    params.cfg?.models?.providers as Record<string, unknown> | undefined,
+  );
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
     const trimmed = rawModel.trim();
@@ -775,6 +786,7 @@ export function resolveConfiguredModelRef(
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
         manifestPlugins: manifestPluginContext.get(),
+        configProviderPolicies,
       });
       if (aliasRef) {
         return aliasRef;
@@ -789,6 +801,7 @@ export function resolveConfiguredModelRef(
       return normalizeExactConfiguredProviderRef(exactConfiguredPrimary, {
         allowManifestNormalization: params.allowManifestNormalization,
         manifestPlugins: manifestPluginContext.get(),
+        configProviderPolicies,
       });
     }
     const aliasCandidate = profileStripped ? undefined : exactAliasCandidate;
@@ -838,6 +851,7 @@ export function resolveConfiguredModelRef(
         manifestPlugins: needsOpenRouterCompatManifestPlugins
           ? manifestPluginContext.get()
           : manifestPlugins,
+        configProviderPolicies,
       });
       if (openrouterCompatRef) {
         return openrouterCompatRef;
@@ -848,6 +862,7 @@ export function resolveConfiguredModelRef(
         model: trimmed,
         allowManifestNormalization: false,
         manifestPlugins,
+        configProviderPolicies,
       });
       let inferredProviderManifestPlugins = manifestPlugins;
       if (
@@ -863,6 +878,7 @@ export function resolveConfiguredModelRef(
             model: trimmed,
             allowManifestNormalization: params.allowManifestNormalization,
             manifestPlugins: inferredProviderManifestPlugins,
+            configProviderPolicies,
           }) ?? inferredProvider;
       }
       if (inferredProvider) {
@@ -872,6 +888,7 @@ export function resolveConfiguredModelRef(
             : false,
           allowPluginNormalization: params.allowPluginNormalization,
           manifestPlugins: inferredProviderManifestPlugins,
+          configProviderPolicies,
         });
       }
 
@@ -890,6 +907,7 @@ export function resolveConfiguredModelRef(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: manifestPluginContext.get(),
+      configProviderPolicies,
     });
     if (resolved) {
       return resolved.ref;
@@ -1278,6 +1296,7 @@ export function buildConfiguredModelCatalog(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   manifestPlugins?: ModelManifestPlugins;
+  configProviderPolicies?: ModelManifestNormalizationContext["configProviderPolicies"];
 }): ModelCatalogEntry[] {
   const providers = params.cfg.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -1285,6 +1304,7 @@ export function buildConfiguredModelCatalog(params: {
   }
 
   const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
+  const configProviderPolicies = params.configProviderPolicies;
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
@@ -1294,7 +1314,10 @@ export function buildConfiguredModelCatalog(params: {
     for (const model of provider.models) {
       const rawId = normalizeOptionalString(model?.id) ?? "";
       const id = rawId
-        ? normalizeConfiguredProviderCatalogModelId(providerId, rawId, { manifestPlugins })
+        ? normalizeConfiguredProviderCatalogModelId(providerId, rawId, {
+            manifestPlugins,
+            configProviderPolicies,
+          })
         : "";
       if (!id) {
         continue;

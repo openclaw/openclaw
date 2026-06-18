@@ -19,12 +19,7 @@ type StaticModelRef = {
   model: string;
 };
 
-export type ProviderModelIdNormalizationOptions = {
-  allowManifestNormalization?: boolean;
-  manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
-};
-
-type ManifestModelIdNormalizationProvider = {
+export type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
   prefixWhenBare?: string;
@@ -32,6 +27,13 @@ type ManifestModelIdNormalizationProvider = {
     modelPrefix: string;
     prefix: string;
   }[];
+};
+
+export type ProviderModelIdNormalizationOptions = {
+  allowManifestNormalization?: boolean;
+  manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
+  /** Per-provider model-id normalization policies from config (models.providers.<id>.modelIdNormalization). */
+  configProviderPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 };
 
 type ManifestModelIdNormalizationRecord = {
@@ -57,7 +59,50 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-/** Normalize a static provider model ID with built-in and optional manifest policy. */
+type MergeConfigProviderPoliciesOptions = {
+  manifestPolicies?: Map<string, ManifestModelIdNormalizationProvider>;
+  configProviderPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
+};
+
+/** Merge config-defined provider policies into the manifest policy map.
+ *  Manifest rules take precedence on the same provider key. */
+function mergeConfigProviderPolicies(
+  options: MergeConfigProviderPoliciesOptions,
+): Map<string, ManifestModelIdNormalizationProvider> {
+  if (!options.configProviderPolicies || options.configProviderPolicies.size === 0) {
+    return options.manifestPolicies ?? new Map();
+  }
+  const merged = new Map(options.manifestPolicies ?? []);
+  for (const [providerKey, policy] of options.configProviderPolicies) {
+    if (!merged.has(providerKey)) {
+      merged.set(providerKey, policy);
+    }
+  }
+  return merged;
+}
+
+type CollectMergedPoliciesOptions = {
+  allowManifestNormalization?: boolean;
+  manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
+  configProviderPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
+};
+
+function collectMergedPolicies(
+  options: CollectMergedPoliciesOptions,
+): Map<string, ManifestModelIdNormalizationProvider> | undefined {
+  const manifest = options.manifestPlugins
+    ? collectManifestModelIdNormalizationPolicies(options.manifestPlugins)
+    : undefined;
+  if (!manifest && (!options.configProviderPolicies || options.configProviderPolicies.size === 0)) {
+    return undefined;
+  }
+  return mergeConfigProviderPolicies({
+    manifestPolicies: manifest,
+    configProviderPolicies: options.configProviderPolicies,
+  });
+}
+
+/** Normalize a static provider model ID with built-in, manifest, and config-defined policy. */
 export function normalizeStaticProviderModelId(
   provider: string,
   model: string,
@@ -67,16 +112,16 @@ export function normalizeStaticProviderModelId(
   if (options.allowManifestNormalization === false) {
     return normalizeBuiltInProviderModelId(normalizedProvider, model);
   }
-  if (options.manifestPlugins) {
-    return normalizeStaticProviderModelIdWithPolicies(
-      normalizedProvider,
-      model,
-      collectManifestModelIdNormalizationPolicies(options.manifestPlugins),
-    );
+
+  const mergedPolicies = collectMergedPolicies(options);
+  if (mergedPolicies) {
+    return normalizeStaticProviderModelIdWithPolicies(normalizedProvider, model, mergedPolicies);
   }
+
   const manifestModelId =
     normalizeProviderModelIdWithManifest({
       provider: normalizedProvider,
+      providerPolicies: options.configProviderPolicies,
       context: {
         provider: normalizedProvider,
         modelId: model,
@@ -94,13 +139,12 @@ export function normalizeConfiguredProviderCatalogModelId(
   if (options.allowManifestNormalization === false) {
     return normalizeConfiguredProviderCatalogModelIdShared(provider, model, new Map());
   }
-  if (options.manifestPlugins) {
-    return normalizeConfiguredProviderCatalogModelIdShared(
-      provider,
-      model,
-      collectManifestModelIdNormalizationPolicies(options.manifestPlugins),
-    );
+
+  const mergedPolicies = collectMergedPolicies(options);
+  if (mergedPolicies) {
+    return normalizeConfiguredProviderCatalogModelIdShared(provider, model, mergedPolicies);
   }
+
   return normalizeConfiguredProviderCatalogModelRef(
     normalizeStaticProviderModelId(provider, model, options),
   );
@@ -149,4 +193,23 @@ export function formatLiteralProviderPrefixedModelRef(provider: string, modelRef
     return trimmedRef;
   }
   return normalizedRef.startsWith(`${providerId}/`) ? `${providerId}/${trimmedRef}` : trimmedRef;
+}
+
+/** Extract model-id normalization policies from config-defined model providers. */
+export function collectConfigProviderModelIdNormalizationPolicies(
+  providers?: Record<string, unknown>,
+): Map<string, ManifestModelIdNormalizationProvider> {
+  const policies = new Map<string, ManifestModelIdNormalizationProvider>();
+  if (!providers) return policies;
+  for (const [providerKey, providerConfig] of Object.entries(providers)) {
+    if (!providerConfig || typeof providerConfig !== "object") continue;
+    const cfg = providerConfig as Record<string, unknown>;
+    const norm = cfg.modelIdNormalization;
+    if (!norm || typeof norm !== "object") continue;
+    policies.set(
+      normalizeLowercaseStringOrEmpty(providerKey),
+      norm as ManifestModelIdNormalizationProvider,
+    );
+  }
+  return policies;
 }

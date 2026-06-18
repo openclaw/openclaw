@@ -512,6 +512,21 @@ const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
+    modelIdNormalization: z
+      .object({
+        aliases: z.record(z.string(), z.string()).optional(),
+        stripPrefixes: z.array(z.string()).optional(),
+        prefixWhenBare: z.string().optional(),
+        prefixWhenBareAfterAliasStartsWith: z
+          .array(
+            z.object({
+              modelPrefix: z.string(),
+              prefix: z.string(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
     models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
