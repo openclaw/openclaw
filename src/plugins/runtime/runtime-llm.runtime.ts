@@ -324,6 +324,7 @@ function assertAllowedModelOverride(params: {
   let policyOwnerPluginId: string | undefined;
   if (params.authorityPolicy?.allowModelOverride) {
     policy = params.authorityPolicy;
+    policyOwnerPluginId = params.pluginPolicyId;
   } else if (params.pluginPolicy?.allowModelOverride) {
     policy = params.pluginPolicy;
     policyOwnerPluginId = params.pluginPolicyId;
