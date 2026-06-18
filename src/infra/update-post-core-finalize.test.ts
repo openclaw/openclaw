@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   foldPostCoreFinalizeIntoResult,
@@ -138,6 +139,41 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(call.argv).not.toContain("--timeout");
     // No per-step timeout requested → outer backstop is the floor.
     expect(call.timeoutMs).toBe(30 * 60_000);
+  });
+
+  it("passes and removes the pre-update config payload for channel restoration", async () => {
+    const preUpdateConfig = {
+      sourceConfig: {
+        channels: {
+          whatsapp: { enabled: true },
+        },
+      },
+      authoredConfig: {
+        channels: {
+          whatsapp: { enabled: true },
+        },
+      },
+    };
+    let sourceConfigPath: string | undefined;
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async ({ env }) => {
+      sourceConfigPath = env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH;
+      expect(sourceConfigPath).toEqual(expect.any(String));
+      await expect(fs.readFile(sourceConfigPath!, "utf-8")).resolves.toBe(
+        `${JSON.stringify(preUpdateConfig)}\n`,
+      );
+      return { code: 0 };
+    });
+
+    await expect(
+      runPostCoreFinalizeAfterGatewayUpdate({
+        result: gitOkResult(),
+        preUpdateConfig,
+        resolveEntrypoint: resolveEntrypointOk,
+        spawnFinalize,
+      }),
+    ).resolves.toEqual({ status: "ok", entrypoint: ENTRYPOINT });
+
+    await expect(fs.access(sourceConfigPath!)).rejects.toThrow();
   });
 
   it("reports error on a non-zero finalize exit", async () => {

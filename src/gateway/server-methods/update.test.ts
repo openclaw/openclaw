@@ -1,6 +1,7 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
@@ -24,6 +25,7 @@ const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): "stable" | "beta" | "dev" | null => null);
+const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
   status: "started" as const,
   pid: 12345,
@@ -52,6 +54,7 @@ type UpdateRunPayload = {
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({ update: {} }),
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -179,6 +182,21 @@ beforeEach(() => {
   readPackageVersionMock.mockResolvedValue("1.0.0");
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
+  readConfigFileSnapshotMock.mockReset();
+  readConfigFileSnapshotMock.mockResolvedValue({
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    resolved: {} as OpenClawConfig,
+    sourceConfig: {} as OpenClawConfig,
+    valid: true,
+    config: {} as OpenClawConfig,
+    runtimeConfig: {} as OpenClawConfig,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
   runGatewayUpdateMock.mockClear();
@@ -722,6 +740,46 @@ describe("update.run post-core plugin finalize", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
     expect(payload?.result?.status).toBe("ok");
+  });
+
+  it("carries the pre-doctor source config into the git finalizer", async () => {
+    const preUpdateConfig = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: JSON.stringify(preUpdateConfig),
+      parsed: preUpdateConfig,
+      resolved: preUpdateConfig,
+      sourceConfig: preUpdateConfig,
+      valid: true,
+      config: preUpdateConfig,
+      runtimeConfig: preUpdateConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      entrypoint: "/tmp/openclaw-git/dist/index.mjs",
+    });
+    mockGitOkUpdate("/tmp/openclaw-git");
+
+    await captureUpdateRunPayload();
+
+    const [finalizeParams] = firstMockCall(
+      runPostCoreFinalizeAfterGatewayUpdateMock,
+      "post-core finalize",
+    ) as [{ preUpdateConfig?: { sourceConfig?: OpenClawConfig; authoredConfig?: OpenClawConfig } }];
+    expect(finalizeParams.preUpdateConfig).toEqual({
+      sourceConfig: preUpdateConfig,
+      authoredConfig: preUpdateConfig,
+    });
   });
 
   it("blocks the restart when post-core plugin finalize fails", async () => {

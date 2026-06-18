@@ -2,12 +2,15 @@
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateUpdateRunParams,
   validateUpdateStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -21,6 +24,7 @@ import {
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
+import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import {
   foldPostCoreFinalizeIntoResult,
   runPostCoreFinalizeAfterGatewayUpdate,
@@ -55,6 +59,21 @@ function tryResolveProcessCwd(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig)
+      : snapshot.sourceConfig,
+  };
 }
 
 function resolveManagedServiceHandoffRestartDelayMs(
@@ -275,6 +294,15 @@ export const updateHandlers: GatewayRequestHandlers = {
           };
         }
       } else {
+        const preUpdateConfig =
+          installSurface.kind === "git"
+            ? await readPreUpdateConfigForPostCoreFinalize().catch((err) => {
+                context?.logGateway?.warn(
+                  `update.run could not capture pre-update config ${formatControlPlaneActor(actor)} error=${formatUpdateRunErrorMessage(err)}`,
+                );
+                return undefined;
+              })
+            : undefined;
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
@@ -288,6 +316,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           result,
           channel: configChannel ?? undefined,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          ...(preUpdateConfig ? { preUpdateConfig } : {}),
         });
         if (finalizeOutcome.status === "error") {
           context?.logGateway?.warn(

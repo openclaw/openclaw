@@ -16,6 +16,8 @@
 // `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true, disableOnFailure: true })`
 // and `runPostCorePluginConvergence`). Finalization never restarts, so the RPC
 // handler keeps ownership of the gateway restart.
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
@@ -27,6 +29,10 @@ import {
   type UpdateChannel,
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "./update-channels.js";
+import {
+  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+  type PreUpdateConfigRestoreInput,
+} from "./update-post-core-context.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Whole-process backstop for the finalizer. `update finalize` runs several timed
@@ -49,6 +55,7 @@ function buildFinalizeEnv(
   baseEnv: NodeJS.ProcessEnv,
   effectiveChannel: UpdateChannel,
   compatHostVersion?: string,
+  sourceConfigPath?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   delete env.OPENCLAW_SERVICE_MARKER;
@@ -57,6 +64,9 @@ function buildFinalizeEnv(
   env[UPDATE_EFFECTIVE_CHANNEL_ENV] = effectiveChannel;
   if (compatHostVersion) {
     env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatHostVersion;
+  }
+  if (sourceConfigPath) {
+    env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV] = sourceConfigPath;
   }
   return env;
 }
@@ -130,6 +140,7 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   result: UpdateRunResult;
   channel?: UpdateChannel;
   timeoutMs?: number;
+  preUpdateConfig?: PreUpdateConfigRestoreInput;
   resolveEntrypoint?: (root: string) => Promise<string | undefined>;
   spawnFinalize?: PostCoreFinalizeSpawner;
   env?: NodeJS.ProcessEnv;
@@ -165,14 +176,26 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   // Pin the finalizer's host-compat resolution to the just-installed core
   // version so plugins reconcile against the new core, not the running process.
   const compatHostVersion = result.after?.version ?? undefined;
-  const env = buildFinalizeEnv(params.env ?? process.env, effectiveChannel, compatHostVersion);
   // Outer whole-process backstop, decoupled from the per-step `--timeout` above.
   const processTimeoutMs = Math.max(
     FINALIZE_PROCESS_TIMEOUT_FLOOR_MS,
     (perStepTimeoutMs ?? 0) * FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER,
   );
 
+  let sourceConfigDir: string | undefined;
   try {
+    let sourceConfigPath: string | undefined;
+    if (params.preUpdateConfig) {
+      sourceConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
+      sourceConfigPath = path.join(sourceConfigDir, "source-config.json");
+      await fs.writeFile(sourceConfigPath, `${JSON.stringify(params.preUpdateConfig)}\n`, "utf-8");
+    }
+    const env = buildFinalizeEnv(
+      params.env ?? process.env,
+      effectiveChannel,
+      compatHostVersion,
+      sourceConfigPath,
+    );
     const spawnResult = await spawnFinalize({
       argv,
       cwd: path.dirname(entrypoint),
@@ -196,6 +219,10 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
       entrypoint,
       message: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    if (sourceConfigDir) {
+      await fs.rm(sourceConfigDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
