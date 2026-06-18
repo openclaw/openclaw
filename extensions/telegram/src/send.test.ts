@@ -956,6 +956,79 @@ describe("sendMessageTelegram", () => {
     expect(richMessage?.html).toContain("<table>");
   });
 
+  describe("rich message unsupported fallback", () => {
+    function createRichMessageUnsupportedError(
+      message = "400: Bad Request: this message is currently not supported on Telegram Web",
+    ) {
+      return Object.assign(new Error(message), { error_code: 400 });
+    }
+
+    it("falls back to sendMessage when sendRichMessage returns unsupported error", async () => {
+      botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+      botRawApi.sendRichMessage.mockRejectedValue(createRichMessageUnsupportedError());
+
+      await sendMessageTelegram("123", "Hello **world**", {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      });
+
+      // Should have attempted sendRichMessage, then fallen back to sendMessage
+      expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+      expect(botApi.sendMessage).toHaveBeenCalledWith(
+        "123",
+        expect.stringContaining("<b>world</b>"),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    });
+
+    it("falls back to sendMessage for MESSAGE_UNSUPPORTED error_code", async () => {
+      botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+      botRawApi.sendRichMessage.mockRejectedValue(
+        Object.assign(new Error("400: Bad Request: MESSAGE_UNSUPPORTED"), { error_code: 400 }),
+      );
+
+      await sendMessageTelegram("123", "Hello **bold**", {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      });
+
+      expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+      expect(botApi.sendMessage).toHaveBeenCalled();
+    });
+
+    it("does not fall back for non-unsupported rich message errors", async () => {
+      botRawApi.sendRichMessage.mockRejectedValue(
+        Object.assign(new Error("400: Bad Request: can't parse entities"), { error_code: 400 }),
+      );
+
+      await expect(
+        sendMessageTelegram("123", "Hello world", {
+          cfg: { channels: { telegram: { richMessages: true } } },
+          token: "tok",
+        }),
+      ).rejects.toThrow(/can't parse entities/);
+
+      // sendRichMessage was tried, but fallback should not have been used
+      expect(botApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("falls back to plain text when HTML sendMessage also fails with parse error", async () => {
+      botApi.sendMessage
+        .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+        .mockResolvedValueOnce({ message_id: 45, chat: { id: "123" } });
+      botRawApi.sendRichMessage.mockRejectedValue(createRichMessageUnsupportedError());
+
+      await sendMessageTelegram("123", "Hello @world", {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+        plainText: "Hello world",
+      });
+
+      // sendRichMessage fails (unsupported) → HTML sendMessage fails (parse error) → plain text succeeds
+      expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it.each([
     {
       name: "list",

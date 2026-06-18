@@ -1142,6 +1142,97 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
   });
 
+  describe("rich message unsupported fallback", () => {
+    function createRichMessageUnsupportedError(
+      message = "400: Bad Request: this message is currently not supported on Telegram Web",
+    ) {
+      return Object.assign(new Error(message), { error_code: 400 });
+    }
+
+    it("falls back to sendMessage when sendRichMessage returns unsupported error", async () => {
+      const runtime = createRuntime();
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMessage });
+      (bot.api as { raw?: unknown }).raw = {
+        sendRichMessage: vi.fn().mockRejectedValue(createRichMessageUnsupportedError()),
+        editMessageText: vi.fn().mockResolvedValue(true),
+      };
+
+      await deliverWith({
+        replies: [{ text: "Hello **world**" }],
+        runtime,
+        bot,
+        richMessages: true,
+      });
+
+      const raw = (bot.api as { raw?: { sendRichMessage: ReturnType<typeof vi.fn> } }).raw!;
+      expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
+      // Rich text chunker generates <b> for bold; fallback sends via regular sendMessage
+      expect(sendMessage).toHaveBeenCalledWith(
+        "123",
+        expect.stringContaining("<b>world</b>"),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    });
+
+    it("does not fall back for non-unsupported rich message errors", async () => {
+      const runtime = createRuntime();
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMessage });
+      (bot.api as { raw?: unknown }).raw = {
+        sendRichMessage: vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error("400: Bad Request: can't parse entities"), { error_code: 400 }),
+          ),
+        editMessageText: vi.fn().mockResolvedValue(true),
+      };
+
+      await expect(
+        deliverWith({
+          replies: [{ text: "Hello world" }],
+          runtime,
+          bot,
+          richMessages: true,
+        }),
+      ).rejects.toThrow(/can't parse entities/);
+    });
+
+    it("falls back for MESSAGE_UNSUPPORTED errors from sendRichMessage", async () => {
+      const runtime = createRuntime();
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMessage });
+      (bot.api as { raw?: unknown }).raw = {
+        sendRichMessage: vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error("400: Bad Request: MESSAGE_UNSUPPORTED"), { error_code: 400 }),
+          ),
+        editMessageText: vi.fn().mockResolvedValue(true),
+      };
+
+      await deliverWith({
+        replies: [{ text: "Hello **bold** world" }],
+        runtime,
+        bot,
+        richMessages: true,
+      });
+
+      const raw = (bot.api as { raw?: { sendRichMessage: ReturnType<typeof vi.fn> } }).raw!;
+      expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalled();
+    });
+  });
+
   it("uses legacy reply id when selected reply target differs from quote source", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
