@@ -19,12 +19,38 @@ export type ReadOnlyWorkspaceSkillMount = {
   containerPath: string;
 };
 
+/**
+ * Rewrites a host path through the Docker host mount prefix map for DooD setups.
+ * When the Gateway runs inside a Docker container, bind mount source paths must
+ * resolve on the Docker host, not inside the Gateway container. Each entry in
+ * the map rewrites paths starting with the key prefix to the value prefix.
+ *
+ * Keys are matched in descending length order so the most specific prefix wins.
+ */
+export function rewriteHostPath(
+  hostPath: string,
+  hostMountPrefixMap?: Record<string, string>,
+): string {
+  if (!hostMountPrefixMap) {
+    return hostPath;
+  }
+  const sorted = Object.keys(hostMountPrefixMap).toSorted((a, b) => b.length - a.length);
+  for (const prefix of sorted) {
+    if (hostPath.startsWith(prefix)) {
+      return hostMountPrefixMap[prefix] + hostPath.slice(prefix.length);
+    }
+  }
+  return hostPath;
+}
+
 function formatManagedWorkspaceBind(params: {
   hostPath: string;
   containerPath: string;
   readOnly: boolean;
+  hostMountPrefixMap?: Record<string, string>;
 }): string {
-  return `${params.hostPath}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
+  const mappedHostPath = rewriteHostPath(params.hostPath, params.hostMountPrefixMap);
+  return `${mappedHostPath}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
 }
 
 function containerJoin(root: string, ...parts: string[]): string {
@@ -118,6 +144,7 @@ export function formatReadOnlyWorkspaceSkillMountHashState(
 export function appendReadOnlyWorkspaceSkillMountArgs(params: {
   args: string[];
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
+  hostMountPrefixMap?: Record<string, string>;
 }): void {
   for (const mount of params.readOnlyWorkspaceSkillMounts) {
     params.args.push(
@@ -126,6 +153,7 @@ export function appendReadOnlyWorkspaceSkillMountArgs(params: {
         hostPath: mount.hostPath,
         containerPath: mount.containerPath,
         readOnly: true,
+        hostMountPrefixMap: params.hostMountPrefixMap,
       }),
     );
   }
@@ -141,8 +169,10 @@ export function appendWorkspaceMountArgs(params: {
   workspaceAccess: SandboxWorkspaceAccess;
   readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
   includeReadOnlyWorkspaceSkillMounts?: boolean;
+  hostMountPrefixMap?: Record<string, string>;
 }) {
-  const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
+  const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess, hostMountPrefixMap } =
+    params;
 
   args.push(
     "-v",
@@ -150,6 +180,7 @@ export function appendWorkspaceMountArgs(params: {
       hostPath: workspaceDir,
       containerPath: workdir,
       readOnly: workspaceAccess !== "rw",
+      hostMountPrefixMap,
     }),
   );
 
@@ -160,6 +191,7 @@ export function appendWorkspaceMountArgs(params: {
         hostPath: agentWorkspaceDir,
         containerPath: SANDBOX_AGENT_WORKSPACE_MOUNT,
         readOnly: workspaceAccess === "ro",
+        hostMountPrefixMap,
       }),
     );
   }
@@ -176,6 +208,7 @@ export function appendWorkspaceMountArgs(params: {
           workdir,
           workspaceAccess,
         }),
+      hostMountPrefixMap,
     });
   }
 }

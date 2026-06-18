@@ -62,6 +62,19 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+  /**
+   * Maps container-side path prefixes to host-side equivalents for DooD
+   * (Docker-outside-of-Docker) setups. When the Gateway runs inside a Docker
+   * container, bind mount source paths must resolve on the Docker host, not
+   * inside the Gateway container. Each entry rewrites paths starting with the
+   * given container prefix to the corresponding host prefix before passing
+   * them to the Docker daemon.
+   *
+   * Example:
+   *   hostMountPrefixMap:
+   *     "/home/node/.openclaw": "/mnt/host/openclaw-data"
+   */
+  hostMountPrefixMap?: Record<string, string>;
 };
 
 export type SandboxBrowserSettings = {

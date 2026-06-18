@@ -108,6 +108,13 @@ export function resolveSandboxDockerConfig(params: {
 
   const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
 
+  const mergedHostMountPrefixMap = {
+    ...globalDocker?.hostMountPrefixMap,
+    ...agentDocker?.hostMountPrefixMap,
+  };
+  const resolvedHostMountPrefixMap =
+    Object.keys(mergedHostMountPrefixMap).length > 0 ? mergedHostMountPrefixMap : undefined;
+
   return {
     image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,
     containerPrefix:
@@ -133,6 +140,7 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
+    hostMountPrefixMap: resolvedHostMountPrefixMap,
     ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
   };
 }
