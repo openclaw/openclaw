@@ -1509,3 +1509,21 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 });
+
+// #84623 premise: when block streaming is disabled, a single turn can resolve
+// two byte-identical finals (e.g. a provider that resends full content on
+// text_end). The assembly does NOT collapse them, so the per-turn dedupe owner
+// is the shared dispatcher (see dispatch-from-config.reply-dispatch.test.ts),
+// not buildReplyPayloads.
+describe("buildReplyPayloads non-streaming identical-final premise (#84623)", () => {
+  it("keeps both identical media finals for a provider-resend shape", async () => {
+    const dup = { text: "generated image", mediaUrl: "https://example.com/gen.png" };
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      payloads: [{ ...dup }, { ...dup }],
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+  });
+});
