@@ -278,6 +278,33 @@ describe("interactive payload helpers", () => {
     });
   });
 
+  it("preserves command/callback values in button fallback text for manual execution", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Approve", value: "/approve req_1 allow-once" },
+            { label: "Deny", action: { type: "command" as const, command: "/approve req_1 deny" } },
+            { label: "Ignore", action: { type: "callback" as const, value: "ignore_123" } },
+            { label: "Docs", url: "https://example.com/docs" },
+            { label: "Disabled", disabled: true },
+          ],
+        },
+      ],
+    };
+
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      [
+        "- Approve: `/approve req_1 allow-once`",
+        "- Deny: `/approve req_1 deny`",
+        "- Ignore: `ignore_123`",
+        "- Docs: https://example.com/docs",
+        "- Disabled",
+      ].join("\n"),
+    );
+  });
+
   it("keeps divider-only fallback empty unless a send transport fallback is requested", () => {
     const presentation = {
       blocks: [{ type: "divider" as const }],
