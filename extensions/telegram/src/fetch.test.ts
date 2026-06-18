@@ -113,6 +113,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+let shouldRetryTelegramTransportFallback: typeof import("./fetch.js").shouldRetryTelegramTransportFallback;
 const tempDirs: string[] = [];
 
 type TelegramDispatcherPolicy = NonNullable<
@@ -125,8 +126,12 @@ type ExplicitProxyTelegramDispatcherPolicy = Extract<
 >;
 
 beforeAll(async () => {
-  ({ resolveTelegramApiBase, resolveTelegramFetch, resolveTelegramTransport } =
-    await import("./fetch.js"));
+  ({
+    resolveTelegramApiBase,
+    resolveTelegramFetch,
+    resolveTelegramTransport,
+    shouldRetryTelegramTransportFallback,
+  } = await import("./fetch.js"));
 });
 
 beforeEach(() => {
@@ -1326,5 +1331,48 @@ describe("resolveTelegramFetch", () => {
 
       await expect(transport.close()).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("shouldRetryTelegramTransportFallback", () => {
+  beforeEach(() => {
+    loggerDebug.mockReset();
+    loggerWarn.mockReset();
+  });
+
+  it("does not trigger IP-rotation fallback for EADDRNOTAVAIL exposed via cause.code", () => {
+    // Well-behaved undici: errno propagates onto the cause as `.code`.
+    const err = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect EADDRNOTAVAIL 149.154.167.220:443 - Local (0.0.0.0:0)"), {
+        code: "EADDRNOTAVAIL",
+      }),
+    });
+
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(false);
+    expectNoLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+  });
+
+  it("does not trigger IP-rotation fallback for EADDRNOTAVAIL embedded only in the message", () => {
+    // Regression for the reported incident: undici wraps the connect failure as
+    // `fetch failed` without propagating `.code`, so the errno lives only in the
+    // message text. Previously this fell through to the code-less `fetch failed`
+    // branch and rotated to the pinned Telegram IP uselessly.
+    const err = new TypeError("fetch failed: connect EADDRNOTAVAIL 149.154.167.220:443 - Local (0.0.0.0:0)");
+
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(false);
+    expectNoLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+  });
+
+  it("still retries for remote-reachability errnos that IP rotation can fix", () => {
+    const err = buildFetchFallbackError("EHOSTUNREACH");
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(true);
+    expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+  });
+
+  it("still retries for code-less fetch failed errors with no errno token", () => {
+    expect(shouldRetryTelegramTransportFallback(new TypeError("fetch failed"))).toBe(true);
+    expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
   });
 });

@@ -126,6 +126,19 @@ const FALLBACK_RETRY_ERROR_CODES = [
   "UND_ERR_SOCKET",
 ] as const;
 
+// Errnos that signal a *local* socket/source-address allocation failure rather
+// than a remote-reachability problem. Rotating to an alternative Telegram API
+// IP cannot fix these (the kernel cannot assign a source address/port for any
+// destination), so falling back through the pinned-IP dispatcher is dead code
+// that only produces misleading "Telegram is down" log noise during an incident.
+const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL"] as const;
+
+// Errno tokens may appear only inside the error `message` when undici wraps a
+// connect failure as `fetch failed` without propagating `.code` onto the cause
+// chain. Match the well-known tokens so detection is not dependent on undici's
+// cause propagation.
+const ERROR_CODE_MESSAGE_PATTERN = /\b(EADDRNOTAVAIL|ETIMEDOUT|ENETDOWN|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAFNOSUPPORT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)\b/i;
+
 type TelegramTransportFallbackContext = {
   message: string;
   codes: Set<string>;
@@ -431,6 +444,13 @@ function collectErrorCodes(err: unknown): Set<string> {
       if (typeof code === "string" && code.trim()) {
         codes.add(code.trim().toUpperCase());
       }
+      const message = (current as { message?: unknown }).message;
+      if (typeof message === "string") {
+        const matched = message.match(ERROR_CODE_MESSAGE_PATTERN);
+        if (matched && matched[1]) {
+          codes.add(matched[1].toUpperCase());
+        }
+      }
       const cause = (current as { cause?: unknown }).cause;
       if (cause && !seen.has(cause)) {
         queue.push(cause);
@@ -473,6 +493,22 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
         : "",
     codes: collectErrorCodes(err),
   };
+  // A local socket/source-address allocation failure (e.g. EADDRNOTAVAIL when
+  // the kernel cannot assign a source address/port) is not a remote
+  // reachability problem. Retrying against an alternative Telegram API IP will
+  // hit the same errno on every attempt, so skip the pinned-IP fallback and
+  // surface the real cause instead of misattributing it to Telegram downtime.
+  const hasLocalSocketFailureCode = LOCAL_SOCKET_FAILURE_ERROR_CODES.some((code) =>
+    ctx.codes.has(code),
+  );
+  if (hasLocalSocketFailureCode) {
+    log.warn(
+      `fetch fallback skipped: local socket allocation failure (codes=${formatErrorCodes(
+        err,
+      )}); remote IP rotation cannot help — check ephemeral ports / network extensions`,
+    );
+    return false;
+  }
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
   return hasKnownNetworkCode || (hasFetchFailedEnvelope && ctx.codes.size === 0);
