@@ -63,10 +63,6 @@ export function normalizeIrcAllowEntry(raw: string): string {
   return value.trim();
 }
 
-export function normalizeIrcAllowlist(entries?: Array<string | number>): string[] {
-  return (entries ?? []).map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean);
-}
-
 export function buildIrcAllowlistCandidates(
   message: IrcInboundMessage,
   params?: { allowNameMatching?: boolean },

@@ -28,7 +28,7 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 export type {
   PluginAutoEnableCandidate,

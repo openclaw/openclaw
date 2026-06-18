@@ -188,17 +188,6 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   return await waitForExecApprovalDecision(params.approvalId);
 }
 
-/** Registers an approval request and waits unless the gateway returned a final decision. */
-export async function requestExecApprovalDecision(
-  params: RequestExecApprovalDecisionParams,
-): Promise<string | null> {
-  const registration = await registerExecApprovalRequest(params);
-  if (Object.hasOwn(registration, "finalDecision")) {
-    return registration.finalDecision ?? null;
-  }
-  return await waitForExecApprovalDecision(registration.id);
-}
-
 type HostExecApprovalParams = {
   approvalId: string;
   command?: string;

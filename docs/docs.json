@@ -1387,6 +1387,7 @@
                   "clawhub/http-api",
                   "clawhub/acceptable-usage",
                   "clawhub/moderation",
+                  "clawhub/namespace-claims",
                   "clawhub/security",
                   "clawhub/security-audits",
                   "clawhub/content-rights",

@@ -9,10 +9,43 @@ openclaw_plugins_cleanup_fixture_servers() {
     [[ -f "$pid_file" ]] || continue
     pid="$(cat "$pid_file" 2>/dev/null || true)"
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
-      kill "$pid" 2>/dev/null || true
+      openclaw_plugins_stop_fixture_process "$pid"
     fi
     rm -f "$pid_file"
   done
+}
+
+openclaw_plugins_signal_fixture_process() {
+  local pid="$1"
+  local signal="$2"
+  if kill -0 -- "-$pid" >/dev/null 2>&1; then
+    kill "-$signal" -- "-$pid" >/dev/null 2>&1 || true
+    return
+  fi
+  kill "-$signal" "$pid" >/dev/null 2>&1 || true
+}
+
+openclaw_plugins_fixture_process_alive() {
+  local pid="$1"
+  kill -0 "$pid" >/dev/null 2>&1 || kill -0 -- "-$pid" >/dev/null 2>&1
+}
+
+openclaw_plugins_stop_fixture_process() {
+  local pid="$1"
+  local _
+  local attempts="${OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS:-40}"
+  local interval="${OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS:-0.25}"
+  if declare -F openclaw_e2e_stop_process >/dev/null 2>&1; then
+    openclaw_e2e_stop_process "$pid"
+    return
+  fi
+  openclaw_plugins_signal_fixture_process "$pid" TERM
+  for _ in $(seq 1 "$attempts"); do
+    ! openclaw_plugins_fixture_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return; }
+    sleep "$interval"
+  done
+  openclaw_plugins_signal_fixture_process "$pid" KILL
+  wait "$pid" >/dev/null 2>&1 || true
 }
 
 openclaw_plugins_print_fixture_log() {
