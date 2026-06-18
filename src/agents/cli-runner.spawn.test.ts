@@ -2213,7 +2213,7 @@ ${JSON.stringify({
     }
   });
 
-  it("answers Claude live control_request can_use_tool with deny when exec policy is restrictive", async () => {
+  it("answers Claude live control_request can_use_tool with ask when exec policy is restrictive but operator approval is configured (on-miss)", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const writes: string[] = [];
     const stdin = {
@@ -2223,22 +2223,22 @@ ${JSON.stringify({
           stdoutListener?.(
             `${JSON.stringify({
               type: "control_request",
-              request_id: "req-deny",
+              request_id: "req-ask-onmiss",
               request: {
                 subtype: "can_use_tool",
                 tool_name: "Bash",
-                tool_use_id: "tool-deny-1",
+                tool_use_id: "tool-ask-onmiss-1",
                 input: { command: "rm -rf /" },
               },
             })}
 ${JSON.stringify({
   type: "system",
   subtype: "init",
-  session_id: "live-control-deny",
+  session_id: "live-control-ask-onmiss",
 })}
 ${JSON.stringify({
   type: "result",
-  session_id: "live-control-deny",
+  session_id: "live-control-ask-onmiss",
   result: "ok",
 })}
 `,
@@ -2252,7 +2252,7 @@ ${JSON.stringify({
       const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
       stdoutListener = input.onStdout;
       return {
-        runId: "live-run-deny",
+        runId: "live-run-ask-onmiss",
         pid: 3002,
         startedAtMs: Date.now(),
         stdin,
@@ -2265,7 +2265,7 @@ ${JSON.stringify({
       buildPreparedCliRunContext({
         provider: "claude-cli",
         model: "sonnet",
-        runId: "run-control-deny",
+        runId: "run-control-ask-onmiss",
         prompt: "hello",
         backend: { liveSession: "claude-stdio" },
         config: {
@@ -2281,11 +2281,10 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { behavior: string; message: string; decisionClassification: string };
+        response: { behavior: string; message: string; toolUseID?: string };
       };
     };
-    expect(parsed.response.response.behavior).toBe("deny");
-    expect(parsed.response.response.decisionClassification).toBe("user_reject");
+    expect(parsed.response.response.behavior).toBe("ask");
     expect(parsed.response.response.message).toContain("security=allowlist");
     const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
     expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
@@ -2422,7 +2421,7 @@ ${JSON.stringify({
     expect(parsed.response.response.toolUseID).toBe("tool-default-allow-1");
   });
 
-  it("answers Claude live control_request can_use_tool with deny when approval defaults are restrictive", async () => {
+  it("answers Claude live control_request can_use_tool with ask when approval defaults are restrictive but operator approval is configured (on-miss)", async () => {
     await withTempExecApprovalsFile(
       {
         version: 1,
@@ -2439,22 +2438,22 @@ ${JSON.stringify({
               stdoutListener?.(
                 `${JSON.stringify({
                   type: "control_request",
-                  request_id: "req-approval-default-deny",
+                  request_id: "req-approval-default-ask",
                   request: {
                     subtype: "can_use_tool",
                     tool_name: "Bash",
-                    tool_use_id: "tool-approval-default-deny-1",
+                    tool_use_id: "tool-approval-default-ask-1",
                     input: { command: "ls" },
                   },
                 })}
 ${JSON.stringify({
   type: "system",
   subtype: "init",
-  session_id: "live-control-approval-default-deny",
+  session_id: "live-control-approval-default-ask",
 })}
 ${JSON.stringify({
   type: "result",
-  session_id: "live-control-approval-default-deny",
+  session_id: "live-control-approval-default-ask",
   result: "ok",
 })}
 `,
@@ -2468,7 +2467,7 @@ ${JSON.stringify({
           const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
           stdoutListener = input.onStdout;
           return {
-            runId: "live-run-approval-default-deny",
+            runId: "live-run-approval-default-ask",
             pid: 3005,
             startedAtMs: Date.now(),
             stdin,
@@ -2481,7 +2480,7 @@ ${JSON.stringify({
           buildPreparedCliRunContext({
             provider: "claude-cli",
             model: "sonnet",
-            runId: "run-control-approval-default-deny",
+            runId: "run-control-approval-default-ask",
             prompt: "hello",
             backend: {
               liveSession: "claude-stdio",
@@ -2500,11 +2499,10 @@ ${JSON.stringify({
         expect(controlResponse, "control_response written to stdin").toBeDefined();
         const parsed = JSON.parse((controlResponse ?? "").trim()) as {
           response: {
-            response: { behavior: string; message: string; decisionClassification: string };
+            response: { behavior: string; message: string; toolUseID?: string };
           };
         };
-        expect(parsed.response.response.behavior).toBe("deny");
-        expect(parsed.response.response.decisionClassification).toBe("user_reject");
+        expect(parsed.response.response.behavior).toBe("ask");
         expect(parsed.response.response.message).toContain("security=allowlist");
         const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
         expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
@@ -2512,7 +2510,7 @@ ${JSON.stringify({
     );
   });
 
-  it("answers Claude live control_request can_use_tool with deny when session exec ask is restrictive", async () => {
+  it("answers Claude live control_request can_use_tool with ask when session exec ask overrides to always", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const writes: string[] = [];
     const stdin = {
@@ -2522,22 +2520,22 @@ ${JSON.stringify({
           stdoutListener?.(
             `${JSON.stringify({
               type: "control_request",
-              request_id: "req-session-ask-deny",
+              request_id: "req-session-ask-always",
               request: {
                 subtype: "can_use_tool",
                 tool_name: "Bash",
-                tool_use_id: "tool-session-ask-deny-1",
+                tool_use_id: "tool-session-ask-always-1",
                 input: { command: "ls" },
               },
             })}
 ${JSON.stringify({
   type: "system",
   subtype: "init",
-  session_id: "live-control-session-ask-deny",
+  session_id: "live-control-session-ask-always",
 })}
 ${JSON.stringify({
   type: "result",
-  session_id: "live-control-session-ask-deny",
+  session_id: "live-control-session-ask-always",
   result: "ok",
 })}
 `,
@@ -2551,7 +2549,7 @@ ${JSON.stringify({
       const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
       stdoutListener = input.onStdout;
       return {
-        runId: "live-run-session-ask-deny",
+        runId: "live-run-session-ask-always",
         pid: 3006,
         startedAtMs: Date.now(),
         stdin,
@@ -2564,7 +2562,7 @@ ${JSON.stringify({
       buildPreparedCliRunContext({
         provider: "claude-cli",
         model: "sonnet",
-        runId: "run-control-session-ask-deny",
+        runId: "run-control-session-ask-always",
         prompt: "hello",
         backend: {
           liveSession: "claude-stdio",
@@ -2581,11 +2579,10 @@ ${JSON.stringify({
     expect(controlResponse, "control_response written to stdin").toBeDefined();
     const parsed = JSON.parse((controlResponse ?? "").trim()) as {
       response: {
-        response: { behavior: string; message: string; decisionClassification: string };
+        response: { behavior: string; message: string; toolUseID?: string };
       };
     };
-    expect(parsed.response.response.behavior).toBe("deny");
-    expect(parsed.response.response.decisionClassification).toBe("user_reject");
+    expect(parsed.response.response.behavior).toBe("ask");
     expect(parsed.response.response.message).toContain("ask=always");
     const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
     expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");

@@ -868,22 +868,37 @@ function handleClaudeLiveControlRequest(
     return;
   }
   const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
-  const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
+  const { security, ask } = turn.execPermission;
+  // Full-bypass: security=full + ask=off → allow all native tools immediately.
+  const bypassAll = security === "full" && ask === "off";
+  // When exec is not explicitly denied and the operator is configured to
+  // approve (ask != "off"), route native tool use through the active
+  // approver instead of hard-denying. This fixes the "on-miss never asks"
+  // dead-end reported in #93661.
+  const deferToApprover =
+    !bypassAll && security !== "deny" && ask !== "off";
+  const allowed = bypassAll || deferToApprover;
   writeClaudeLiveControlResponse(session, {
     type: "control_response",
     response: {
       subtype: "success",
       request_id: requestId,
-      response: allowed
+      response: bypassAll
         ? {
             behavior: "allow",
             ...(toolUseId ? { toolUseID: toolUseId } : {}),
           }
-        : {
-            behavior: "deny",
-            decisionClassification: "user_reject",
-            message: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
-          },
+        : deferToApprover
+          ? {
+              behavior: "ask",
+              ...(toolUseId ? { toolUseID: toolUseId } : {}),
+              message: `OpenClaw exec policy requests operator approval for Claude native tool use (security=${security}, ask=${ask}).`,
+            }
+          : {
+              behavior: "deny",
+              decisionClassification: "user_reject",
+              message: `OpenClaw exec policy denied Claude native tool use (security=${security}, ask=${ask}).`,
+            },
     },
   });
 }
