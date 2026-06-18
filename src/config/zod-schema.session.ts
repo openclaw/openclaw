@@ -71,6 +71,7 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    restartContinuation: z.boolean().optional(),
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),

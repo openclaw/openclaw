@@ -376,7 +376,7 @@ export function resolveSession(opts: {
   });
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const terminalMainTranscriptNewerThanRegistry =
-    sessionEntry && !requestedSessionId
+    sessionEntry && !requestedSessionId && !(sessionCfg?.restartContinuation && sessionEntry.abortedLastRun)
       ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
           entry: sessionEntry,
           sessionScope: sessionCfg?.scope,

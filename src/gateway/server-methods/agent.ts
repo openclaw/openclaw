@@ -1883,7 +1883,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           requestedSessionId && entry?.sessionId?.trim() === requestedSessionId,
         );
         const terminalMainTranscriptCheck =
-          isSystemGatewayRun || requestedSessionMatchesEntry
+          isSystemGatewayRun || requestedSessionMatchesEntry || (cfgLocal.session?.restartContinuation && entry?.abortedLastRun)
             ? undefined
             : resolveTerminalMainSessionTranscriptRegistryCheck({
                 entry,

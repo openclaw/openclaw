@@ -2,6 +2,29 @@
 import { describe, expect, it } from "vitest";
 import { SessionSchema } from "./zod-schema.session.js";
 
+describe("SessionSchema", () => {
+  it("accepts session.restartContinuation", () => {
+    const result = SessionSchema.safeParse({
+      restartContinuation: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts session.restartContinuation as false", () => {
+    const result = SessionSchema.safeParse({
+      restartContinuation: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-boolean session.restartContinuation", () => {
+    const result = SessionSchema.safeParse({
+      restartContinuation: "yes",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("SessionSchema maintenance extensions", () => {
   it("accepts session write-lock acquire timeout", () => {
     const result = SessionSchema.safeParse({

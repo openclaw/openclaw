@@ -472,6 +472,7 @@ export async function initSessionState(params: {
     );
   const terminalMainTranscriptNewerThanRegistry =
     !isSystemEvent &&
+    !(sessionCfg?.restartContinuation && entry?.abortedLastRun) &&
     (await hasTerminalMainSessionTranscriptNewerThanRegistry({
       entry,
       sessionScope,
