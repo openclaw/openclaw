@@ -96,6 +96,18 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("preserves index alignment when an earlier attachment lacks a media type", () => {
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPaths: ["/tmp/a.bin", "/tmp/b.png"],
+          MediaTypes: ["", "image/png"],
+        }),
+      ).toEqual([
+        { path: "/tmp/a.bin", contentType: undefined },
+        { path: "/tmp/b.png", contentType: "image/png" },
+      ]);
+    });
+
     it("resolves staged relative media paths against the media workspace", () => {
       const workspaceDir = createTempDir("openclaw-user-turn-media-");
 
