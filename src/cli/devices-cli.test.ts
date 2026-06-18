@@ -501,6 +501,66 @@ describe("devices cli remove", () => {
   });
 });
 
+describe("devices cli rename", () => {
+  it("sets a paired device label", async () => {
+    callGateway.mockResolvedValueOnce({
+      device: { deviceId: "device-1", label: "Kitchen iPad" },
+    });
+
+    await runDevicesCommand(["rename", " device-1 ", "--name", " Kitchen iPad "]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.rename",
+      params: { deviceId: "device-1", label: "Kitchen iPad" },
+    });
+    expect(readRuntimeOutput()).toContain("Kitchen iPad");
+  });
+
+  it("clears a paired device label", async () => {
+    callGateway.mockResolvedValueOnce({
+      device: { deviceId: "device-1" },
+    });
+
+    await runDevicesCommand(["rename", "device-1", "--clear"]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.rename",
+      params: { deviceId: "device-1", label: null },
+    });
+    expect(readRuntimeOutput()).toContain("Cleared label");
+  });
+
+  it("returns JSON for rename results in JSON mode", async () => {
+    const result = {
+      device: { deviceId: "device-1", label: "Kitchen iPad" },
+    };
+    callGateway.mockResolvedValueOnce(result);
+
+    await runDevicesCommand(["rename", "device-1", "--name", "Kitchen iPad", "--json"]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.rename",
+      params: { deviceId: "device-1", label: "Kitchen iPad" },
+    });
+    expect(runtime.writeJson).toHaveBeenCalledWith(result);
+  });
+
+  it("requires exactly one label action", async () => {
+    await runDevicesCommand(["rename", "device-1"]);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readRuntimeErrorOutput()).toContain("Set a label with --name <name>");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+
+    vi.clearAllMocks();
+    runtime.exit.mockImplementation(() => {});
+
+    await runDevicesCommand(["rename", "device-1", "--name", "Kitchen iPad", "--clear"]);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readRuntimeErrorOutput()).toContain("Use either --name or --clear");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
+
 describe("devices cli clear", () => {
   it("requires --yes before clearing", async () => {
     await runDevicesCommand(["clear"]);
@@ -1380,6 +1440,27 @@ describe("devices cli list", () => {
     expect(output).toContain("BadName");
     expect(output).toContain("spoof");
     expect(output).toContain("Paired");
+  });
+
+  it("renders paired labels before client display names", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        {
+          deviceId: "device-1",
+          label: "Kitchen iPad",
+          displayName: "Client iPad",
+          roles: ["operator"],
+          scopes: ["operator.read"],
+        },
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = readRuntimeOutput();
+    expect(output).toContain("Kitchen iPad");
+    expect(output).not.toContain("Client iPad");
   });
 
   it("emits JSON when the gateway transport fails in JSON mode", async () => {

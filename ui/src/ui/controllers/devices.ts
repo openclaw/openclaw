@@ -28,6 +28,7 @@ export type PendingDevice = {
 export type PairedDevice = {
   deviceId: string;
   publicKey?: string;
+  label?: string;
   displayName?: string;
   roles?: string[];
   scopes?: string[];
@@ -101,6 +102,21 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
   }
   try {
     await state.client.request("device.pair.reject", { requestId });
+    await loadDevices(state);
+  } catch (err) {
+    state.devicesError = String(err);
+  }
+}
+
+export async function renamePairedDevice(
+  state: DevicesState,
+  params: { deviceId: string; label: string | null },
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("device.pair.rename", params);
     await loadDevices(state);
   } catch (err) {
     state.devicesError = String(err);

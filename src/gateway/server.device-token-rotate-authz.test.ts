@@ -376,8 +376,11 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
   let pairingScopeDeniedCase: {
     pairedBAfterRevokeRevokedAtMs: unknown;
     pairedBToken: string | undefined;
+    pairedBAfterRenameLabel: string | undefined;
     revokeMessage: string | undefined;
     revokeOk: boolean;
+    renameMessage: string | undefined;
+    renameOk: boolean;
     rotateMessage: string | undefined;
     rotateOk: boolean;
     token: string;
@@ -408,9 +411,17 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
         role: "operator",
       });
       const pairedBAfterRevoke = await getPairedDevice(deviceB.deviceId);
+      const rename = await rpcReq(pairingWs, "device.pair.rename", {
+        deviceId: deviceB.deviceId,
+        label: "Blocked label",
+      });
+      const pairedBAfterRename = await getPairedDevice(deviceB.deviceId);
       pairingScopeDeniedCase = {
         pairedBAfterRevokeRevokedAtMs: pairedBAfterRevoke?.tokens?.operator?.revokedAtMs,
+        pairedBAfterRenameLabel: pairedBAfterRename?.label,
         pairedBToken: pairedB?.tokens?.operator?.token,
+        renameMessage: rename.error?.message,
+        renameOk: rename.ok,
         revokeMessage: revoke.error?.message,
         revokeOk: revoke.ok,
         rotateMessage: rotate.error?.message,
@@ -434,6 +445,9 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
     expect(pairingScopeDeniedCase.revokeOk).toBe(false);
     expect(pairingScopeDeniedCase.revokeMessage).toBe("device token revocation denied");
     expect(pairingScopeDeniedCase.pairedBAfterRevokeRevokedAtMs).toBeUndefined();
+    expect(pairingScopeDeniedCase.renameOk).toBe(false);
+    expect(pairingScopeDeniedCase.renameMessage).toBe("device pairing rename denied");
+    expect(pairingScopeDeniedCase.pairedBAfterRenameLabel).toBeUndefined();
   });
 
   test("allows an admin-scoped caller to rotate and revoke another device's token", async () => {
@@ -442,6 +456,19 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
     try {
       await connectOk(started.ws);
+
+      const rename = await rpcReq<{ device?: { label?: string } }>(
+        started.ws,
+        "device.pair.rename",
+        {
+          deviceId: device.deviceId,
+          label: "Admin managed device",
+        },
+      );
+      expect(rename.ok).toBe(true);
+      expect(rename.payload?.device?.label).toBe("Admin managed device");
+      const pairedAfterRename = await getPairedDevice(device.deviceId);
+      expect(pairedAfterRename?.label).toBe("Admin managed device");
 
       const rotate = await rpcReq<{ rotatedAtMs?: number; token?: string }>(
         started.ws,

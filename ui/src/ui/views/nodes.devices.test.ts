@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderNodes, type NodesProps } from "./nodes.ts";
 
 function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
@@ -30,6 +30,7 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     onDevicesRefresh: () => undefined,
     onDeviceApprove: () => undefined,
     onDeviceReject: () => undefined,
+    onDeviceRename: () => undefined,
     onDeviceRotate: () => undefined,
     onDeviceRevoke: () => undefined,
     onLoadConfig: () => undefined,
@@ -188,5 +189,80 @@ describe("nodes devices pending rendering", () => {
     const details = getPendingDeviceDetails(container);
 
     expect(details[1]).toBe("requested: roles: node, operator \u00b7 scopes: operator.read");
+  });
+});
+
+describe("nodes paired device labels", () => {
+  it("renders operator labels before client display names", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "device-1",
+            label: "Kitchen iPad",
+            displayName: "Client iPad",
+            roles: ["operator"],
+            scopes: ["operator.read"],
+          },
+        ],
+      },
+    });
+    const item = getDevicesCard(container).querySelector(".list-item");
+
+    expect(item?.querySelector(".list-title")?.textContent?.trim()).toBe("Kitchen iPad");
+    expect(item?.querySelector(".list-sub")?.textContent).toContain("device-1");
+    expect(item?.querySelector(".list-sub")?.textContent).toContain("client: Client iPad");
+  });
+
+  it("prompts for a paired-device label and clears on blank input", () => {
+    const onDeviceRename = vi.fn();
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("   ");
+    const container = renderNodesContainer({
+      onDeviceRename,
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "device-1",
+            label: "Kitchen iPad",
+            displayName: "Client iPad",
+            roles: ["operator"],
+            scopes: ["operator.read"],
+          },
+        ],
+      },
+    });
+
+    const renameButton = Array.from(getDevicesCard(container).querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Rename",
+    );
+    expect(renameButton).toBeInstanceOf(HTMLButtonElement);
+    (renameButton as HTMLButtonElement).click();
+
+    expect(prompt).toHaveBeenCalledWith("Device label", "Kitchen iPad");
+    expect(onDeviceRename).toHaveBeenCalledWith("device-1", null);
+    prompt.mockRestore();
+  });
+
+  it("does not rename when the prompt is cancelled", () => {
+    const onDeviceRename = vi.fn();
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue(null);
+    const container = renderNodesContainer({
+      onDeviceRename,
+      devicesList: {
+        pending: [],
+        paired: [{ deviceId: "device-1", label: "Kitchen iPad" }],
+      },
+    });
+
+    const renameButton = Array.from(getDevicesCard(container).querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Rename",
+    );
+    expect(renameButton).toBeInstanceOf(HTMLButtonElement);
+    (renameButton as HTMLButtonElement).click();
+
+    expect(onDeviceRename).not.toHaveBeenCalled();
+    prompt.mockRestore();
   });
 });

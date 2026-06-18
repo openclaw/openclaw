@@ -95,6 +95,7 @@ import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
   approveDevicePairing,
   loadDevices,
+  renamePairedDevice,
   rejectDevicePairing,
   revokeDeviceToken,
   rotateDeviceToken,
@@ -3689,6 +3690,8 @@ export function renderApp(state: AppViewState) {
                 onDevicesRefresh: () => void loadDevices(state),
                 onDeviceApprove: (requestId) => void approveDevicePairing(state, requestId),
                 onDeviceReject: (requestId) => void rejectDevicePairing(state, requestId),
+                onDeviceRename: (deviceId, label) =>
+                  void renamePairedDevice(state, { deviceId, label }),
                 onDeviceRotate: (deviceId, role, scopes) =>
                   void rotateDeviceToken(state, { deviceId, role, scopes }),
                 onDeviceRevoke: (deviceId, role) =>

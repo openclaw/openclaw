@@ -26,6 +26,14 @@ describe("devices CLI gateway timeout parsing", () => {
     ["list", () => devicesRuntime.runDevicesListCommand({ timeout: "10ms" })],
     ["remove", () => devicesRuntime.runDevicesRemoveCommand("device-1", { timeout: "10ms" })],
     [
+      "rename",
+      () =>
+        devicesRuntime.runDevicesRenameCommand("device-1", {
+          timeout: "10ms",
+          name: "Kitchen iPad",
+        }),
+    ],
+    [
       "clear",
       () => devicesRuntime.runDevicesClearCommand({ timeout: "10ms", yes: true, pending: true }),
     ],

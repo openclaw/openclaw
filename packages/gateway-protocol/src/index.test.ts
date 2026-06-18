@@ -11,6 +11,7 @@ import {
   validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
+  validateDevicePairRenameParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -121,6 +122,15 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("validates paired-device rename params", () => {
+    expect(validateDevicePairRenameParams({ deviceId: "device-1", label: "Kitchen iPad" })).toBe(
+      true,
+    );
+    expect(validateDevicePairRenameParams({ deviceId: "device-1", label: null })).toBe(true);
+    expect(validateDevicePairRenameParams({ deviceId: "device-1", label: "" })).toBe(false);
+    expect(validateDevicePairRenameParams({ deviceId: "device-1" })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {

@@ -29,6 +29,15 @@ export const DevicePairRemoveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Sets or clears the operator-owned label for an approved device. */
+export const DevicePairRenameParamsSchema = Type.Object(
+  {
+    deviceId: NonEmptyString,
+    label: Type.Union([NonEmptyString, Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
 /** Rotates or issues a device token for a specific role/scope grant. */
 export const DeviceTokenRotateParamsSchema = Type.Object(
   {

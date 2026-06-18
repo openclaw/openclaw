@@ -25,6 +25,7 @@ export type NodesProps = {
   onDevicesRefresh: () => void;
   onDeviceApprove: (requestId: string) => void;
   onDeviceReject: (requestId: string) => void;
+  onDeviceRename: (deviceId: string, label: string | null) => void;
   onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
   onLoadConfig: () => void;

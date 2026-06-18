@@ -450,7 +450,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Device pairing and device tokens">
     - `device.pair.list` returns pending and approved paired devices.
-    - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
+    - `device.pair.approve`, `device.pair.reject`, `device.pair.remove`, and `device.pair.rename` manage device-pairing records.
+    - `device.pair.rename` accepts `{ "deviceId": "...", "label": "..." }` to set an operator-owned label, or `{ "deviceId": "...", "label": null }` to clear it. The label is display metadata only; it does not change device identity, public keys, approved roles, scopes, or tokens. Paired-device lists prefer `label`, then client `displayName`, then `deviceId`.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
     - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
 
