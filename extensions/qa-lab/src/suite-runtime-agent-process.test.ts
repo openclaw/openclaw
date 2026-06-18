@@ -42,6 +42,7 @@ type MockEmitter = {
 };
 
 type MockChildProcess = MockEmitter & {
+  pid?: number;
   stdout: MockEmitter;
   stderr: MockEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -51,8 +52,9 @@ function createMockEmitter() {
   return new EventEmitter() as unknown as MockEmitter;
 }
 
-function createSpawnedProcess() {
+function createSpawnedProcess(params: { pid?: number } = {}) {
   const child = createMockEmitter() as MockChildProcess;
+  child.pid = params.pid;
   child.stdout = createMockEmitter();
   child.stderr = createMockEmitter();
   child.kill = vi.fn();
@@ -144,6 +146,39 @@ describe("qa suite runtime agent process helpers", () => {
       await expect(pending).resolves.toBe("ok");
     } finally {
       timeoutSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const child = createSpawnedProcess({ pid: 12345 });
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: {
+            tempRoot: "/tmp/runtime",
+            runtimeEnv: { PATH: "/usr/bin" },
+          },
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+        { timeoutMs: 1 },
+      );
+      const timeoutAssertion = expect(pending).rejects.toThrow(
+        "qa cli timed out: openclaw qa suite",
+      );
+
+      await waitForSpawnCount(1);
+      await timeoutAssertion;
+      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
     }
   });
 

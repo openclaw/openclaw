@@ -1114,7 +1114,7 @@ internal fun gatewayRecoveryUiState(
   ready: Boolean,
   statusText: String,
   connectSettling: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState = GatewayNodeApprovalState.Loading,
+  nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {

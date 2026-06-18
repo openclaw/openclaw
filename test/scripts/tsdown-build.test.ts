@@ -37,6 +37,41 @@ async function expectPathMissing(targetPath: string) {
   expect(Reflect.get(statError, "code")).toBe("ENOENT");
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
 describe("resolveTsdownBuildInvocation", () => {
   it("parses wrapper help before any tsdown work", () => {
     expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
@@ -610,4 +645,58 @@ describe("runTsdownBuildInvocation", () => {
     expect(result.signal).toBe("SIGTERM");
     expect(output.chunks.join("")).toContain("timeout after 50ms");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "kills timed-out tsdown process groups when the wrapper exits first",
+    async () => {
+      const rootDir = createTempDir("openclaw-tsdown-timeout-");
+      const childPidPath = path.join(rootDir, "child.pid");
+      let childPid = 0;
+      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      try {
+        const output = createWriteSink();
+        const runPromise = runTsdownBuildInvocation(
+          {
+            command: process.execPath,
+            args: ["-e", parentScript],
+            options: {
+              stdio: ["ignore", "pipe", "pipe"],
+              shell: false,
+              env: process.env,
+            },
+          },
+          {
+            stdout: output.sink,
+            stderr: output.sink,
+            env: {
+              ...process.env,
+              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+              OPENCLAW_TSDOWN_TIMEOUT_MS: "50",
+            },
+          },
+        );
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+        const result = await runPromise;
+
+        expect(result.timedOut).toBe(true);
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
 });
