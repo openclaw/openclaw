@@ -420,11 +420,32 @@ function ensureFtsSchema(
   const textColumns = db.prepare(`PRAGMA table_info(${textTableName})`).all() as Array<{
     name: string;
   }>;
-  if (textColumns.some((column) => column.name === "path_text")) {
+  if (
+    textColumns.some((column) => column.name === "path_text") ||
+    !hasColumns(textColumns, ["text", "id", "path", "source", "model", "start_line", "end_line"])
+  ) {
     db.exec(`DROP TABLE ${textTableName};`);
     createTextTable();
   }
   createPathTable();
+  const pathColumns = db.prepare(`PRAGMA table_info(${pathTableName})`).all() as Array<{
+    name: string;
+  }>;
+  if (
+    !hasColumns(pathColumns, [
+      "path_text",
+      "text",
+      "id",
+      "path",
+      "source",
+      "model",
+      "start_line",
+      "end_line",
+    ])
+  ) {
+    db.exec(`DROP TABLE ${pathTableName};`);
+    createPathTable();
+  }
 
   const textRows = db.prepare(`SELECT COUNT(*) AS count FROM ${textTableName}`).get() as
     | { count?: number | bigint }
@@ -486,6 +507,11 @@ function ensureFtsSchema(
       );
     }
   }
+}
+
+function hasColumns(columns: Array<{ name: string }>, names: string[]): boolean {
+  const columnNames = new Set(columns.map((column) => column.name));
+  return names.every((name) => columnNames.has(name));
 }
 
 function readCount(row: { count?: number | bigint } | undefined): number {

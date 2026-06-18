@@ -540,6 +540,78 @@ describe("searchKeyword FTS MATCH fallback", () => {
     },
   );
 
+  itWithFts("adds legacy chunk source before rebuilding path FTS", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE chunks_fts USING fts5(
+          text,
+          id UNINDEXED,
+          path UNINDEXED,
+          model UNINDEXED,
+          start_line UNINDEXED,
+          end_line UNINDEXED
+        );
+      `);
+      db.prepare(
+        "INSERT INTO chunks (id, path, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "target-memory",
+        "memory/2026-06-17-1649.md",
+        1,
+        36,
+        "target-memory:hash",
+        "mock-embed",
+        "OAuth token notes and Google testing mode details",
+        JSON.stringify([0]),
+        Date.now(),
+      );
+
+      const result = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+      });
+      expect(result.ftsAvailable).toBe(true);
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "2026-06-17-1649",
+        ftsTokenizer: "unicode61",
+        limit: 3,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target-memory"]);
+    } finally {
+      db.close();
+    }
+  });
+
   itWithFts("applies source filter in LIKE fallback", async () => {
     const db = createFtsDb();
     try {
