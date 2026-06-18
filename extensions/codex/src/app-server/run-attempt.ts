@@ -2166,7 +2166,7 @@ export async function runCodexAppServerAttempt(
       "codex app-server resumed thread has active native turn; waiting before turn/start",
       { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
     );
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: {
         phase: "turn_start_waiting_for_native_turn",
@@ -2206,7 +2206,7 @@ export async function runCodexAppServerAttempt(
       );
       const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
       if (compactTurnCompleted && !runAbortController.signal.aborted) {
-        emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",
           data: { phase: "turn_start_retry_after_compact", threadId: thread.threadId },
         });

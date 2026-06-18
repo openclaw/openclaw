@@ -938,6 +938,19 @@ export function createFollowupRunner(params: {
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
                   },
+                  onCommentaryText:
+                    opts?.commentaryProgressEnabled === true && opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await forwardFollowupProgressEvent({
+                            evt: {
+                              stream: "item",
+                              data: { kind: "preamble", progressText: text, itemId },
+                            },
+                            opts,
+                            detailMode: toolProgressDetail,
+                          });
+                        }
+                      : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await enqueueProgressDelivery(async () => {
                       await sendFollowupPayloads(

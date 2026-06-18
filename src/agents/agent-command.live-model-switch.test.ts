@@ -339,7 +339,10 @@ vi.mock("../routing/session-key.js", async () => {
       }
       return raw.startsWith("agent:") ? "malformed_agent" : "legacy_or_alias";
     },
-    isSubagentSessionKey: () => false,
+    isSubagentSessionKey: (key?: string | null) => {
+      const raw = key?.trim().toLowerCase() ?? "";
+      return raw.startsWith("subagent:") || raw.includes(":subagent:");
+    },
     isUnscopedSessionKeySentinel: (key?: string | null) => {
       const lowered = key?.trim().toLowerCase();
       return lowered === "global" || lowered === "unknown";
