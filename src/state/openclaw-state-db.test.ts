@@ -82,10 +82,13 @@ describe("openclaw state database", () => {
 
   it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
     const databasePath = path.join(createTempStateDir(), "openclaw.sqlite");
-    fs.writeFileSync(databasePath, "not a sqlite database");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec("PRAGMA user_version = 2;");
+    db.close();
 
     expect(() => openOpenClawStateDatabase({ path: databasePath })).toThrow(
-      "file is not a database",
+      /newer schema version 2/,
     );
     expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
   });

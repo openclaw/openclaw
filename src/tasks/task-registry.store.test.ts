@@ -1128,7 +1128,6 @@ describe("task-registry store runtime", () => {
 
         resetTaskRegistryForTests({ persist: false });
 
-        // Gateway should recover: fresh empty database created
         const snapshot = getTaskRegistrySnapshot();
         expect(snapshot.tasks.length).toBe(0);
 
@@ -1172,7 +1171,6 @@ describe("task-registry store runtime", () => {
 
         resetTaskRegistryForTests({ persist: false });
 
-        // Should recover with fresh database
         const snapshot = getTaskRegistrySnapshot();
         expect(snapshot.tasks.length).toBe(0);
 

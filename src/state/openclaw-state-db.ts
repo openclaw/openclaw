@@ -1,5 +1,5 @@
 // OpenClaw state database manages shared persisted state and migrations.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -108,6 +108,48 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
     if (existsSync(candidate)) {
       bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
     }
+  }
+}
+
+function isSqliteCorruptionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  const code = (error as NodeJS.ErrnoException).code ?? "";
+  return (
+    code === "SQLITE_CORRUPT" ||
+    message.includes("malformed") ||
+    message.includes("corrupt") ||
+    message.includes("database disk image") ||
+    message.includes("file is not a database")
+  );
+}
+
+function quarantineCorruptedOpenClawStateDatabase(pathname: string): string | null {
+  const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
+  const sidecarSuffixes = resolveSqliteDatabaseFilePaths(pathname)
+    .filter((candidate) => candidate !== pathname)
+    .map((candidate) => candidate.slice(pathname.length));
+  try {
+    for (const suffix of sidecarSuffixes) {
+      const sidecar = `${pathname}${suffix}`;
+      if (existsSync(sidecar)) {
+        renameSync(sidecar, `${quarantinePath}${suffix}`);
+      }
+    }
+    renameSync(pathname, quarantinePath);
+    return quarantinePath;
+  } catch {
+    for (const suffix of sidecarSuffixes) {
+      const movedSidecar = `${quarantinePath}${suffix}`;
+      if (existsSync(movedSidecar)) {
+        try {
+          renameSync(movedSidecar, `${pathname}${suffix}`);
+        } catch {}
+      }
+    }
+    return null;
   }
 }
 
@@ -861,6 +903,63 @@ function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
+function openInitializedOpenClawStateDatabase(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): OpenClawStateDatabase {
+  ensureOpenClawStatePermissions(pathname, env);
+  const sqlite = requireNodeSqlite();
+  let db: DatabaseSync | undefined;
+  let walMaintenance: SqliteWalMaintenance | undefined;
+  try {
+    db = new sqlite.DatabaseSync(pathname);
+    walMaintenance = configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: "openclaw-state",
+      databasePath: pathname,
+      foreignKeys: true,
+      synchronous: "NORMAL",
+    });
+    ensureSchema(db, pathname);
+    ensureOpenClawStatePermissions(pathname, env);
+    const database = { db, path: pathname, walMaintenance };
+    cachedDatabases.set(pathname, database);
+    return database;
+  } catch (err) {
+    walMaintenance?.close();
+    if (db) {
+      clearNodeSqliteKyselyCacheForDatabase(db);
+      if (db.isOpen) {
+        db.close();
+      }
+    }
+    throw err;
+  }
+}
+
+function openOrRecoverOpenClawStateDatabase(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): OpenClawStateDatabase {
+  try {
+    return openInitializedOpenClawStateDatabase(pathname, env);
+  } catch (error) {
+    if (!isSqliteCorruptionError(error) || !existsSync(pathname)) {
+      throw error;
+    }
+    const quarantinePath = quarantineCorruptedOpenClawStateDatabase(pathname);
+    if (!quarantinePath) {
+      throw error;
+    }
+    stateDbLog.warn("Corrupted OpenClaw state database quarantined, creating fresh database", {
+      originalPath: pathname,
+      quarantinePath,
+      error: String(error),
+    });
+    return openInitializedOpenClawStateDatabase(pathname, env);
+  }
+}
+
 /** Open or return a cached shared state database after schema and migration checks. */
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
@@ -878,31 +977,7 @@ export function openOpenClawStateDatabase(
     cachedDatabases.delete(pathname);
   }
 
-  ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = (() => {
-    let maintenance: SqliteWalMaintenance | undefined;
-    try {
-      maintenance = configureSqliteConnectionPragmas(db, {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: "openclaw-state",
-        databasePath: pathname,
-        foreignKeys: true,
-        synchronous: "NORMAL",
-      });
-      ensureSchema(db, pathname);
-      return maintenance;
-    } catch (err) {
-      maintenance?.close();
-      db.close();
-      throw err;
-    }
-  })();
-  ensureOpenClawStatePermissions(pathname, env);
-  const database = { db, path: pathname, walMaintenance };
-  cachedDatabases.set(pathname, database);
-  return database;
+  return openOrRecoverOpenClawStateDatabase(pathname, env);
 }
 
 /** Run a synchronous immediate transaction against the shared state database. */
