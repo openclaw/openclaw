@@ -1,8 +1,11 @@
 // Covers SSH target parsing and tunnel startup preflight behavior.
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import net from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
+  spawn: vi.fn(),
 }));
 
 vi.mock("./ports.js", async (importOriginal) => ({
@@ -10,6 +13,12 @@ vi.mock("./ports.js", async (importOriginal) => ({
   ensurePortAvailable: mocks.ensurePortAvailable,
 }));
 
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: mocks.spawn,
+}));
+
+import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
 
 describe("parseSshTarget", () => {
@@ -42,6 +51,51 @@ describe("parseSshTarget", () => {
 });
 
 describe("startSshPortForward", () => {
+  const openServers: net.Server[] = [];
+
+  afterEach(async () => {
+    while (openServers.length > 0) {
+      const server = openServers.pop();
+      await new Promise<void>((resolve) => {
+        server?.close(() => resolve());
+      });
+    }
+    mocks.ensurePortAvailable.mockReset();
+    mocks.spawn.mockReset();
+  });
+
+  // Fake ssh child that, when spawned, parses the -L forward spec and starts a
+  // real IPv4-loopback listener on the chosen local port so waitForLocalListener
+  // resolves without launching a real ssh process.
+  function spawnFakeSshListening() {
+    mocks.spawn.mockImplementation((_cmd: string, args: string[]) => {
+      const forwardSpec = args[args.indexOf("-L") + 1] ?? "";
+      const localPort = Number(forwardSpec.split(":")[0]);
+      const server = net.createServer();
+      server.on("error", () => {});
+      openServers.push(server);
+      server.listen(localPort, "127.0.0.1");
+
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        pid: number;
+        stderr: EventEmitter & { setEncoding: (enc: string) => void };
+        kill: (signal?: string) => boolean;
+      };
+      child.killed = false;
+      child.pid = 4242;
+      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
+      stderr.setEncoding = () => {};
+      child.stderr = stderr;
+      child.kill = (signal?: string) => {
+        child.killed = true;
+        queueMicrotask(() => child.emit("exit", 0, signal ?? null));
+        return true;
+      };
+      return child;
+    });
+  }
+
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");
     mocks.ensurePortAvailable.mockRejectedValueOnce(sentinel);
@@ -56,5 +110,46 @@ describe("startSshPortForward", () => {
     ).rejects.toBe(sentinel);
 
     expect(mocks.ensurePortAvailable).toHaveBeenCalledWith(43210, "127.0.0.1");
+  });
+
+  it("falls back to an ephemeral port when the preferred port is in use", async () => {
+    // ensurePortAvailable raises the domain PortInUseError (no errno `code`),
+    // which the catch must treat as "busy" and route to pickEphemeralPort.
+    // Reserve a real port so pickEphemeralPort (listen(0)) cannot hand the same
+    // number back and make the assertion flaky.
+    const occupied = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      occupied.once("error", reject);
+      occupied.listen(0, "127.0.0.1", () => {
+        occupied.off("error", reject);
+        resolve();
+      });
+    });
+    openServers.push(occupied);
+    const addr = occupied.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("failed to reserve preferred port");
+    }
+    const preferredPort = addr.port;
+
+    mocks.ensurePortAvailable.mockRejectedValueOnce(new PortInUseError(preferredPort));
+    spawnFakeSshListening();
+
+    const tunnel = await startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: preferredPort,
+      remotePort: 18789,
+      timeoutMs: 1000,
+    });
+
+    expect(tunnel.localPort).not.toBe(preferredPort);
+    expect(tunnel.localPort).toBeGreaterThan(0);
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "/usr/bin/ssh",
+      expect.arrayContaining(["-L", `${tunnel.localPort}:127.0.0.1:18789`]),
+      expect.anything(),
+    );
+
+    await tunnel.stop();
   });
 });
