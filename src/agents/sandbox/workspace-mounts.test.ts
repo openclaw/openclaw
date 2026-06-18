@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+import {
+  appendWorkspaceMountArgs,
+  resolveMaterializedSandboxSkillsWorkspaceDir,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "./workspace-mounts.js";
 
 const tmpDirs: string[] = [];
 
@@ -247,6 +251,44 @@ describe("appendWorkspaceMountArgs", () => {
     expect(mounts).toEqual([`${sandboxWorkspaceDir}:/workspace:ro,z`]);
     expect(mounts).not.toContain(
       `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
+    );
+  });
+});
+
+describe("resolveMaterializedSandboxSkillsWorkspaceDir", () => {
+  it("produces a path that can be pre-created for Docker bind mounts", () => {
+    // Regression (#94370): the materialized skills workspace directory
+    // must be pre-created before Docker bind mount processing so that
+    // the Docker daemon does not auto-create it as root:root.
+    const agentWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = resolveMaterializedSandboxSkillsWorkspaceDir(agentWorkspaceDir);
+
+    // The path follows the .openclaw/sandbox-skills convention.
+    expect(skillsWorkspaceDir).toBe(
+      path.join(agentWorkspaceDir, ".openclaw", "sandbox-skills"),
+    );
+
+    // Pre-create the directory (mirrors the fix in ensureSandboxWorkspaceLayout).
+    fs.mkdirSync(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+    fs.writeFileSync(path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md"), "# Demo\n");
+
+    // Verify that resolveReadOnlyWorkspaceSkillMounts discovers the
+    // pre-created directory and emits a read-only overlay mount.
+    const mounts = resolveReadOnlyWorkspaceSkillMounts({
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+
+    expect(mounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          hostPath: path.join(skillsWorkspaceDir, "skills"),
+          containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+        }),
+      ]),
     );
   });
 });
