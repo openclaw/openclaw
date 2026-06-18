@@ -1426,6 +1426,8 @@ export async function attachWebInboxToSocket(
       for (const update of updates) {
         if (update.id) {
           options.baileysGroupMetaCache?.delete(update.id);
+          groupMetaCache.delete(update.id);
+          groupMetadataCache.delete(update.id);
         }
       }
     }) as unknown as (...args: unknown[]) => void,
@@ -1442,6 +1444,8 @@ export async function attachWebInboxToSocket(
     "group-participants.update",
     ((update: { id: string }) => {
       options.baileysGroupMetaCache?.delete(update.id);
+      groupMetaCache.delete(update.id);
+      groupMetadataCache.delete(update.id);
     }) as unknown as (...args: unknown[]) => void,
   );
 
