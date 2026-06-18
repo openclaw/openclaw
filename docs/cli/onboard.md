@@ -39,6 +39,7 @@ openclaw onboard --flow manual
 openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
+openclaw onboard --auth-choice groq-api-key
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
@@ -51,6 +52,12 @@ On a fresh install where the active config file is missing or has no authored
 settings (empty or metadata-only), bare `openclaw` also starts the classic
 onboarding flow. Once a config file has authored settings, bare `openclaw`
 opens Crestodian instead.
+
+To switch or refresh a model provider after onboarding, rerun `openclaw onboard
+--auth-choice <provider>`. If OpenClaw detects existing config, choose **Review
+and update** to reach the selected provider credential prompt. Choosing **Keep
+current values** leaves existing provider keys unchanged. You can also jump to
+the model/provider section with `openclaw configure --section model`.
 
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
 Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set

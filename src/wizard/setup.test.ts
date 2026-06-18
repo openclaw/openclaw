@@ -1086,6 +1086,106 @@ describe("runSetupWizard", () => {
     expect(legacyPluginNotes.length).toBeGreaterThan(0);
   });
 
+  it("hints that Review and update is the provider key update path for auth-choice reruns", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {},
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const configHandlingPrompts: WizardSelectParams<unknown>[] = [];
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        configHandlingPrompts.push(opts);
+        return "keep";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-chatgpt-api-key",
+        openaiApiKey: "sk-flag-value",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const modifyOption = configHandlingPrompts[0]?.options.find(
+      (option) => option.value === "modify",
+    );
+    expect(modifyOption?.hint).toBe("Choose this to enter or update the selected provider key.");
+  });
+
+  it("does not show the provider key update hint for auth-choice skip reruns", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {},
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const configHandlingPrompts: WizardSelectParams<unknown>[] = [];
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        configHandlingPrompts.push(opts);
+        return "keep";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const modifyOption = configHandlingPrompts[0]?.options.find(
+      (option) => option.value === "modify",
+    );
+    expect(modifyOption?.hint).toBeUndefined();
+  });
+
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
     const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
     process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-ref-password"; // pragma: allowlist secret

@@ -359,7 +359,14 @@ export async function runSetupWizard(
       message: t("wizard.setup.configHandling"),
       options: [
         { value: "keep", label: t("wizard.setup.keepCurrent") },
-        { value: "modify", label: t("wizard.setup.modifyCurrent") },
+        {
+          value: "modify",
+          label: t("wizard.setup.modifyCurrent"),
+          hint:
+            opts.authChoice === undefined || opts.authChoice === "skip"
+              ? undefined
+              : t("wizard.setup.modifyCurrentAuthChoiceHint"),
+        },
         { value: "reset", label: t("wizard.setup.resetBefore") },
       ],
     });

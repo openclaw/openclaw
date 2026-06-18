@@ -247,6 +247,7 @@ export const zh_CN = {
       localGatewayMissing: "未检测到 Gateway（{url}）",
       localGatewayReachable: "Gateway 可访问（{url}）",
       modifyCurrent: "查看并更新",
+      modifyCurrentAuthChoiceHint: "选择此项即可输入或更新所选 provider 的 key。",
       pluginCompatibilityTitle: "插件兼容性",
       quickstartOnlyLocal: "QuickStart 仅支持本地 Gateway。将切换到手动模式。",
       quickstartTitle: "QuickStart",
