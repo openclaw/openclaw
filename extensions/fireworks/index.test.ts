@@ -12,12 +12,16 @@ import {
 import fireworksPlugin from "./index.js";
 import {
   FIREWORKS_BASE_URL,
+  FIREWORKS_DEEPSEEK_V4_MODEL_ID,
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_GLM_5_1_MODEL_ID,
+  FIREWORKS_GPT_OSS_120B_MODEL_ID,
   FIREWORKS_K2_6_CONTEXT_WINDOW,
   FIREWORKS_K2_6_MAX_TOKENS,
   FIREWORKS_K2_6_MODEL_ID,
+  FIREWORKS_MINIMAX_M3_MODEL_ID,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
@@ -69,6 +73,10 @@ describe("fireworks provider plugin", () => {
     expect(models.map((model) => model.id)).toEqual([
       FIREWORKS_K2_6_MODEL_ID,
       FIREWORKS_DEFAULT_MODEL_ID,
+      FIREWORKS_DEEPSEEK_V4_MODEL_ID,
+      FIREWORKS_MINIMAX_M3_MODEL_ID,
+      FIREWORKS_GLM_5_1_MODEL_ID,
+      FIREWORKS_GPT_OSS_120B_MODEL_ID,
     ]);
     expect(models[0]?.reasoning).toBe(false);
     expect(models[0]?.input).toEqual(["text", "image"]);
@@ -78,6 +86,51 @@ describe("fireworks provider plugin", () => {
     expect(models[1]?.input).toEqual(["text", "image"]);
     expect(models[1]?.contextWindow).toBe(FIREWORKS_DEFAULT_CONTEXT_WINDOW);
     expect(models[1]?.maxTokens).toBe(FIREWORKS_DEFAULT_MAX_TOKENS);
+  });
+
+  it("catalogs reasoning families with reasoning_effort compat from the manifest", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const catalogProvider = await runSingleProviderCatalog(provider);
+    const byId = new Map(catalogProvider.models?.map((model) => [model.id, model]) ?? []);
+
+    const deepseek = byId.get(FIREWORKS_DEEPSEEK_V4_MODEL_ID);
+    expect(deepseek?.reasoning).toBe(true);
+    // thinkingFormat "openai" opts out of core's deepseek-native fallback for
+    // deepseek-v4-* ids; Fireworks 400s on payloads carrying `thinking` next to
+    // `reasoning_effort`.
+    expect(deepseek?.compat).toMatchObject({
+      thinkingFormat: "openai",
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      reasoningEffortMap: { off: "none", max: "max" },
+    });
+
+    const minimax = byId.get(FIREWORKS_MINIMAX_M3_MODEL_ID);
+    expect(minimax?.reasoning).toBe(true);
+    expect(minimax?.input).toEqual(["text", "image"]);
+    expect(minimax?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high"],
+      reasoningEffortMap: { off: "none", max: "high" },
+    });
+
+    const glm = byId.get(FIREWORKS_GLM_5_1_MODEL_ID);
+    expect(glm?.reasoning).toBe(true);
+    expect(glm?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high"],
+      reasoningEffortMap: { off: "none", max: "high" },
+    });
+
+    const gptOss = byId.get(FIREWORKS_GPT_OSS_120B_MODEL_ID);
+    expect(gptOss?.reasoning).toBe(true);
+    expect(gptOss?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: { max: "high" },
+    });
+    expect(gptOss?.compat?.supportedReasoningEfforts).not.toContain("minimal");
+    expect(gptOss?.compat?.reasoningEffortMap).not.toHaveProperty("off");
   });
 
   it("resolves forward-compat Fireworks model ids from the default template", async () => {
@@ -119,13 +172,13 @@ describe("fireworks provider plugin", () => {
     const resolved = provider.resolveDynamicModel?.(
       createProviderDynamicModelContext({
         provider: "fireworks",
-        modelId: "accounts/fireworks/models/glm-5p1",
+        modelId: "accounts/fireworks/models/glm-4p6",
         models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
       }),
     );
 
     expect(resolved?.provider).toBe("fireworks");
-    expect(resolved?.id).toBe("accounts/fireworks/models/glm-5p1");
+    expect(resolved?.id).toBe("accounts/fireworks/models/glm-4p6");
     expect(resolved?.input).toEqual(["text"]);
   });
 
@@ -159,6 +212,61 @@ describe("fireworks provider plugin", () => {
     }
   });
 
+  it("derives thinking menus from each cataloged model's supportedReasoningEfforts", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: FIREWORKS_DEEPSEEK_V4_MODEL_ID,
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: FIREWORKS_MINIMAX_M3_MODEL_ID,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: FIREWORKS_GLM_5_1_MODEL_ID,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: FIREWORKS_GPT_OSS_120B_MODEL_ID,
+      }),
+    ).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/deepseek-v4-flash",
+      }),
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/glm-5p2",
+      }),
+    ).toBeUndefined();
+  });
+
   it("exposes off-only thinking policy for Fireworks Kimi models", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
 
@@ -169,7 +277,6 @@ describe("fireworks provider plugin", () => {
       }),
     ).toEqual({
       levels: [{ id: "off" }],
-      defaultLevel: "off",
     });
     expect(
       provider.resolveThinkingProfile?.({
@@ -178,7 +285,6 @@ describe("fireworks provider plugin", () => {
       }),
     ).toEqual({
       levels: [{ id: "off" }],
-      defaultLevel: "off",
     });
     expect(
       provider.resolveThinkingProfile?.({
@@ -188,7 +294,6 @@ describe("fireworks provider plugin", () => {
     ).toBeUndefined();
     expect(resolveThinkingProfile({ modelId: FIREWORKS_K2_6_MODEL_ID })).toEqual({
       levels: [{ id: "off" }],
-      defaultLevel: "off",
     });
     expect(
       resolveThinkingProfile({

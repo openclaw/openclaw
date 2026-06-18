@@ -64,6 +64,117 @@
               "cacheRead": 0,
               "cacheWrite": 0
             }
+          },
+          {
+            "id": "accounts/fireworks/models/deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "compat": {
+              "thinkingFormat": "openai",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "xhigh",
+                "adaptive": "high",
+                "max": "max"
+              }
+            },
+            "cost": {
+              "input": 1.74,
+              "output": 3.48,
+              "cacheRead": 0.145,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "accounts/fireworks/models/minimax-m3",
+            "name": "MiniMax M3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 524288,
+            "maxTokens": 64000,
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "medium",
+                "max": "high"
+              }
+            },
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.06,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "accounts/fireworks/models/glm-5p1",
+            "name": "GLM-5.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 202752,
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              }
+            },
+            "cost": {
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "accounts/fireworks/models/gpt-oss-120b",
+            "name": "GPT-OSS 120B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 131072,
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high"],
+              "reasoningEffortMap": {
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "medium",
+                "max": "high"
+              }
+            },
+            "cost": {
+              "input": 0.15,
+              "output": 0.6,
+              "cacheRead": 0.015,
+              "cacheWrite": 0
+            }
           }
         ]
       }
