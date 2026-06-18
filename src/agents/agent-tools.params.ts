@@ -16,6 +16,24 @@ const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
 const XML_ARG_VALUE_PATH_PARAM_KEYS = new Set(["path"]);
 
+/** Known hallucinated file extensions from LLM confusion with 'codex'. */
+const HALLUCINATED_EXT_MAP: Record<string, string> = {
+  ".docodex": ".docx",
+  ".pptcodex": ".pptx",
+  ".xlscodex": ".xlsx",
+  ".pdfcodex": ".pdf",
+  ".txtcodex": ".txt",
+  ".mdcodex": ".md",
+  ".jsoncodex": ".json",
+  ".xmlcodex": ".xml",
+  ".csvcodex": ".csv",
+};
+
+const HALLUCINATED_EXT_RE = new RegExp(
+  `(${Object.keys(HALLUCINATED_EXT_MAP).map((ext) => ext.replace(".", "\\")).join("|")})$`,
+  "i",
+);
+
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
@@ -110,6 +128,23 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
+/** Correct hallucinated file extensions like .docodex → .docx. */
+export function correctHallucinatedFileExtension(path: string): string {
+  const match = path.match(HALLUCINATED_EXT_RE);
+  if (!match) {
+    return path;
+  }
+  const badExt = match[0].toLowerCase();
+  const goodExt = HALLUCINATED_EXT_MAP[badExt];
+  if (!goodExt) {
+    return path;
+  }
+  // Preserve original case of the extension in the path
+  const originalExt = path.slice(match.index);
+  const correctedExt = originalExt[0] === "." ? goodExt : goodExt.slice(1);
+  return path.slice(0, match.index) + correctedExt;
+}
+
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
@@ -125,6 +160,26 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
     if (stripped !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = stripped as T[keyof T];
+    }
+  }
+  return normalized ?? record;
+}
+
+/** Correct hallucinated file extensions in selected string fields without mutating input. */
+export function correctHallucinatedFileExtensionFromKeys<T extends Record<string, unknown>>(
+  record: T,
+  keys: readonly string[],
+): T {
+  let normalized: T | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const corrected = correctHallucinatedFileExtension(value);
+    if (corrected !== value) {
+      normalized ??= { ...record };
+      normalized[key as keyof T] = corrected as T[keyof T];
     }
   }
   return normalized ?? record;
@@ -196,10 +251,12 @@ export function wrapToolParamValidation(
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
       const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
-          : params;
+      let normalizedParams = params;
+      if (record && pathKeys.length > 0) {
+        // First strip XML suffixes, then correct hallucinated extensions
+        const stripped = stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys);
+        normalizedParams = correctHallucinatedFileExtensionFromKeys(stripped, pathKeys);
+      }
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
       }
