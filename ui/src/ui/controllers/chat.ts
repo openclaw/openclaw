@@ -1185,6 +1185,7 @@ export function appendUserChatMessage(
   message: string,
   attachments?: ChatAttachment[],
   timestamp = Date.now(),
+  openclawMetadata?: Record<string, unknown>,
 ) {
   state.chatMessages = [
     ...state.chatMessages,
@@ -1192,6 +1193,7 @@ export function appendUserChatMessage(
       role: "user",
       content: buildUserChatMessageContentBlocks(message, attachments),
       timestamp,
+      ...(openclawMetadata ? { __openclaw: openclawMetadata } : {}),
     },
   ];
 }

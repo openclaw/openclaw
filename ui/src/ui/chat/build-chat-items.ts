@@ -456,6 +456,21 @@ function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> |
   };
 }
 
+function submittedSendMessageIds(messages: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    const marker = asRecord(asRecord(message)?.["__openclaw"]);
+    if (marker?.kind !== "submitted-send") {
+      continue;
+    }
+    const id = typeof marker.id === "string" ? marker.id.trim() : "";
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
 function rawMessageTimestamp(message: unknown): number | null {
   const timestamp = asRecord(message)?.timestamp;
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
@@ -725,8 +740,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     });
   }
   const queuedSends = Array.isArray(props.queue) ? props.queue : [];
+  const submittedSendIds = submittedSendMessageIds(history);
   for (const queued of queuedSends) {
-    if (!shouldRenderQueuedSendInThread(queued)) {
+    if (submittedSendIds.has(queued.id) || !shouldRenderQueuedSendInThread(queued)) {
       continue;
     }
     const message = queuedSendThreadMessage(queued);

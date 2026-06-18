@@ -724,6 +724,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timeout: 10_000,
         })
         .toBe("");
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const app = document.querySelector("openclaw-app") as
+                | (Element & {
+                    chatMessages?: Array<{ role?: unknown; content?: Array<{ text?: unknown }> }>;
+                  })
+                | null;
+              return (app?.chatMessages ?? []).map((message) => ({
+                role: message.role,
+                text: message.content?.[0]?.text,
+              }));
+            }),
+          { timeout: 10_000 },
+        )
+        .toEqual([{ role: "user", text: prompt }]);
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 

@@ -2332,7 +2332,11 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toHaveLength(1);
     expect(host.chatQueue[0]?.text).toBe("same prompt");
     expect(host.chatQueue[0]?.sendState).toBe("sending");
-    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "same prompt" }],
+    });
 
     const queuedRunId = host.chatQueue[0]?.sendRunId;
     sent.resolve({ runId: queuedRunId, status: "started" });
@@ -2343,7 +2347,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toHaveLength(1);
   });
 
-  it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {
+  it("renders the user message before chat.send is acknowledged", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn((method: string) => {
       if (method === "chat.send") {
@@ -2360,7 +2364,11 @@ describe("handleSendChat", () => {
     await Promise.resolve();
 
     expect(host.chatMessage).toBe("");
-    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "do not lose this" }],
+    });
     expect(host.chatQueue).toHaveLength(1);
     expect(host.chatQueue[0]).toMatchObject({
       text: "do not lose this",

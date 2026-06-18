@@ -1045,11 +1045,43 @@ async function sendQueuedChatMessage(
   recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   host.chatSending = true;
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
+  let previousChatMessages: ChatState["chatMessages"] | null = null;
+  let appendedUserMessage = false;
+  const rollbackAppendedUserMessage = () => {
+    if (appendedUserMessage && previousChatMessages && isVisibleSession()) {
+      host.chatMessages = previousChatMessages;
+    }
+    appendedUserMessage = false;
+  };
+  const clearSubmittedSendMarker = () => {
+    if (!appendedUserMessage) {
+      return;
+    }
+    host.chatMessages = host.chatMessages.map((entry) => {
+      const record = entry as Record<string, unknown>;
+      const marker = record.__openclaw as Record<string, unknown> | undefined;
+      if (marker?.kind !== "submitted-send" || marker.id !== id) {
+        return entry;
+      }
+      const next = { ...record };
+      delete next.__openclaw;
+      return next;
+    });
+  };
   if (isVisibleSession()) {
     setChatError(host, null);
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       clearRunStatus: true,
     });
+    previousChatMessages = host.chatMessages;
+    appendUserChatMessage(
+      host as unknown as ChatState,
+      message,
+      hasAttachments ? attachments : undefined,
+      startedAt,
+      { kind: "submitted-send", id },
+    );
+    appendedUserMessage = true;
   }
 
   try {
@@ -1078,13 +1110,17 @@ async function sendQueuedChatMessage(
       ...chatSendAckServerTimingEventFields(ack),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
+    clearSubmittedSendMarker();
     if (isVisibleSession()) {
-      appendUserChatMessage(
-        host as unknown as ChatState,
-        message,
-        hasAttachments ? attachments : undefined,
-        startedAt,
-      );
+      if (!appendedUserMessage) {
+        appendUserChatMessage(
+          host as unknown as ChatState,
+          message,
+          hasAttachments ? attachments : undefined,
+          startedAt,
+        );
+        appendedUserMessage = true;
+      }
       if (ack.status === "ok") {
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
@@ -1133,6 +1169,7 @@ async function sendQueuedChatMessage(
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
     return "sent";
   } catch (err) {
+    rollbackAppendedUserMessage();
     const error = formatConnectError(err);
     if (isRecoverableChatSendError(err, error)) {
       updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
