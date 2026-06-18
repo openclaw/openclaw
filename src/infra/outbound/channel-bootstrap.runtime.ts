@@ -3,7 +3,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
+import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import {
   getActivePluginChannelRegistry,
@@ -70,18 +70,26 @@ export function bootstrapOutboundChannelPlugin(params: {
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
   const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
   const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, defaultAgentId);
+  const loadOptions = {
+    config: autoEnabled.config,
+    activationSourceConfig: cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    workspaceDir,
+    runtimeOptions: {
+      allowGatewaySubagentBinding: true,
+    },
+  };
   try {
-    resolveRuntimePluginRegistry({
-      config: autoEnabled.config,
-      activationSourceConfig: cfg,
-      autoEnabledReasons: autoEnabled.autoEnabledReasons,
-      workspaceDir,
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    });
+    resolveRuntimePluginRegistry(loadOptions);
     if (!canResolveSendCapableChannel(params.channel)) {
-      bootstrapAttempts.delete(attemptKey);
+      // The cached compatible registry may not include npm-installed external
+      // channel plugins discovered through install records. Force a fresh
+      // plugin load so the install-records ledger is scanned and external
+      // plugins register their channel adapters.  (#78754)
+      loadOpenClawPlugins(loadOptions);
+      if (!canResolveSendCapableChannel(params.channel)) {
+        bootstrapAttempts.delete(attemptKey);
+      }
     }
   } catch {
     bootstrapAttempts.delete(attemptKey);

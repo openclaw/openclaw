@@ -11,10 +11,12 @@ import {
 
 const loaderMocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn(),
+  loadOpenClawPlugins: vi.fn(),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
   resolveRuntimePluginRegistry: loaderMocks.resolveRuntimePluginRegistry,
+  loadOpenClawPlugins: loaderMocks.loadOpenClawPlugins,
 }));
 
 const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTests } =
@@ -29,6 +31,7 @@ const discordConfig = {
 describe("bootstrapOutboundChannelPlugin", () => {
   afterEach(() => {
     loaderMocks.resolveRuntimePluginRegistry.mockReset();
+    loaderMocks.loadOpenClawPlugins.mockReset();
     resetOutboundChannelBootstrapStateForTests();
     resetPluginRuntimeStateForTest();
   });
@@ -165,5 +168,56 @@ describe("bootstrapOutboundChannelPlugin", () => {
     });
 
     expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to loadOpenClawPlugins when the cached registry lacks the external channel (#78754)", () => {
+    // Simulate an existing registry that does not include the npm-installed
+    // external channel plugin.  resolveRuntimePluginRegistry returns the
+    // cached registry, but the channel is still not send-capable.  The
+    // bootstrap should then call loadOpenClawPlugins directly to force a
+    // fresh plugin discovery that includes install records.
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [] as never;
+    setActivePluginRegistry(registry);
+    pinActivePluginChannelRegistry(registry);
+
+    // First call (resolveRuntimePluginRegistry) returns the cached registry
+    // without the channel.  Second call (loadOpenClawPlugins) also returns
+    // a registry (the channel might still not be found, but the call must
+    // happen).
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(registry);
+
+    bootstrapOutboundChannelPlugin({
+      channel: "openclaw-weixin",
+      cfg: { channels: { "openclaw-weixin": {} } } as OpenClawConfig,
+    });
+
+    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips loadOpenClawPlugins fallback when resolveRuntimePluginRegistry resolves the channel", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "openclaw-weixin",
+        plugin: {
+          id: "openclaw-weixin",
+          meta: {},
+          outbound: { sendText: async () => ({ messageId: "1" }) },
+        },
+        source: "runtime",
+      },
+    ] as never;
+    setActivePluginRegistry(registry);
+    pinActivePluginChannelRegistry(registry);
+
+    bootstrapOutboundChannelPlugin({
+      channel: "openclaw-weixin",
+      cfg: { channels: { "openclaw-weixin": {} } } as OpenClawConfig,
+    });
+
+    expect(loaderMocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(loaderMocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 });

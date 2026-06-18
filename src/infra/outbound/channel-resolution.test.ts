@@ -8,6 +8,7 @@ const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const resolveRuntimePluginRegistryMock = vi.hoisted(() => vi.fn());
+const loadOpenClawPluginsMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryVersionMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn());
@@ -31,6 +32,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../../plugins/loader.js", () => ({
   resolveRuntimePluginRegistry: (...args: unknown[]) => resolveRuntimePluginRegistryMock(...args),
+  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
@@ -582,6 +584,73 @@ describe("outbound channel resolution", () => {
         cfg: { channels: {} } as never,
       }),
     ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps external channel plugins not yet in the deliverable list (#78754)", async () => {
+    // Simulate an external/npm-installed channel plugin that is not in the
+    // deliverable channel list (isDeliverableMessageChannel returns false)
+    // and not yet loaded.  After bootstrap, the plugin appears in the
+    // runtime registries and is resolved.
+    const externalPlugin = {
+      id: "openclaw-weixin",
+      outbound: { sendText: vi.fn() },
+      meta: {},
+    };
+    let bootstrapped = false;
+
+    isDeliverableMessageChannelMock.mockImplementation((value?: string) => {
+      if (String(value) === "openclaw-weixin") return bootstrapped;
+      return ["alpha", "beta", "gamma"].includes(String(value));
+    });
+
+    // normalizeMessageChannel must accept the external channel
+    normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
+      typeof value === "string" ? value.trim().toLowerCase() : undefined,
+    );
+
+    resolveRuntimePluginRegistryMock.mockImplementation(() => {
+      bootstrapped = true;
+    });
+
+    // Registries start empty, then populated after bootstrap
+    getLoadedChannelPluginMock.mockImplementation(() =>
+      bootstrapped ? externalPlugin : undefined,
+    );
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockImplementation(() => ({
+      channels: bootstrapped ? [{ plugin: externalPlugin }] : [],
+    }));
+    getActivePluginRegistryMock.mockImplementation(() => ({
+      channels: bootstrapped ? [{ plugin: externalPlugin }] : [],
+    }));
+
+    const channelResolution = await importChannelResolution("external-channel-bootstrap");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "openclaw-weixin",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(externalPlugin);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns undefined for external channels when allowBootstrap is not set", async () => {
+    isDeliverableMessageChannelMock.mockImplementation((value?: string) => {
+      if (String(value) === "openclaw-weixin") return false;
+      return ["alpha", "beta", "gamma"].includes(String(value));
+    });
+
+    const channelResolution = await importChannelResolution("no-bootstrap-external");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "openclaw-weixin",
+        cfg: { channels: {} } as never,
+      }),
+    ).toBeUndefined();
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 });
