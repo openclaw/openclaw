@@ -132,7 +132,7 @@ console.log(`Looking for marker skill at: ${path.relative(result.workspaceDir, u
 const userOwnedExists = await fs
   .stat(userOwnedPath)
   .then((s) => s.isFile())
-  .catch(() => false);
+  .catch((_err: unknown) => false);
 console.log(`Marker skill present?  ${userOwnedExists ? "yes" : "no"}`);
 
 if (!userOwnedExists) {
