@@ -63,7 +63,7 @@ import {
 import {
   formatUnknownError,
   getSocketEmitter,
-  isNonRecoverableSlackAuthError,
+  isNonRecoverableSlackSocketError,
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
@@ -116,29 +116,25 @@ function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserRes
 export function formatSlackSocketReconnectMessage(params: {
   event: string;
   attempt: number;
-  maxAttempts: number;
   delayMs: number;
   error?: unknown;
 }) {
-  const maxAttempts = params.maxAttempts > 0 ? String(params.maxAttempts) : "∞";
   const suffix = params.error ? ` (${formatUnknownError(params.error)})` : "";
-  return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/${maxAttempts})${suffix}`;
+  return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/∞)${suffix}`;
 }
 
 export function formatSlackSocketStartRetryMessage(params: {
   attempt: number;
-  maxAttempts: number;
   delayMs: number;
   error: unknown;
   sdkContext?: string;
 }) {
-  const maxAttempts = params.maxAttempts > 0 ? String(params.maxAttempts) : "∞";
   const reason = formatUnknownError(
     params.error,
     "Slack Socket Mode start failed without error detail",
   );
   const sdkContext = params.sdkContext?.trim() ? `; last SDK log: ${params.sdkContext.trim()}` : "";
-  return `slack socket mode failed to start; retry ${params.attempt}/${maxAttempts} in ${Math.round(params.delayMs / 1000)}s reason="${reason}${sdkContext}"`;
+  return `slack socket mode failed to start; retry ${params.attempt}/∞ in ${Math.round(params.delayMs / 1000)}s reason="${reason}${sdkContext}"`;
 }
 
 function parseApiAppIdFromAppToken(raw?: string) {
@@ -568,10 +564,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
           publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
 
-          // Bail immediately on non-recoverable auth errors during reconnect too.
-          if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
+          // Preserve the Slack SDK's fail-fast classes outside its native reconnect loop.
+          if (disconnect.error && isNonRecoverableSlackSocketError(disconnect.error)) {
             runtime.error?.(
-              `slack socket mode disconnected due to non-recoverable auth error — skipping channel (${formatUnknownError(disconnect.error)})`,
+              `slack socket mode disconnected due to non-recoverable error — skipping channel (${formatUnknownError(disconnect.error)})`,
             );
             throw disconnect.error instanceof Error
               ? disconnect.error
@@ -579,22 +575,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
 
           reconnectAttempts += 1;
-          if (
-            SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
-            reconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
-          ) {
-            throw new Error(
-              `Slack socket mode reconnect max attempts reached (${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts}) after ${disconnect.event}`,
-            );
-          }
-
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.log?.(
             warn(
               formatSlackSocketReconnectMessage({
                 event: disconnect.event,
                 attempt: reconnectAttempts,
-                maxAttempts: SLACK_SOCKET_RECONNECT_POLICY.maxAttempts,
                 delayMs,
                 error: disconnect.error,
               }),
@@ -607,26 +593,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             break;
           }
         } catch (err) {
-          // Auth errors (account_inactive, invalid_auth, etc.) are permanent —
-          // retrying will never succeed and blocks the entire gateway.  Fail fast.
-          if (isNonRecoverableSlackAuthError(err)) {
+          if (isNonRecoverableSlackSocketError(err)) {
             runtime.error?.(
-              `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
+              `slack socket mode failed to start due to non-recoverable error — skipping channel (${formatUnknownError(err)})`,
             );
             throw err;
           }
           reconnectAttempts += 1;
-          if (
-            SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
-            reconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
-          ) {
-            throw err;
-          }
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.error?.(
             formatSlackSocketStartRetryMessage({
               attempt: reconnectAttempts,
-              maxAttempts: SLACK_SOCKET_RECONNECT_POLICY.maxAttempts,
               delayMs,
               error: err,
               sdkContext: socketModeLogger.getLastMessage(),
@@ -657,7 +634,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
+export { isNonRecoverableSlackSocketError } from "./reconnect-policy.js";
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
