@@ -31,12 +31,15 @@ export type CaptureSessionRecord = {
 
 export type CaptureBlobRecord = {
   blobId: string;
-  /** @deprecated Shared-state capture blobs do not have a standalone file path. */
-  path?: string;
+  path: string;
   encoding: "gzip";
   sizeBytes: number;
   sha256: string;
   contentType?: string;
+};
+
+export type SharedCaptureBlobRecord = Omit<CaptureBlobRecord, "path"> & {
+  path?: never;
 };
 
 export type CaptureEventRecord = {

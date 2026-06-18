@@ -24,6 +24,7 @@ import type {
   CaptureSessionCoverageSummary,
   CaptureSessionRecord,
   CaptureSessionSummary,
+  SharedCaptureBlobRecord,
 } from "./types.js";
 
 // Capture rows and compressed payload BLOBs live in the shared global state DB.
@@ -178,16 +179,13 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
-export class DebugProxyCaptureStore {
+class DebugProxyCaptureStoreImpl {
   readonly db: DatabaseSync;
   readonly dbPath: string;
   readonly blobDir: string;
   private readonly pathBased?: PathBasedDebugProxyCaptureStore;
   private closed = false;
 
-  constructor(options?: DebugProxyCaptureStoreOptions);
-  /** @deprecated Use the options overload so capture data lives in shared SQLite state. */
-  constructor(dbPath: string, blobDir: string);
   constructor(
     optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
     legacyBlobDir?: string,
@@ -282,7 +280,7 @@ export class DebugProxyCaptureStore {
       .run(endedAt, sessionId);
   }
 
-  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord {
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord {
     const sha256 = createHash("sha256").update(data).digest("hex");
     const blobId = sha256.slice(0, 24);
     if (this.pathBased) {
@@ -784,8 +782,33 @@ export class DebugProxyCaptureStore {
   }
 }
 
+export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+  persistPayload(
+    data: Buffer,
+    contentType?: string,
+  ): CaptureBlobRecord | SharedCaptureBlobRecord;
+};
+
+export type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord;
+};
+
+export type SharedDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+  persistPayload(data: Buffer, contentType?: string): SharedCaptureBlobRecord;
+};
+
+type DebugProxyCaptureStoreConstructor = {
+  new (dbPath: string, blobDir: string): LegacyDebugProxyCaptureStore;
+  new (options?: DebugProxyCaptureStoreOptions): SharedDebugProxyCaptureStore;
+};
+
+// The runtime implementation branches on constructor arguments; expose the
+// corresponding result type so both shipped constructor contracts stay exact.
+export const DebugProxyCaptureStore =
+  DebugProxyCaptureStoreImpl as unknown as DebugProxyCaptureStoreConstructor;
+
 type CachedStoreEntry = {
-  store: DebugProxyCaptureStore;
+  store: DebugProxyCaptureStoreImpl;
   leases: number;
 };
 
@@ -800,26 +823,32 @@ function resolveDebugProxyCaptureStoreKey(
     : `shared:${openOpenClawStateDatabase({ env: optionsOrDbPath.env }).path}`;
 }
 
-export function getDebugProxyCaptureStore(
-  options?: DebugProxyCaptureStoreOptions,
-): DebugProxyCaptureStore;
-/** @deprecated Use the options overload so capture data lives in shared SQLite state. */
-export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore;
-export function getDebugProxyCaptureStore(
+function getDebugProxyCaptureStoreImpl(
   optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
   legacyBlobDir?: string,
-): DebugProxyCaptureStore {
+): DebugProxyCaptureStoreImpl {
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
   const cached = cachedStores.get(key);
   if (cached && !cached.store.isClosed) {
     return cached.store;
   }
-  const store =
-    typeof optionsOrDbPath === "string"
-      ? new DebugProxyCaptureStore(optionsOrDbPath, legacyBlobDir!)
-      : new DebugProxyCaptureStore(optionsOrDbPath);
+  const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   cachedStores.set(key, { store, leases: 0 });
   return store;
+}
+
+export function getDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): LegacyDebugProxyCaptureStore;
+export function getDebugProxyCaptureStore(
+  options?: DebugProxyCaptureStoreOptions,
+): SharedDebugProxyCaptureStore;
+export function getDebugProxyCaptureStore(
+  optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
+  legacyBlobDir?: string,
+): DebugProxyCaptureStore {
+  return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
 export function closeDebugProxyCaptureStore(): void {
@@ -831,13 +860,12 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
-export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
-  store: DebugProxyCaptureStore;
+export function acquireDebugProxyCaptureStore(dbPath: string, blobDir: string): {
+  store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
-/** @deprecated Use the options overload so capture data lives in shared SQLite state. */
-export function acquireDebugProxyCaptureStore(dbPath: string, blobDir: string): {
-  store: DebugProxyCaptureStore;
+export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
+  store: SharedDebugProxyCaptureStore;
   release: () => void;
 };
 export function acquireDebugProxyCaptureStore(
@@ -848,10 +876,7 @@ export function acquireDebugProxyCaptureStore(
   release: () => void;
 } {
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
-  const store =
-    typeof optionsOrDbPath === "string"
-      ? getDebugProxyCaptureStore(optionsOrDbPath, legacyBlobDir!)
-      : getDebugProxyCaptureStore(optionsOrDbPath);
+  const store = getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   const cached = cachedStores.get(key);
   if (!cached || cached.store !== store) {
     throw new Error("debug proxy capture store cache changed while acquiring a lease");
@@ -879,7 +904,12 @@ export function acquireDebugProxyCaptureStore(
 }
 
 export function persistEventPayload(
-  store: DebugProxyCaptureStore,
+  store: {
+    persistPayload(
+      data: Buffer,
+      contentType?: string,
+    ): CaptureBlobRecord | SharedCaptureBlobRecord;
+  },
   params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
 ): { dataText?: string; dataBlobId?: string; dataSha256?: string } {
   if (params.data == null) {
