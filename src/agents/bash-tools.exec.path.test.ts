@@ -216,6 +216,27 @@ describe("exec PATH login shell merge", () => {
     }
   });
 
+  it("fails without running when an explicit workdir is unavailable", async () => {
+    const missingWorkdir = path.join(
+      os.tmpdir(),
+      `openclaw-missing-workdir-${process.pid}-${Date.now()}`,
+    );
+    fs.rmSync(missingWorkdir, { recursive: true, force: true });
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-missing-workdir", {
+      command: "echo ok",
+      workdir: missingWorkdir,
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(result.details?.status).toBe("failed");
+    expect(value).toContain(`workdir "${missingWorkdir}" is unavailable`);
+    expect(value).toContain("command was not executed");
+    expect(value).not.toBe("ok");
+  });
+
   it("merges login-shell PATH for host=gateway", async () => {
     if (isWin) {
       return;

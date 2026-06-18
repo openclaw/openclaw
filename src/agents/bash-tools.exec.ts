@@ -77,7 +77,9 @@ import {
   buildSandboxEnv,
   clampWithDefault,
   coerceEnv,
+  formatUnavailableWorkdirFailure,
   readEnvInt,
+  resolveExistingWorkdir,
   resolveSandboxWorkdir,
   resolveWorkdir,
   truncateMiddle,
@@ -1416,6 +1418,7 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
       if (approvalWarningText) {
         warnings.push(approvalWarningText);
@@ -1593,7 +1596,24 @@ export function createExecTool(
         workdir = explicitWorkdir;
       } else {
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
-        workdir = resolveWorkdir(rawWorkdir, warnings);
+        workdir = explicitWorkdir
+          ? (resolveExistingWorkdir(rawWorkdir) ?? undefined)
+          : resolveWorkdir(rawWorkdir, warnings);
+        if (!workdir) {
+          return buildExecForegroundResult({
+            outcome: {
+              status: "failed",
+              exitCode: null,
+              exitSignal: null,
+              durationMs: 0,
+              aggregated: "",
+              timedOut: false,
+              failureKind: "runtime-error",
+              reason: formatUnavailableWorkdirFailure(rawWorkdir),
+            },
+            warningText: getWarningText(),
+          });
+        }
       }
       await rejectUnsafeExecControlShellCommand(params.command);
 
@@ -1770,7 +1790,6 @@ export function createExecTool(
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
       const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
-      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)

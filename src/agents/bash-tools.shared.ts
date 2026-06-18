@@ -179,17 +179,30 @@ function normalizeContainerPath(input: string): string {
   return path.posix.normalize(normalized);
 }
 
-/** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
-export function resolveWorkdir(workdir: string, warnings: string[]) {
-  const current = safeCwd();
-  const fallback = current ?? homedir();
+/** Returns a host workdir only when it exists and is a directory. */
+export function resolveExistingWorkdir(workdir: string): string | null {
   try {
     const stats = statSync(workdir);
     if (stats.isDirectory()) {
       return workdir;
     }
   } catch {
-    // ignore, fallback below
+    // caller decides whether unavailable workdirs should fail or fall back
+  }
+  return null;
+}
+
+export function formatUnavailableWorkdirFailure(workdir: string) {
+  return `workdir "${workdir}" is unavailable; command was not executed.`;
+}
+
+/** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
+export function resolveWorkdir(workdir: string, warnings: string[]) {
+  const current = safeCwd();
+  const fallback = current ?? homedir();
+  const resolved = resolveExistingWorkdir(workdir);
+  if (resolved) {
+    return resolved;
   }
   warnings.push(`Warning: workdir "${workdir}" is unavailable; using "${fallback}".`);
   return fallback;
