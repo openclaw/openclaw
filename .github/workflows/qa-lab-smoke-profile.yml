@@ -93,7 +93,7 @@ jobs:
           INPUT_QA_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.qa_profile || 'smoke-ci' }}
           INPUT_SURFACE: ${{ github.event_name == 'workflow_dispatch' && inputs.surface || '' }}
           INPUT_CATEGORY: ${{ github.event_name == 'workflow_dispatch' && inputs.category || '' }}
-          INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || 'gateway-smoke' }}
+          INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || (github.event_name == 'pull_request' && 'gateway-smoke' || '') }}
           INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '1' }}
           INPUT_EVIDENCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_mode || 'slim' }}
           INPUT_FAST: ${{ github.event_name != 'workflow_dispatch' || inputs.fast }}
