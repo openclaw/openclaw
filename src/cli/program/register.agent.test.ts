@@ -105,6 +105,19 @@ describe("registerAgentCommands", () => {
     expect(deps).toBeUndefined();
   });
 
+  it("forwards file and stdin message input options", async () => {
+    await runCli(["agent", "--message-file", "/tmp/prompt.txt", "--agent", "ops"]);
+
+    const [fileOptions] = commandCall(agentCliCommandMock, 0);
+    expect((fileOptions as { messageFile?: string }).messageFile).toBe("/tmp/prompt.txt");
+    expect((fileOptions as { messageStdin?: boolean }).messageStdin).toBe(false);
+
+    await runCli(["agent", "--message-stdin", "--agent", "ops"]);
+
+    const [stdinOptions] = commandCall(agentCliCommandMock, 1);
+    expect((stdinOptions as { messageStdin?: boolean }).messageStdin).toBe(true);
+  });
+
   it("runs agent command with verbose disabled for --verbose off", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "off"]);
 

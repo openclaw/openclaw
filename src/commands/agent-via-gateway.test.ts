@@ -308,6 +308,50 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("reads the gateway message from a UTF-8 file", async () => {
+    await withTempStore(async ({ dir }) => {
+      mockGatewaySuccessReply();
+      const messagePath = path.join(dir, "prompt.txt");
+      fs.writeFileSync(messagePath, "  file hello  \n", "utf8");
+
+      await agentCliCommand({ messageFile: messagePath, to: "+1555" }, runtime);
+
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("file hello");
+    });
+  });
+
+  it("requires exactly one message input source", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messagePath = path.join(dir, "prompt.txt");
+      fs.writeFileSync(messagePath, "file hello", "utf8");
+
+      await expect(
+        agentCliCommand({ message: "hi", messageFile: messagePath, to: "+1555" }, runtime),
+      ).rejects.toThrow(
+        "Choose exactly one message input: --message, --message-file, or --message-stdin.",
+      );
+
+      await expect(agentCliCommand({ to: "+1555" }, runtime)).rejects.toThrow(
+        "Choose exactly one message input: --message, --message-file, or --message-stdin.",
+      );
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects empty file message input", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messagePath = path.join(dir, "prompt.txt");
+      fs.writeFileSync(messagePath, " \n\t ", "utf8");
+
+      await expect(
+        agentCliCommand({ messageFile: messagePath, to: "+1555" }, runtime),
+      ).rejects.toThrow("Missing message.");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
     async (message) => {
