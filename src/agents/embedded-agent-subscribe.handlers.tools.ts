@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -30,6 +31,8 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { buildPluginToolMetadataKey } from "../plugins/tools.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -77,6 +80,7 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { normalizeExternalActionEvidence } from "./external-action-receipts.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -214,6 +218,36 @@ function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
+function collectExternalActionEvidenceForTool(params: {
+  toolName: string;
+  pluginMetadataKey?: string;
+  result: unknown;
+}) {
+  if (!params.pluginMetadataKey) {
+    return [];
+  }
+  const registry = getActivePluginRegistry();
+  if (!registry?.toolMetadata?.length) {
+    return [];
+  }
+  return registry.toolMetadata.flatMap((entry) => {
+    const entryKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
+    if (entryKey !== params.pluginMetadataKey) {
+      return [];
+    }
+    const declaration = entry.metadata.externalActionEvidence;
+    if (!declaration) {
+      return [];
+    }
+    const evidence = normalizeExternalActionEvidence({
+      declaration,
+      toolName: params.toolName,
+      result: params.result,
+    });
+    return evidence ? [evidence] : [];
+  });
+}
+
 /** Returns the number of active tool executions tracked for one embedded run. */
 export function countActiveToolExecutions(runId: string): number {
   const prefix = `${runId}:`;
@@ -238,12 +272,16 @@ function buildToolCallSummary(
   toolName: string,
   args: unknown,
   meta: string | undefined,
+  pluginId: string | undefined,
+  pluginMetadataKey: string | undefined,
   instanceReplaySafe: boolean,
   structuredReplaySafe: boolean,
 ): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
+    ...(pluginId ? { pluginId } : {}),
+    ...(pluginMetadataKey ? { pluginMetadataKey } : {}),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
     replaySafe:
@@ -759,6 +797,8 @@ export function handleToolExecutionStart(
     toolName: string;
     toolCallId: string;
     args: unknown;
+    pluginId?: string;
+    pluginMetadataKey?: string;
     replaySafe?: boolean;
   },
 ): void | Promise<void> {
@@ -779,6 +819,15 @@ export function handleToolExecutionStart(
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    const pluginId =
+      normalizeOptionalString(evt.pluginId) ??
+      ctx.params.toolPluginIdsByName?.get(rawToolName) ??
+      ctx.params.toolPluginIdsByName?.get(toolName);
+    const pluginMetadataKey =
+      normalizeOptionalString(evt.pluginMetadataKey) ??
+      ctx.params.toolPluginMetadataKeysByName?.get(rawToolName) ??
+      ctx.params.toolPluginMetadataKeysByName?.get(toolName) ??
+      (pluginId ? buildPluginToolMetadataKey(pluginId, rawToolName) : undefined);
     ctx.state.toolExecutionSinceLastBlockReply = true;
     ctx.params.onExecutionPhase?.({
       phase: "tool_execution_started",
@@ -868,7 +917,15 @@ export function handleToolExecutionStart(
       ctx.params.replaySafeToolNames?.has(toolName) === true;
     ctx.state.toolMetaById.set(
       toolCallId,
-      buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false),
+      buildToolCallSummary(
+        toolName,
+        args,
+        meta,
+        pluginId,
+        pluginMetadataKey,
+        instanceReplaySafe,
+        false,
+      ),
     );
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
@@ -1133,6 +1190,8 @@ export async function handleToolExecutionEnd(
     toolName,
     startArgs,
     initialCallSummary?.meta,
+    initialCallSummary?.pluginId,
+    initialCallSummary?.pluginMetadataKey,
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
   );
@@ -1156,6 +1215,15 @@ export async function handleToolExecutionEnd(
       : null;
   if (acceptedSessionSpawn) {
     ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
+  }
+  if (!isToolError) {
+    ctx.state.externalActionEvidence.push(
+      ...collectExternalActionEvidenceForTool({
+        toolName,
+        pluginMetadataKey: callSummary.pluginMetadataKey,
+        result: sanitizedResult,
+      }),
+    );
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);

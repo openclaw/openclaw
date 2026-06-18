@@ -91,6 +91,7 @@ import {
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import { isValidPluginExternalActionEvidenceRegistration } from "./host-hooks.js";
 import {
   isPluginJsonValue,
   normalizePluginHostHookId,
@@ -2157,6 +2158,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       displayName === "" ||
       description === "" ||
       tags === null ||
+      !isValidPluginExternalActionEvidenceRegistration(metadata.externalActionEvidence) ||
       (metadata.risk !== undefined && !["low", "medium", "high"].includes(metadata.risk))
     ) {
       pushDiagnostic({

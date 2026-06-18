@@ -6,7 +6,9 @@ import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { buildPluginToolMetadataKey } from "../plugins/tools.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildBlockedToolResult,
@@ -68,6 +70,7 @@ function createTestContext(): {
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      externalActionEvidence: [],
       acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
       itemActiveIds: new Set<string>(),
@@ -174,6 +177,63 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
   const targets = ctx.state.messagingToolSentTargets;
   expect(targets).toHaveLength(1);
   return requireRecord(targets[0], "messaging target");
+}
+
+function installDialpadSmsEvidenceMetadata(
+  params: { includePartyFields?: boolean; includeSpoofPlugin?: boolean } = {},
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.toolMetadata = [
+    ...(params.includeSpoofPlugin
+      ? [
+          {
+            pluginId: "spoof",
+            pluginName: "Spoof",
+            source: "test",
+            metadata: {
+              toolName: "dialpad_send_sms",
+              externalActionEvidence: {
+                actionFamily: "sms" as const,
+                successStatusPaths: ["spoofStatus"],
+                providerIdPaths: ["spoofId"],
+              },
+            },
+          },
+        ]
+      : []),
+    {
+      pluginId: "dialpad",
+      pluginName: "Dialpad",
+      source: "test",
+      metadata: {
+        toolName: "dialpad_send_sms",
+        externalActionEvidence: {
+          actionFamily: "sms",
+          successStatusPaths: ["status"],
+          providerIdPaths: ["id"],
+          ...(params.includePartyFields
+            ? {
+                senderPaths: ["from"],
+                recipientPaths: ["to"],
+              }
+            : {}),
+          dryRunPaths: ["dryRun"],
+        },
+      },
+    },
+  ];
+  setActivePluginRegistry(registry);
+}
+
+async function startDialpadSmsTool(ctx: ToolHandlerContext, toolCallId = "tool-sms") {
+  await handleToolExecutionStart(ctx, {
+    type: "tool_execution_start",
+    toolName: "dialpad_send_sms",
+    toolCallId,
+    pluginId: "dialpad",
+    pluginMetadataKey: buildPluginToolMetadataKey("dialpad", "dialpad_send_sms"),
+    args: {},
+  } as never);
 }
 
 describe("handleToolExecutionStart read path checks", () => {
@@ -664,6 +724,90 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
     );
 
     expect(ctx.state.acceptedSessionSpawns).toEqual([]);
+  });
+});
+
+describe("handleToolExecutionEnd external action evidence", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("records successful evidence declared by plugin tool metadata", async () => {
+    installDialpadSmsEvidenceMetadata({ includePartyFields: true });
+    const { ctx } = createTestContext();
+
+    await startDialpadSmsTool(ctx);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "dialpad_send_sms",
+      toolCallId: "tool-sms",
+      isError: false,
+      result: {
+        id: "4797682962735104",
+        status: "accepted/queued",
+        from: "+14155201316",
+        to: "+13522815065",
+      },
+    });
+
+    expect(ctx.state.externalActionEvidence).toEqual([
+      expect.objectContaining({
+        actionFamily: "sms",
+        toolName: "dialpad_send_sms",
+        providerId: "4797682962735104",
+        status: "accepted/queued",
+        sender: "+14155201316",
+        recipient: "+13522815065",
+      }),
+    ]);
+  });
+
+  it("uses the executed tool plugin owner when tool names collide", async () => {
+    installDialpadSmsEvidenceMetadata({ includeSpoofPlugin: true });
+    const { ctx } = createTestContext();
+
+    await startDialpadSmsTool(ctx);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "dialpad_send_sms",
+      toolCallId: "tool-sms",
+      isError: false,
+      result: {
+        id: "4797682962735104",
+        status: "accepted/queued",
+        spoofId: "spoof-should-not-match",
+        spoofStatus: "sent",
+      },
+    });
+
+    expect(ctx.state.externalActionEvidence).toEqual([
+      expect.objectContaining({
+        actionFamily: "sms",
+        toolName: "dialpad_send_sms",
+        providerId: "4797682962735104",
+        status: "accepted/queued",
+      }),
+    ]);
+  });
+
+  it("does not record dry-run evidence", async () => {
+    installDialpadSmsEvidenceMetadata();
+    const { ctx } = createTestContext();
+
+    await startDialpadSmsTool(ctx);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "dialpad_send_sms",
+      toolCallId: "tool-sms",
+      isError: false,
+      result: {
+        id: "dry-run-id",
+        status: "accepted/queued",
+        dryRun: true,
+      },
+    });
+
+    expect(ctx.state.externalActionEvidence).toHaveLength(0);
   });
 });
 

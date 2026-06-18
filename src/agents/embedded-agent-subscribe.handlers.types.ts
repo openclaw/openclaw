@@ -23,6 +23,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
+import type { ExternalActionEvidence } from "./external-action-receipts.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -43,6 +44,8 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  pluginId?: string;
+  pluginMetadataKey?: string;
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
@@ -76,6 +79,7 @@ export type EmbeddedAgentSubscribeState = {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
+  externalActionEvidence: ExternalActionEvidence[];
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -290,6 +294,8 @@ type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "replaySafeToolNames"
+  | "toolPluginIdsByName"
+  | "toolPluginMetadataKeysByName"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
@@ -299,6 +305,7 @@ type ToolHandlerState = Pick<
   EmbeddedAgentSubscribeState,
   | "toolMetaById"
   | "toolMetas"
+  | "externalActionEvidence"
   | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"

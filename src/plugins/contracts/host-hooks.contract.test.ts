@@ -222,6 +222,69 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("rejects malformed external action evidence metadata", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bad-action-evidence",
+        name: "Bad Action Evidence",
+        origin: "workspace",
+        contracts: { tools: ["send_fixture"] },
+      }),
+      register(api) {
+        api.registerToolMetadata({
+          toolName: "send_fixture",
+          externalActionEvidence: {
+            actionFamily: "",
+            providerIdPaths: ["id"],
+          },
+        });
+      },
+    });
+
+    expect(registry.registry.toolMetadata ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toContainEqual(
+      expect.objectContaining({
+        pluginId: "bad-action-evidence",
+        message: "tool metadata registration has invalid metadata: send_fixture",
+      }),
+    );
+  });
+
+  it("rejects malformed external action evidence path lists", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bad-action-evidence-paths",
+        name: "Bad Action Evidence Paths",
+        origin: "workspace",
+        contracts: { tools: ["send_fixture"] },
+      }),
+      register(api) {
+        api.registerToolMetadata({
+          toolName: "send_fixture",
+          externalActionEvidence: {
+            actionFamily: "sms",
+            providerIdPaths: ["id"],
+            senderPaths: [123] as never,
+          },
+        });
+      },
+    });
+
+    expect(registry.registry.toolMetadata ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toContainEqual(
+      expect.objectContaining({
+        pluginId: "bad-action-evidence-paths",
+        message: "tool metadata registration has invalid metadata: send_fixture",
+      }),
+    );
+  });
+
   it("allows explicitly enabled declared external trusted policy registration without reserved command ownership", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

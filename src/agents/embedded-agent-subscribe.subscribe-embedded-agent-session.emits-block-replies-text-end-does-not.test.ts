@@ -3,6 +3,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createSubscribedSessionHarness,
   createTextEndBlockReplyHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
@@ -15,7 +16,8 @@ import {
 
 type TextEndBlockReplyHarness = ReturnType<typeof createTextEndBlockReplyHarness>;
 type OnBlockReplyMock = ReturnType<typeof vi.fn>;
-type BlockReplyPayload = { text?: string };
+type BlockReplyPayload = { text?: string; replyToCurrent?: boolean; replyToTag?: boolean };
+type PartialReplyPayload = { text?: string; delta?: string; replace?: boolean };
 
 function emitOpenAiResponsesTextEvent(params: {
   emit: TextEndBlockReplyHarness["emit"];
@@ -120,6 +122,82 @@ function requireBlockReplyPayload(onBlockReply: OnBlockReplyMock): BlockReplyPay
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it("replaces unsupported SMS receipt claims before partial streaming replies", async () => {
+    const onPartialReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onPartialReply,
+    });
+
+    emitAssistantTextDelta({
+      emit,
+      delta: `Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 6655442331193344`,
+    });
+    await Promise.resolve();
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    const payload = onPartialReply.mock.calls[0]?.[0] as PartialReplyPayload | undefined;
+    expect(payload).toMatchObject({
+      text: "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+      delta:
+        "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+      replace: true,
+    });
+    expect(payload?.text).not.toContain("Message ID: 6655442331193344");
+  });
+
+  it("replaces unsupported SMS receipt claims before streamed block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emitAssistantTextEnd({
+      emit,
+      content: `[[reply_to_current]]
+Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 6655442331193344`,
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireBlockReplyPayload(onBlockReply);
+    expect(payload.text).toBe(
+      "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+    );
+    expect(payload.replyToCurrent).toBe(true);
+    expect(payload.replyToTag).toBe(true);
+    expect(payload.text).not.toContain("Message ID: 6655442331193344");
+    expect(subscription.assistantTexts.join("\n")).toContain("Message ID: 6655442331193344");
+  });
+
+  it("replaces unsupported SMS receipt claims before chunked block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
+    });
+
+    emitAssistantTextEnd({
+      emit,
+      content: `Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 6655442331193344`,
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireBlockReplyPayload(onBlockReply);
+    expect(payload.text).toBe(
+      "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+    );
+    expect(payload.text).not.toContain("Message ID: 6655442331193344");
+  });
+
   it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

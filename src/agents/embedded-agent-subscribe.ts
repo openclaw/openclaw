@@ -54,6 +54,7 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import { guardExternalActionReceiptText } from "./external-action-receipt-guard.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -169,6 +170,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const state: EmbeddedAgentSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
+    externalActionEvidence: [],
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
@@ -267,10 +269,27 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
+  const guardAssistantStreamData = (
+    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
+  ): EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"] => {
+    const receiptGuard = guardExternalActionReceiptText({
+      text: data.text,
+      evidence: state.externalActionEvidence,
+    });
+    if (receiptGuard.allowed) {
+      return data;
+    }
+    return {
+      text: receiptGuard.replacementText,
+      delta: receiptGuard.replacementText,
+      replace: true,
+      phase: data.phase,
+    };
+  };
   const emitAssistantStreamDataSafely = (
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
-    const { data } = delivery;
+    const data = guardAssistantStreamData(delivery.data);
     emitAgentEvent({
       runId: params.runId,
       stream: "assistant",
@@ -308,23 +327,44 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deferredAssistantEvents.length = 0;
   };
   const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
+  const hasBlockReplyMedia = (payload: BlockReplyPayload): boolean =>
+    Boolean(payload.mediaUrls?.length);
+  const hasPotentialSmsReceiptAssertion = (text: string): boolean =>
+    /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered)\b)/iu.test(text);
+  const guardBlockReplyPayload = (payload: BlockReplyPayload): BlockReplyPayload => {
+    if (payload.isReasoning || !payload.text) {
+      return payload;
+    }
+    const receiptGuard = guardExternalActionReceiptText({
+      text: payload.text,
+      evidence: state.externalActionEvidence,
+    });
+    if (receiptGuard.allowed) {
+      return payload;
+    }
+    return {
+      ...payload,
+      text: receiptGuard.replacementText,
+    };
+  };
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
-  ): boolean => {
+  ): { emitted: boolean; payload: BlockReplyPayload } => {
+    const guardedPayload = guardBlockReplyPayload(payload);
     if (!params.onBlockReply) {
-      return false;
+      return { emitted: false, payload: guardedPayload };
     }
     try {
       const taggedPayload =
         options?.assistantMessageIndex !== undefined
-          ? setReplyPayloadMetadata(payload, {
+          ? setReplyPayloadMetadata(guardedPayload, {
               assistantMessageIndex: options.assistantMessageIndex,
             })
-          : payload;
+          : guardedPayload;
       const maybeTask = params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
-        return true;
+        return { emitted: true, payload: taggedPayload };
       }
       const task = Promise.resolve(maybeTask).catch((err: unknown) => {
         log.warn(`block reply callback failed: ${String(err)}`);
@@ -333,10 +373,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
-      return true;
+      return { emitted: true, payload: taggedPayload };
     } catch (err) {
       log.warn(`block reply callback failed: ${String(err)}`);
-      return false;
+      return { emitted: false, payload: guardedPayload };
     }
   };
   const emitBlockReply = (
@@ -363,10 +403,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.deferredBlockReplies.push(deferredPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(withToolMedia, options);
-    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+    const delivery = emitBlockReplySafely(withToolMedia, options);
+    if (
+      delivery.emitted &&
+      !delivery.payload.isReasoning &&
+      hasAssistantVisibleReply(delivery.payload)
+    ) {
       state.visibleBlockReplyCount += 1;
-      if (consumesPendingToolMedia) {
+      if (consumesPendingToolMedia && hasBlockReplyMedia(delivery.payload)) {
         state.hasToolMediaBlockReply = true;
       }
     }
@@ -377,10 +421,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
-      const emitted = emitBlockReplySafely(payload);
-      if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
+      const delivery = emitBlockReplySafely(payload);
+      if (
+        delivery.emitted &&
+        !delivery.payload.isReasoning &&
+        hasAssistantVisibleReply(delivery.payload)
+      ) {
         state.visibleBlockReplyCount += 1;
-        if (deferredToolMediaReplies.has(payload)) {
+        if (deferredToolMediaReplies.has(payload) && hasBlockReplyMedia(delivery.payload)) {
           state.hasToolMediaBlockReply = true;
         }
       }
@@ -1121,6 +1169,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     if (blockChunker?.hasBuffered()) {
+      const bufferedPayload = guardBlockReplyPayload({ text: blockChunker.bufferedText });
+      if (bufferedPayload.text !== blockChunker.bufferedText) {
+        blockChunker.reset();
+        state.suppressBlockChunks = true;
+        emitBlockReply(bufferedPayload, {
+          assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+        });
+      } else if (!options?.final && hasPotentialSmsReceiptAssertion(blockChunker.bufferedText)) {
+        return;
+      }
       if (options?.final) {
         let pendingChunk: string | undefined;
         blockChunker.drain({
@@ -1334,11 +1392,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
+    getExternalActionEvidence: () => state.externalActionEvidence.slice(),
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;
       args: unknown;
+      pluginId?: string;
+      pluginMetadataKey?: string;
       replaySafe?: boolean;
       execute: () => Promise<T>;
     }): Promise<T> => {
@@ -1347,6 +1408,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
+        pluginId: toolParams.pluginId,
+        pluginMetadataKey: toolParams.pluginMetadataKey,
         replaySafe: toolParams.replaySafe,
       } as never);
       try {

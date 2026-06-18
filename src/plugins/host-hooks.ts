@@ -1,4 +1,5 @@
 /** Public host-hook type contracts exposed to plugin runtimes. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
@@ -97,7 +98,48 @@ export type PluginToolMetadataRegistration = {
   description?: string;
   risk?: "low" | "medium" | "high";
   tags?: string[];
+  externalActionEvidence?: PluginExternalActionEvidenceRegistration;
 };
+
+export type PluginExternalActionEvidenceRegistration = {
+  actionFamily: string;
+  successStatusPaths?: string[];
+  providerIdPaths?: string[];
+  senderPaths?: string[];
+  recipientPaths?: string[];
+  bodyPaths?: string[];
+  dryRunPaths?: string[];
+};
+
+function isValidPluginMetadataPathList(value: string[] | undefined): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((item) => normalizeOptionalString(item) !== undefined))
+  );
+}
+
+export function isValidPluginExternalActionEvidenceRegistration(
+  value: PluginExternalActionEvidenceRegistration | undefined,
+): boolean {
+  if (!value) {
+    return true;
+  }
+  const actionFamily = normalizeOptionalString(value.actionFamily);
+  if (!actionFamily) {
+    return false;
+  }
+  if (
+    !isValidPluginMetadataPathList(value.successStatusPaths) ||
+    !isValidPluginMetadataPathList(value.providerIdPaths) ||
+    !isValidPluginMetadataPathList(value.senderPaths) ||
+    !isValidPluginMetadataPathList(value.recipientPaths) ||
+    !isValidPluginMetadataPathList(value.bodyPaths) ||
+    !isValidPluginMetadataPathList(value.dryRunPaths)
+  ) {
+    return false;
+  }
+  return Boolean(value.successStatusPaths?.length || value.providerIdPaths?.length);
+}
 
 export type PluginCommandContinuation = {
   continueAgent?: boolean;

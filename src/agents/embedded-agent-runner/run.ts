@@ -1743,6 +1743,9 @@ async function runEmbeddedAgentInternal(
         };
         let authRetryPending = false;
         let accumulatedReplayState = createEmbeddedRunReplayState();
+        const accumulatedExternalActionEvidence: NonNullable<
+          EmbeddedRunAttemptForRunner["externalActionEvidence"]
+        > = [];
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -2082,6 +2085,9 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          if (attempt.externalActionEvidence?.length) {
+            accumulatedExternalActionEvidence.push(...attempt.externalActionEvidence);
+          }
 
           const {
             aborted,
@@ -3378,6 +3384,7 @@ async function runEmbeddedAgentInternal(
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
             toolMetas: attempt.toolMetas,
+            externalActionEvidence: accumulatedExternalActionEvidence,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,

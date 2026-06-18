@@ -40,6 +40,7 @@ import {
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
+import { guardExternalActionReceiptText } from "./external-action-receipt-guard.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
@@ -164,6 +165,32 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
       ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
       (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
   );
+}
+
+function hasPotentialSmsReceiptAssertion(text: string): boolean {
+  return /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered)\b)/iu.test(
+    text,
+  );
+}
+
+function guardChunkedBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext): boolean {
+  const bufferedText = ctx.blockChunker?.bufferedText;
+  if (!bufferedText) {
+    return true;
+  }
+  const receiptGuard = guardExternalActionReceiptText({
+    text: bufferedText,
+    evidence: ctx.state.externalActionEvidence,
+  });
+  if (!receiptGuard.allowed) {
+    ctx.blockChunker?.reset();
+    ctx.state.suppressBlockChunks = true;
+    ctx.emitBlockReply({
+      text: receiptGuard.replacementText,
+    });
+    return false;
+  }
+  return !hasPotentialSmsReceiptAssertion(bufferedText);
 }
 
 function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
@@ -874,7 +901,9 @@ export function handleMessageUpdate(
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    if (guardChunkedBlockReplyBuffer(ctx)) {
+      ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    }
   }
 
   if (

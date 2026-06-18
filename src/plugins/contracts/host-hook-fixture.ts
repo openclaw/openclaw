@@ -12,6 +12,11 @@ export function registerHostHookFixture(api: OpenClawPluginApi) {
     description: "Fixture metadata for a plugin-owned tool",
     risk: "medium",
     tags: ["fixture", "approval"],
+    externalActionEvidence: {
+      actionFamily: "approval",
+      successStatusPaths: ["ok"],
+      providerIdPaths: ["id"],
+    },
   });
   api.session.controls.registerControlUiDescriptor({
     id: "workflow-card",
