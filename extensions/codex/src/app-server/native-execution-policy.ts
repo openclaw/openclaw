@@ -49,7 +49,7 @@ export function resolveCodexNativeExecutionPolicy(params: {
     shouldReadRuntimeSessionEntry({ sessionKey, agentId: params.agentId });
   const sessionEntry =
     params.sessionEntry ??
-    (canReadSessionEntry ? readRuntimeSessionEntryBestEffort(sessionKey) : undefined);
+    (canReadSessionEntry && sessionKey ? readRuntimeSessionEntryBestEffort(sessionKey) : undefined);
   const sandboxAvailable =
     params.sandboxAvailable ??
     (sessionKey
