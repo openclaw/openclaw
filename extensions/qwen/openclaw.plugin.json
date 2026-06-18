@@ -18,7 +18,9 @@
         "https://coding-intl.dashscope.aliyuncs.com/v1",
         "https://coding.dashscope.aliyuncs.com/v1",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
       ]
     },
     {
