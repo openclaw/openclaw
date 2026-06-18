@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DebugProxySettings } from "./env.js";
 import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
 import { closeDebugProxyCaptureStore } from "./store.sqlite.js";
 
@@ -28,7 +29,7 @@ async function cleanupTestDirs(): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
-async function makeSettings() {
+async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
   const certDir = join(testRoot, "certs");
   await mkdir(certDir, { recursive: true });
@@ -38,6 +39,8 @@ async function makeSettings() {
   return {
     enabled: true,
     required: false,
+    dbPath: join(testRoot, "capture.sqlite"),
+    blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
