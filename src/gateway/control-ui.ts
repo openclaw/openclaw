@@ -929,7 +929,10 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res);
 
-  if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
+  // #94157: Bypass auth for manifest.webmanifest when behind oauth2-proxy
+  const isManifestRequest = pathname.endsWith("/manifest.webmanifest");
+
+  if (!isManifestRequest && matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
