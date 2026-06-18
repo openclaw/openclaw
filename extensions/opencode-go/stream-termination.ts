@@ -1,10 +1,7 @@
 // Opencode Go stream termination wrapper aborts stalled OpenAI-compatible
 // SSE streams at the provider-owned raw boundary, before the shared runtime
 // stuck-session recovery kicks in.
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 
@@ -40,26 +37,30 @@ function isOpencodeGoModel(model: unknown, providerId: string): boolean {
     : false;
 }
 
-function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal {
+function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
+  signal: AbortSignal;
+  cleanup(): void;
+} {
   const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (present.length === 0) {
-    return new AbortController().signal;
+    return { signal: new AbortController().signal, cleanup: () => undefined };
   }
   if (present.length === 1) {
-    return present[0];
+    return { signal: present[0], cleanup: () => undefined };
   }
-  // Prefer the platform combiner when available; otherwise subscribe manually.
-  const anyFn = (AbortSignal as unknown as {
-    any?: (signals: AbortSignal[]) => AbortSignal;
-  }).any;
+  const anyFn = (
+    AbortSignal as unknown as {
+      any?: (signals: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
   if (typeof anyFn === "function") {
-    return anyFn(present);
+    return { signal: anyFn(present), cleanup: () => undefined };
   }
   const controller = new AbortController();
   const alreadyAborted = present.find((signal) => signal.aborted);
   if (alreadyAborted) {
     controller.abort((alreadyAborted as { reason?: unknown }).reason);
-    return controller.signal;
+    return { signal: controller.signal, cleanup: () => undefined };
   }
   const unsubscribe: Array<() => void> = [];
   for (const signal of present) {
@@ -67,7 +68,15 @@ function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal 
     signal.addEventListener("abort", onAbort, { once: true });
     unsubscribe.push(() => signal.removeEventListener("abort", onAbort));
   }
-  return controller.signal;
+  return {
+    signal: controller.signal,
+    cleanup() {
+      for (const remove of unsubscribe) {
+        remove();
+      }
+      unsubscribe.length = 0;
+    },
+  };
 }
 
 function buildAbortedErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
@@ -92,9 +101,7 @@ function buildAbortedErrorEvent(partial: AssistantMessage | undefined): Assistan
   };
 }
 
-function buildUnterminatedErrorEvent(
-  partial: AssistantMessage | undefined,
-): AssistantMessageEvent {
+function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
   if (partial) {
     return {
       type: "error",
@@ -149,7 +156,14 @@ function synthesizeMinimalAssistantMessage(
     api: "openai-completions",
     provider: "opencode-go",
     model: "",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason,
     errorMessage,
     timestamp: Date.now(),
@@ -158,17 +172,18 @@ function synthesizeMinimalAssistantMessage(
 
 /**
  * Wraps an opencode-go provider stream function so that an SSE socket that
- * produces tokens and then silently stalls is aborted at the provider-owned
- * raw boundary via the injected AbortSignal, instead of waiting for the much
- * later shared runtime stuck-session recovery.
+ * fails to deliver a first event or stops producing progress is aborted at the
+ * provider-owned raw boundary via the injected AbortSignal, instead of waiting
+ * for the much later shared runtime stuck-session recovery.
  *
  * Behavior:
  * - Provider-scoped: only applies when `model.provider === options.provider`.
- * - Idle-based: every event forwarded from the underlying stream refreshes
- *   the idle timer; if no event arrives within `idleTimeoutMs`, the wrapper
- *   calls `controller.abort()` on the AbortSignal injected into the
- *   underlying call (so the OpenAI SDK request is genuinely interrupted, not
- *   just the iterator) and pushes a terminal `error` event downstream.
+ * - Idle-based: the timer covers stream creation, first event delivery, and
+ *   every gap between forwarded events; if no event arrives within
+ *   `idleTimeoutMs`, the wrapper calls `controller.abort()` on the AbortSignal
+ *   injected into the underlying call (so the OpenAI SDK request is genuinely
+ *   interrupted, not just the iterator) and pushes a terminal `error` event
+ *   downstream.
  * - Terminal-safe: when the underlying stream emits `done` or `error`, the
  *   wrapper forwards the event, clears all timers, and ends the stream.
  *
@@ -181,9 +196,7 @@ export function createOpencodeGoStalledStreamWrapper(
   options: OpencodeGoStalledStreamWrapperOptions,
 ): ProviderStreamFn {
   if (!options || options.idleTimeoutMs <= 0) {
-    throw new Error(
-      "createOpencodeGoStalledStreamWrapper requires idleTimeoutMs > 0",
-    );
+    throw new Error("createOpencodeGoStalledStreamWrapper requires idleTimeoutMs > 0");
   }
   const providerId = options.provider;
   const idleTimeoutMs = options.idleTimeoutMs;
@@ -193,115 +206,133 @@ export function createOpencodeGoStalledStreamWrapper(
       return underlying(model, context, callOptions);
     }
 
+    const output = createAssistantMessageEventStream();
     const controller = new AbortController();
-    const injectedSignal = combineAbortSignals([
+    const combinedSignal = combineAbortSignals([
       (callOptions as { signal?: AbortSignal } | undefined)?.signal,
       controller.signal,
     ]);
     const wrappedOptions = {
       ...callOptions,
-      signal: injectedSignal,
+      signal: combinedSignal.signal,
+    };
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastSeenPartial: AssistantMessage | undefined;
+    let settled = false;
+    let baseIterator: AsyncIterator<AssistantMessageEvent> | undefined;
+
+    const clearIdleTimer = () => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
     };
 
-    const baseStreamResult = underlying(model, context, wrappedOptions);
+    const cleanup = () => {
+      clearIdleTimer();
+      combinedSignal.cleanup();
+    };
 
-    const attach = (baseStream: AsyncIterable<AssistantMessageEvent>) => {
-      const output = createAssistantMessageEventStream();
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
-      let lastSeenPartial: AssistantMessage | undefined;
-      let settled = false;
-      let underlyingDone = false;
+    const releaseBaseStream = () => {
+      if (baseIterator?.return) {
+        void Promise.resolve(baseIterator.return()).catch(() => undefined);
+      }
+    };
 
-      const clearIdleTimer = () => {
-        if (idleTimer !== undefined) {
-          clearTimeout(idleTimer);
-          idleTimer = undefined;
+    const finishWith = (event: AssistantMessageEvent) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      output.push(event);
+      output.end(
+        event.type === "done" ? (event as { message: AssistantMessage }).message : undefined,
+      );
+    };
+
+    const abortStalledStream = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearIdleTimer();
+      controller.abort(new Error("opencode-go stream stalled"));
+      combinedSignal.cleanup();
+      releaseBaseStream();
+      output.push(buildAbortedErrorEvent(lastSeenPartial));
+      output.end();
+    };
+
+    const armIdleTimer = () => {
+      clearIdleTimer();
+      idleTimer = setTimeout(abortStalledStream, idleTimeoutMs);
+      idleTimer.unref?.();
+    };
+
+    const trackPartial = (event: AssistantMessageEvent) => {
+      const partial =
+        (event as { partial?: AssistantMessage; message?: AssistantMessage }).partial ??
+        (event as { message?: AssistantMessage }).message;
+      if (partial) {
+        lastSeenPartial = partial;
+      }
+    };
+
+    const releaseResolvedStream = (baseStream: AsyncIterable<AssistantMessageEvent>) => {
+      const iterator = baseStream[Symbol.asyncIterator]();
+      if (iterator.return) {
+        void Promise.resolve(iterator.return()).catch(() => undefined);
+      }
+    };
+
+    armIdleTimer();
+    let baseStreamResult: ReturnType<ProviderStreamFn>;
+    try {
+      baseStreamResult = underlying(model, context, wrappedOptions);
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+
+    void (async () => {
+      try {
+        const baseStream = await Promise.resolve(
+          baseStreamResult as Awaited<ReturnType<ProviderStreamFn>>,
+        );
+        if (settled) {
+          releaseResolvedStream(baseStream as AsyncIterable<AssistantMessageEvent>);
+          return;
         }
-      };
-
-      const armIdleTimer = () => {
-        clearIdleTimer();
-        idleTimer = setTimeout(() => {
+        baseIterator = (baseStream as AsyncIterable<AssistantMessageEvent>)[Symbol.asyncIterator]();
+        for (;;) {
+          const result = await baseIterator.next();
           if (settled) {
             return;
           }
-          settled = true;
-          clearIdleTimer();
-          try {
-            controller.abort(new Error("opencode-go stream stalled"));
-          } catch {
-            // AbortController.abort never throws in spec; ignore defensively.
-          }
-          output.push(buildAbortedErrorEvent(lastSeenPartial));
-          output.end();
-        }, idleTimeoutMs);
-      };
-
-      const finishWith = (event: AssistantMessageEvent) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearIdleTimer();
-        output.push(event);
-        output.end(event.type === "done" ? (event as { message: AssistantMessage }).message : undefined);
-      };
-
-      const trackPartial = (event: AssistantMessageEvent) => {
-        const partial = (event as { partial?: AssistantMessage; message?: AssistantMessage }).partial
-          ?? (event as { message?: AssistantMessage }).message;
-        if (partial) {
-          lastSeenPartial = partial;
-        }
-      };
-
-      void (async () => {
-        try {
-          // Arm the idle timer only AFTER the first upstream event. The
-          // reported bug is a stall AFTER provider progress, and arming
-          // earlier would abort slow time-to-first-byte requests that the
-          // runtime deliberately leaves uncapped for cron runs
-          // (`resolveLlmIdleTimeoutMs` returns 0 for cron without explicit
-          // timeout). The runtime's own first-event timeout governs the
-          // pre-progress window.
-          for await (const event of baseStream) {
-            if (event.type === "done" || event.type === "error") {
-              trackPartial(event);
-              underlyingDone = true;
-              finishWith(event);
-              return;
-            }
-            trackPartial(event);
-            output.push(event);
-            // Refresh the idle window: any forward-progress (text delta,
-            // tool delta, thinking delta, usage-only chunk, etc.) means the
-            // underlying SSE is still alive.
-            armIdleTimer();
-          }
-          if (!underlyingDone && !settled) {
-            // Underlying iterator ended without an explicit terminal event.
-            // Surface it as an error so downstream consumers do not hang.
+          if (result.done) {
             finishWith(buildUnterminatedErrorEvent(lastSeenPartial));
+            return;
           }
-        } catch (error) {
-          if (!settled) {
-            finishWith(buildCaughtErrorEvent(lastSeenPartial, error));
+          const event = result.value;
+          if (event.type === "done" || event.type === "error") {
+            trackPartial(event);
+            finishWith(event);
+            return;
           }
-        } finally {
-          clearIdleTimer();
+          trackPartial(event);
+          output.push(event);
+          armIdleTimer();
         }
-      })();
+      } catch (error) {
+        if (!settled) {
+          finishWith(buildCaughtErrorEvent(lastSeenPartial, error));
+        }
+      } finally {
+        cleanup();
+      }
+    })();
 
-      return output;
-    };
-
-    if (
-      baseStreamResult &&
-      typeof baseStreamResult === "object" &&
-      "then" in baseStreamResult
-    ) {
-      return Promise.resolve(baseStreamResult).then(attach) as ReturnType<ProviderStreamFn>;
-    }
-    return attach(baseStreamResult as AsyncIterable<AssistantMessageEvent>);
+    return output;
   };
 }
