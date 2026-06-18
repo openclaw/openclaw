@@ -1,9 +1,38 @@
 /** Tests materializing MCP catalog tools into agent tool definitions and results. */
+const outboundAttachmentMockState = vi.hoisted(() => {
+  const delayByFilename = new Map<string, number>();
+  return {
+    delayByFilename,
+    resolveOutboundAttachmentFromBuffer: vi.fn(
+      async (
+        _buffer: Buffer,
+        _maxBytes: number,
+        options?: { contentType?: string; filename?: string },
+      ) => {
+        const delayMs = delayByFilename.get(options?.filename ?? "") ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        return {
+          path: `/tmp/openclaw/media/outbound/${options?.filename ?? "mcp-attachment"}`,
+          contentType: options?.contentType,
+        };
+      },
+    ),
+  };
+});
+vi.mock("../media/outbound-attachment.js", () => ({
+  resolveOutboundAttachmentFromBuffer:
+    outboundAttachmentMockState.resolveOutboundAttachmentFromBuffer,
+}));
+
+const resolveOutboundAttachmentFromBufferMock =
+  outboundAttachmentMockState.resolveOutboundAttachmentFromBuffer;
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -14,6 +43,11 @@ import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import {
+  extractToolResultMediaArtifact,
+  filterToolResultMediaUrls,
+} from "./embedded-agent-subscribe.tools.js";
+import { clearHostOwnedMcpMediaPathsForTest } from "./mcp-tool-result-media.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
@@ -93,6 +127,12 @@ function makeToolRuntime(
 describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
+  });
+
+  beforeEach(() => {
+    resolveOutboundAttachmentFromBufferMock.mockClear();
+    outboundAttachmentMockState.delayByFilename.clear();
+    clearHostOwnedMcpMediaPathsForTest();
   });
 
   it("keeps app-only MCP tools out of the model tool catalog", async () => {
@@ -339,7 +379,7 @@ describe("createBundleMcpToolRuntime", () => {
               resource: { uri: "blob://two", blob: "AAAA", mimeType: "application/pdf" },
             },
             { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-            { type: "image", data: "iVBOR", mimeType: "image/png" },
+            { type: "image", data: "AAAA", mimeType: "image/png" },
           ],
           isError: false,
         } as CallToolResult,
@@ -360,8 +400,131 @@ describe("createBundleMcpToolRuntime", () => {
       { type: "text", text: "memo body" },
       { type: "text", text: "blob://two" },
       { type: "text", text: "[audio audio/mpeg]" },
-      { type: "image", data: "iVBOR", mimeType: "image/png" },
+      { type: "image", data: "AAAA", mimeType: "image/png" },
     ]);
+    expect(resolveOutboundAttachmentFromBufferMock).toHaveBeenCalledTimes(3);
+    expect(result.details).toMatchObject({
+      mcpServer: "bundleProbe",
+      mcpTool: "bundle_probe",
+      media: {
+        source: "mcp",
+        hostOwned: true,
+        attachments: [
+          {
+            type: "resource",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-4.pdf",
+            mimeType: "application/pdf",
+            uri: "blob://two",
+          },
+          {
+            type: "audio",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-5.mp3",
+            mimeType: "audio/mpeg",
+          },
+          {
+            type: "image",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-6.png",
+            mimeType: "image/png",
+          },
+        ],
+      },
+    });
+    const media = extractToolResultMediaArtifact(result);
+    expect(media?.mediaUrls).toEqual([
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-4.pdf",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-5.mp3",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-6.png",
+    ]);
+    expect(
+      filterToolResultMediaUrls(runtime.tools[0].name, media?.mediaUrls ?? [], result),
+    ).toEqual([
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-4.pdf",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-5.mp3",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-6.png",
+    ]);
+    expect(
+      filterToolResultMediaUrls(runtime.tools[0].name, ["/tmp/openclaw/media/outbound/spoof.png"], {
+        details: {
+          mcpServer: "bundleProbe",
+          mcpTool: "bundle_probe",
+          media: { mediaUrl: "/tmp/openclaw/media/outbound/spoof.png" },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("preserves MCP media attachment order when staging completes out of order", async () => {
+    outboundAttachmentMockState.delayByFilename.set("bundleProbe-bundle_probe-0.png", 30);
+    outboundAttachmentMockState.delayByFilename.set("bundleProbe-bundle_probe-1.pdf", 10);
+    outboundAttachmentMockState.delayByFilename.set("bundleProbe-bundle_probe-2.mp3", 0);
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "image", data: "AAAA", mimeType: "image/png" },
+            {
+              type: "resource",
+              resource: { uri: "blob://ordered", blob: "AAAA", mimeType: "application/pdf" },
+            },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+          ],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.details).toMatchObject({
+      media: {
+        attachments: [
+          {
+            type: "image",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-0.png",
+          },
+          {
+            type: "resource",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-1.pdf",
+          },
+          {
+            type: "audio",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-2.mp3",
+          },
+        ],
+      },
+    });
+    expect(extractToolResultMediaArtifact(result)?.mediaUrls).toEqual([
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-0.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-1.pdf",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-2.mp3",
+    ]);
+  });
+
+  it("rejects oversized MCP base64 before decoding staged media", async () => {
+    const oversizedImageBase64 = "A".repeat(9 * 1024 * 1024);
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "image", data: oversizedImageBase64, mimeType: "image/png" }],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+      expect(result.details).toEqual({
+        mcpServer: "bundleProbe",
+        mcpTool: "bundle_probe",
+      });
+      expect(resolveOutboundAttachmentFromBufferMock).not.toHaveBeenCalled();
+      expect(
+        bufferFromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64"),
+      ).toHaveLength(0);
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 
   it("coerces a malformed image block (missing base64 source) to text", async () => {
