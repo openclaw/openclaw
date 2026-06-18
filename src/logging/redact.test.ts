@@ -1092,9 +1092,40 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("ya29.fake-access-token");
     expect(serialized).not.toContain("1//0fake-refresh-token");
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
+    expect(serialized).toContain("main-test-case-name");
+    expect(serialized).toContain("standalone app password");
+    expect(serialized).toContain("qrst-uvwx-yzab-cdef");
+  });
+
+  it("masks app-specific password shapes with Apple/iCloud context in generic fields", () => {
+    const output = redactSecrets({
+      data: {
+        text: "iCloud rejected abcd-efgh-ijkl-mnop",
+        errorMessage: "apple app-specific-password qrst-uvwx-yzab-cdef rejected",
+        detail: "benign kube-node-pool-spec identifier preserved",
+      },
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).toContain("iCloud rejected");
     expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
     expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
-    expect(serialized).toContain("main-test-case-name");
+    expect(serialized).toContain("kube-node-pool-spec");
+  });
+
+  it("masks app-specific password shapes in dedicated apple field keys", () => {
+    expect(redactSensitiveFieldValue("app-specific-password", "abcd-efgh-ijkl-mnop")).toContain(
+      "…",
+    );
+    expect(redactSensitiveFieldValue("icloud", "abcd-efgh-ijkl-mnop")).toContain("…");
+  });
+
+  it("preserves kebab-case identifiers in generic fields without Apple context", () => {
+    expect(redactSensitiveFieldValue("text", "open the help-desk-team-page link")).toBe(
+      "open the help-desk-team-page link",
+    );
+    expect(redactSensitiveFieldValue("error", "module load-some-bare-init crashed")).toBe(
+      "module load-some-bare-init crashed",
+    );
   });
 
   it("preserves benign bare access and refresh fields", () => {

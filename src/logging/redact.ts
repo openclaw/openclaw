@@ -93,6 +93,9 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
 );
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
+/** Apple-specific field names that always provide Apple/iCloud context for app password redaction. */
+const APP_SPECIFIC_ONLY_FIELD_RE =
+  /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
 const BENIGN_APP_PASSWORD_WORDS = new Set([
   "case",
@@ -939,7 +942,14 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
   return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
 }
 
-function redactAppSpecificPasswords(text: string): string {
+const APP_SPECIFIC_PASSWORD_CONTEXT_RE = /\b(?:apple|icloud|app[-_\s]?specific[-_\s]?password)\b/i;
+
+function redactAppSpecificPasswords(text: string, fieldKey?: string): string {
+  if (!fieldKey || !APP_SPECIFIC_ONLY_FIELD_RE.test(fieldKey)) {
+    if (!APP_SPECIFIC_PASSWORD_CONTEXT_RE.test(text)) {
+      return text;
+    }
+  }
   return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
     looksLikeAppSpecificPassword(token)
       ? redactMatch(match, [token], APP_SPECIFIC_PASSWORD_RE)
@@ -1041,7 +1051,7 @@ function redactSensitiveFieldValueWithOptions(
   });
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
-    const appRedacted = redactAppSpecificPasswords(redacted);
+    const appRedacted = redactAppSpecificPasswords(redacted, key);
     if (appRedacted !== value) {
       return appRedacted;
     }
