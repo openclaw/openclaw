@@ -24,6 +24,7 @@ type LegacyCaptureSessionRow = {
   source_scope: string;
   source_process: string;
   proxy_url: string | null;
+  blob_dir: string;
 };
 
 type LegacyCaptureEventRow = {
@@ -153,6 +154,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
   sessions: LegacyCaptureSessionRow[];
   events: LegacyCaptureEventRow[];
   blobs: LegacyCaptureBlobRow[];
+  blobDirs: string[];
 } {
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(params.sourcePath, { readOnly: true });
@@ -192,7 +194,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
     ]);
     const sessions = db
       .prepare(
-        `SELECT id, started_at, ended_at, mode, source_scope, source_process, proxy_url
+        `SELECT id, started_at, ended_at, mode, source_scope, source_process, proxy_url, blob_dir
          FROM capture_sessions
          ORDER BY started_at ASC, id ASC`,
       )
@@ -220,6 +222,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
         source_scope: event.source_scope,
         source_process: event.source_process,
         proxy_url: null,
+        blob_dir: params.blobDir,
       });
       sessionIds.add(event.session_id);
     }
@@ -233,15 +236,33 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       rows.push(event);
       blobEvents.set(event.data_blob_id, rows);
     }
+    const blobDirBySession = new Map(
+      sessions.map((session) => [session.id, session.blob_dir] as const),
+    );
+    const usedBlobDirs = new Set<string>();
     const blobs: LegacyCaptureBlobRow[] = [];
     for (const [blobId, referencingEvents] of blobEvents) {
-      const blobPath = path.join(params.blobDir, `${blobId}.bin.gz`);
+      const candidateBlobDirs = [
+        ...new Set(
+          [
+            ...referencingEvents.map(
+              (event) => blobDirBySession.get(event.session_id) ?? params.blobDir,
+            ),
+            params.blobDir,
+          ],
+        ),
+      ];
+      const blobPath =
+        candidateBlobDirs
+          .map((blobDir) => path.join(blobDir, `${blobId}.bin.gz`))
+          .find(fileExists) ?? path.join(candidateBlobDirs[0] ?? params.blobDir, `${blobId}.bin.gz`);
       const data = fs.readFileSync(blobPath);
       const raw = gunzipSync(data);
       const sha256 = createHash("sha256").update(raw).digest("hex");
       if (sha256.slice(0, 24) !== blobId) {
         throw new Error(`legacy debug proxy blob hash mismatch: ${blobPath}`);
       }
+      usedBlobDirs.add(path.dirname(blobPath));
       blobs.push({
         blobId,
         contentType: referencingEvents.find((event) => event.content_type)?.content_type ?? null,
@@ -254,7 +275,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
         ),
       });
     }
-    return { sessions, events, blobs };
+    return { sessions, events, blobs, blobDirs: [...usedBlobDirs] };
   } finally {
     db.close();
   }
@@ -519,6 +540,14 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
   archiveLegacyDebugProxySqlite({ sourcePath: detected.sourcePath, changes, warnings });
   if (!fileExists(detected.sourcePath) && fileExists(`${detected.sourcePath}.migrated`)) {
     archiveLegacyDebugProxyBlobs({ blobDir: detected.blobDir, changes, warnings });
+    for (const blobDir of legacy.blobDirs) {
+      if (path.resolve(blobDir) === path.resolve(detected.blobDir) || !dirExists(blobDir)) {
+        continue;
+      }
+      warnings.push(
+        `Left migrated debug proxy capture blobs in stored session directory: ${blobDir}`,
+      );
+    }
   }
   return { changes, warnings };
 }

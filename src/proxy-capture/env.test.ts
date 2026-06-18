@@ -28,14 +28,14 @@ describe("resolveDebugProxySettings", () => {
     expect(settings.sessionId).toBe("session-explicit");
   });
 
-  it("ignores obsolete capture storage overrides", () => {
+  it("retains deprecated capture storage settings for Plugin SDK compatibility", () => {
     const settings = resolveDebugProxySettings({
       OPENCLAW_DEBUG_PROXY_DB_PATH: "/tmp/legacy-capture.sqlite",
       OPENCLAW_DEBUG_PROXY_BLOB_DIR: "/tmp/legacy-capture-blobs",
     });
 
-    expect(settings).not.toHaveProperty("dbPath");
-    expect(settings).not.toHaveProperty("blobDir");
+    expect(settings.dbPath).toBe("/tmp/legacy-capture.sqlite");
+    expect(settings.blobDir).toBe("/tmp/legacy-capture-blobs");
   });
 
   it("does not pass obsolete capture storage overrides to child processes", () => {
