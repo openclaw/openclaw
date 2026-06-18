@@ -844,6 +844,48 @@ describe("anthropic transport stream", () => {
     });
   });
 
+  it("maps Anthropic max_turns as a length-limited stop reason", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_max_turns", usage: { input_tokens: 4, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Partial turn" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "max_turns" },
+          usage: { input_tokens: 4, output_tokens: 8 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("length");
+    expect(result.content).toEqual([{ type: "text", text: "Partial turn" }]);
+    expect(result.usage).toMatchObject({ input: 4, output: 8 });
+  });
+
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

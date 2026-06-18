@@ -1485,8 +1485,9 @@ function mapStopReason(reason: string): StopReason {
     case "refusal":
       return "error";
     case "pause_turn": // Stop is good enough -> resubmit
-    case "max_turns":
       return "stop";
+    case "max_turns":
+      return "length";
     case "stop_sequence":
       return "stop"; // We don't supply stop sequences, so this should never happen
     case "sensitive": // Content flagged by safety filters (not yet in SDK types)
