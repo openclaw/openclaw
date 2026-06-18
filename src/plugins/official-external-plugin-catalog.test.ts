@@ -55,6 +55,18 @@ describe("official external plugin catalog", () => {
     );
   });
 
+  it("lists GMI Cloud as an official external provider", () => {
+    const gmi = expectCatalogEntry("gmi");
+
+    expect(resolveOfficialExternalPluginId(gmi)).toBe("gmi");
+    expect(resolveOfficialExternalPluginInstall(gmi)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/gmi-provider",
+      npmSpec: "@openclaw/gmi-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
+  });
+
   it("allows invalid-config recovery for externalized stock plugins", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("brave"))).toMatchObject({
       npmSpec: "@openclaw/brave-plugin",

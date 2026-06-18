@@ -122,10 +122,32 @@ describe("OpenClaw dual-published plugin metadata", () => {
     {
       extensionId: "diagnostics-otel",
       packageName: "@openclaw/diagnostics-otel",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-otel",
+      },
     },
     {
       extensionId: "diagnostics-prometheus",
       packageName: "@openclaw/diagnostics-prometheus",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-prometheus",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-prometheus",
+      },
+    },
+    {
+      extensionId: "gmi",
+      packageName: "@openclaw/gmi-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/gmi-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/gmi-provider",
+      },
     },
   ] as const;
 
@@ -158,12 +180,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toEqual({
-        clawhubSpec: `clawhub:${plugin.packageName}`,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.4.25",
-        npmSpec: plugin.packageName,
-      });
+      expect(packageJson.openclaw?.install).toEqual(plugin.install);
       expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,
