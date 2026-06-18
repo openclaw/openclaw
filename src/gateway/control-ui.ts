@@ -743,8 +743,29 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
-  const hashes = computeInlineScriptHashes(body);
+function rewriteIndexHtmlPublicAssetPaths(html: string, basePath: string): string {
+  // Rewrite root-absolute public asset hrefs to the Control UI namespace path
+  // so initial-load requests bypass authenticating reverse proxies.
+  // The runtime helper (inferControlUiPublicAssetPath) already corrects these
+  // after JS boots; this rewrite only covers the pre-JS window.
+  const namespacePrefix = basePath
+    ? `${basePath}${CONTROL_UI_NAMESPACE_PREFIX}`
+    : CONTROL_UI_NAMESPACE_PREFIX;
+  let result = html;
+  for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
+    const absoluteHref = `href="/${asset}"`;
+    if (!result.includes(absoluteHref)) {
+      continue;
+    }
+    const namespacedHref = `href="${namespacePrefix}${asset}"`;
+    result = result.replaceAll(absoluteHref, namespacedHref);
+  }
+  return result;
+}
+
+function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string) {
+  const rewritten = basePath !== undefined ? rewriteIndexHtmlPublicAssetPaths(body, basePath) : body;
+  const hashes = computeInlineScriptHashes(rewritten);
   if (hashes.length > 0) {
     res.setHeader(
       "Content-Security-Policy",
@@ -753,7 +774,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  res.end(rewritten);
 }
 
 function readOpenedFile(fd: number): Promise<Buffer> {
@@ -1069,7 +1090,7 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd), basePath);
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1097,7 +1118,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd), basePath);
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

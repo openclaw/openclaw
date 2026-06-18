@@ -1394,6 +1394,100 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("rewrites public asset hrefs in index.html to the namespace path for root-mounted SPA", async () => {
+    const indexHtml = `<html><head>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+</head><body></body></html>`;
+    await withControlUiRoot({
+      indexHtml,
+      fn: async (tmp) => {
+        // Root path serves index.html
+        const { handled, res, end } = await runControlUiRequest({
+          url: "/",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const body = responseBody(end);
+        expect(body).toContain('href="/__openclaw__/favicon.svg"');
+        expect(body).toContain('href="/__openclaw__/manifest.webmanifest"');
+        expect(body).toContain('href="/__openclaw__/apple-touch-icon.png"');
+        // Original hrefs should no longer appear
+        expect(body).not.toContain('href="/favicon.svg"');
+        expect(body).not.toContain('href="/manifest.webmanifest"');
+      },
+    });
+  });
+
+  it("rewrites public asset hrefs in index.html for SPA fallback from deep routes", async () => {
+    const indexHtml = `<html><head>
+<link rel="manifest" href="/manifest.webmanifest" />
+</head><body></body></html>`;
+    await withControlUiRoot({
+      indexHtml,
+      fn: async (tmp) => {
+        // SPA fallback for deep route should also get rewritten
+        const { handled, res, end } = await runControlUiRequest({
+          url: "/skills/workshop",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const body = responseBody(end);
+        expect(body).toContain('href="/__openclaw__/manifest.webmanifest"');
+        expect(body).not.toContain('href="/manifest.webmanifest"');
+      },
+    });
+  });
+
+  it("rewrites public asset hrefs under a configured base path", async () => {
+    const indexHtml = `<html><head>
+<link rel="manifest" href="/manifest.webmanifest" />
+</head><body></body></html>`;
+    await withControlUiRoot({
+      indexHtml,
+      fn: async (tmp) => {
+        const { handled, res, end } = await runControlUiRequest({
+          url: "/openclaw/",
+          method: "GET",
+          rootPath: tmp,
+          basePath: "/openclaw",
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const body = responseBody(end);
+        expect(body).toContain('href="/openclaw/__openclaw__/manifest.webmanifest"');
+        expect(body).not.toContain('href="/manifest.webmanifest"');
+      },
+    });
+  });
+
+  it("rewrites public asset hrefs in index.html for base-path deep routes (SPA fallback)", async () => {
+    const indexHtml = `<html><head>
+<link rel="manifest" href="/manifest.webmanifest" />
+</head><body></body></html>`;
+    await withControlUiRoot({
+      indexHtml,
+      fn: async (tmp) => {
+        const { handled, res, end } = await runControlUiRequest({
+          url: "/openclaw/skills/workshop",
+          method: "GET",
+          rootPath: tmp,
+          basePath: "/openclaw",
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const body = responseBody(end);
+        expect(body).toContain('href="/openclaw/__openclaw__/manifest.webmanifest"');
+        expect(body).not.toContain('href="/manifest.webmanifest"');
+      },
+    });
+  });
+
   it("serves public root assets under the internal namespace when the SPA is routed there", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

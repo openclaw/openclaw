@@ -43,5 +43,13 @@ function setDocumentLinkHref(
   if (!link) {
     return;
   }
+  // Preserve the server-chosen namespace path (e.g. /__openclaw__/manifest.webmanifest)
+  // for public assets.  The gateway rewrites root-absolute hrefs in index.html to the
+  // Control UI namespace so initial-load requests bypass authenticating reverse proxies.
+  // Without this check the inferred root-absolute path would undo that fix.
+  const currentHref = link.getAttribute("href");
+  if (currentHref?.includes("/__openclaw__/")) {
+    return;
+  }
   link.href = inferControlUiPublicAssetPath(asset);
 }
