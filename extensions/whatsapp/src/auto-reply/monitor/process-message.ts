@@ -510,6 +510,9 @@ export async function processMessage(params: {
     accountId: params.route.accountId,
     sessionKey: params.route.sessionKey,
   });
+  if (admission.ingress.admission === "observe") {
+    return false;
+  }
 
   const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
     cfg: params.cfg,

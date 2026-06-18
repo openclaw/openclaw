@@ -17,7 +17,7 @@ export type BlockedInboundAccessControlResult = {
 
 export type AcceptedInboundAccessControlResult = {
   allowed: true;
-  shouldMarkRead: true;
+  shouldMarkRead: boolean;
   isSelfChat: boolean;
   resolvedAccountId: string;
   admission: WhatsAppInboundAdmission;
@@ -44,6 +44,75 @@ function blockedInboundAccess(
     shouldMarkRead: false,
     isSelfChat: policy.isSelfChat,
     resolvedAccountId: policy.account.accountId,
+  };
+}
+
+type WhatsAppMessageReceivedHookConfig = {
+  pluginHooks?: {
+    messageReceived?: boolean;
+  };
+  accounts?: Record<string, unknown>;
+};
+
+function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const pluginHooks = (value as WhatsAppMessageReceivedHookConfig).pluginHooks;
+  if (pluginHooks?.messageReceived === undefined) {
+    return undefined;
+  }
+  return pluginHooks.messageReceived;
+}
+
+function shouldObserveBlockedInbound(params: { cfg: OpenClawConfig; accountId: string }): boolean {
+  const channelConfig = params.cfg.channels?.whatsapp as
+    | WhatsAppMessageReceivedHookConfig
+    | undefined;
+  const accountConfig =
+    params.accountId && channelConfig?.accounts
+      ? channelConfig.accounts[params.accountId]
+      : undefined;
+
+  return (
+    readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
+    readWhatsAppMessageReceivedHookOptIn(channelConfig) ??
+    false
+  );
+}
+
+function observeOnlyInboundAccess(params: {
+  policy: ReturnType<typeof resolveWhatsAppInboundPolicy>;
+  access: Awaited<ReturnType<typeof resolveWhatsAppIngressAccess>>;
+  isGroup: boolean;
+  conversationId: string;
+  senderId: string;
+}): AcceptedInboundAccessControlResult {
+  return {
+    allowed: true,
+    shouldMarkRead: false,
+    isSelfChat: params.policy.isSelfChat,
+    resolvedAccountId: params.policy.account.accountId,
+    admission: buildWhatsAppInboundAdmission({
+      policy: params.policy,
+      access: {
+        ...params.access,
+        ingress: {
+          ...params.access.ingress,
+          admission: "observe",
+          decision: "allow",
+        },
+        activationAccess: {
+          ...params.access.activationAccess,
+          ran: true,
+          allowed: true,
+          shouldSkip: false,
+        },
+      },
+      isGroup: params.isGroup,
+      conversationId: params.conversationId,
+      senderId: params.senderId,
+    }),
   };
 }
 
@@ -107,6 +176,15 @@ export async function checkInboundAccessControl(params: {
   if (params.group && senderAccess.decision !== "allow") {
     if (senderAccess.reasonCode === "group_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked group message (groupPolicy: disabled)");
+      if (shouldObserveBlockedInbound({ cfg: params.cfg, accountId: policy.account.accountId })) {
+        return observeOnlyInboundAccess({
+          policy,
+          access,
+          isGroup: params.group,
+          conversationId,
+          senderId: admissionSenderId,
+        });
+      }
     } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
       logWhatsAppVerbose(
         params.verbose,
@@ -129,6 +207,15 @@ export async function checkInboundAccessControl(params: {
     }
     if (senderAccess.decision === "block" && senderAccess.reasonCode === "dm_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked dm (dmPolicy: disabled)");
+      if (shouldObserveBlockedInbound({ cfg: params.cfg, accountId: policy.account.accountId })) {
+        return observeOnlyInboundAccess({
+          policy,
+          access,
+          isGroup: params.group,
+          conversationId,
+          senderId: admissionSenderId,
+        });
+      }
       return blockedInboundAccess(policy);
     }
     if (senderAccess.decision === "pairing" && !policy.isSamePhone(params.from)) {

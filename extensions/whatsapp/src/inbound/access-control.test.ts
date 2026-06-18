@@ -301,6 +301,92 @@ describe("checkInboundAccessControl admission contract", () => {
     expect(result.allowed).toBe(false);
     expect("admission" in result).toBe(false);
   });
+
+  it("observes disabled DMs without read receipts when message_received hooks are enabled", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "disabled",
+          pluginHooks: {
+            messageReceived: true,
+          },
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Sam",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expectAccepted(result);
+    expect(result.shouldMarkRead).toBe(false);
+    expect(result.admission.ingress).toMatchObject({
+      admission: "observe",
+      decision: "allow",
+      reasonCode: "dm_policy_disabled",
+    });
+    expect(result.admission.senderAccess).toMatchObject({
+      allowed: false,
+      decision: "block",
+      reasonCode: "dm_policy_disabled",
+    });
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("observes disabled groups without read receipts when account message_received hooks are enabled", async () => {
+    const groupJid = "120363401234567890@g.us";
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "disabled",
+          accounts: {
+            default: {
+              pluginHooks: {
+                messageReceived: true,
+              },
+            },
+          },
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: groupJid,
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: true,
+      pushName: "Sam",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: groupJid,
+    });
+
+    expectAccepted(result);
+    expect(result.shouldMarkRead).toBe(false);
+    expect(result.admission.ingress).toMatchObject({
+      admission: "observe",
+      decision: "allow",
+      reasonCode: "group_policy_disabled",
+    });
+    expect(result.admission.senderAccess).toMatchObject({
+      allowed: false,
+      decision: "block",
+      reasonCode: "group_policy_disabled",
+    });
+  });
 });
 
 describe("checkInboundAccessControl pairing grace", () => {

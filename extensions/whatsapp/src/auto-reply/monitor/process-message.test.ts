@@ -469,6 +469,75 @@ describe("processMessage group system prompt wiring", () => {
     expect(internalReceived).not.toHaveBeenCalled();
   });
 
+  it("emits observe-only message_received hooks without reply dispatch side effects", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "disabled inbound",
+      BodyForCommands: "disabled inbound",
+      RawBody: "disabled inbound",
+      CommandBody: "disabled inbound",
+      From: GROUP_JID,
+      To: "+15550001111",
+      SessionKey: baseRoute.sessionKey,
+      AccountId: "default",
+      MessageSid: "observe-msg-1",
+      SenderId: "+15550002222",
+      SenderName: "Alice",
+      SenderE164: "+15550002222",
+      Timestamp: 1710000000,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: GROUP_JID,
+    }));
+
+    const result = await callProcessMessage({
+      cfg: {
+        channels: {
+          whatsapp: {
+            pluginHooks: {
+              messageReceived: true,
+            },
+          },
+        },
+      },
+      msg: createTestWebInboundMessage({
+        event: {
+          id: "observe-msg-1",
+          timestamp: 1710000000,
+        },
+        admission: {
+          ingress: {
+            admission: "observe",
+            decision: "allow",
+            reasonCode: "dm_policy_disabled",
+          },
+          senderAccess: {
+            allowed: false,
+            decision: "block",
+            reasonCode: "dm_policy_disabled",
+          },
+          activationAccess: {
+            ran: true,
+            allowed: true,
+            shouldSkip: false,
+            reasonCode: "dm_policy_disabled",
+          },
+        },
+      }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(result).toBe(false);
+    expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
+    expect(internalReceived).toHaveBeenCalledTimes(1);
+    expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
+    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+  });
+
   it("tracks session metadata writes as connection background tasks", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     buildContextMock.mockImplementationOnce(() => ({
