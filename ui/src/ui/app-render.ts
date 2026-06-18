@@ -6,12 +6,14 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
+  createRouteModules,
   iconForRoute,
   isSettingsRoute,
   normalizeBasePath,
   pathForRoute,
-  SETTINGS_ROUTES,
   ROUTE_GROUPS,
+  ROUTE_RECORDS,
+  SETTINGS_ROUTES,
   subtitleForRoute,
   titleForRoute,
   type RouteId,
@@ -470,7 +472,10 @@ const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyL
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyUsage = createLazyView(() => import("./views/usage.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
-const routeTree = createRouteTree({ notifyLazyViewChanged });
+const routeTree = createRouteTree({
+  records: ROUTE_RECORDS,
+  routeModules: createRouteModules({ notifyLazyViewChanged }),
+});
 
 type ChatWorkspaceFilesState = {
   activeId: string | null;

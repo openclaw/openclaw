@@ -1,42 +1,19 @@
 // Control UI route registry defines route ids, paths, and navigation metadata.
+import { createSkillWorkshopRoute } from "../features/skill-workshop/skill-workshop.ts";
 import { t } from "../i18n/index.ts";
 import type { IconName } from "../ui/icons.js";
 import { normalizeLowercaseStringOrEmpty } from "../ui/string-coerce.ts";
+import type { RouteModule, RouteRecord } from "./route-types.ts";
 
-export type RouteId =
-  | "agents"
-  | "activity"
-  | "overview"
-  | "workboard"
-  | "channels"
-  | "instances"
-  | "sessions"
-  | "usage"
-  | "cron"
-  | "skills"
-  | "skill-workshop"
-  | "nodes"
-  | "chat"
-  | "config"
-  | "communications"
-  | "appearance"
-  | "automation"
-  | "mcp"
-  | "infrastructure"
-  | "ai-agents"
-  | "debug"
-  | "logs"
-  | "dreams";
+export type { RouteModule, RouteRecord, RouteRefresh, RouteRefreshOptions } from "./route-types.ts";
 
-export interface RouteRecord {
-  path: string;
-  icon: IconName;
-  titleKey: string;
-  subtitleKey: string;
-  parent?: RouteId;
+function defineRouteRecords<
+  const TRouteRecords extends Record<string, RouteRecord<Extract<keyof TRouteRecords, string>>>,
+>(records: TRouteRecords): TRouteRecords {
+  return records;
 }
 
-export const ROUTE_RECORDS = {
+export const ROUTE_RECORDS = defineRouteRecords({
   agents: {
     path: "/agents",
     icon: "folder",
@@ -176,7 +153,15 @@ export const ROUTE_RECORDS = {
     titleKey: "tabs.dreams",
     subtitleKey: "subtitles.dreams",
   },
-} as const satisfies Record<RouteId, RouteRecord>;
+});
+
+export type RouteId = keyof typeof ROUTE_RECORDS & string;
+
+export function createRouteModules(
+  options: { notifyLazyViewChanged?: () => void } = {},
+): readonly RouteModule<RouteId>[] {
+  return [createSkillWorkshopRoute(options.notifyLazyViewChanged)];
+}
 
 export const ROUTE_GROUPS = [
   { label: "chat", routes: ["chat"] },

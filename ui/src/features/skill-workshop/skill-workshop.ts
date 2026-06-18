@@ -2,7 +2,7 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { ControlUiRouteModule } from "../../routes/route-tree.ts";
+import type { RouteModule } from "../../routes/route-types.ts";
 import { createChatSessionsLoadOverrides } from "../../ui/app-chat.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { switchChatSessionAndWait } from "../../ui/chat-session-switch.ts";
@@ -350,7 +350,7 @@ export function createSkillWorkshopFeature(notifyLazyViewChanged: () => void) {
 
 export function createSkillWorkshopRoute(
   notifyLazyViewChanged: () => void = () => undefined,
-): ControlUiRouteModule {
+): RouteModule<"skill-workshop"> {
   const feature = createSkillWorkshopFeature(notifyLazyViewChanged);
   return {
     id: "skill-workshop",
@@ -358,5 +358,5 @@ export function createSkillWorkshopRoute(
     contentClass: feature.contentClass,
     renderHeaderControls: feature.renderHeaderControls,
     renderView: feature.renderView,
-  };
+  } as const;
 }

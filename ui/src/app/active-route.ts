@@ -1,11 +1,8 @@
 // Control UI active route lifecycle and refresh orchestration.
 import { t } from "../i18n/index.ts";
-import type { RouteId } from "../routes/route-registry.ts";
-import {
-  createRouteTree,
-  type RouteRefresh,
-  type RouteRefreshOptions,
-} from "../routes/route-tree.ts";
+import { createRouteModules, ROUTE_RECORDS, type RouteId } from "../routes/route-registry.ts";
+import { createRouteTree } from "../routes/route-tree.ts";
+import type { RouteRefresh, RouteRefreshOptions } from "../routes/route-types.ts";
 import { refreshChat } from "../ui/app-chat.ts";
 import {
   startDebugPolling,
@@ -143,7 +140,11 @@ const ACTIVE_ROUTE_REFRESHERS = {
   },
 } satisfies Record<AppRefreshRouteId, RouteRefresh>;
 
-const ACTIVE_ROUTE_TREE = createRouteTree({ refreshers: ACTIVE_ROUTE_REFRESHERS });
+const ACTIVE_ROUTE_TREE = createRouteTree({
+  records: ROUTE_RECORDS,
+  routeModules: createRouteModules(),
+  refreshers: ACTIVE_ROUTE_REFRESHERS,
+});
 
 export function applyActiveRouteTransition(
   host: SettingsHost,
