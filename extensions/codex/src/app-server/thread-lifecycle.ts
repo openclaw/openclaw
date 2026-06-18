@@ -1406,6 +1406,7 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    workspacePromptContext?: string;
   },
 ): CodexTurnStartParams {
   const modelSelection = resolveCodexAppServerRequestModelSelection({
@@ -1441,6 +1442,7 @@ export function buildTurnStartParams(
       skillsCollaborationInstructions: options.skillsCollaborationInstructions,
       memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+      workspacePromptContext: options.workspacePromptContext,
     }),
   };
 }
@@ -1477,6 +1479,7 @@ export function buildTurnCollaborationMode(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    workspacePromptContext?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -1497,9 +1500,11 @@ function buildTurnScopedCollaborationInstructions(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    workspacePromptContext?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
+    options.workspacePromptContext,
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
     options.skillsCollaborationInstructions,

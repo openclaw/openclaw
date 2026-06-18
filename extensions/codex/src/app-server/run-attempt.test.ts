@@ -2728,9 +2728,14 @@ describe("runCodexAppServerAttempt", () => {
       input?: Array<{ text?: string }>;
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
+    const collaborationInstructions = (turnStartParams as Record<string, unknown>)
+      .collaborationMode as { settings?: { developer_instructions?: string } } | undefined;
+    const developerInstructions = collaborationInstructions?.settings?.developer_instructions ?? "";
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain("memory_search");
-    expect(inputText).toContain(memorySummary);
+    // Runtime context (including MEMORY.md) is delivered through collaboration
+    // instructions, not persisted in Codex user input history.
+    expect(developerInstructions).toContain(memorySummary);
 
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],

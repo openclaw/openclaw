@@ -2201,7 +2201,11 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
       appServer: pluginAppServer,
-      promptText: codexTurnPromptText,
+      promptText: prependCodexOpenClawPromptContext(promptBuild.prompt, undefined, {
+        preservePromptWithoutContext:
+          params.bootstrapContextMode === "lightweight" &&
+          params.bootstrapContextRunKind === "cron",
+      }),
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
       model: thread.model,
@@ -2211,6 +2215,7 @@ export async function runCodexAppServerAttempt(
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
+      workspacePromptContext: openClawPromptContext,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     const startedTurn = assertCodexTurnStartResponse(
