@@ -4,6 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
+const transcribeFirstAudio = vi.hoisted(() => vi.fn(async () => "voice transcript"));
+
+vi.mock("./media-understanding.runtime.js", () => ({
+  transcribeFirstAudio,
+}));
+
 function createSendChatActionHandler(
   sendChatAction = vi.fn(async () => undefined),
 ): TelegramSendChatActionHandler & { sendChatAction: typeof sendChatAction } {
@@ -40,6 +46,30 @@ describe("buildTelegramMessageContext typing", () => {
     expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledWith(42, "typing", undefined);
     expect(sendChatActionHandler.sendChatAction.mock.invocationCallOrder[0]).toBeLessThan(
       buildInboundContext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("sends direct typing before voice transcription starts", async () => {
+    transcribeFirstAudio.mockClear();
+    const sendChatActionHandler = createSendChatActionHandler();
+
+    await expect(
+      buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: 42, type: "private", first_name: "Pat" },
+          from: { id: 42, first_name: "Pat" },
+          voice: { file_id: "voice-1", duration: 1 },
+        },
+        allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+        sendChatActionHandler,
+      }),
+    ).resolves.not.toBeNull();
+
+    expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledTimes(1);
+    expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledWith(42, "typing", undefined);
+    expect(transcribeFirstAudio).toHaveBeenCalledTimes(1);
+    expect(sendChatActionHandler.sendChatAction.mock.invocationCallOrder[0]).toBeLessThan(
+      transcribeFirstAudio.mock.invocationCallOrder[0],
     );
   });
 
