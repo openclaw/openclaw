@@ -193,6 +193,7 @@ describe("production lint suppressions", () => {
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+        "scripts/repro/issue-92044-workboard-scope.mjs|typescript/use-unknown-in-catch-callback-variable|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
