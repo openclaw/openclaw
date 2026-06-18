@@ -970,15 +970,18 @@ export function createCliJsonlStreamingParser(params: {
       }
     },
     getOutput() {
+      if (output?.errorText) {
+        return output;
+      }
+      const terminalText = taskCompleteText ?? finalAnswerText;
+      if (terminalText) {
+        return { text: terminalText, sessionId, usage };
+      }
       if (output) {
         return output;
       }
       if (isGeminiStreamJsonDialect(params) && (assistantText.trim() || sessionId || usage)) {
         return { text: assistantText.trim(), sessionId, usage };
-      }
-      const terminalText = taskCompleteText ?? finalAnswerText;
-      if (terminalText) {
-        return { text: terminalText, sessionId, usage };
       }
       const text = texts.join("\n").trim();
       if (!text) {
@@ -1129,15 +1132,15 @@ export function parseCliJsonl(
   if (isGeminiStreamJsonDialect({ backend, providerId }) && geminiErrorText) {
     return { text: "", sessionId, usage, errorText: geminiErrorText };
   }
+  const terminalText = taskCompleteText ?? finalAnswerText;
+  if (terminalText) {
+    return { text: terminalText, sessionId, usage };
+  }
   if (
     isGeminiStreamJsonDialect({ backend, providerId }) &&
     (sawGeminiStructuredOutput || sessionId || usage)
   ) {
     return { text: geminiText.trim(), sessionId, usage };
-  }
-  const terminalText = taskCompleteText ?? finalAnswerText;
-  if (terminalText) {
-    return { text: terminalText, sessionId, usage };
   }
   const text = texts.join("\n").trim();
   if (!text) {

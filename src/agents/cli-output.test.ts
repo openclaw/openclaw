@@ -422,6 +422,51 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("prefers final-answer phase content over Gemini stream-json message text", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: "progress text",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          status: "success",
+          stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: {
+        input: 4,
+        output: 5,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 9,
+      },
+    });
+  });
+
   it("parses Gemini stream-json result errors as provider errors", () => {
     const result = parseCliJsonl(
       [
@@ -1237,6 +1282,56 @@ describe("createCliJsonlStreamingParser", () => {
       text: "Final answer text",
       sessionId: undefined,
       usage: undefined,
+    });
+  });
+
+  it("prefers streamed final-answer phase content over Gemini result output", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      providerId: "google-gemini-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: "progress text",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          status: "success",
+          stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: {
+        input: 4,
+        output: 5,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 9,
+      },
     });
   });
 
