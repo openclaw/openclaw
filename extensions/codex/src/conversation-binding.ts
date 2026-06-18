@@ -199,6 +199,7 @@ export async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
   } else {
     await createThread({
@@ -214,6 +215,7 @@ export async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
   }
   return createCodexConversationBindingData({
@@ -577,6 +579,7 @@ async function runBoundTurn(params: {
   const { execPolicy, runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
     config: params.config,
+    agentId: params.data.agentId,
     sessionKey: params.sessionKey,
     workspaceDir,
     modelProvider: reviewerModelProvider,
@@ -802,6 +805,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
     const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
     const execPolicy = resolveConversationExecPolicy({
       config: params.config,
+      agentId: params.data.agentId,
       sessionKey: params.sessionKey,
     });
     const useCurrentRuntimePolicy = execPolicy.touched;
@@ -818,6 +822,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       serviceTier: binding?.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.data.agentId,
     });
     return await runBoundTurn(params);
   }

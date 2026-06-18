@@ -44,11 +44,12 @@ export function resolveCodexNativeExecutionPolicy(params: {
 }): CodexNativeExecutionPolicy {
   const config = params.config ?? {};
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+  const canReadSessionEntry =
+    params.readRuntimeSessionEntry &&
+    shouldReadRuntimeSessionEntry({ sessionKey, agentId: params.agentId });
   const sessionEntry =
     params.sessionEntry ??
-    (params.readRuntimeSessionEntry && sessionKey
-      ? readRuntimeSessionEntryBestEffort(sessionKey)
-      : undefined);
+    (canReadSessionEntry ? readRuntimeSessionEntryBestEffort(sessionKey) : undefined);
   const sandboxAvailable =
     params.sandboxAvailable ??
     (sessionKey
@@ -146,6 +147,20 @@ function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
     return undefined;
   }
   return normalizeAgentIdOrDefault(parts[1]);
+}
+
+function shouldReadRuntimeSessionEntry(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): params is { sessionKey: string; agentId?: string } {
+  if (!params.sessionKey) {
+    return false;
+  }
+  const explicitAgentId = normalizeAgentIdOrDefault(params.agentId);
+  if (!explicitAgentId) {
+    return true;
+  }
+  return parseAgentIdFromSessionKey(params.sessionKey) === explicitAgentId;
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
