@@ -164,7 +164,13 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
+  // Only append stdout to the aggregated output. Stderr (e.g. PowerShell warnings)
+  // is tracked separately in pendingStderr and should not appear in tool results
+  // or channel progress messages sent to users.
+  const aggregated =
+    stream === "stdout"
+      ? trimWithCap(session.aggregated + chunk, session.maxOutputChars)
+      : session.aggregated;
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
