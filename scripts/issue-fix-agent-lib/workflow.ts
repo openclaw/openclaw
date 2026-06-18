@@ -19,8 +19,8 @@ type WorkflowParams = {
   readonly statePath?: string;
 };
 
-function defaultStatePath(): string {
-  return path.join(process.cwd(), ".openclaw", "issue-fix-agent.sqlite");
+export function defaultIssueFixAgentStatePath(): string {
+  return path.join(process.cwd(), ".artifacts", "issue-fix-agent.sqlite");
 }
 
 async function scan(runCommand: CommandRunner): Promise<{
@@ -49,7 +49,7 @@ export async function runIssueFixAgentCommand(params: WorkflowParams): Promise<v
     return;
   }
   if (params.args.command === "status") {
-    const statePath = params.statePath ?? defaultStatePath();
+    const statePath = params.statePath ?? defaultIssueFixAgentStatePath();
     if (!fs.existsSync(statePath)) {
       out("No active issue-fix-agent run.");
       return;
@@ -90,7 +90,7 @@ export async function runIssueFixAgentCommand(params: WorkflowParams): Promise<v
       out("No qualified issue-fix-agent candidates.");
       return;
     }
-    const store = openIssueFixAgentState(params.statePath ?? defaultStatePath());
+    const store = openIssueFixAgentState(params.statePath ?? defaultIssueFixAgentStatePath());
     try {
       const created = createIssueFixAgentRun(store, {
         issueNumber: candidate.number,

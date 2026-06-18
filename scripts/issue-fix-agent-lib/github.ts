@@ -50,11 +50,8 @@ function normalizeIssue(raw: GitcrawlIssue): IssueCandidate | null {
   };
 }
 
-export async function fetchOpenIssueCandidates(params: {
-  limit: number;
-  runCommand: CommandRunner;
-}): Promise<IssueCandidate[]> {
-  const result = await params.runCommand("gitcrawl", [
+function gitcrawlIssueSearchArgs(limit: number): string[] {
+  return [
     "search",
     "issues",
     "repo:openclaw/openclaw state:open is:issue",
@@ -65,10 +62,39 @@ export async function fetchOpenIssueCandidates(params: {
     "--json",
     "number,title,url,body,labels,author,updatedAt",
     "--limit",
-    String(params.limit),
-  ]);
+    String(limit),
+  ];
+}
+
+function ghIssueListArgs(limit: number): string[] {
+  return [
+    "issue",
+    "list",
+    "--repo",
+    "openclaw/openclaw",
+    "--state",
+    "open",
+    "--search",
+    "is:issue",
+    "--json",
+    "number,title,url,body,labels,author,updatedAt",
+    "--limit",
+    String(limit),
+  ];
+}
+
+export async function fetchOpenIssueCandidates(params: {
+  limit: number;
+  runCommand: CommandRunner;
+}): Promise<IssueCandidate[]> {
+  let result = await params.runCommand("gitcrawl", gitcrawlIssueSearchArgs(params.limit)).catch(
+    async () => await params.runCommand("gh", ghIssueListArgs(params.limit)),
+  );
   if (result.code !== 0) {
-    throw new Error(`gitcrawl issue search failed: ${result.stderr || result.stdout}`);
+    result = await params.runCommand("gh", ghIssueListArgs(params.limit));
+  }
+  if (result.code !== 0) {
+    throw new Error(`issue search failed: ${result.stderr || result.stdout}`);
   }
   return parseJsonArray(result.stdout)
     .map((entry) => normalizeIssue(entry as GitcrawlIssue))

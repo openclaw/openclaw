@@ -30,7 +30,10 @@ import {
   transitionIssueFixAgentRun,
 } from "../../scripts/issue-fix-agent-lib/state.sqlite.ts";
 import type { IssueCandidate } from "../../scripts/issue-fix-agent-lib/types.ts";
-import { runIssueFixAgentCommand } from "../../scripts/issue-fix-agent-lib/workflow.ts";
+import {
+  defaultIssueFixAgentStatePath,
+  runIssueFixAgentCommand,
+} from "../../scripts/issue-fix-agent-lib/workflow.ts";
 
 function issue(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
   return {
@@ -207,6 +210,54 @@ describe("issue-fix-agent github reads", () => {
       "5",
     ]);
   });
+
+  it("falls back to gh issue list when gitcrawl is unavailable", async () => {
+    const calls: string[][] = [];
+    const runCommand: CommandRunner = async (command, args) => {
+      calls.push([command, ...args]);
+      if (command === "gitcrawl") {
+        throw new Error("spawn gitcrawl ENOENT");
+      }
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify([
+          {
+            author: { login: "external-user" },
+            body: "Repro: TypeError in src/commands/status.ts",
+            labels: [{ name: "bug" }],
+            number: 12345,
+            title: "status crashes",
+            updatedAt: "2026-06-01T00:00:00Z",
+            url: "https://github.com/openclaw/openclaw/issues/12345",
+          },
+        ]),
+      };
+    };
+
+    await expect(fetchOpenIssueCandidates({ limit: 5, runCommand })).resolves.toMatchObject([
+      {
+        author: "external-user",
+        isPullRequest: false,
+        number: 12345,
+      },
+    ]);
+    expect(calls[1]).toEqual([
+      "gh",
+      "issue",
+      "list",
+      "--repo",
+      "openclaw/openclaw",
+      "--state",
+      "open",
+      "--search",
+      "is:issue",
+      "--json",
+      "number,title,url,body,labels,author,updatedAt",
+      "--limit",
+      "5",
+    ]);
+  });
 });
 
 describe("issue-fix-agent workflow", () => {
@@ -256,6 +307,12 @@ describe("issue-fix-agent workflow", () => {
       state: "qualified",
     });
     store.close();
+  });
+
+  it("uses an ignored artifact path for default run state", () => {
+    expect(defaultIssueFixAgentStatePath()).toBe(
+      path.join(process.cwd(), ".artifacts", "issue-fix-agent.sqlite"),
+    );
   });
 
   it("status reports when there is no active run", async () => {
