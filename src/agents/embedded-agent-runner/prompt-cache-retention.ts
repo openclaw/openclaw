@@ -47,6 +47,11 @@ export function resolveCacheRetention(
   }
 
   const newVal = extraParams?.cacheRetention;
+  // Treat "standard" as an alias for "short" — users may configure it in model
+  // params expecting Bedrock-style or generic cache semantics.
+  if (newVal === "standard") {
+    return "short";
+  }
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
   }

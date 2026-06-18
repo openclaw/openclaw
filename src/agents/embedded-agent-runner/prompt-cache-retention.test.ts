@@ -63,6 +63,74 @@ describe("prompt cache retention", () => {
     ).toBe("none");
   });
 
+  it("maps 'standard' cacheRetention to 'short' for Anthropic Bedrock Claude models (issue #94482)", () => {
+    // 'standard' is an alias for 'short' — users may set it in model params
+    // expecting generic cache semantics.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "amazon-bedrock",
+        "openai-completions",
+        "us.anthropic.claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "amazon-bedrock",
+        "openai-completions",
+        "anthropic.claude-opus-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("maps 'standard' cacheRetention to 'short' for direct Anthropic models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "anthropic",
+        undefined,
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "anthropic",
+        "anthropic-messages",
+        "claude-opus-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("maps 'standard' cacheRetention to 'short' for anthropic-vertex models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("does not map 'standard' cacheRetention for non-Anthropic Bedrock models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-micro-v1:0",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("does not map 'standard' cacheRetention for non-eligible providers", () => {
+    expect(
+      resolveCacheRetention({ cacheRetention: "standard" }, "openai", undefined, "gpt-4"),
+    ).toBeUndefined();
+  });
+
   it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
     // Providers that route via openai-completions but do not advertise prompt
     // caching must keep retention out of outgoing payloads.
