@@ -29,8 +29,8 @@ describe("mirror-dispatch", () => {
     resetMirrorDispatchForTest();
     const a = vi.fn();
     const b = vi.fn();
-    registerChannelMirrorDispatcher("telegram", "default", a);
-    registerChannelMirrorDispatcher("telegram", "default", b); // account reloaded -> replaces a
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", a);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", b); // account reloaded -> replaces a
     expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(b);
     expect(resolveChannelMirrorDispatcher("discord", "default")).toBeUndefined();
   });
@@ -38,16 +38,36 @@ describe("mirror-dispatch", () => {
   it("unregister removes a stopped account's dispatcher", () => {
     resetMirrorDispatchForTest();
     const a = vi.fn();
-    registerChannelMirrorDispatcher("telegram", "default", a);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", a);
     expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(a);
-    unregisterChannelMirrorDispatcher("telegram", "default");
+    unregisterChannelMirrorDispatcher("test-owner", "telegram", "default");
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBeUndefined();
+  });
+
+  it("is owner-scoped: a different owner cannot replace or unregister another owner's dispatcher", () => {
+    resetMirrorDispatchForTest();
+    const a = vi.fn();
+    const b = vi.fn();
+    registerChannelMirrorDispatcher("owner-a", "telegram", "default", a);
+    // A DIFFERENT owner must not be able to hijack the (channel, account) entry —
+    // the ownership boundary: an installed plugin cannot replace another
+    // plugin/account's mirror handler.
+    registerChannelMirrorDispatcher("owner-b", "telegram", "default", b);
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(a);
+    // A different owner's unregister is a no-op.
+    unregisterChannelMirrorDispatcher("owner-b", "telegram", "default");
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(a);
+    // The OWNING registrant can still replace (account reload) and remove its entry.
+    registerChannelMirrorDispatcher("owner-a", "telegram", "default", b);
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(b);
+    unregisterChannelMirrorDispatcher("owner-a", "telegram", "default");
     expect(resolveChannelMirrorDispatcher("telegram", "default")).toBeUndefined();
   });
 
   it("uses the sole dispatcher only for a wildcard target, not an explicit account mismatch", () => {
     resetMirrorDispatchForTest();
     const a = vi.fn();
-    registerChannelMirrorDispatcher("telegram", "default", a);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", a);
     // A wildcard target (no pinned account) may use the only registered dispatcher.
     expect(resolveChannelMirrorDispatcher("telegram")).toBe(a);
     expect(resolveChannelMirrorDispatcher("telegram", "")).toBe(a);
@@ -60,8 +80,8 @@ describe("mirror-dispatch", () => {
     resetMirrorDispatchForTest();
     const accA = vi.fn();
     const accB = vi.fn();
-    registerChannelMirrorDispatcher("telegram", "acc-a", accA);
-    registerChannelMirrorDispatcher("telegram", "acc-b", accB);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "acc-a", accA);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "acc-b", accB);
     // Exact account match resolves THAT account's runtime.
     expect(resolveChannelMirrorDispatcher("telegram", "acc-b")).toBe(accB);
     expect(resolveChannelMirrorDispatcher("telegram", "acc-a")).toBe(accA);
@@ -88,7 +108,7 @@ describe("mirror-dispatch", () => {
   it("dispatches a mirror turn to each resolved target with a bus-sourced resolver, marks handled", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn();
-    registerChannelMirrorDispatcher("telegram", "default", dispatcher);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", dispatcher);
 
     const handle = await launchMirrorDispatch({
       originRunId: "run-1",
@@ -117,7 +137,7 @@ describe("mirror-dispatch", () => {
   it("un-marks a target when its dispatcher fails (post-hoc delivers, no silent drop)", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn(() => Promise.reject(new Error("context dropped")));
-    registerChannelMirrorDispatcher("telegram", "default", dispatcher);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", dispatcher);
     await launchMirrorDispatch({
       originRunId: "run-fail",
       cfg,
@@ -154,8 +174,8 @@ describe("mirror-dispatch", () => {
     resetMirrorDispatchForTest();
     // Channel is mirror-capable but the target's account (acc-c) is not registered;
     // with >1 account there is no single-dispatcher fallback, so resolve fails.
-    registerChannelMirrorDispatcher("telegram", "acc-a", vi.fn());
-    registerChannelMirrorDispatcher("telegram", "acc-b", vi.fn());
+    registerChannelMirrorDispatcher("test-owner", "telegram", "acc-a", vi.fn());
+    registerChannelMirrorDispatcher("test-owner", "telegram", "acc-b", vi.fn());
     const target = { channel: "telegram", to: "telegram:-100", accountId: "acc-c", threadId: 1 };
     const handle = await launchMirrorDispatch({
       originRunId: "run-fc",
@@ -174,7 +194,7 @@ describe("mirror-dispatch", () => {
   it("excludes the origin target (no self-mirror)", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn();
-    registerChannelMirrorDispatcher("telegram", "default", dispatcher);
+    registerChannelMirrorDispatcher("test-owner", "telegram", "default", dispatcher);
     const handle = await launchMirrorDispatch({
       originRunId: "run-3",
       cfg,

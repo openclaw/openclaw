@@ -37,21 +37,21 @@ describe("channel-admission", () => {
 
   it("delegates to the registered predicate (enabled -> admit, disabled -> deny)", async () => {
     const enabled = vi.fn(() => true);
-    registerChannelEchoAdmission("telegram", "default", enabled);
+    registerChannelEchoAdmission("test-owner", "telegram", "default", enabled);
     expect(
       await isEchoTargetAdmissible(cfg, "telegram", { to: "telegram:-100", accountId: "default" }),
     ).toBe(true);
     expect(enabled).toHaveBeenCalledTimes(1);
 
     const disabled = vi.fn(() => false);
-    registerChannelEchoAdmission("telegram", "default", disabled); // last-wins replace
+    registerChannelEchoAdmission("test-owner", "telegram", "default", disabled); // last-wins replace
     expect(
       await isEchoTargetAdmissible(cfg, "telegram", { to: "telegram:-100", accountId: "default" }),
     ).toBe(false);
   });
 
   it("awaits an async predicate (telegram DM access is resolved asynchronously)", async () => {
-    registerChannelEchoAdmission("telegram", "default", async () => false);
+    registerChannelEchoAdmission("test-owner", "telegram", "default", async () => false);
     expect(
       await isEchoTargetAdmissible(cfg, "telegram", { to: "telegram:123", accountId: "default" }),
     ).toBe(false);
@@ -59,7 +59,7 @@ describe("channel-admission", () => {
 
   it("uses the sole predicate for a wildcard target but fails closed on an explicit account mismatch", async () => {
     const a = vi.fn(() => true);
-    registerChannelEchoAdmission("telegram", "default", a);
+    registerChannelEchoAdmission("test-owner", "telegram", "default", a);
     // Wildcard (no pinned account) may use the only registered predicate.
     expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "telegram:-100" })).toBe(true);
     // An explicit, different account fails closed even though only one is registered.
@@ -69,9 +69,11 @@ describe("channel-admission", () => {
   });
 
   it("keys predicates by account and fails closed on an unknown account when >1 registered", async () => {
-    registerChannelEchoAdmission("telegram", "acc-a", () => true);
-    registerChannelEchoAdmission("telegram", "acc-b", () => false);
-    expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "acc-a" })).toBe(true);
+    registerChannelEchoAdmission("test-owner", "telegram", "acc-a", () => true);
+    registerChannelEchoAdmission("test-owner", "telegram", "acc-b", () => false);
+    expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "acc-a" })).toBe(
+      true,
+    );
     expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "acc-b" })).toBe(
       false,
     );
@@ -82,11 +84,11 @@ describe("channel-admission", () => {
   });
 
   it("unregister removes a stopped account's predicate (channel reverts to admit-all)", async () => {
-    registerChannelEchoAdmission("telegram", "default", () => false);
+    registerChannelEchoAdmission("test-owner", "telegram", "default", () => false);
     expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "default" })).toBe(
       false,
     );
-    unregisterChannelEchoAdmission("telegram", "default");
+    unregisterChannelEchoAdmission("test-owner", "telegram", "default");
     // No predicates left for the channel → unchanged admit-all behavior.
     expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "default" })).toBe(
       true,

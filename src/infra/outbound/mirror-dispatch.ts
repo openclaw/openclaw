@@ -43,11 +43,16 @@ export type MirrorDispatchHandle = {
   dispose: () => void;
 };
 
+/** A registered dispatcher plus the owner that registered it (owner-scoped). */
+type OwnedMirrorDispatcher = { owner: string; dispatcher: MirrorDispatcher };
+
 const state = {
-  // channel -> accountId -> dispatcher. Account-keyed (not channel-only) so a
-  // multi-account install mirrors through the TARGET account's own runtime — its
+  // channel -> accountId -> { owner, dispatcher }. Account-keyed (not channel-only)
+  // so a multi-account install mirrors through the TARGET account's own runtime — its
   // bot token, routing, and persistence — never the first-registered account's.
-  dispatchers: new Map<string, Map<string, MirrorDispatcher>>(),
+  // Each entry records the OWNER that registered it so another owner cannot replace
+  // or unregister it (see registerChannelMirrorDispatcher / unregister).
+  dispatchers: new Map<string, Map<string, OwnedMirrorDispatcher>>(),
   /** sessionKey -> target keys a mirror turn was launched for this run. */
   handledBySession: new Map<string, Set<string>>(),
 };
@@ -118,17 +123,24 @@ export function consumeStreamingEchoHandled(
 }
 
 /**
- * Register the mirror dispatcher for a channel ACCOUNT. A channel plugin
- * registers one dispatcher per account it serves (the dispatcher closes over
- * that account's bot/runtime), so a mirror to a given target renders through the
- * target's own account.
+ * Register the mirror dispatcher for a channel ACCOUNT, scoped to `owner` (the
+ * registering plugin/channel identity). A channel plugin registers one dispatcher
+ * per account it serves (the dispatcher closes over that account's bot/runtime), so
+ * a mirror to a given target renders through the target's own account.
  *
- * Re-registration REPLACES the previous dispatcher (last-wins). The dispatcher
- * captures a live bot instance, so when an account is reloaded/restarted in-process
- * its bot-core re-registers — the new dispatcher must supersede the old one, or
- * mirrors would keep routing through the stopped runtime (stale token/bot).
+ * Owner scoping: a (channel, account) entry can only be replaced or removed by the
+ * SAME owner that registered it. A register call from a DIFFERENT owner is refused
+ * (logged, no-op) so an installed plugin cannot hijack another channel/account's
+ * mirror delivery. Prefer the owner-bound registrar (createChannelOutboundRegistrar)
+ * over calling this directly.
+ *
+ * Same-owner re-registration REPLACES the previous dispatcher (last-wins). The
+ * dispatcher captures a live bot instance, so when an account is reloaded/restarted
+ * in-process its bot-core re-registers — the new dispatcher must supersede the old
+ * one, or mirrors would keep routing through the stopped runtime (stale token/bot).
  */
 export function registerChannelMirrorDispatcher(
+  owner: string,
   channel: string,
   accountId: string,
   dispatcher: MirrorDispatcher,
@@ -136,16 +148,25 @@ export function registerChannelMirrorDispatcher(
   const key = normalizeDispatcherAccountId(accountId);
   let byAccount = state.dispatchers.get(channel);
   if (!byAccount) {
-    byAccount = new Map<string, MirrorDispatcher>();
+    byAccount = new Map<string, OwnedMirrorDispatcher>();
     state.dispatchers.set(channel, byAccount);
   }
   const existing = byAccount.get(key);
-  if (existing && existing !== dispatcher) {
+  if (existing && existing.owner !== owner) {
+    // Owner mismatch: refuse to overwrite another owner's dispatcher. This is the
+    // ownership boundary — without it any plugin could replace another account's
+    // mirror handler by registering under the same (channel, account) key.
+    log.warn(
+      `mirror dispatcher for ${channel}/${key || "default"} NOT replaced: owned by ${existing.owner}, register attempted by ${owner}`,
+    );
+    return;
+  }
+  if (existing && existing.dispatcher !== dispatcher) {
     log.debug(
-      `mirror dispatcher for ${channel}/${key || "default"} replaced (account re-registered)`,
+      `mirror dispatcher for ${channel}/${key || "default"} replaced (account re-registered by ${owner})`,
     );
   }
-  byAccount.set(key, dispatcher);
+  byAccount.set(key, { owner, dispatcher });
   // Sticky: once a channel is mirror-capable, the echo-admission gate must keep
   // failing closed for it even while its admission predicate is briefly absent
   // (stop/reload unregisters the dispatcher AND the predicate together).
@@ -154,14 +175,30 @@ export function registerChannelMirrorDispatcher(
 
 /**
  * Remove the mirror dispatcher for a channel account (called when an account stops
- * so a removed account does not keep a stale dispatcher). No-op if absent.
+ * so a removed account does not keep a stale dispatcher). No-op if absent, or if the
+ * entry is owned by a DIFFERENT owner — only the registering owner may unregister it.
  */
-export function unregisterChannelMirrorDispatcher(channel: string, accountId: string): void {
+export function unregisterChannelMirrorDispatcher(
+  owner: string,
+  channel: string,
+  accountId: string,
+): void {
   const byAccount = state.dispatchers.get(channel);
   if (!byAccount) {
     return;
   }
-  byAccount.delete(normalizeDispatcherAccountId(accountId));
+  const key = normalizeDispatcherAccountId(accountId);
+  const existing = byAccount.get(key);
+  if (!existing) {
+    return;
+  }
+  if (existing.owner !== owner) {
+    log.warn(
+      `mirror dispatcher for ${channel}/${key || "default"} NOT unregistered: owned by ${existing.owner}, unregister attempted by ${owner}`,
+    );
+    return;
+  }
+  byAccount.delete(key);
   if (byAccount.size === 0) {
     state.dispatchers.delete(channel);
   }
@@ -198,11 +235,11 @@ export function resolveChannelMirrorDispatcher(
   const key = normalizeDispatcherAccountId(accountId);
   const exact = byAccount.get(key);
   if (exact) {
-    return exact;
+    return exact.dispatcher;
   }
   // Sole-dispatcher fallback ONLY for a wildcard target (no pinned account).
   if (key === "" && byAccount.size === 1) {
-    return [...byAccount.values()][0];
+    return [...byAccount.values()][0].dispatcher;
   }
   return undefined;
 }

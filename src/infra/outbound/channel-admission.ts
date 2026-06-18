@@ -24,34 +24,59 @@ export type ChannelEchoAdmission = (
   target: EchoAdmissionTarget,
 ) => boolean | Promise<boolean>;
 
-const admissions = new Map<string, Map<string, ChannelEchoAdmission>>();
+/** A registered admission predicate plus the owner that registered it (owner-scoped). */
+type OwnedEchoAdmission = { owner: string; admission: ChannelEchoAdmission };
+
+const admissions = new Map<string, Map<string, OwnedEchoAdmission>>();
 
 function normalizeAdmissionAccountId(accountId: string | undefined): string {
   return accountId && accountId.trim() ? accountId : "";
 }
 
-/** Register the echo-admission predicate for a channel ACCOUNT (last-wins, like the
- * mirror dispatcher, so an account reload supersedes a stale closure). */
+/** Register the echo-admission predicate for a channel ACCOUNT, scoped to `owner`.
+ * Same-owner re-registration is last-wins (an account reload supersedes a stale
+ * closure); a register from a DIFFERENT owner is refused so a plugin cannot replace
+ * another channel/account's admission gate. Prefer createChannelOutboundRegistrar. */
 export function registerChannelEchoAdmission(
+  owner: string,
   channel: string,
   accountId: string,
   admission: ChannelEchoAdmission,
 ): void {
   let byAccount = admissions.get(channel);
   if (!byAccount) {
-    byAccount = new Map<string, ChannelEchoAdmission>();
+    byAccount = new Map<string, OwnedEchoAdmission>();
     admissions.set(channel, byAccount);
   }
-  byAccount.set(normalizeAdmissionAccountId(accountId), admission);
+  const key = normalizeAdmissionAccountId(accountId);
+  const existing = byAccount.get(key);
+  if (existing && existing.owner !== owner) {
+    // Owner mismatch: refuse to overwrite another owner's admission predicate.
+    return;
+  }
+  byAccount.set(key, { owner, admission });
 }
 
-/** Remove a channel account's echo-admission predicate (account stopped). No-op if absent. */
-export function unregisterChannelEchoAdmission(channel: string, accountId: string): void {
+/** Remove a channel account's echo-admission predicate (account stopped). No-op if
+ * absent or owned by a different owner — only the registering owner may remove it. */
+export function unregisterChannelEchoAdmission(
+  owner: string,
+  channel: string,
+  accountId: string,
+): void {
   const byAccount = admissions.get(channel);
   if (!byAccount) {
     return;
   }
-  byAccount.delete(normalizeAdmissionAccountId(accountId));
+  const key = normalizeAdmissionAccountId(accountId);
+  const existing = byAccount.get(key);
+  if (!existing) {
+    return;
+  }
+  if (existing.owner !== owner) {
+    return;
+  }
+  byAccount.delete(key);
   if (byAccount.size === 0) {
     admissions.delete(channel);
   }
@@ -68,11 +93,11 @@ function resolveChannelEchoAdmission(
   const key = normalizeAdmissionAccountId(accountId);
   const exact = byAccount.get(key);
   if (exact) {
-    return exact;
+    return exact.admission;
   }
   // Sole-predicate fallback only for a wildcard target (no pinned account).
   if (key === "" && byAccount.size === 1) {
-    return [...byAccount.values()][0];
+    return [...byAccount.values()][0].admission;
   }
   return undefined;
 }

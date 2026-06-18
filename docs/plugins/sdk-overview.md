@@ -178,32 +178,37 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 ### Channel mirror dispatcher
 
 The pin-from-here **mirror dispatcher** and **echo-admission** registries are
-exported from `openclaw/plugin-sdk/channel-outbound`:
+reached through an **owner-scoped registrar** from
+`openclaw/plugin-sdk/channel-outbound`:
 
 ```ts
-import {
-  registerChannelMirrorDispatcher,
-  unregisterChannelMirrorDispatcher,
-  type MirrorDispatcher,
-  registerChannelEchoAdmission,
-  unregisterChannelEchoAdmission,
-  type ChannelEchoAdmission,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelOutboundRegistrar } from "openclaw/plugin-sdk/channel-outbound";
+
+// `owner` is your plugin's stable identity; entries you register can only be
+// replaced or removed by this same owner.
+const outbound = createChannelOutboundRegistrar(myPluginId);
+
+outbound.registerMirrorDispatcher("telegram", accountId, dispatcher);
+outbound.registerEchoAdmission("telegram", accountId, admission);
+// on account stop:
+outbound.unregisterMirrorDispatcher("telegram", accountId);
+outbound.unregisterEchoAdmission("telegram", accountId);
 ```
 
-A channel registers **per account** (last-wins, `unregister*` on stop, fail
-closed). `registerChannelMirrorDispatcher` hands the channel a bus-sourced
-`replyResolver` so a pinned target's turn renders + persists through that
-channel's own dispatch under its own config; `registerChannelEchoAdmission`
+A channel registers **per account** (last-wins **for the same owner**,
+`unregister*` on stop, fail closed). `registerMirrorDispatcher` hands the channel
+a bus-sourced `replyResolver` so a pinned target's turn renders + persists
+through that channel's own dispatch under its own config; `registerEchoAdmission`
 gates the channel-agnostic prompt/post-hoc echo path on the destination's live
 enablement, so a revoked group/topic/DM stops receiving **both** the native
 mirror and the echo fallback.
 
-> **Maintainer note (open):** these are global, caller-keyed registries with no
-> per-plugin ownership enforcement — a caller could replace or unregister
-> another channel's handler. A maintainer decision is owed on whether to keep
-> them as a public seam, hand them out through an owner-scoped registrar, or keep
-> them internal. Only the bundled telegram channel uses them today.
+> **Ownership:** registration is owner-scoped. The registrar binds your plugin
+> identity, and a `(channel, account)` entry can only be replaced or unregistered
+> by the owner that created it — an installed plugin cannot hijack or remove
+> another plugin/account's mirror or admission handler. The previously-global,
+> caller-keyed `register*`/`unregister*` functions are no longer part of the
+> public SDK surface; use the registrar instead.
 
 ### Host hooks for workflow plugins
 

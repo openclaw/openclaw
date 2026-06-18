@@ -313,7 +313,7 @@ describe("fireEchoDeliveries", () => {
     // The channel-agnostic echo send bypasses the channel's own inbound admission
     // gate, so a disabled (revoked) destination would still receive echoes. The
     // admission predicate makes the echo path honor live enablement: fail closed.
-    registerChannelEchoAdmission("telegram", "default", () => false);
+    registerChannelEchoAdmission("test-owner", "telegram", "default", () => false);
     const entry = makeEntry([
       makeTarget({ channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 }),
     ]);
@@ -333,7 +333,7 @@ describe("fireEchoDeliveries", () => {
   });
 
   it("delivers when the channel predicate admits the target", async () => {
-    registerChannelEchoAdmission("telegram", "default", () => true);
+    registerChannelEchoAdmission("test-owner", "telegram", "default", () => true);
     const entry = makeEntry([
       makeTarget({ channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 }),
     ]);
