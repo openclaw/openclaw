@@ -105,6 +105,25 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+export type MessageSendingHookContext = {
+  /** Recipient identifier */
+  to: string;
+  /** Message content */
+  content: string;
+  /** Channel identifier (for example "chat" or "support-chat") */
+  channelId: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+};
+
+export type MessageSendingHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "sending";
+  context: MessageSendingHookContext;
+};
+
 type MessageEnrichedBodyHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
