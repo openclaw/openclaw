@@ -191,9 +191,6 @@ describe("provider attribution", () => {
         "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
       },
     });
-    expect(policy.headers).toEqual({
-      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
-    });
   });
 
   it("normalizes aliases when resolving provider policy headers", () => {
