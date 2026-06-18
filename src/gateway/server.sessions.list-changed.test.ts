@@ -664,6 +664,70 @@ test("sessions.compact scopes selected global truncation to the requested agent"
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
+test("sessions.compact trims default global agent when no agentId is supplied", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    agentId: "main",
+    reason: "compact",
+    compacted: true,
+  });
+  await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe("main two\n");
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    "work one\nwork two\n",
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact keeps manual trim no-op response shape", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 5,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 2 });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    "work one\nwork two\n",
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact keeps manual trim no-transcript response shape", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore();
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, {
+    ok: true,
+    key: "global",
+    compacted: false,
+    reason: "no transcript",
+  });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
 test("sessions.compact passes the selected global agent into embedded compaction", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
   const { responsePayload } = await invokeSessionsCompact({

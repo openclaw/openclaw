@@ -219,6 +219,12 @@ function isSourceFile(filePath) {
   return sourceFileExtensions.has(path.extname(filePath));
 }
 
+function isGeneratedAssetSourceFile(filePath) {
+  return /(?:^|\/)extensions\/[^/]+\/assets\/[^/]+\.[cm]?js$/u.test(
+    filePath.replaceAll(path.sep, "/"),
+  );
+}
+
 function isTestLikeSourceFile(filePath) {
   return sourceTestSuffixes.some((suffix) => filePath.endsWith(suffix));
 }
@@ -235,7 +241,11 @@ async function collectSourceFiles(targetPath) {
   }
 
   if (stat.isFile()) {
-    return isSourceFile(targetPath) && !isTestLikeSourceFile(targetPath) ? [targetPath] : [];
+    return isSourceFile(targetPath) &&
+      !isTestLikeSourceFile(targetPath) &&
+      !isGeneratedAssetSourceFile(targetPath)
+      ? [targetPath]
+      : [];
   }
 
   const entries = await fs.readdir(targetPath, { withFileTypes: true });
@@ -249,7 +259,12 @@ async function collectSourceFiles(targetPath) {
       files.push(...(await collectSourceFiles(entryPath)));
       continue;
     }
-    if (entry.isFile() && isSourceFile(entryPath) && !isTestLikeSourceFile(entryPath)) {
+    if (
+      entry.isFile() &&
+      isSourceFile(entryPath) &&
+      !isTestLikeSourceFile(entryPath) &&
+      !isGeneratedAssetSourceFile(entryPath)
+    ) {
       files.push(entryPath);
     }
   }

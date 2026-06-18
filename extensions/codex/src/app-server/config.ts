@@ -28,6 +28,8 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+export type CodexAppServerConnectionClass = "local-loopback" | "remote";
+export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -170,6 +172,9 @@ export type CodexAppServerStartOptions = {
 
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
+  connectionClass: CodexAppServerConnectionClass;
+  remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
+  remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
@@ -209,6 +214,7 @@ export type CodexPluginConfig = {
     authToken?: string;
     headers?: Record<string, string>;
     clearEnv?: string[];
+    remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
@@ -242,6 +248,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
+  "remoteWorkspaceRoot",
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
@@ -309,6 +316,7 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
+const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
@@ -382,6 +390,7 @@ const codexPluginConfigSchema = z
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
+        remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
@@ -524,6 +533,9 @@ export function resolveCodexAppServerRuntimeOptions(
   const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
+  const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
+  const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
+  const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
     execPolicy: params.execPolicy,
@@ -616,6 +628,11 @@ export function resolveCodexAppServerRuntimeOptions(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
     );
   }
+  assertCodexAppServerConnectionClassConfig({
+    connectionClass,
+    authToken,
+    headers,
+  });
 
   const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
   const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
@@ -643,6 +660,9 @@ export function resolveCodexAppServerRuntimeOptions(
       headers,
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
+    connectionClass,
+    remoteAppsSubstrate,
+    ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
@@ -1009,6 +1029,71 @@ export function withMcpElicitationsApprovalPolicy(
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
+}
+
+function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
+  return readNonEmptyString(value);
+}
+
+function inferCodexAppServerConnectionClass(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+}): CodexAppServerConnectionClass {
+  if (params.transport !== "websocket") {
+    return "local-loopback";
+  }
+  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+}
+
+function assertCodexAppServerConnectionClassConfig(params: {
+  connectionClass: CodexAppServerConnectionClass;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  if (
+    params.connectionClass === "remote" &&
+    !hasIdentityBearingWebSocketAuth({
+      authToken: params.authToken,
+      headers: params.headers,
+    })
+  ) {
+    throw new Error(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
+  }
+}
+
+function isLoopbackWebSocketUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.startsWith("127.")
+  );
+}
+
+function hasIdentityBearingWebSocketAuth(params: {
+  authToken?: string;
+  headers: Record<string, string>;
+}): boolean {
+  if (readNonEmptyString(params.authToken)) {
+    return true;
+  }
+  return Object.entries(params.headers).some(
+    ([key, value]) =>
+      key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
+  );
 }
 
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {

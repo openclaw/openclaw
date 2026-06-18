@@ -31,6 +31,7 @@ const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
@@ -380,47 +381,92 @@ export function runCommand(command, args, options = {}) {
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
-      clearTimeout(forceKillTimer);
-      void stopResourceSampling().then((resourceSampleFailure) => {
-        if (!timedOut && status === 0) {
-          if (resourceSampleFailure) {
-            reject(resourceSampleFailure);
+      const finish = () => {
+        clearTimeout(forceKillTimer);
+        void stopResourceSampling().then((resourceSampleFailure) => {
+          if (!timedOut && status === 0) {
+            if (resourceSampleFailure) {
+              reject(resourceSampleFailure);
+              return;
+            }
+            resolve({
+              stdout: stdout.text,
+              stderr: stderr.text,
+              stdoutTruncatedChars: stdout.truncatedChars,
+              stderrTruncatedChars: stderr.truncatedChars,
+            });
             return;
           }
-          resolve({
-            stdout: stdout.text,
-            stderr: stderr.text,
-            stdoutTruncatedChars: stdout.truncatedChars,
-            stderrTruncatedChars: stderr.truncatedChars,
-          });
-          return;
-        }
-        const detail = [
-          formatCapturedOutput("stdout", stdout),
-          formatCapturedOutput("stderr", stderr),
-        ]
-          .filter(Boolean)
-          .join("\n")
-          .trim();
-        const failure = timedOut
-          ? `timed out after ${timeoutMs}ms`
-          : `failed with ${signal || status}`;
-        reject(
-          Object.assign(
-            new Error(
-              `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          const detail = [
+            formatCapturedOutput("stdout", stdout),
+            formatCapturedOutput("stderr", stderr),
+          ]
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+          const failure = timedOut
+            ? `timed out after ${timeoutMs}ms`
+            : `failed with ${signal || status}`;
+          reject(
+            Object.assign(
+              new Error(
+                `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+              ),
+              {
+                signal,
+                status,
+                stderr: stderr.text,
+                stdout: stdout.text,
+              },
             ),
-            {
-              signal,
-              status,
-              stderr: stderr.text,
-              stdout: stdout.text,
-            },
-          ),
-        );
-      });
+          );
+        });
+      };
+
+      if (timedOut) {
+        void finishTimedOutCommandProcessTree(child, timeoutKillGraceMs).then(finish, finish);
+        return;
+      }
+
+      finish();
     });
   });
+}
+
+async function finishTimedOutCommandProcessTree(child, timeoutKillGraceMs) {
+  if (!commandProcessTreeIsAlive(child)) {
+    return;
+  }
+  signalProcessGroup(child, "SIGKILL");
+  await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+async function waitForCommandProcessTreeExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!commandProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !commandProcessTreeIsAlive(child);
+}
+
+function commandProcessTreeIsAlive(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return !hasChildExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
 }
 
 function signalProcessGroup(child, signal) {
@@ -1021,7 +1067,8 @@ async function startGateway(runner, port, env, logPath) {
 }
 
 export async function stopGateway(child, options = {}) {
-  if (!child || hasChildExited(child)) {
+  const killProcess = options.killProcess ?? defaultKillProcess;
+  if (!child || !isGatewayAlive(child, killProcess)) {
     return;
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
@@ -1029,18 +1076,21 @@ export async function stopGateway(child, options = {}) {
   const exited = new Promise((resolve) => {
     child.once("exit", resolve);
   });
-  const waitForExit = async (ms) =>
-    hasChildExited(child)
-      ? true
-      : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
+  const waitForExit = async (ms) => {
+    if (!isGatewayAlive(child, killProcess)) {
+      return true;
+    }
+    await Promise.race([exited, delay(ms)]);
+    return !isGatewayAlive(child, killProcess);
+  };
 
-  if (!signalGateway(child, "SIGTERM")) {
+  if (!signalGateway(child, "SIGTERM", killProcess)) {
     return;
   }
   if (await waitForExit(teardownGraceMs)) {
     return;
   }
-  if (!signalGateway(child, "SIGKILL")) {
+  if (!signalGateway(child, "SIGKILL", killProcess)) {
     return;
   }
   if (await waitForExit(killGraceMs)) {
@@ -1051,6 +1101,25 @@ export async function stopGateway(child, options = {}) {
 
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
+}
+
+function defaultKillProcess(pid, signal) {
+  return process.kill(pid, signal);
+}
+
+function isGatewayAlive(child, killProcess) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      killProcess(-child.pid, 0);
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return false;
+      }
+      throw error;
+    }
+  }
+  return !hasChildExited(child);
 }
 
 function createChildExitPromise(child) {
@@ -1069,10 +1138,10 @@ function releaseUnsettledGatewayChild(child) {
   child.unref?.();
 }
 
-function signalGateway(child, signal) {
+function signalGateway(child, signal, killProcess = defaultKillProcess) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
-      process.kill(-child.pid, signal);
+      killProcess(-child.pid, signal);
       return true;
     } catch (error) {
       if (error?.code === "ESRCH") {

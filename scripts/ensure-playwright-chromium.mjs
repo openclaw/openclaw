@@ -8,16 +8,7 @@ import { chromium } from "playwright";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const playwrightInstallArgs = ["--dir", "ui", "exec", "playwright", "install", "chromium"];
-const playwrightInstallWithDepsArgs = [
-  "--dir",
-  "ui",
-  "exec",
-  "playwright",
-  "install",
-  "--with-deps",
-  "chromium",
-];
+const playwrightInstallBaseArgs = ["--dir", "ui", "exec", "playwright", "install"];
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 /**
  * System Chromium executable paths used before downloading Playwright browsers.
@@ -59,12 +50,17 @@ export function resolveSystemChromiumExecutablePath(
  */
 export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
+  const targets = options.targets ?? ["chromium"];
   return resolvePnpmRunner({
     comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
     env,
     npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,
-    pnpmArgs: options.withDeps ? playwrightInstallWithDepsArgs : playwrightInstallArgs,
+    pnpmArgs: [
+      ...playwrightInstallBaseArgs,
+      ...(options.withDeps ? ["--with-deps"] : []),
+      ...targets,
+    ],
   });
 }
 
@@ -122,10 +118,37 @@ export function ensurePlaywrightChromium(options = {}) {
   const existsSync = options.existsSync ?? existsSyncImpl;
   const log = options.log ?? console.error;
   const spawnSync = options.spawnSync ?? spawnSyncImpl;
+  const runPlaywrightInstall = (targets = ["chromium"], withDeps = false) => {
+    const runner = resolvePlaywrightInstallRunner({
+      comSpec: options.comSpec,
+      env,
+      platform: options.platform,
+      targets,
+      withDeps,
+    });
+    const result = spawnSync(runner.command, runner.args, {
+      cwd: options.cwd ?? repoRoot,
+      env,
+      shell: runner.shell,
+      stdio: options.stdio ?? "inherit",
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    });
+    return result.status ?? 1;
+  };
+  const ensureFfmpeg = () => {
+    if (!options.ensureFfmpeg) {
+      return 0;
+    }
+    const status = runPlaywrightInstall(["ffmpeg"]);
+    if (status !== 0) {
+      log(`[ui-e2e] Playwright ffmpeg install failed with status ${status}.`);
+    }
+    return status;
+  };
 
   if (executableOverride) {
     if (existsSync(executableOverride) && canRunChromiumExecutable(executableOverride, spawnSync)) {
-      return 0;
+      return ensureFfmpeg();
     }
     log(
       `[ui-e2e] ${executableOverrideEnvKey} points to ${executableOverride}, but that browser is not runnable.`,
@@ -134,14 +157,14 @@ export function ensurePlaywrightChromium(options = {}) {
   }
 
   if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
-    return 0;
+    return ensureFfmpeg();
   }
 
   const systemExecutablePath =
     options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync, spawnSync);
   if (systemExecutablePath && canRunChromiumExecutable(systemExecutablePath, spawnSync)) {
     log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
-    return 0;
+    return ensureFfmpeg();
   }
 
   if (env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1") {
@@ -157,35 +180,18 @@ export function ensurePlaywrightChromium(options = {}) {
     getuid: options.getuid,
     platform: options.platform,
   });
-  const runPlaywrightInstall = (withDeps = false) => {
-    const runner = resolvePlaywrightInstallRunner({
-      comSpec: options.comSpec,
-      env,
-      platform: options.platform,
-      withDeps,
-    });
-    const result = spawnSync(runner.command, runner.args, {
-      cwd: options.cwd ?? repoRoot,
-      env,
-      shell: runner.shell,
-      stdio: options.stdio ?? "inherit",
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
-    });
-    return result.status ?? 1;
-  };
-
   const status = runPlaywrightInstall();
   if (status !== 0) {
     if (canInstallSystemDependencies) {
       log(
         `[ui-e2e] Chromium install failed in a Linux CI/root lane; installing Linux system dependencies.`,
       );
-      const depsStatus = runPlaywrightInstall(true);
+      const depsStatus = runPlaywrightInstall(["chromium"], true);
       if (depsStatus !== 0) {
         return depsStatus;
       }
       if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
-        return 0;
+        return ensureFfmpeg();
       }
       log(
         `[ui-e2e] Playwright install completed but Chromium is still not runnable at ${executablePath}.`,
@@ -200,12 +206,12 @@ export function ensurePlaywrightChromium(options = {}) {
       log(
         `[ui-e2e] Chromium is installed but still cannot start; installing Linux system dependencies.`,
       );
-      const depsStatus = runPlaywrightInstall(true);
+      const depsStatus = runPlaywrightInstall(["chromium"], true);
       if (depsStatus !== 0) {
         return depsStatus;
       }
       if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
-        return 0;
+        return ensureFfmpeg();
       }
     }
     log(
@@ -213,9 +219,9 @@ export function ensurePlaywrightChromium(options = {}) {
     );
     return 1;
   }
-  return 0;
+  return ensureFfmpeg();
 }
 
 if (isDirectScriptExecution()) {
-  process.exitCode = ensurePlaywrightChromium();
+  process.exitCode = ensurePlaywrightChromium({ ensureFfmpeg: true });
 }

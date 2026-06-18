@@ -57,6 +57,7 @@ import {
   usesBuiltOpenClawEntry,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -249,6 +250,48 @@ describe("kitchen-sink RPC gateway teardown", () => {
     ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: 0,
+      kill: vi.fn(),
+      pid: 12347,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn(() => true);
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 1 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12347, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12347, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  posixIt("rechecks process group liveness after the wrapper exits during teardown", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      kill: vi.fn(),
+      pid: 12348,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+      if (signal === "SIGTERM") {
+        setTimeout(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        }, 0);
+      }
+      return true;
+    });
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 100 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12348, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12348, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12348, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("fails readiness waits before polling after signaled gateway exits", async () => {
@@ -717,6 +760,52 @@ describe("kitchen-sink RPC caller loading", () => {
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("kills descendants when timed commands exit cleanly after SIGTERM", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
+    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    let grandchildPid = 0;
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+      timeoutKillGraceMs: 2_000,
+      timeoutMs: 100,
+    });
+
+    try {
+      await waitFor(() => existsSync(grandchildPidPath));
+      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+
+      await expect(runPromise).rejects.toThrow("timed out after 100ms");
+      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+    } finally {
+      await runPromise.catch(() => {});
+      if (grandchildPid && isProcessAlive(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL");
+      }
+      cleanupTempDirs(tempDirs);
     }
   });
 });

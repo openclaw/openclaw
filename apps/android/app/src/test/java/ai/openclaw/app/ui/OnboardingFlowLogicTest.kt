@@ -112,6 +112,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Gateway error: pairing required; approval in progress",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
   }
@@ -124,6 +125,7 @@ class OnboardingFlowLogicTest {
         ready = true,
         statusText = "Gateway error: pairing required",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
   }
@@ -162,6 +164,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connecting…",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -184,6 +187,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connecting…",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -206,6 +210,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Offline",
         connectSettling = true,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
   }
@@ -218,6 +223,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connected (node offline)",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
   }
@@ -230,6 +236,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Gateway error: connection refused",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
   }
