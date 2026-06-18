@@ -2332,7 +2332,12 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toHaveLength(1);
     expect(host.chatQueue[0]?.text).toBe("same prompt");
     expect(host.chatQueue[0]?.sendState).toBe("sending");
-    expect(host.chatMessages).toStrictEqual([]);
+    // FIX #94479: User message is now appended before the network request.
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "same prompt" }],
+    });
 
     const queuedRunId = host.chatQueue[0]?.sendRunId;
     sent.resolve({ runId: queuedRunId, status: "started" });
@@ -2360,7 +2365,8 @@ describe("handleSendChat", () => {
     await Promise.resolve();
 
     expect(host.chatMessage).toBe("");
-    expect(host.chatMessages).toStrictEqual([]);
+    // FIX #94479: User message is now appended before the network request.
+    expect(host.chatMessages).toHaveLength(1);
     expect(host.chatQueue).toHaveLength(1);
     expect(host.chatQueue[0]).toMatchObject({
       text: "do not lose this",
@@ -2375,6 +2381,7 @@ describe("handleSendChat", () => {
 
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe(runId);
+    // User message should still be present (no rollback since send succeeded).
     expect(host.chatMessages).toHaveLength(1);
     const userMessage = requireRecord(host.chatMessages[0], "user message");
     expect(userMessage.role).toBe("user");
@@ -2648,6 +2655,9 @@ describe("handleSendChat", () => {
     );
     expect(payload.sessionKey).toBe("global");
     expect(payload.agentId).toBe("work");
+    // FIX #94479: User message is NOT appended here because the session is
+    // no longer visible (agent switched from "work" to "main"). The message
+    // will appear when the user switches back to the "work" global session.
     expect(host.chatMessages).toStrictEqual([]);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();

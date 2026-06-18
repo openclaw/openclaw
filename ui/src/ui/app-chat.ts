@@ -1052,6 +1052,21 @@ async function sendQueuedChatMessage(
     });
   }
 
+  // FIX #94479: Append user message before the network request so it appears
+  // immediately in the chat, without waiting for the ACK or streaming response.
+  let userMessageAppended = false;
+  let previousChatMessages: unknown[] | null = null;
+  if (isVisibleSession()) {
+    previousChatMessages = host.chatMessages;
+    appendUserChatMessage(
+      host as unknown as ChatState,
+      message,
+      hasAttachments ? attachments : undefined,
+      startedAt,
+    );
+    userMessageAppended = true;
+  }
+
   try {
     const ack = prepared.skillWorkshopRevision
       ? await requestSkillWorkshopRevisionChatSend(host as unknown as ChatState, {
@@ -1078,13 +1093,11 @@ async function sendQueuedChatMessage(
       ...chatSendAckServerTimingEventFields(ack),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
+    // FIX #94479: Only process ACK effects if the session is still visible.
+    // The user message was already appended before the network request above,
+    // so this guard only prevents stale ACK state (e.g. chatRunId) from
+    // leaking into a different session the user has since switched to.
     if (isVisibleSession()) {
-      appendUserChatMessage(
-        host as unknown as ChatState,
-        message,
-        hasAttachments ? attachments : undefined,
-        startedAt,
-      );
       if (ack.status === "ok") {
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
@@ -1115,7 +1128,7 @@ async function sendQueuedChatMessage(
             startedAt;
         }
       }
-    }
+    } // end if (isVisibleSession()) — guard ACK effects to current session
     if (prepared.refreshSessions) {
       const refreshTarget = {
         sessionKey,
@@ -1133,6 +1146,12 @@ async function sendQueuedChatMessage(
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
     return "sent";
   } catch (err) {
+    // FIX #94479: Rollback the user message if the send failed, so the queue
+    // item (pending-send) continues to represent the pending message without
+    // a duplicate in chatMessages.
+    if (userMessageAppended && previousChatMessages !== null) {
+      host.chatMessages = previousChatMessages;
+    }
     const error = formatConnectError(err);
     if (isRecoverableChatSendError(err, error)) {
       updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
