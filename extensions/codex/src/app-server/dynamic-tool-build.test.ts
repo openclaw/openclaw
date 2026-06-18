@@ -1397,18 +1397,23 @@ describe("Codex app-server dynamic tool build", () => {
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = [];
     params.runtimePlan = createCodexRuntimePlanFixture();
-    setOpenClawCodingToolsFactoryForTests((options) =>
-      options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
-    );
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")];
+    });
 
-    const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
+    expect(shouldForceMessageTool(params)).toBe(false);
     const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
       ignoreDisableMessageTool: true,
       ignoreRuntimePlan: true,
     });
 
-    expect(availableTools.map((tool) => tool.name)).not.toContain("message");
     expect(registeredTools.map((tool) => tool.name)).toContain("message");
+    expect(factoryOptions[0]).toMatchObject({
+      disableMessageTool: false,
+      forceMessageTool: true,
+    });
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
