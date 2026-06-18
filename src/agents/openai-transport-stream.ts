@@ -2679,14 +2679,27 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           model as OpenAIModeModel,
           options as OpenAICompletionsOptions | undefined,
         );
+        // Provider-scoped stall guard: only for opencode-go, which is known
+        // to intermittently stall after finish_reason without sending [DONE].
+        // The abort controller is wired into the HTTP request signal so that
+        // abort() reliably cancels the underlying async iterator.
+        let stallAbortController: AbortController | undefined;
+        let requestSignal = options?.signal;
+        if (model.provider === "opencode-go") {
+          stallAbortController = new AbortController();
+          requestSignal = options?.signal
+            ? AbortSignal.any([options.signal, stallAbortController.signal])
+            : stallAbortController.signal;
+        }
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, options?.signal),
+          buildOpenAISdkRequestOptions(model, requestSignal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
-          signal: options?.signal,
+          signal: requestSignal,
           emitReasoning,
+          stallAbortController,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -2704,13 +2717,19 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
 }
 
 /**
- * Wraps an OpenAI completions stream with a stall guard.
+ * Wraps an OpenAI completions stream with a stall guard that aborts the
+ * underlying HTTP request when a provider stalls after finish_reason.
+ *
  * After seeing finish_reason on a chunk, if no further chunk arrives within
- * STALL_TIMEOUT_MS the iteration ends cleanly. This handles providers that
- * deliver all streaming tokens but then fail to send the final [DONE] or
- * stream-close signal (e.g. opencode-go deepseek-v4 endpoint).
+ * STALL_TIMEOUT_MS the HTTP request is aborted via the provided controller.
+ * This reliably cancels the stuck async iterator (instead of an unreliable
+ * `Promise.race` / `it.return()` approach) because aborting the HTTP connection
+ * causes the pending `it.next()` to reject, which is caught and suppressed so
+ * the stream ends cleanly.
+ *
+ * Provider-scoped: only wired when model.provider === "opencode-go".
  */
-const STALL_TIMEOUT_MS = 15_000;
+const STALL_TIMEOUT_MS = 30_000;
 
 function chunkHasFinishReason(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") return false;
@@ -2719,33 +2738,37 @@ function chunkHasFinishReason(raw: unknown): boolean {
   return Boolean(choice?.finish_reason);
 }
 
-async function* withStreamCompletionGuard(source: AsyncIterable<unknown>): AsyncIterable<unknown> {
+async function* withStreamCompletionGuard(
+  source: AsyncIterable<unknown>,
+  abortController: AbortController,
+): AsyncIterable<unknown> {
   const it = source[Symbol.asyncIterator]();
-  let guardAcquired = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-  // Cleanly end the underlying async iterator and return a done sentinel.
-  const endIteration = (): IteratorResult<unknown> => {
-    guardAcquired = false;
-    void it.return?.().catch(() => {});
-    return { done: true, value: undefined };
+  const clearStallTimer = () => {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+      timeoutId = undefined;
+    }
   };
 
   try {
     for (;;) {
       let result: IteratorResult<unknown>;
 
-      if (guardAcquired) {
-        // Race the next chunk against the stall timeout
-        result = await Promise.race([
-          it.next(),
-          new Promise<IteratorResult<unknown>>((resolve) => {
-            setTimeout(() => resolve(endIteration()), STALL_TIMEOUT_MS);
-          }),
-        ]);
-        guardAcquired = false;
-      } else {
+      try {
         result = await it.next();
+      } catch (err) {
+        // If the request was aborted due to stall, end cleanly.
+        // The HTTP abort causes the pending it.next() to reject with
+        // an AbortError — we catch it and return normally.
+        if (abortController.signal.aborted) {
+          return;
+        }
+        throw err;
       }
+
+      clearStallTimer();
 
       if (result.done) {
         return;
@@ -2753,16 +2776,24 @@ async function* withStreamCompletionGuard(source: AsyncIterable<unknown>): Async
 
       yield result.value;
 
-      // Arm the guard for the NEXT iteration if this chunk carries a
-      // finish_reason — the model signalled completion so no more data
-      // should arrive. If the provider keeps the connection open, the
-      // guard will end the iteration cleanly after the timeout.
+      // Arm the stall guard: after finish_reason, only a final usage-only
+      // chunk or stream end is expected. If neither arrives within the
+      // generous timeout, abort the HTTP request to cancel the pending
+      // it.next(). The 30s window accounts for providers that send a
+      // delayed usage-only chunk after finish_reason.
       if (chunkHasFinishReason(result.value)) {
-        guardAcquired = true;
+        timeoutId = setTimeout(() => {
+          timeoutId = undefined;
+          abortController.abort(
+            new Error(
+              `Stream stalled after finish_reason — no [DONE] or usage chunk within ${STALL_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, STALL_TIMEOUT_MS);
       }
     }
   } finally {
-    void it.return?.().catch(() => {});
+    clearStallTimer();
   }
 }
 
@@ -2771,7 +2802,14 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal; emitReasoning?: boolean },
+  options?: {
+    signal?: AbortSignal;
+    emitReasoning?: boolean;
+    /** When provided, wraps the stream with a stall guard that aborts the
+     *  HTTP request if no data arrives after finish_reason. Currently only
+     *  used for the opencode-go provider (provider-scoped). */
+    stallAbortController?: AbortController;
+  },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -3026,7 +3064,14 @@ async function processOpenAICompletionsStream(
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
-  const guardedStream = withStreamCompletionGuard(responseStream as AsyncIterable<unknown>);
+  // Only apply the stall guard when an abort controller is provided
+  // (currently only for opencode-go — provider-scoped).
+  const guardedStream = options?.stallAbortController
+    ? withStreamCompletionGuard(
+        responseStream as AsyncIterable<unknown>,
+        options.stallAbortController,
+      )
+    : (responseStream as AsyncIterable<unknown>);
   for await (const rawChunk of guardedStream) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;

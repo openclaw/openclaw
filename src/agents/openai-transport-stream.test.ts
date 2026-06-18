@@ -7610,7 +7610,7 @@ describe("openai transport stream", () => {
   });
 
   describe("withStreamCompletionGuard", () => {
-    it("passes through chunks unchanged for a normal stream", async () => {
+    it("passes through chunks unchanged for a normal stream (non-opencode-go, abort controller unused)", async () => {
       const chunks = [
         { choices: [{ delta: { content: "hello" } }] },
         { choices: [{ delta: { content: " world" }, finish_reason: "stop" }] },
@@ -7619,7 +7619,8 @@ describe("openai transport stream", () => {
         for (const c of chunks) yield c;
       }
       const collected: unknown[] = [];
-      for await (const c of testing.withStreamCompletionGuard(testStream())) {
+      const ac = new AbortController();
+      for await (const c of testing.withStreamCompletionGuard(testStream(), ac)) {
         collected.push(c);
       }
       expect(collected).toStrictEqual(chunks);
