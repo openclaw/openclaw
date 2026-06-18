@@ -135,9 +135,13 @@ const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL"] as const;
 
 // Errno tokens may appear only inside the error `message` when undici wraps a
 // connect failure as `fetch failed` without propagating `.code` onto the cause
-// chain. Match the well-known tokens so detection is not dependent on undici's
-// cause propagation.
-const ERROR_CODE_MESSAGE_PATTERN = /\b(EADDRNOTAVAIL|ETIMEDOUT|ENETDOWN|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAFNOSUPPORT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)\b/i;
+// chain. Only match the local-socket-failure errno here (not the fallback-retry
+// codes), so that a message-only `ECONNREFUSED` or `EHOSTUNREACH` envelope still
+// falls through to the code-less `fetch failed` branch and keeps the existing
+// IP-rotation behavior. The fallback-retry codes already match via `.code` on
+// the cause chain; matching them from message text too would change the
+// classification for envelopes where undici omits `.code`.
+const LOCAL_SOCKET_FAILURE_MESSAGE_PATTERN = /\b(EADDRNOTAVAIL|EAFNOSUPPORT)\b/i;
 
 type TelegramTransportFallbackContext = {
   message: string;
@@ -446,7 +450,7 @@ function collectErrorCodes(err: unknown): Set<string> {
       }
       const message = (current as { message?: unknown }).message;
       if (typeof message === "string") {
-        const matched = message.match(ERROR_CODE_MESSAGE_PATTERN);
+        const matched = message.match(LOCAL_SOCKET_FAILURE_MESSAGE_PATTERN);
         if (matched && matched[1]) {
           codes.add(matched[1].toUpperCase());
         }

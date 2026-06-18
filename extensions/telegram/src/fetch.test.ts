@@ -1371,6 +1371,18 @@ describe("shouldRetryTelegramTransportFallback", () => {
     expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
   });
 
+  it("still retries for ECONNREFUSED embedded only in the message (preserves existing IP-rotation behavior)", () => {
+    // A message-only `ECONNREFUSED` envelope previously fell through to the
+    // code-less `fetch failed` branch and triggered IP rotation. The message
+    // errno parser must not extract `ECONNREFUSED` from the message (it is not
+    // a local-socket-failure code), otherwise `ctx.codes.size > 0` would block
+    // the fallback for a remote-reachability problem that IP rotation can fix.
+    const err = new TypeError("fetch failed: connect ECONNREFUSED 149.154.167.220:443");
+
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(true);
+    expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+  });
+
   it("still retries for code-less fetch failed errors with no errno token", () => {
     expect(shouldRetryTelegramTransportFallback(new TypeError("fetch failed"))).toBe(true);
     expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
