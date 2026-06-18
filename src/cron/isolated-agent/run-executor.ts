@@ -315,10 +315,11 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
-            // Cron jobs run on a schedule with no chat recipient — an empty assistant
-            // response means "nothing to report", not a failure.  Allow silent replies
-            // so condition-check-only cron jobs don't surface spurious FailoverErrors.
-            allowEmptyAssistantReplyAsSilent: true,
+            // When delivery was not requested (--no-deliver), an empty assistant
+            // reply means "nothing to report" — treat it as silent success instead
+            // of throwing FailoverError.  With delivery enabled, empty output is
+            // still an error because someone/something is expecting content.
+            allowEmptyAssistantReplyAsSilent: !params.deliveryRequested,
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
@@ -375,9 +376,9 @@ export function createCronPromptExecutor(params: {
           prompt: modelPrompt,
           transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
           lane: resolveCronAgentLane(params.lane),
-          // Same rationale as the CLI runner path above — empty cron replies are
-          // intentional silence, not errors.
-          allowEmptyAssistantReplyAsSilent: true,
+          // Same gating as the CLI runner path above — only silence when no
+          // delivery target is expecting output.
+          allowEmptyAssistantReplyAsSilent: !params.deliveryRequested,
           provider: providerOverride,
           model: modelOverride,
           modelFallbacksOverride: cronFallbacksOverride,
