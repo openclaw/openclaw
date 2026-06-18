@@ -20,6 +20,7 @@ import path from "node:path";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
   DEFAULT_GIT_CHANNEL,
@@ -85,29 +86,12 @@ const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, time
   return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
 };
 
-function normalizeOptionalString(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-// A no-op git update (same SHA and version) has nothing new to converge against,
-// so skip finalize to avoid an unnecessary doctor/convergence run. Mirrors the
-// CLI's `shouldResumePostCoreUpdateInFreshProcess` git resume gate.
-function gitCoreChanged(result: UpdateRunResult): boolean {
-  const beforeSha = normalizeOptionalString(result.before?.sha);
-  const afterSha = normalizeOptionalString(result.after?.sha);
-  if (beforeSha && afterSha && beforeSha !== afterSha) {
-    return true;
-  }
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  const afterVersion = normalizeOptionalString(result.after?.version);
-  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
-}
-
 // Only git/source updates routed through `runGatewayUpdate` defer-and-drop
 // plugin convergence. Package-manager/global installs already converge because
 // the RPC routes them through `startManagedServiceUpdateHandoff`, which
-// re-enters the full `openclaw update` CLI.
+// re-enters the full `openclaw update` CLI. Re-run convergence on no-op retries:
+// an earlier finalizer failure must not be bypassed by a same-SHA update that
+// would otherwise restart the gateway with stale plugins.
 function isGitUpdateNeedingFinalize(
   result: UpdateRunResult,
 ): result is UpdateRunResult & { root: string } {
@@ -115,8 +99,7 @@ function isGitUpdateNeedingFinalize(
     result.status === "ok" &&
     result.mode === "git" &&
     typeof result.root === "string" &&
-    result.root.length > 0 &&
-    gitCoreChanged(result)
+    result.root.length > 0
   );
 }
 
@@ -240,7 +223,7 @@ export function foldPostCoreFinalizeIntoResult(
         cwd: result.root ?? process.cwd(),
         durationMs: 0,
         exitCode: outcome.reason === "nonzero-exit" ? (outcome.exitCode ?? 1) : 1,
-        ...(outcome.message ? { stderrTail: outcome.message } : {}),
+        ...(outcome.message ? { stderrTail: trimLogTail(outcome.message) } : {}),
       },
     ],
   };

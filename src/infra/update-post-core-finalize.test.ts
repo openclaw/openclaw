@@ -41,8 +41,8 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(spawnFinalize).not.toHaveBeenCalled();
   });
 
-  it("skips a no-op git update with no core change", async () => {
-    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>();
+  it("retries finalization after a no-op git update", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     const outcome = await runPostCoreFinalizeAfterGatewayUpdate({
       result: gitOkResult({
         before: { sha: "same", version: "2026.6.1" },
@@ -51,8 +51,8 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       resolveEntrypoint: resolveEntrypointOk,
       spawnFinalize,
     });
-    expect(outcome).toEqual({ status: "skipped", reason: "not-git-update" });
-    expect(spawnFinalize).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ status: "ok", entrypoint: ENTRYPOINT });
+    expect(spawnFinalize).toHaveBeenCalledTimes(1);
   });
 
   it("skips when no built entrypoint is found", async () => {
@@ -206,5 +206,16 @@ describe("foldPostCoreFinalizeIntoResult", () => {
     });
     // Core update metadata is preserved for the sentinel.
     expect(folded.after).toEqual(result.after);
+  });
+
+  it("bounds finalizer stderr in the update result", () => {
+    const folded = foldPostCoreFinalizeIntoResult(gitOkResult(), {
+      status: "error",
+      reason: "nonzero-exit",
+      entrypoint: ENTRYPOINT,
+      exitCode: 1,
+      message: "x".repeat(8_001),
+    });
+    expect(folded.steps.at(-1)?.stderrTail).toBe(`…${"x".repeat(8_000)}`);
   });
 });
