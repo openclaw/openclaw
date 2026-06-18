@@ -5683,6 +5683,66 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]).not.toHaveProperty("strict");
   });
 
+  it("keeps native responses strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        name?: string;
+        strict?: boolean;
+        parameters?: Record<string, unknown>;
+      }>;
+    };
+
+    expect(params.tools).toEqual([
+      {
+        type: "function",
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+  });
+
   it("still normalizes responses tool parameters when strict is omitted", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -7399,6 +7459,67 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(true);
+  });
+
+  it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        function?: {
+          name?: string;
+          strict?: boolean;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+    };
+
+    expect(params.tools?.map((tool) => tool.function)).toEqual([
+      {
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
   });
 
   it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
