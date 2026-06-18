@@ -223,4 +223,48 @@ describe("feishu bitable write tool schemas", () => {
     expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
     expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
   });
+
+  it("accepts Feishu user field value (array of objects)", () => {
+    // Feishu bitable user fields are arrays of objects: [{id:"ou_xxx"}].
+    // The value schema must accept open objects inside arrays, not just
+    // primitives, to avoid rejecting valid Feishu payloads.
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_record");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+    const serialized = JSON.stringify(parameters);
+
+    // The array branch items must include an open-object option
+    // (additionalProperties: true), not just primitive types.
+    expect(serialized).toContain('"additionalProperties":true');
+    // Verify the array items union has at least 5 branches (primitives + open object)
+    const valueSchema = recordValueSchema(parameters, "fields");
+    const anyOf = (valueSchema as { anyOf?: unknown[] })?.anyOf;
+    const arrayBranch = anyOf?.find(
+      (b) => (b as { type?: string })?.type === "array",
+    ) as { items?: { anyOf?: unknown[] } } | undefined;
+    expect(arrayBranch?.items?.anyOf?.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("accepts Feishu create_field property.options (array of option objects)", () => {
+    // property.options for SingleSelect/MultiSelect fields is [{name:"A"}].
+    // The value schema must allow arrays containing objects.
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_field");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+    const valueSchema = recordValueSchema(parameters, "property");
+
+    const anyOf = (valueSchema as { anyOf?: unknown[] })?.anyOf;
+    const arrayBranch = anyOf?.find(
+      (b) => (b as { type?: string })?.type === "array",
+    ) as { items?: { anyOf?: unknown[] } } | undefined;
+    // Array items must include an open-object branch for option objects
+    const objectBranch = arrayBranch?.items?.anyOf?.find(
+      (b) =>
+        (b as { type?: string })?.type === "object" &&
+        (b as { additionalProperties?: unknown })?.additionalProperties === true,
+    );
+    expect(objectBranch).toBeDefined();
+  });
 });

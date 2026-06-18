@@ -498,12 +498,26 @@ async function updateRecord(
 // Strict JSON Schema (draft 2020-12) validators such as AWS Bedrock reject empty
 // sub-schemas, which fails the entire tool list. Every branch below serializes to
 // a non-empty schema (no bare `{}`).
+//
+// Array items include open objects (not just primitives) because Feishu bitable
+// field values already support arrays of objects for users ([{id:"ou_xxx"}]),
+// attachments, and create-field property.options ([{name:"A"}]). A primitive-only
+// array branch would reject those valid Feishu payloads, narrowing the accepted
+// argument shapes and breaking existing calls.
 const BitableFieldValueSchema = Type.Union([
   Type.String(),
   Type.Number(),
   Type.Boolean(),
   Type.Null(),
-  Type.Array(Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()])),
+  Type.Array(
+    Type.Union([
+      Type.String(),
+      Type.Number(),
+      Type.Boolean(),
+      Type.Null(),
+      Type.Object({}, { additionalProperties: true }),
+    ]),
+  ),
   Type.Object({}, { additionalProperties: true }),
 ]);
 
