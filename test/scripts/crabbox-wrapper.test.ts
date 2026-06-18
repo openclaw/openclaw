@@ -365,6 +365,23 @@ function expectGroupedShellCommand(remoteCommand: string, command: string): void
 const remoteChangedGateEnvPrefix =
   "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
 const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
+const remoteChangedGateFetch =
+  'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main"';
+
+function expectChangedGateGitBootstrap(remoteCommand: string): void {
+  expect(remoteCommand).toContain("command -v git");
+  expect(remoteCommand).toContain(
+    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-abc123}",
+  );
+  expect(remoteCommand).toContain(
+    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"',
+  );
+  expect(remoteCommand).toContain(
+    '[ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]',
+  );
+  expect(remoteCommand).toContain("git init -q");
+  expect(remoteCommand).toContain(remoteChangedGateFetch);
+}
 
 afterAll(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -1985,7 +2002,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(result.stderr).toContain("overlaying local HEAD as worktree changes from origin/main");
     expect(parseFakeCrabboxOutput(result).args.join(" ")).toContain(
-      "if ! git status --short >/dev/null 2>&1; then rm -rf .git;",
+      'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"',
     );
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
@@ -2036,10 +2053,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expectChangedGateGitBootstrap(remoteCommand);
     expect(remoteCommand).toContain("git reset --mixed --quiet refs/remotes/origin/main");
     expect(remoteCommand).toContain("git add -A");
     expect(remoteCommand).toContain("git diff --cached --quiet");
@@ -2047,6 +2061,25 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
+  });
+
+  it("rebuilds stale remote Git metadata before sparse changed gates", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expectChangedGateGitBootstrap(remoteCommand);
   });
 
   it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
@@ -2069,9 +2102,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
@@ -2106,9 +2137,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
@@ -2131,9 +2160,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(
       remoteCommand,
@@ -2247,9 +2274,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toContain(
       `&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; ${shellScript}`,
     );
@@ -2358,9 +2383,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
@@ -2714,9 +2737,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
-    expect(remoteCommand).toContain(
-      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
-    );
+    expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
       /&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; env CI=1 pnpm check:changed$/u,
     );

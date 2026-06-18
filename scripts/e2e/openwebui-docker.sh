@@ -29,6 +29,18 @@ DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-$((PROVIDER
 DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-600s}"
 SMOKE_MODE="${OPENWEBUI_SMOKE_MODE:-${OPENCLAW_OPENWEBUI_SMOKE_MODE:-chat}}"
 
+validate_tcp_port() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    echo "invalid $label: $value" >&2
+    exit 2
+  fi
+}
+
+validate_tcp_port OPENCLAW_OPENWEBUI_GATEWAY_PORT "$PORT"
+validate_tcp_port OPENCLAW_OPENWEBUI_PORT "$WEBUI_PORT"
+
 case "$SMOKE_MODE" in
   chat | models) ;;
   *)
