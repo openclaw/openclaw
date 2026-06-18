@@ -345,7 +345,7 @@ describe("openai-compatible generic embedding provider", () => {
               },
             },
           },
-        } as EmbeddingProviderCreateOptions["config"],
+        } as unknown as EmbeddingProviderCreateOptions["config"],
         remote: { baseUrl: "https://llm.internal/v1" },
       }),
     );
@@ -366,7 +366,7 @@ describe("openai-compatible generic embedding provider", () => {
               },
             },
           },
-        } as EmbeddingProviderCreateOptions["config"],
+        } as unknown as EmbeddingProviderCreateOptions["config"],
         remote: { baseUrl: "https://llm.internal/v1" },
       }),
     );
