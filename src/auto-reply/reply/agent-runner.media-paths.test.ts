@@ -451,6 +451,38 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
+  // A present-but-non-streaming run is stale (finishRun cleared
+  // isStreaming but the entry was never removed from ACTIVE_EMBEDDED_RUNS).
+  // It must NOT divert the inbound into a followup queue whose drain never
+  // fires; the turn has to run now instead of silently blackholing.
+  it("runs now instead of queuing a followup when the active run is stale (not streaming)", async () => {
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "followup" } as QueueSettings,
+        shouldSteer: false,
+        shouldFollowup: true,
+        isActive: true,
+        isRunActive: () => true,
+        isStreaming: false,
+      }),
+    );
+
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("falls back to a queued followup when active steering is rejected", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: false,

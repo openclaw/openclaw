@@ -1276,7 +1276,10 @@ export async function runReplyAgent(params: {
   }
 
   const activeRunQueueAction = resolveActiveRunQueueAction({
-    isActive,
+    // Gate on liveness, not bare presence. A stale (present but
+    // non-streaming) run must not divert this inbound into a followup queue
+    // whose drain never fires; isStreaming stays true for the whole live run.
+    isActive: isActive && isStreaming,
     isHeartbeat,
     shouldFollowup: effectiveShouldFollowup,
     queueMode: activeRunQueueMode,

@@ -1117,6 +1117,14 @@ export async function runPreparedReply(
     };
   };
   const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  // A present-but-non-streaming handle is a stale/ended run (finishRun
+  // cleared isStreaming but the entry was never removed from ACTIVE_EMBEDDED_RUNS),
+  // not a live one. Gate dispatch queueing on liveness so an inbound arriving
+  // behind a dead-but-uncleared run routes run-now instead of into a followup
+  // queue whose drain never fires (silent blackhole until restart). isStreaming
+  // is true for the whole run incl. tool gaps, so a genuinely busy run is
+  // unaffected; it is already the dispatch-relevant signal threaded below.
+  const hasLiveActiveRun = isActive && isStreaming;
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;
   const shouldSteer =
@@ -1132,13 +1140,13 @@ export async function runPreparedReply(
       resolvedQueue.mode === "followup" ||
       resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
-    isActive,
+    isActive: hasLiveActiveRun,
     isHeartbeat: isHeartbeatRun,
     shouldFollowup,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
-  if (isActive && activeRunQueueAction === "run-now") {
+  if (hasLiveActiveRun && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
