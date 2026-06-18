@@ -444,6 +444,50 @@ describe("sendMessageMSTeams", () => {
     expect(uploadPayload.chatId).toBe(botFrameworkConversationId);
     expect(uploadPayload.siteId).toBe("site-456");
   });
+
+  it("passes threadActivityId to proactive attachment sends for channel thread routing", async () => {
+    const threadRootId = "thread-root-msg-1";
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      app: createMockApp(),
+      appId: "app-id",
+      conversationId: "19:channel@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+        threadId: threadRootId,
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      replyStyle: "thread",
+      sdkCloudOptions: { cloud: "Public" },
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024 * 1024,
+      sharePointSiteId: "site-789",
+    });
+    mockSharePointPdfUpload({
+      bufferSize: 50,
+      fileName: "threaded-report.pdf",
+      itemId: "item-3",
+      uniqueId: "{GUID-789}",
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "threaded file",
+      mediaUrl: "https://example.com/threaded-report.pdf",
+    });
+
+    // The proactive activity send for the SharePoint file card must include
+    // threadActivityId so the message lands inside the channel thread.
+    const calls = mockState.sendMSTeamsActivityWithReference.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    // sendMSTeamsActivityWithReference(app, baseRef, activity, options)
+    const options = calls[0]?.[3] as Record<string, unknown> | undefined;
+    expect(options?.threadActivityId).toBe(threadRootId);
+  });
 });
 
 describe("MSTeams continueConversation failure handling", () => {
