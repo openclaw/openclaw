@@ -10,7 +10,7 @@ import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds, resolveAgentDir } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -307,9 +307,31 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+
+  // Load per-agent agentDir bootstrap files when agentDir differs from
+  // workspaceDir so SOUL.md / AGENTS.md / TOOLS.md placed in the per-agent
+  // directory are not silently ignored (issue #29387).
+  let mergedRawFiles = rawFiles;
+  if (params.config && params.agentId) {
+    const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+    const agentDir = resolveAgentDir(params.config, params.agentId);
+    const resolvedAgentDir = resolveUserPath(agentDir);
+    if (resolvedAgentDir !== resolvedWorkspaceDir) {
+      const agentDirFiles = await loadWorkspaceBootstrapFiles(agentDir);
+      const presentAgentDirFiles = agentDirFiles.filter((f) => !f.missing);
+      if (presentAgentDirFiles.length > 0) {
+        const agentDirNames = new Set(presentAgentDirFiles.map((f) => f.name));
+        // agentDir files override workspace files with the same name, enabling
+        // per-agent customization of SOUL.md, AGENTS.md, etc.
+        const workspaceOnly = rawFiles.filter((f) => !agentDirNames.has(f.name));
+        mergedRawFiles = [...workspaceOnly, ...presentAgentDirFiles];
+      }
+    }
+  }
+
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(mergedRawFiles, sessionKey),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
