@@ -3691,15 +3691,15 @@ surfaces:
       - name: Catalog Discovery
         id: catalog-discovery
         features:
-          - name: openclaw plugins search as the ClawHub
+          - name: Plugin catalog search
             coverageIds: [openclaw-plugins-search-as-the-clawhub]
-            description: openclaw plugins search as the ClawHub plugin lookup command
+            description: OpenClaw plugin search resolves ClawHub package lookup results.
           - name: Search result metadata
             coverageIds: [search-result-metadata]
-            description: package name, family, channel, version, summary, and
-          - name: Distinction between plugin search
+            description: Search results include package identity, channel, version, summary, compatibility, and source metadata.
+          - name: Plugin and skill search separation
             coverageIds: [distinction-between-plugin-search]
-            description: Distinction between plugin search and skill search
+            description: Plugin search and skill search stay distinct even when both use ClawHub metadata.
           - name: Catalog lookup failure
             coverageIds: [catalog-lookup-failure]
             description: Catalog lookup failure and empty-result behavior
@@ -3782,8 +3782,8 @@ surfaces:
         features:
           - name: Source prefixes
             coverageIds: [source-prefixes]
-            description: Source prefixes and shorthand resolution for clawhub:, npm:,
-          - name: Bare package behavior during the launch
+            description: Source prefixes and shorthand resolution cover ClawHub, npm, local, archive, and marketplace plugin sources.
+          - name: Bare package launch behavior
             coverageIds: [bare-package-behavior-during-the-launch]
             description: Bare package behavior during the launch cutover
           - name: Explicit pinned versions
@@ -3819,7 +3819,7 @@ surfaces:
           - name: Uninstall config/index/policy/file cleanup
             coverageIds: [uninstall-config-index-policy-file-cleanup]
             description: Evidence scope for Uninstall config/index/policy/file cleanup.
-          - name: Gateway restart/reload requirements after
+          - name: Gateway restart and reload requirements
             coverageIds: [gateway-restart-reload-requirements-after]
             description: Gateway restart/reload requirements after install/update/uninstall
           - name: Per-plugin managed npm project
@@ -3837,15 +3837,15 @@ surfaces:
           - name: Legacy dependency root cleanup
             coverageIds: [legacy-dependency-root-cleanup]
             description: Legacy dependency root cleanup and doctor repair
-          - name: plugins list
+          - name: Plugin inventory commands
             coverageIds: [plugins-list]
-            description: plugins list, plugins inspect, runtime inspect, plugins doctor, and
+            description: Plugin list, inspect, runtime inspect, and doctor commands expose operator inventory and diagnostics.
           - name: Local plugin index
             coverageIds: [local-plugin-index]
             description: Local plugin index and persisted cold registry state
           - name: Troubleshooting stale config
             coverageIds: [troubleshooting-stale-config]
-            description: Troubleshooting stale config, blocked paths, dependencies, missing plugins,
+            description: Troubleshooting covers stale config, blocked paths, dependencies, missing plugins, and repair guidance.
           - name: Runtime verification after Gateway
             coverageIds: [runtime-verification-after-gateway]
             description: Runtime verification after Gateway restart
