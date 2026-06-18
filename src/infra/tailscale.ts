@@ -411,6 +411,18 @@ export async function enableTailscaleServe(
   serviceName?: string,
 ) {
   const tailscaleBin = await getTailscaleBinary();
+  // tailscale serve is append-only — stale entries accumulated across gateway
+  // restarts cause duplicate proxies and eventually ERR_SSL_PROTOCOL_ERROR /
+  // ERR_CONNECTION_REFUSED. Reset before configuring so each start is clean.
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    serviceName ? ["serve", "clear", serviceName] : ["serve", "reset"],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
   await execWithSudoFallback(
     exec,
     tailscaleBin,

@@ -218,17 +218,22 @@ describe("tailscale helpers", () => {
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
     const exec = vi
       .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
+      .mockResolvedValueOnce({ stdout: "" }) // reset succeeds
+      .mockRejectedValueOnce(new Error("permission denied")) // serve fails
+      .mockResolvedValueOnce({ stdout: "" }); // sudo serve succeeds
 
     await enableTailscaleServe(3000, exec as never);
 
-    expect(exec).toHaveBeenCalledTimes(2);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+    expect(exec).toHaveBeenCalledTimes(3);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "reset"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });
-    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"], {
+    expectExecCall(exec, 2, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expectExecCall(exec, 3, "sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });
@@ -239,8 +244,12 @@ describe("tailscale helpers", () => {
 
     await enableTailscaleServe(3000, exec as never);
 
-    expect(exec).toHaveBeenCalledTimes(1);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "reset"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expectExecCall(exec, 2, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });
@@ -251,10 +260,14 @@ describe("tailscale helpers", () => {
 
     await enableTailscaleServe(3000, exec as never, "svc:openclaw");
 
-    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
     expectExecCall(
       exec,
-      1,
+      2,
       tailscaleBin,
       ["serve", "--service=svc:openclaw", "--bg", "--yes", "3000"],
       {
