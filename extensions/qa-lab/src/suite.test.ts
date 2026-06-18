@@ -33,6 +33,30 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
   };
 }
 
+async function createFakeCrablineCli() {
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-fake-crabline-"));
+  const cliPath = path.join(outputDir, "fake-crabline.mjs");
+  await fs.writeFile(
+    cliPath,
+    `#!/usr/bin/env node
+const command = process.argv.at(-1);
+if (command === "providers") {
+  process.stdout.write(JSON.stringify({
+    configured: [{ adapter: "telegram", platform: "telegram" }],
+    support: [{ platform: "telegram", status: "ready" }]
+  }));
+} else if (command === "doctor") {
+  process.stdout.write(JSON.stringify({ findings: [], ok: true }));
+} else {
+  process.stderr.write("unexpected command " + command);
+  process.exit(1);
+}
+`,
+    "utf8",
+  );
+  return { cliPath, outputDir };
+}
+
 describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
@@ -274,7 +298,10 @@ describe("qa suite", () => {
 
   it("writes Crabline channel-driver smoke artifacts when selected", async () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-crabline-"));
+    const fakeCrabline = await createFakeCrablineCli();
+    const originalCrablineBin = process.env.OPENCLAW_QA_CRABLINE_BIN;
     const originalTelegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.OPENCLAW_QA_CRABLINE_BIN = fakeCrabline.cliPath;
     process.env.TELEGRAM_BOT_TOKEN = "telegram-token";
     try {
       const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
@@ -334,7 +361,13 @@ describe("qa suite", () => {
       } else {
         process.env.TELEGRAM_BOT_TOKEN = originalTelegramBotToken;
       }
+      if (originalCrablineBin === undefined) {
+        delete process.env.OPENCLAW_QA_CRABLINE_BIN;
+      } else {
+        process.env.OPENCLAW_QA_CRABLINE_BIN = originalCrablineBin;
+      }
       await fs.rm(outputDir, { recursive: true, force: true });
+      await fs.rm(fakeCrabline.outputDir, { recursive: true, force: true });
     }
   });
 

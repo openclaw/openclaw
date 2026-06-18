@@ -445,17 +445,12 @@ describe("qa cli runtime", () => {
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-e2e/smoke-ci"),
         transportId: "qa-channel",
-        channelDriver: "crabline",
+        channelDriver: "qa-channel",
         providerMode: "mock-openai",
         fastMode: true,
         concurrency: 2,
       });
-      expect(suiteArgs.channelDriverSelection).toEqual({
-        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        smokeArtifactPath: "crabline-channel-smoke.json",
-      });
+      expect(suiteArgs.channelDriverSelection).toBeUndefined();
       expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {

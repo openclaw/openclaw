@@ -81,9 +81,9 @@ the root profile before the QA command:
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
 ```
 
-QA profiles select the channel driver: `smoke-ci` uses Crabline, `release` uses
-`live`. Scenarios set `execution.channel` only when they need a specific
-channel; otherwise the driver default is used.
+QA profiles select the channel driver: `smoke-ci` uses the synthetic
+`qa-channel`, and `release` uses `live`. Scenarios set `execution.channel` only
+when they need a specific channel; otherwise the driver default is used.
 
 ## Operator flow
 

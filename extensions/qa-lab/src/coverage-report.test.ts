@@ -133,7 +133,7 @@ describe("qa coverage report", () => {
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
     ).toMatchObject({
-      channelDriver: "crabline",
+      channelDriver: "qa-channel",
       evidenceMode: "slim",
     });
     expect(

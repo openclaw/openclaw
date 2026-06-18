@@ -897,6 +897,15 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (opts.channel?.trim() && channelDriver !== "crabline") {
     throw new Error("--channel requires --channel-driver crabline.");
   }
+  if (runner !== "host" && runner !== "multipass") {
+    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
+  }
+  if (opts.preflight === true && runner !== "host") {
+    throw new Error("--preflight requires --runner host.");
+  }
+  if (channelDriver === "crabline" && runner !== "host") {
+    throw new Error("--channel-driver crabline requires --runner host.");
+  }
   const selectedScenarioChannel =
     channelDriver === "crabline"
       ? resolveQaSuiteScenarioChannel({
@@ -917,15 +926,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
           channelDriver,
         })
       : undefined;
-  if (runner !== "host" && runner !== "multipass") {
-    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
-  }
-  if (opts.preflight === true && runner !== "host") {
-    throw new Error("--preflight requires --runner host.");
-  }
-  if (channelDriverSelection && runner !== "host") {
-    throw new Error("--channel-driver crabline requires --runner host.");
-  }
   if (
     runner === "host" &&
     (opts.image !== undefined ||

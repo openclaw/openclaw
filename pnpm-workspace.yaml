@@ -131,8 +131,6 @@ allowBuilds:
   "@tloncorp/tlon-skill": true
   baileys: true
   authenticate-pam: true
-  better-sqlite3: true
-  crabline: true
   "@discordjs/opus": false
   esbuild: true
   koffi: false
@@ -143,7 +141,6 @@ allowBuilds:
   "@openclaw/proxyline": true
   clawpdf: true
   rastermill: true
-  sharp: true
 
 packageExtensions:
   baileys:

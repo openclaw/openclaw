@@ -2,13 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type {
-  InboundEnvelope,
-  ManifestDefinition,
-  ProviderAdapter,
-  ProviderContext,
-  SendResult,
-} from "crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -38,6 +31,70 @@ const CRABLINE_TELEGRAM_USER_NAME = "openclaw-qa";
 const CRABLINE_TELEGRAM_OBSERVE_TIMEOUT_MS = 180_000;
 const CRABLINE_TELEGRAM_OBSERVE_IDLE_MS = 1_500;
 
+type CrablineInboundEnvelope = {
+  id: string;
+  provider?: string;
+  raw?: unknown;
+  sentAt: string;
+  text: string;
+  threadId?: string;
+};
+
+type CrablineManifestDefinition = {
+  configVersion: number;
+  fixtures: Array<{
+    env?: string[];
+    id: string;
+    inboundMatch?: Record<string, unknown>;
+    mode?: string;
+    provider: string;
+    retries?: number;
+    tags?: string[];
+    target: {
+      channelId?: string;
+      id: string;
+      metadata?: Record<string, unknown>;
+    };
+    timeoutMs?: number;
+  }>;
+  providers: Record<string, Record<string, unknown>>;
+  userName: string;
+};
+
+type CrablineProviderContext = {
+  config: Record<string, unknown>;
+  fixture: CrablineManifestDefinition["fixtures"][number];
+  manifestPath: string;
+  providerId: string;
+  userName: string;
+};
+
+type CrablineSendResult = {
+  accepted?: boolean;
+  messageId: string;
+  threadId?: string;
+};
+
+export type QaCrablineProviderAdapter = {
+  [key: string]: unknown;
+  cleanup?: () => Promise<void> | void;
+  send: (
+    params: CrablineProviderContext & {
+      mode: "agent";
+      nonce: string;
+      text: string;
+    },
+  ) => Promise<CrablineSendResult>;
+  waitForInbound: (
+    params: CrablineProviderContext & {
+      nonce: string;
+      since: string;
+      threadId?: string;
+      timeoutMs: number;
+    },
+  ) => Promise<CrablineInboundEnvelope | null>;
+};
+
 type TelegramBotIdentity = {
   id: number;
   is_bot: boolean;
@@ -48,10 +105,17 @@ type TelegramBotIdentity = {
 type CrablineTelegramRuntime = {
   fetchCredentialLease?: typeof fetch;
   fetchTelegramBotIdentity: (token: string) => Promise<TelegramBotIdentity>;
-  provider?: ProviderAdapter;
+  provider?: QaCrablineProviderAdapter;
 };
 
-type CrablineRuntimeModule = typeof import("crabline");
+type CrablineRuntimeModule = {
+  createRegistry: (
+    manifest: CrablineManifestDefinition,
+    manifestPath: string,
+  ) => {
+    resolve: (providerId: string, fixtureId: string) => QaCrablineProviderAdapter;
+  };
+};
 
 type CrablineTelegramCredentials = {
   driverToken: string;
@@ -61,10 +125,10 @@ type CrablineTelegramCredentials = {
 
 type CrablineTelegramStateParams = {
   driverIdentity: TelegramBotIdentity;
-  fixtureContext: ProviderContext;
+  fixtureContext: CrablineProviderContext;
   observeIdleMs?: number;
   observeTimeoutMs?: number;
-  provider: ProviderAdapter;
+  provider: QaCrablineProviderAdapter;
   state: QaBusState;
 };
 
@@ -213,15 +277,15 @@ function createTelegramManifest(params: {
         },
       },
       userName: CRABLINE_TELEGRAM_USER_NAME,
-    } satisfies ManifestDefinition,
+    } satisfies CrablineManifestDefinition,
     manifestPath: path.join(params.outputDir, "crabline-runtime.json"),
   };
 }
 
 function createFixtureContext(params: {
-  manifest: ManifestDefinition;
+  manifest: CrablineManifestDefinition;
   manifestPath: string;
-}): ProviderContext {
+}): CrablineProviderContext {
   const fixture = params.manifest.fixtures.find(
     (entry) => entry.id === CRABLINE_TELEGRAM_FIXTURE_ID,
   );
@@ -300,9 +364,9 @@ function targetForConversation(message: QaBusMessage) {
 }
 
 function shouldIgnoreObservedMessage(params: {
-  accepted: SendResult;
+  accepted: CrablineSendResult;
   driverIdentity: TelegramBotIdentity;
-  event: InboundEnvelope;
+  event: CrablineInboundEnvelope;
   sentText: string;
 }) {
   if (params.event.id === params.accepted.messageId) {
@@ -337,7 +401,7 @@ function textForTelegramSend(input: QaBusInboundMessageInput) {
 
 function addObservedOutbound(params: {
   baseState: QaBusState;
-  event: InboundEnvelope;
+  event: CrablineInboundEnvelope;
   inbound: QaBusMessage;
 }) {
   params.baseState.addOutboundMessage({
@@ -362,7 +426,7 @@ function createCrablineTelegramState(params: CrablineTelegramStateParams): QaTra
   let closed = false;
 
   const observeReplies = async (input: {
-    accepted: SendResult;
+    accepted: CrablineSendResult;
     inbound: QaBusMessage;
     sentText: string;
     since: string;
@@ -532,7 +596,7 @@ class QaCrablineTelegramTransport extends QaStateBackedTransportAdapter {
     this.#sutToken = params.sutToken;
   }
 
-  createGatewayConfig = () =>
+  createGatewayConfig = (_params: { baseUrl: string }) =>
     createCrablineTelegramGatewayConfig({
       driverIdentity: this.#driverIdentity,
       groupId: this.#groupId,

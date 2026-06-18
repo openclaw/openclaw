@@ -2,10 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ProviderAdapter } from "crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
+import {
+  createQaCrablineTransportAdapter,
+  type QaCrablineProviderAdapter,
+} from "./crabline-transport.js";
 
 const tempDirs: string[] = [];
 
@@ -36,7 +38,7 @@ function createEnv() {
   } satisfies NodeJS.ProcessEnv;
 }
 
-function createProvider(overrides: Partial<ProviderAdapter> = {}) {
+function createProvider(overrides: Partial<QaCrablineProviderAdapter> = {}) {
   const provider = {
     id: "telegram",
     platform: "telegram",
@@ -62,7 +64,7 @@ function createProvider(overrides: Partial<ProviderAdapter> = {}) {
       .mockResolvedValue(null),
     cleanup: vi.fn(async () => {}),
     ...overrides,
-  } satisfies ProviderAdapter;
+  } satisfies QaCrablineProviderAdapter;
   return provider;
 }
 
@@ -259,27 +261,6 @@ describe("crabline transport", () => {
     );
     await transport.cleanup?.();
     expect(provider.cleanup).toHaveBeenCalled();
-  });
-
-  it("loads the installed Crabline package and resolves its Telegram provider", async () => {
-    const transport = await createQaCrablineTransportAdapter({
-      env: createEnv(),
-      outputDir: await createTempOutputDir(),
-      runtime: {
-        fetchTelegramBotIdentity: vi.fn(async () => ({
-          first_name: "Driver",
-          id: 42,
-          is_bot: true,
-          username: "driver_bot",
-        })),
-      },
-      selection: createSelection(),
-      state: createQaBusState(),
-    });
-
-    expect(transport.id).toBe("crabline");
-    expect(transport.requiredPluginIds).toEqual(["telegram"]);
-    await transport.cleanup?.();
   });
 
   it("fails fast when a non-Telegram Crabline channel is selected", async () => {

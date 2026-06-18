@@ -2,7 +2,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
@@ -23,8 +22,6 @@ export const QA_CRABLINE_CHANNEL_SMOKE_PATH = "crabline-channel-smoke.json";
 export const QA_CRABLINE_MANIFEST_PATH = "crabline-smoke.json";
 export const QA_CRABLINE_DEFAULT_CHANNEL = "telegram";
 
-let supportedCrablineChannelsPromise: Promise<QaCrablineChannelId[]> | undefined;
-
 export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriverId | null {
   const normalized = input?.trim().toLowerCase();
   if (!normalized) {
@@ -38,9 +35,10 @@ export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriv
 
 export async function normalizeQaCrablineChannel(
   input?: string | null,
+  env?: NodeJS.ProcessEnv,
 ): Promise<QaCrablineChannelId> {
   const normalized = input?.trim().toLowerCase() || QA_CRABLINE_DEFAULT_CHANNEL;
-  const supportedChannels = await listSupportedCrablineChannels();
+  const supportedChannels = await readSupportedCrablineChannels(env ?? process.env);
   if (supportedChannels.includes(normalized)) {
     return normalized;
   }
@@ -52,6 +50,7 @@ export async function normalizeQaCrablineChannel(
 export async function resolveQaCrablineChannelDriverSelection(params: {
   channel?: string | null;
   channelDriver?: string | null;
+  env?: NodeJS.ProcessEnv;
 }): Promise<QaCrablineChannelDriverSelection | null> {
   const channelDriver = normalizeQaChannelDriverId(params.channelDriver);
   if (!channelDriver) {
@@ -61,7 +60,7 @@ export async function resolveQaCrablineChannelDriverSelection(params: {
     return null;
   }
 
-  const channel = await normalizeQaCrablineChannel(params.channel);
+  const channel = await normalizeQaCrablineChannel(params.channel, params.env);
   return {
     channel,
     channelDriver,
@@ -76,15 +75,30 @@ type CrablineCommandResult = {
   stdout: string;
 };
 
+type CrablineCommandError = Error & {
+  code?: string;
+};
+
 export type QaCrablineChannelDriverSmokeResult = {
   capabilityReport: unknown;
   manifestPath: string;
   smoke: unknown;
 };
 
-function resolveCrablineBinPath() {
-  const indexPath = fileURLToPath(import.meta.resolve("crabline"));
-  return path.join(path.dirname(indexPath), "bin", "crabline.js");
+function resolveCrablineCommand(env: NodeJS.ProcessEnv) {
+  const explicitCli = env.OPENCLAW_QA_CRABLINE_BIN?.trim();
+  if (explicitCli) {
+    return {
+      file: process.execPath,
+      argsPrefix: [explicitCli],
+      displayPrefix: ["node", explicitCli],
+    };
+  }
+  return {
+    file: "crabline",
+    argsPrefix: [] as string[],
+    displayPrefix: ["crabline"],
+  };
 }
 
 function createCrablineCatalogManifest() {
@@ -114,13 +128,15 @@ async function runCrablineJsonCommand(params: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ json: unknown; result: CrablineCommandResult }> {
-  const command = [resolveCrablineBinPath(), "--json", ...params.args];
-  const displayCommand = ["node", "crabline", "--json", ...params.args];
+  const env = params.env ?? process.env;
+  const crabline = resolveCrablineCommand(env);
+  const command = [...crabline.argsPrefix, "--json", ...params.args];
+  const displayCommand = [...crabline.displayPrefix, "--json", ...params.args];
   try {
-    const result = await execFileAsync(process.execPath, command, {
+    const result = await execFileAsync(crabline.file, command, {
       cwd: params.cwd,
       encoding: "utf8",
-      env: params.env ?? process.env,
+      env,
       maxBuffer: 1024 * 1024,
     });
     const stdout = result.stdout;
@@ -141,10 +157,16 @@ async function runCrablineJsonCommand(params: {
     const stdout = childError.stdout?.toString() ?? "";
     const stderr = childError.stderr?.toString() ?? "";
     const details = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
-    throw new Error(
-      `Crabline command failed (${displayCommand.join(" ")}): ${details || childError.message}`,
+    const hint =
+      childError.code === "ENOENT"
+        ? " Install crabline on PATH or set OPENCLAW_QA_CRABLINE_BIN to a Crabline CLI JavaScript file."
+        : "";
+    const wrappedError = new Error(
+      `Crabline command failed (${displayCommand.join(" ")}): ${details || childError.message}.${hint}`,
       { cause: error },
-    );
+    ) as CrablineCommandError;
+    wrappedError.code = typeof childError.code === "string" ? childError.code : undefined;
+    throw wrappedError;
   }
 }
 
@@ -169,7 +191,9 @@ function readCrablineSupportedChannels(payload: unknown): QaCrablineChannelId[] 
   return [...new Set(channels)];
 }
 
-async function readSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
+async function readSupportedCrablineChannels(
+  env: NodeJS.ProcessEnv,
+): Promise<QaCrablineChannelId[]> {
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "qa-crabline-catalog-"),
   );
@@ -183,6 +207,21 @@ async function readSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
     const providers = await runCrablineJsonCommand({
       args: ["--config", manifestPath, "providers"],
       cwd: tempDir,
+      env,
+    }).catch((error: unknown) => {
+      if ((error as CrablineCommandError).code === "ENOENT") {
+        return {
+          json: {
+            support: [{ platform: QA_CRABLINE_DEFAULT_CHANNEL, status: "ready" }],
+          },
+          result: {
+            command: ["crabline", "--json", "providers"],
+            stderr: "",
+            stdout: "",
+          },
+        };
+      }
+      throw error;
     });
     const supportedChannels = readCrablineSupportedChannels(providers.json);
     if (supportedChannels.length === 0) {
@@ -192,11 +231,6 @@ async function readSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
-}
-
-async function listSupportedCrablineChannels(): Promise<QaCrablineChannelId[]> {
-  supportedCrablineChannelsPromise ??= readSupportedCrablineChannels();
-  return await supportedCrablineChannelsPromise;
 }
 
 export async function runQaCrablineChannelDriverSmoke(
