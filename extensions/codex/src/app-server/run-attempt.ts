@@ -178,6 +178,7 @@ import {
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForModel,
+  resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -778,6 +779,7 @@ export async function runCodexAppServerAttempt(
     pluginConfig,
     profilerEnabled,
     forceHeartbeatTool: true,
+    ignoreDisableMessageTool: true,
     ignoreRuntimePlan: true,
     onYieldDetected: () => {
       yieldDetected = true;
@@ -788,8 +790,10 @@ export async function runCodexAppServerAttempt(
     tools,
     registeredTools,
     signal: runAbortController.signal,
-    loading: resolveCodexDynamicToolsLoadingForModel(pluginConfig, params.modelId),
-    directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
+    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, params.modelId, {
+      connectionClass: appServer.connectionClass,
+    }),
+    directToolNames: resolveCodexDynamicToolDirectNames(params),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -3186,6 +3190,13 @@ function handleApprovalRequest(params: {
   });
 }
 
+function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return [];
+  }
+  return ["message"];
+}
+
 export const testing = {
   buildCodexNativeHookRelayId,
   buildDeveloperInstructions,
@@ -3199,6 +3210,7 @@ export const testing = {
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
+  resolveCodexDynamicToolDirectNames,
   hasPendingDynamicToolTerminalDiagnostic,
   toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,

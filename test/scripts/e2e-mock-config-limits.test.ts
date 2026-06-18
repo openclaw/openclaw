@@ -202,7 +202,9 @@ describe("e2e mock and config helper numeric limits", () => {
 
           expect(response.status).toBe(500);
           expect(body.error.message).toContain("mock OpenAI request log write failed");
-          expect(output.stderr()).toContain("mock-openai request log write failed");
+          await expect
+            .poll(() => output.stderr(), { timeout: 1_000 })
+            .toContain("mock-openai request log write failed");
         },
       );
     } finally {
@@ -234,7 +236,9 @@ describe("e2e mock and config helper numeric limits", () => {
 
           expect(response.status).toBe(500);
           expect(body.error.message).toContain("mock OpenAI request log write failed");
-          expect(output.stderr()).toContain("mock-openai-web-search request log write failed");
+          await expect
+            .poll(() => output.stderr(), { timeout: 1_000 })
+            .toContain("mock-openai-web-search request log write failed");
         },
       );
     } finally {

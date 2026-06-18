@@ -89,7 +89,7 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
-import { extractToolPayload } from "./tool-payload.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;

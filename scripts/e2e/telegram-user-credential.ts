@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Telegram User Credential script supports OpenClaw repository automation.
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -224,6 +224,10 @@ async function postBroker(params: {
   return payload;
 }
 
+export function buildTelegramUserCredentialOwnerId() {
+  return `telegram-user-${randomUUID()}`;
+}
+
 async function resolveConvexLeaseConfig(opts: Map<string, string>) {
   const envFile = opts.get("env-file") || DEFAULT_CONVEX_ENV_FILE;
   const fileEnv = await readEnvFile(envFile);
@@ -259,7 +263,7 @@ async function resolveConvexLeaseConfig(opts: Map<string, string>) {
     ownerId:
       opts.get("owner-id") ||
       process.env.OPENCLAW_QA_CREDENTIAL_OWNER_ID?.trim() ||
-      `telegram-user-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`,
+      buildTelegramUserCredentialOwnerId(),
   };
 }
 
