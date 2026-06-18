@@ -226,6 +226,30 @@ describe("appendWorkspaceMountArgs", () => {
     );
   });
 
+  it("creates materialized skills directory when it does not exist", () => {
+    const agentWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = path.join(agentWorkspaceDir, "skills-workspace");
+    // skillsWorkspaceDir does not exist yet
+    const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
+
+    const args: string[] = [];
+    appendWorkspaceMountArgs({
+      args,
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+
+    // Directory should have been created
+    expect(fs.existsSync(materializedSkillsDir)).toBe(true);
+    // Should be owned by current user (not root)
+    const stat = fs.statSync(materializedSkillsDir);
+    expect(stat.uid).toBe(process.getuid());
+    expect(stat.gid).toBe(process.getgid());
+  });
+
   it("does not add a separate synced skill overlay when workspaceAccess is none", () => {
     const agentWorkspaceDir = makeTempWorkspace();
     const sandboxWorkspaceDir = makeTempWorkspace();

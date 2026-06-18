@@ -74,7 +74,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
   const materializedSkillsWorkspaceDir =
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
+    params.skillsWorkspaceDir ??
+    resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
@@ -98,12 +99,26 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   ];
 
   return mounts
-    .filter((mount) =>
-      isExistingWorkspaceSkillMountSource({
-        rootDir: mount.rootDir,
-        hostPath: mount.hostPath,
-      }),
-    )
+    .filter((mount) => {
+      if (
+        !isExistingWorkspaceSkillMountSource({
+          rootDir: mount.rootDir,
+          hostPath: mount.hostPath,
+        })
+      ) {
+        return false;
+      }
+      // For the materialized sandbox-skills directory, only mount when it has
+      // content so empty directories are not exposed as read-only mounts.
+      if (mount.rootDir === materializedSkillsWorkspaceDir) {
+        try {
+          return fs.readdirSync(mount.hostPath).length > 0;
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    })
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }
 
@@ -165,6 +180,13 @@ export function appendWorkspaceMountArgs(params: {
   }
 
   if (params.includeReadOnlyWorkspaceSkillMounts !== false) {
+    const materializedSkillsDir =
+      params.skillsWorkspaceDir ??
+      resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
+    const skillsOverlayDir = path.join(materializedSkillsDir, "skills");
+    // Pre-create the directory so Docker does not auto-create it as root:root.
+    fs.mkdirSync(skillsOverlayDir, { recursive: true });
+
     appendReadOnlyWorkspaceSkillMountArgs({
       args,
       readOnlyWorkspaceSkillMounts:
