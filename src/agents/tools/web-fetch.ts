@@ -218,6 +218,7 @@ const BODY_TAG_RAW_TEXT_CONTAINERS = new Set([
   "script",
   "style",
   "textarea",
+  "template",
   "title",
   "xmp",
 ]);
