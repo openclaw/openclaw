@@ -573,9 +573,8 @@ async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteOpenAIOAuthTlsPrerequisites } = await import(
-    "../plugins/provider-openai-chatgpt-oauth-tls.js"
-  );
+  const { noteOpenAIOAuthTlsPrerequisites } =
+    await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
   await noteOpenAIOAuthTlsPrerequisites({
     cfg: ctx.cfg,
     deep: ctx.options.deep === true,
@@ -951,7 +950,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     }
     return;
   }
-  if (!ctx.prompter.shouldRepair && ctx.configResult.pendingChanges) {
+  if (!ctx.prompter.shouldRepair && ctx.configResult.pendingChanges === true) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }

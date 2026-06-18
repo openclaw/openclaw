@@ -983,6 +983,26 @@ describe("doctor health contributions", () => {
       );
     });
 
+    it("skips the doctor --fix trailer when no pending config changes were recorded", async () => {
+      const cfg = {};
+      const log = vi.fn();
+      const ctx = {
+        runtime: { log },
+        options: {},
+        prompter: buildDoctorPrompter(false),
+        configResult: { cfg, shouldWriteConfig: false },
+        cfg,
+        cfgForPersistence: cfg,
+        sourceConfigValid: true,
+        configPath: "/tmp/openclaw-doctor-trailer.json",
+        env: {},
+      } as unknown as Parameters<(typeof writeConfigContribution)["run"]>[0];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(log).not.toHaveBeenCalled();
+    });
+
     it("skips the doctor --fix trailer when no pending config changes remain", async () => {
       const cfg = {};
       const log = vi.fn();
