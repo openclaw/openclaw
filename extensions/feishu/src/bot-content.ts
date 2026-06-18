@@ -7,6 +7,7 @@ import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { parseInteractiveCardContent } from "./send.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
 type FeishuMention = {
@@ -195,6 +196,10 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Video]";
       case "sticker":
         return "[Sticker]";
+      case "interactive": {
+        const parsed = JSON.parse(content);
+        return parseInteractiveCardContent(parsed);
+      }
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
