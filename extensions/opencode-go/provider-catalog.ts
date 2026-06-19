@@ -140,7 +140,7 @@ const OPENCODE_GO_MODELS = (
         cacheRead: 0.26,
         cacheWrite: 0,
       },
-      contextWindow: 1_000_000,
+      contextWindow: 202_752,
       maxTokens: 32_768,
     },
     {
