@@ -1,5 +1,4 @@
 // Telegram plugin module implements bot message dispatch behavior.
-import { open } from "node:fs/promises";
 import path from "node:path";
 import type { Bot } from "grammy";
 import {
@@ -317,67 +316,6 @@ function resolveTelegramMirroredTranscriptText(
   return text ? text : null;
 }
 
-const TRANSCRIPT_TAIL_BYTES = 16384;
-
-// Reads the transcript tail to check whether the most recent non-mirror assistant
-// message already carries the same text. Prevents the mirror writer from producing
-// a duplicate row when the primary reply writer already recorded the turn.
-async function transcriptHasEquivalentAssistantReply(
-  transcriptPath: string,
-  mirrorText: string,
-): Promise<boolean> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(transcriptPath, "r");
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size <= 0) return false;
-
-    const readSize = Math.min(stat.size, TRANSCRIPT_TAIL_BYTES);
-    const position = stat.size - readSize;
-    const buffer = Buffer.alloc(readSize);
-    await handle.read(buffer, 0, readSize, position);
-
-    const raw = buffer.toString("utf8");
-    const lines = raw.split("\n");
-    // When reading a partial tail the first line may be truncated JSON.
-    const startIndex = position > 0 ? 1 : 0;
-
-    for (let i = lines.length - 1; i >= startIndex; i--) {
-      const line = lines[i]?.trim();
-      if (!line) continue;
-      try {
-        const parsed = JSON.parse(line) as {
-          message?: { role?: string; model?: string; content?: unknown[] };
-        };
-        const msg = parsed.message;
-        if (!msg || msg.role !== "assistant") continue;
-        // Skip existing delivery-mirror entries — we want the primary reply.
-        if (msg.model === "delivery-mirror") continue;
-        if (!Array.isArray(msg.content)) return false;
-
-        const existingText = (msg.content as { type?: string; text?: string }[])
-          .filter(
-            (p): p is { type: "text"; text: string } =>
-              p.type === "text" && typeof p.text === "string" && p.text.trim().length > 0,
-          )
-          .map((p) => p.text.trim())
-          .join("\n")
-          .trim();
-
-        return existingText === mirrorText;
-      } catch {
-        continue;
-      }
-    }
-
-    return false;
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
   route: TelegramMessageContext["route"];
@@ -407,8 +345,13 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     sessionsDir: path.dirname(storePath),
   });
   // Skip if the primary runner already wrote an equivalent assistant message.
+  // Normalize whitespace because extractAssistantVisibleText and the Telegram
+  // delivery path may join content blocks with different separators.
   const existing = await readLatestAssistantTextFromSessionTranscript(sessionFile);
-  if (existing?.text && existing.text.trim() === text.trim()) {
+  if (
+    existing?.text &&
+    existing.text.trim().replace(/\s+/g, " ") === text.trim().replace(/\s+/g, " ")
+  ) {
     return;
   }
   const message = {
