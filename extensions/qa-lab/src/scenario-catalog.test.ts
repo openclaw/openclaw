@@ -173,6 +173,21 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
   });
 
+  it("loads folded HTTP API script scenarios with primary taxonomy coverage", () => {
+    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.primary).toStrictEqual([
+      "gateway.openai-compatible-apis",
+    ]);
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.primary).toStrictEqual([
+      "runtime.reasoning-and-cache-controls",
+    ]);
+    expect(
+      readQaScenarioById("openai-web-search-native-assertions").coverage?.primary,
+    ).toStrictEqual(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]);
+    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.primary).toStrictEqual([
+      "gateway.openai-compatible-apis",
+    ]);
+  });
+
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
     const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
     const soak = readQaScenarioById("runtime-soak-100-turn");
