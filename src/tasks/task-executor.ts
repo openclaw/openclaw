@@ -40,6 +40,11 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import {
+  acquireTaskRouteLease,
+  mapDeliveryStatusToLeaseRetirement,
+  settleTaskRouteLease,
+} from "./task-route-lease.js";
 
 const log = createSubsystemLogger("tasks/executor");
 
@@ -120,6 +125,18 @@ export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRe
   });
   if (!task) {
     return null;
+  }
+  // Acquire a task-route lease so the cron / subagent / ACP / codex
+  // delivery resolvers can recover the original outbound origin even if
+  // the originating session entry is evicted or the shared bucket is
+  // retargeted by another conversation before completion fires.
+  // Best-effort: never throws, never blocks task creation.
+  if (task.runId && task.deliveryStatus !== "not_applicable") {
+    acquireTaskRouteLease({
+      runId: task.runId,
+      taskId: task.taskId,
+      requesterOrigin: params.requesterOrigin,
+    });
   }
   return ensureSingleTaskFlow({
     task,
@@ -213,7 +230,15 @@ export function setDetachedTaskDeliveryStatusByRunId(params: {
   deliveryStatus: TaskDeliveryStatus;
   error?: string;
 }) {
-  return setTaskRunDeliveryStatusByRunId(params);
+  const updated = setTaskRunDeliveryStatusByRunId(params);
+  // Settle the task-route lease on terminal delivery so it can be GC'd
+  // instead of waiting for TTL expiry. Idempotent — re-runs on already-
+  // settled leases are no-ops.
+  const retirement = mapDeliveryStatusToLeaseRetirement(params.deliveryStatus);
+  if (retirement) {
+    settleTaskRouteLease(params.runId, retirement);
+  }
+  return updated;
 }
 
 type RetryBlockedFlowResult = {

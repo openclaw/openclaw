@@ -1145,6 +1145,39 @@ CREATE TABLE IF NOT EXISTS task_delivery_state (
   FOREIGN KEY (task_id) REFERENCES task_runs(task_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS task_route_leases (
+  -- Lease row keyed by detached run id (NOT task_id — a single task may
+  -- produce multiple runs over time, each owning its own route lease).
+  -- See docs/concepts/task-completion.md for the full invariant.
+  --
+  -- No FOREIGN KEY on task_id: leases are acquired before the parent
+  -- task_runs row exists in some callers (e.g. cron pre-flight), and the
+  -- lease module owns its own lifecycle independent of task_runs. The
+  -- task_id column is kept for indexed lookup and forensic correlation,
+  -- not referential integrity.
+  run_id TEXT NOT NULL PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  -- requester_origin is the original DeliveryContext captured at acquire
+  -- time. Persisted as JSON so the lease is durable across gateway
+  -- restarts; sqlite-only state per OpenClaw storage defaults.
+  requester_origin_json TEXT NOT NULL,
+  acquired_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  settled_at INTEGER,
+  -- 'active' / 'settling' / 'settled' / 'retired' / 'expired'
+  -- 'settling' is reserved for in-flight delivery settlement.
+  status TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_route_leases_task_id
+  ON task_route_leases(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_route_leases_status_expires
+  ON task_route_leases(status, expires_at)
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_task_route_leases_expires_active
+  ON task_route_leases(expires_at)
+  WHERE status = 'active';
+
 CREATE TABLE IF NOT EXISTS flow_runs (
   flow_id TEXT NOT NULL PRIMARY KEY,
   shape TEXT,
