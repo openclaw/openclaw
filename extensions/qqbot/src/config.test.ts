@@ -1,6 +1,10 @@
+// Qqbot tests cover config plugin behavior.
 import fs from "node:fs";
-import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -126,6 +130,41 @@ describe("qqbot config", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("accepts canonical group tools config", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      groups: {
+        G1: {
+          requireMention: true,
+          tools: { deny: ["*"] },
+          toolsBySender: {
+            "id:alice": { allow: ["read"] },
+          },
+        },
+      },
+      accounts: {
+        bot2: {
+          groups: {
+            G1: { tools: { allow: [] } },
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects retired group toolPolicy config", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      groups: {
+        G1: {
+          toolPolicy: "none",
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it("preserves top-level media and upgrade config on the default account", () => {
@@ -278,10 +317,12 @@ describe("qqbot config", () => {
       return (value as Record<string, unknown>)[key];
     }, next) as Record<string, unknown> | undefined;
 
-    expect(accountConfig).toMatchObject({
+    expect(accountConfig).toStrictEqual({
       enabled: true,
+      allowFrom: ["*"],
       appId: "102905186",
       clientSecret: "Oi2Mg1Mh2Ni3:Pl7TpBXuHe1OmAYwKi7W",
+      clientSecretFile: undefined,
     });
   });
 
@@ -333,7 +374,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,
@@ -348,7 +389,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,

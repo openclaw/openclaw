@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Googlechat tests cover secret contract plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyResolvedAssignments,
   createResolverContext,
   resolveSecretRefValues,
-} from "openclaw/plugin-sdk/runtime-secret-resolution";
+} from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 

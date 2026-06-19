@@ -1,3 +1,4 @@
+// Discord tests cover security audit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -74,14 +75,10 @@ describe("Discord security audit findings", () => {
       config: discordConfig,
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.discord.commands.native.unrestricted",
-          severity: "critical",
-        }),
-      ]),
+    const unrestrictedFinding = findings.find(
+      (finding) => finding.checkId === "channels.discord.commands.native.unrestricted",
     );
+    expect(unrestrictedFinding?.severity).toBe("critical");
   });
 
   it.each([

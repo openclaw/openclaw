@@ -1,8 +1,10 @@
+// Tests npm registry spec parsing for packages, tags, and versions.
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawReleaseVersions,
   formatPrereleaseResolutionError,
   isExactSemverVersion,
+  isOpenClawOrgNpmSpec,
   isOpenClawStableCorrectionVersion,
   isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
@@ -12,7 +14,6 @@ import {
 
 function parseSpecOrThrow(spec: string) {
   const parsed = parseRegistryNpmSpec(spec);
-  expect(parsed).not.toBeNull();
   if (parsed === null) {
     throw new Error(`Expected ${spec} to parse`);
   }
@@ -106,6 +107,17 @@ describe("npm registry spec parsing helpers", () => {
   });
 
   it.each([
+    { spec: "@openclaw/voice-call", expected: true },
+    { spec: "@openclaw/voice-call@1.2.3", expected: true },
+    { spec: "@other/voice-call", expected: false },
+    { spec: "voice-call", expected: false },
+    { spec: "npm:@openclaw/voice-call", expected: false },
+    { spec: undefined, expected: false },
+  ])("detects OpenClaw-org npm specs for %s", ({ spec, expected }) => {
+    expect(isOpenClawOrgNpmSpec(spec)).toBe(expected);
+  });
+
+  it.each([
     { value: "v1.2.3", expected: true },
     { value: "1.2", expected: false },
   ])("detects exact semver versions for %s", ({ value, expected }) => {
@@ -117,7 +129,7 @@ describe("npm registry spec parsing helpers", () => {
     { value: "1.2.3-1", expected: true },
     { value: "2026.5.3-beta.1", expected: true },
     { value: "2026.5.3-1", expected: false },
-    { value: "2026.2.30-1", expected: true },
+    { value: "2026.2.30-1", expected: false },
     { value: "1.2.3", expected: false },
   ])("detects prerelease semver versions for %s", ({ value, expected }) => {
     expect(isPrereleaseSemverVersion(value)).toBe(expected);
@@ -128,7 +140,7 @@ describe("npm registry spec parsing helpers", () => {
     { value: "2026.5.3-2", expected: true },
     { value: "2026.5.3-beta.1", expected: false },
     { value: "1.2.3-1", expected: false },
-    { value: "2026.2.30-1", expected: false },
+    { value: "2026.2.30-1", expected: true },
   ])("detects OpenClaw stable correction versions for %s", ({ value, expected }) => {
     expect(isOpenClawStableCorrectionVersion(value)).toBe(expected);
   });

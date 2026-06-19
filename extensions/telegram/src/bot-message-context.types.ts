@@ -1,11 +1,12 @@
+// Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
@@ -23,6 +24,8 @@ export type TelegramMessageContextOptions = {
   messageIdOverride?: string;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
+  promptContextMinTimestampMs?: number;
+  spooledReplay?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<
@@ -63,7 +66,7 @@ type TelegramMessageContextRuntimeOverrides = Partial<
 export type TelegramMessageContextSessionRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.session.runtime.js"),
-    | "finalizeInboundContext"
+    | "buildChannelInboundEventContext"
     | "readSessionUpdatedAt"
     | "recordInboundSession"
     | "resolveInboundLastRouteSessionKey"

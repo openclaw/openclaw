@@ -1,7 +1,8 @@
-import AjvPkg from "ajv";
+/** Tests exec SecretRef id validation parity with provider contract helpers. */
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
+import { SecretRefSchema as GatewaySecretRefSchema } from "../../packages/gateway-protocol/src/schema.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
-import { SecretRefSchema as GatewaySecretRefSchema } from "../gateway/protocol/schema/primitives.js";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import {
   INVALID_FILE_SECRET_REF_IDS,
@@ -21,10 +22,10 @@ import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpe
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 describe("exec SecretRef id parity", () => {
-  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-  const ajv = new Ajv({ allErrors: true, strict: false });
-  const validateGatewaySecretRef = ajv.compile(GatewaySecretRefSchema);
+  const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
+  const validEnvSecretRefIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
+  const invalidEnvSecretRefIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
 
   function configAcceptsExecRef(id: string): boolean {
     const result = validateConfigObjectRaw({
@@ -74,23 +75,67 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+  function planAcceptsRef(ref: { source: "env" | "file" | "exec"; provider: string; id: string }) {
+    return isSecretsApplyPlan({
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-03-10T00:00:00.000Z",
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          providerId: TALK_TEST_PROVIDER_ID,
+          ref,
+        },
+      ],
+    });
+  }
+
+  for (const id of [...validEnvSecretRefIds, ...invalidEnvSecretRefIds]) {
+    it(`keeps plan/gateway/plugin parity for env id "${id}"`, () => {
+      const expected = validEnvSecretRefIds.includes(id);
+      expect(planAcceptsRef({ source: "env", provider: "default", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "env", provider: "default", id })).toBe(
+        expected,
+      );
+      expect(
+        pluginSdkSecretInput.safeParse({ source: "env", provider: "default", id }).success,
+      ).toBe(expected);
+    });
+  }
+
   for (const id of [...VALID_FILE_SECRET_REF_IDS, ...INVALID_FILE_SECRET_REF_IDS]) {
     it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
       const expected = isValidFileSecretRefId(id);
       expect(configAcceptsFileRef(id)).toBe(expected);
-      expect(validateGatewaySecretRef({ source: "file", provider: "default", id })).toBe(expected);
+      expect(planAcceptsRef({ source: "file", provider: "default", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "file", provider: "default", id })).toBe(
+        expected,
+      );
       expect(
         pluginSdkSecretInput.safeParse({ source: "file", provider: "default", id }).success,
       ).toBe(expected);
     });
   }
 
+  it("rejects invalid provider aliases across plan/gateway/plugin refs", () => {
+    const ref = { source: "env" as const, provider: "Default", id: "OPENAI_API_KEY" };
+
+    expect(planAcceptsRef(ref)).toBe(false);
+    expect(validateGatewaySecretRef.Check(ref)).toBe(false);
+    expect(pluginSdkSecretInput.safeParse(ref).success).toBe(false);
+  });
+
   for (const id of [...VALID_EXEC_SECRET_REF_IDS, ...INVALID_EXEC_SECRET_REF_IDS]) {
     it(`keeps config/plan/gateway/plugin parity for exec id "${id}"`, () => {
       const expected = isValidExecSecretRefId(id);
       expect(configAcceptsExecRef(id)).toBe(expected);
       expect(planAcceptsExecRef(id)).toBe(expected);
-      expect(validateGatewaySecretRef({ source: "exec", provider: "vault", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "exec", provider: "vault", id })).toBe(
+        expected,
+      );
       expect(
         pluginSdkSecretInput.safeParse({ source: "exec", provider: "vault", id }).success,
       ).toBe(expected);

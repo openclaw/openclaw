@@ -1,3 +1,4 @@
+// Openshell tests cover mirror plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +18,14 @@ async function makeTmpDir(): Promise<string> {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 afterEach(async () => {

@@ -1,3 +1,4 @@
+/** Tests external plugin channel secret contract API loading. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +43,12 @@ function requireChannelSecretContractApi(
     throw new Error("expected channel secret contract API");
   }
   return api;
+}
+
+function expectDiscordTokenRegistryEntry(contractApi: ChannelSecretContractApi): void {
+  const entries = contractApi.secretTargetRegistryEntries ?? [];
+  const entry = entries.find((record) => record.id === "channels.discord.token");
+  expect(entry?.id).toBe("channels.discord.token");
 }
 
 function channelSecretContractModuleSource(channelId: string) {
@@ -114,13 +121,7 @@ describe("external channel secret contract api", () => {
     });
 
     const contractApi = requireChannelSecretContractApi(api);
-    expect(contractApi.secretTargetRegistryEntries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "channels.discord.token",
-        }),
-      ]),
-    );
+    expectDiscordTokenRegistryEntry(contractApi);
     expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
@@ -151,13 +152,7 @@ describe("external channel secret contract api", () => {
     });
 
     const contractApi = requireChannelSecretContractApi(api);
-    expect(contractApi.secretTargetRegistryEntries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "channels.discord.token",
-        }),
-      ]),
-    );
+    expectDiscordTokenRegistryEntry(contractApi);
     expect(contractApi.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
@@ -199,13 +194,7 @@ describe("external channel secret contract api", () => {
         env,
       });
       const contractApi = requireChannelSecretContractApi(api);
-      expect(contractApi.secretTargetRegistryEntries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "channels.discord.token",
-          }),
-        ]),
-      );
+      expectDiscordTokenRegistryEntry(contractApi);
     },
   );
 

@@ -1,3 +1,10 @@
+/**
+ * Exec tool display summaries.
+ *
+ * Turns common shell commands into short redacted labels for tool timelines and transcripts.
+ */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { redactToolPayloadText } from "../logging/redact.js";
 import {
   binaryName,
   firstPositional,
@@ -11,7 +18,6 @@ import {
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
-import { asRecord } from "./tool-display-record.js";
 
 function summarizeKnownExec(words: string[]): string {
   if (words.length === 0) {
@@ -297,6 +303,57 @@ type ExecSummary = {
   allGeneric?: boolean;
 };
 
+function normalizePathForDisplay(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+function classifyWorkspacePath(
+  path: string,
+): "agent" | "repo" | "sandbox" | "workspace" | undefined {
+  const normalized = normalizePathForDisplay(path);
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length === 0) {
+    return undefined;
+  }
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!segment) {
+      continue;
+    }
+    if (segment === ".openclaw" && segments[index + 1] === "workspace") {
+      return "agent";
+    }
+    if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
+      return "sandbox";
+    }
+    if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
+      return "agent";
+    }
+    if (/^workspace[-_]/i.test(segment)) {
+      return "agent";
+    }
+  }
+
+  if (segments.includes("Projects") || segments.includes("projects")) {
+    return "repo";
+  }
+
+  if (segments.at(-1)?.toLowerCase() === "workspace") {
+    return "workspace";
+  }
+
+  return undefined;
+}
+
+function formatCwdSuffix(cwd: string): string | undefined {
+  const workspace = classifyWorkspacePath(cwd);
+  if (workspace === "sandbox") {
+    return undefined;
+  }
+  return workspace ? `(${workspace})` : `(in ${cwd})`;
+}
+
 function summarizeExecCommand(command: string): ExecSummary | undefined {
   const { command: cleaned, chdirPath } = stripShellPreamble(command);
   if (!cleaned) {
@@ -375,14 +432,17 @@ function isGenericSummary(summary: string): boolean {
 }
 
 function compactRawCommand(raw: string, maxLength = 120): string {
-  const oneLine = raw
-    .replace(/\s*\n\s*/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  const oneLine = redactToolPayloadText(
+    raw
+      .replace(/\s*\n\s*/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim(),
+  );
   if (oneLine.length <= maxLength) {
     return oneLine;
   }
-  return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
+  const half = Math.floor((maxLength - 1) / 2);
+  return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
 }
 
 export type ToolDetailMode = "explain" | "raw";
@@ -401,6 +461,11 @@ export function resolveExecDetail(
     return undefined;
   }
 
+  const nodeName =
+    record.host === "node" && typeof record.node === "string" && record.node.trim()
+      ? record.node.trim()
+      : undefined;
+
   const unwrapped = unwrapShellWrapper(raw);
   const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
   const summary = result?.text || "run command";
@@ -414,19 +479,23 @@ export function resolveExecDetail(
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
   const compact = compactRawCommand(unwrapped);
+  const cwdSuffix = cwd ? formatCwdSuffix(cwd) : undefined;
+  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
+
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} (in ${cwd})` : compact;
+    const base = cwdSuffix ? `${compact} ${cwdSuffix}` : compact;
+    return `${base}${nodeFragment}`;
   }
 
-  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
+  const displaySummary = cwdSuffix ? `${summary} ${cwdSuffix}` : summary;
   if (
     options?.detailMode !== "explain" &&
     compact &&
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary} · \`${compact}\``;
+    return `${displaySummary}${nodeFragment} · \`${compact}\``;
   }
 
-  return displaySummary;
+  return `${displaySummary}${nodeFragment}`;
 }

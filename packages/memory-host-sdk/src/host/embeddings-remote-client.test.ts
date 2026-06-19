@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover embeddings remote client behavior.
 import { describe, expect, it, vi } from "vitest";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 
@@ -12,13 +13,15 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
           models: {
             providers: {
               openai: {
-                apiKey: "sk-config",
                 baseUrl: "https://proxy.example.test/openai/v1",
               },
             },
           },
         } as never,
         model: "text-embedding-3-small",
+        remote: {
+          apiKey: "sk-test",
+        },
       },
     });
 
@@ -36,8 +39,8 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
         remote: {
           apiKey: "sk-test",
           headers: {
-            originator: "pi",
-            "User-Agent": "pi",
+            originator: "openclaw",
+            "User-Agent": "openclaw",
           },
         },
       },

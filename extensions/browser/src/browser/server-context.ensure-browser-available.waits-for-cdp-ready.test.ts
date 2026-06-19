@@ -1,15 +1,15 @@
+// Browser tests cover server context.ensure browser available.waits for cdp ready plugin behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
-import {
-  PROFILE_ATTACH_RETRY_TIMEOUT_MS,
-  PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-} from "./cdp-timeouts.js";
+import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
+
+const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
 
 function setupEnsureBrowserAvailableHarness() {
   vi.useFakeTimers();
@@ -47,6 +47,16 @@ function createAttachOnlyLoopbackProfile(cdpUrl: string) {
   });
   const ctx = createBrowserRouteContext({ getState: () => state });
   return { profile: ctx.forProfile("manual-cdp"), state };
+}
+
+function requireFirstLaunchOptions(launchOpenClawChrome: {
+  mock: { calls: unknown[][] };
+}): unknown {
+  const [call] = launchOpenClawChrome.mock.calls;
+  if (!call) {
+    throw new Error("expected Chrome launch call");
+  }
+  return call[2];
 }
 
 afterEach(() => {
@@ -149,7 +159,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     await expect(promise).resolves.toBeUndefined();
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(launchOpenClawChrome.mock.calls[0]?.[2]).toEqual({ headlessOverride: true });
+    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual({ headlessOverride: true });
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
@@ -179,7 +189,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(launchOpenClawChrome.mock.calls[0]?.[2]).toEqual({ headlessOverride: true });
+    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual({ headlessOverride: true });
   });
 
   it("does not share inflight lazy-start promises across different headless overrides", async () => {

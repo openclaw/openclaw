@@ -1,3 +1,6 @@
+/**
+ * Tests channel lifecycle queue ordering and failure handling.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { createChannelRunQueue } from "./channel-lifecycle.core.js";
 
@@ -68,11 +71,15 @@ describe("createChannelRunQueue", () => {
 
     await flushAsyncWork();
 
-    expect(setStatus).toHaveBeenCalledWith({ activeRuns: 0, busy: false });
-    expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ activeRuns: 1, busy: true }));
-    expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({ activeRuns: 0, busy: false }),
-    );
+    expect(setStatus).toHaveBeenCalledTimes(3);
+    const [initialStatus, busyStatus, finalStatus] = setStatus.mock.calls.map(([status]) => status);
+    expect(initialStatus).toEqual({ activeRuns: 0, busy: false });
+    expect(busyStatus?.activeRuns).toBe(1);
+    expect(busyStatus?.busy).toBe(true);
+    expect(typeof busyStatus?.lastRunActivityAt).toBe("number");
+    expect(finalStatus?.activeRuns).toBe(0);
+    expect(finalStatus?.busy).toBe(false);
+    expect(typeof finalStatus?.lastRunActivityAt).toBe("number");
     expect(onError).toHaveBeenCalledWith(taskError);
   });
 

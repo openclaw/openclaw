@@ -1,3 +1,4 @@
+// Slack tests cover blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -105,6 +106,7 @@ describe("parseSlackModalPrivateMetadata", () => {
           channelId: "D123",
           channelType: "im",
           userId: "U123",
+          pluginInteractiveData: "dean.contract:confirm",
           ignored: "x",
         }),
       ),
@@ -113,6 +115,7 @@ describe("parseSlackModalPrivateMetadata", () => {
       channelId: "D123",
       channelType: "im",
       userId: "U123",
+      pluginInteractiveData: "dean.contract:confirm",
     });
   });
 });
@@ -126,12 +129,14 @@ describe("encodeSlackModalPrivateMetadata", () => {
           channelId: "",
           channelType: "im",
           userId: "U123",
+          pluginInteractiveData: "dean.contract:confirm",
         }),
       ),
     ).toEqual({
       sessionKey: "agent:main:slack:channel:C1",
       channelType: "im",
       userId: "U123",
+      pluginInteractiveData: "dean.contract:confirm",
     });
   });
 

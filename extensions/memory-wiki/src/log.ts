@@ -1,9 +1,10 @@
+// Memory Wiki plugin module implements log behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 
 type MemoryWikiLogEntry = {
-  type: "init" | "ingest" | "compile" | "lint";
+  type: "init" | "ingest" | "okf-import" | "compile" | "lint";
   timestamp: string;
   details?: Record<string, unknown>;
 };

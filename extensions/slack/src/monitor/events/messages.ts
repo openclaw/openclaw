@@ -1,6 +1,16 @@
+// Slack plugin module implements messages behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createSubsystemLogger,
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
+import {
+  asOptionalRecord as asRecord,
+  normalizeOptionalString as asString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
@@ -10,6 +20,22 @@ import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
+// Mirrors the Telegram `[telegram]` inbound logger so cross-channel journal-grep
+// workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
+const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
+
+export function formatSlackInboundLogLine(params: {
+  workspaceId: string;
+  channelId: string;
+  channelType: string;
+  userId: string;
+  botUserId: string;
+  bodyChars: number;
+}): string {
+  const from = `slack:${params.workspaceId}:channel:${params.channelId}:user:${params.userId}`;
+  return `Inbound app_mention ${from} -> bot:${params.botUserId} (${params.channelType}, ${params.bodyChars} chars)`;
+}
+
 type SlackAssistantMessageRecord = {
   bot_id?: unknown;
   user?: unknown;
@@ -18,19 +44,10 @@ type SlackAssistantMessageRecord = {
   thread_ts?: unknown;
   files?: unknown;
   attachments?: unknown;
+  assistant_thread?: unknown;
   metadata?: unknown;
   blocks?: unknown;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function isSlackUserId(value: string): boolean {
   return /^[UW][A-Z0-9]+$/.test(value);
@@ -107,6 +124,11 @@ function resolveAssistantMessageChangedInbound(params: {
     botUserId: params.ctx.botUserId,
   });
   if (!senderId) {
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `slack: assistant_app_thread message_changed in DM channel=${changed.channel} dropped: no sender resolved from metadata`,
+      );
+    }
     return undefined;
   }
   return {
@@ -118,6 +140,11 @@ function resolveAssistantMessageChangedInbound(params: {
     ts: asString(message.ts) ?? asString(changed.event_ts),
     thread_ts: asString(message.thread_ts),
     event_ts: changed.event_ts,
+    assistant_thread:
+      asRecord(message.assistant_thread) ??
+      asRecord(
+        (changed as SlackMessageChangedEvent & { assistant_thread?: unknown }).assistant_thread,
+      ),
     files: Array.isArray(message.files) ? (message.files as SlackMessageEvent["files"]) : undefined,
     attachments: Array.isArray(message.attachments)
       ? (message.attachments as SlackMessageEvent["attachments"])
@@ -210,6 +237,21 @@ export function registerSlackMessageEvents(params: {
       if (channelType === "im" || channelType === "mpim") {
         return;
       }
+
+      // Emit a per-inbound receipt before dispatch so a silently-dropped mention
+      // (e.g. router consumes it without a tool call) still leaves journal evidence,
+      // matching the Telegram inbound log. Runs after the DM drop above, so duplicate
+      // DM app_mention events (already handled via message.im) produce no line.
+      slackInboundLog.info(
+        formatSlackInboundLogLine({
+          workspaceId: ctx.teamId,
+          channelId: mention.channel,
+          channelType: channelType ?? "channel",
+          userId: asString(mention.user) ?? "unknown",
+          botUserId: ctx.botUserId,
+          bodyChars: asString(mention.text)?.length ?? 0,
+        }),
+      );
 
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",

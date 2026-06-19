@@ -1,3 +1,4 @@
+// Matrix tests cover config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
@@ -83,6 +84,24 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolved.deviceName).toBe("EnvDevice");
     expect(resolved.initialSyncLimit).toBeUndefined();
     expect(resolved.encryption).toBe(false);
+  });
+
+  it("ignores non-finite initial sync limits", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          initialSyncLimit: Number.NaN,
+          accounts: {
+            ops: {
+              initialSyncLimit: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
+    expect(resolved.initialSyncLimit).toBeUndefined();
   });
 
   it("resolves accessToken SecretRef against the provided env", () => {
@@ -307,12 +326,18 @@ describe("Matrix auth/config live surfaces", () => {
 
     const resolved = resolveMatrixAuthContext({ cfg, env });
     expect(resolved.accountId).toBe("default");
-    expect(resolved.resolved).toMatchObject({
+    expect(resolved.resolved).toEqual({
       homeserver: "https://matrix.gumadeiras.com",
       userId: "@pinguini:matrix.gumadeiras.com",
+      accessToken: undefined,
       password: "cfg-pass",
+      deviceId: undefined,
       deviceName: "OpenClaw Gateway Pinguini",
+      initialSyncLimit: undefined,
       encryption: true,
+      allowPrivateNetwork: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
     });
   });
 

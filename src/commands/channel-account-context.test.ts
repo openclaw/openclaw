@@ -1,3 +1,4 @@
+// Channel account context tests cover default account resolution and read-only account inspection fallback.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -76,9 +77,9 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.enabled).toBe(false);
     expect(result.configured).toBe(false);
     expect(result.degraded).toBe(true);
-    expect(result.diagnostics).toEqual(
-      expect.arrayContaining([expect.stringContaining("failed to resolve account")]),
-    );
+    expect(result.diagnostics).toStrictEqual([
+      "status: channels.demo.accounts.acc-err: failed to resolve account (missing secret); skipping read-only checks.",
+    ]);
   });
 
   it("prefers inspectAccount in read_only mode", async () => {

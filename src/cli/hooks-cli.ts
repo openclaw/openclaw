@@ -1,4 +1,12 @@
+// Hooks CLI for listing, checking, toggling, installing, and updating hook integrations.
 import type { Command } from "commander";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,9 +21,6 @@ import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
@@ -46,6 +51,7 @@ function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntr
 }
 
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
+  // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
   const pluginReport = buildPluginDiagnosticsReport({ config, workspaceDir });
@@ -103,14 +109,15 @@ function formatHookStatus(hook: HookStatusEntry): string {
     return theme.success("✓ ready");
   }
   if (!hook.enabledByConfig) {
-    return theme.warn("⏸ disabled");
+    return theme.warn(decorativePrefix("⏸", "disabled"));
   }
   return theme.error("✗ missing");
 }
 
 function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? "🔗";
-  return `${emoji} ${theme.command(hook.name)}`;
+  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const name = theme.command(hook.name);
+  return emoji ? `${emoji} ${name}` : name;
 }
 
 function formatHookSource(hook: HookStatusEntry): string {
@@ -266,14 +273,14 @@ export function formatHookInfo(
   }
 
   const lines: string[] = [];
-  const emoji = hook.emoji ?? "🔗";
+  const emoji = hook.emoji ?? decorativeEmoji("🔗");
   const status = hook.loadable
     ? theme.success("✓ Ready")
     : !hook.enabledByConfig
-      ? theme.warn("⏸ Disabled")
+      ? theme.warn(decorativePrefix("⏸", "Disabled"))
       : theme.error("✗ Missing requirements");
 
-  lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
+  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
   lines.push("");
   lines.push(hook.description);
   lines.push("");
@@ -409,7 +416,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.missing.os.length > 0) {
         reasons.push(`os: ${hook.missing.os.join(", ")}`);
       }
-      lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+      const emoji = hook.emoji ?? decorativeEmoji("🔗");
+      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
     }
   }
 
@@ -432,7 +440,7 @@ export async function enableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
   );
 }
 
@@ -447,7 +455,7 @@ export async function disableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
   );
 }
 
@@ -522,7 +530,12 @@ export function registerHooksCli(program: Command): void {
     .description("Internal native harness hook relay")
     .requiredOption("--provider <provider>", "Native harness provider")
     .requiredOption("--relay-id <id>", "Native hook relay id")
+    .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
+    .option(
+      "--pre-tool-use-unavailable <mode>",
+      "PreToolUse fallback mode when the originating relay is unavailable",
+    )
     .option("--timeout <ms>", "Gateway timeout in ms", "5000")
     .action(async (opts: NativeHookRelayCliOptions) =>
       runHooksCliAction(async () => {
@@ -540,7 +553,7 @@ export function registerHooksCli(program: Command): void {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
-      await runPluginInstallCommand({ raw, opts });
+      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
     });
 
   hooks

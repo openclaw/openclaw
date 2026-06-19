@@ -31,11 +31,7 @@ extension OnboardingView {
     }
 
     func openSettings(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
+        AppNavigationActions.openSettings(tab: tab)
     }
 
     func handleBack() {
@@ -54,8 +50,7 @@ extension OnboardingView {
     }
 
     func finish() {
-        UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
-        UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        OnboardingController.markComplete()
         OnboardingController.shared.close()
     }
 

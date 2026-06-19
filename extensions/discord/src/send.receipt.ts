@@ -1,9 +1,10 @@
+// Discord plugin module implements send.receipt behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { DiscordSendResult } from "./send.types.js";
 
 export type DiscordReceiptResultSource = {

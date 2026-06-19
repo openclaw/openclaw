@@ -22,9 +22,22 @@ enum OpenClawAppModelRegistry {
 
 @MainActor
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
-    private let backgroundWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "BackgroundWake")
-    private static let wakeRefreshTaskIdentifier = "ai.openclaw.ios.bgrefresh"
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "Push")
+    private let backgroundWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "BackgroundWake")
+    private static var wakeRefreshTaskIdentifier: String {
+        "\(appBundleIdentifier).bgrefresh"
+    }
+
+    private static var appBundleIdentifier: String {
+        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleId.isEmpty
+        else {
+            return "ai.openclawfoundation.app"
+        }
+
+        return bundleId
+    }
+
     private var backgroundWakeTask: Task<Bool, Never>?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
@@ -91,6 +104,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     #if DEBUG
     func _test_resolvedAppModel() -> NodeAppModel? {
         self.resolvedAppModel()
+    }
+
+    func _test_wakeRefreshTaskIdentifier() -> String {
+        Self.wakeRefreshTaskIdentifier
     }
     #endif
 
@@ -602,6 +619,8 @@ extension NodeAppModel {
 struct OpenClawApp: App {
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
+        AppAppearancePreference.system.rawValue
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -609,33 +628,89 @@ struct OpenClawApp: App {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
+        #if DEBUG
+        if Self.screenshotModeEnabled {
+            UIView.setAnimationsEnabled(false)
+            UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
+            UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
+            UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
+            appModel.enterScreenshotFixtureMode()
+        }
+        #endif
         OpenClawAppModelRegistry.appModel = appModel
         _appModel = State(initialValue: appModel)
-        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+        _gatewayController = State(
+            initialValue: GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: !Self.screenshotModeEnabled))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootCanvas()
+            RootTabs()
+                .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
                     self.appDelegate.appModel = self.appModel
+                    self.applyAppearancePreference()
+                    self.gatewayController.setScenePhase(self.scenePhase)
                 }
                 .onOpenURL { url in
-                    Task { await self.appModel.handleDeepLink(url: url) }
+                    Task { await self.handleOpenURL(url) }
+                }
+                .onChange(of: self.appearancePreferenceRaw) { _, _ in
+                    self.applyAppearancePreference()
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
+                    self.applyAppearancePreference()
                 }
         }
+    }
+
+    private var appearancePreference: AppAppearancePreference {
+        AppAppearancePreference.launchArgumentPreference
+            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
+            ?? .system
+    }
+
+    private static var screenshotModeEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")
+        #else
+        false
+        #endif
+    }
+
+    @MainActor
+    private func applyAppearancePreference() {
+        let style = self.appearancePreference.userInterfaceStyle
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { window in
+                window.overrideUserInterfaceStyle = style
+            }
     }
 }
 
 extension OpenClawApp {
+    @MainActor
+    private func handleOpenURL(_ url: URL) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case .agent, .dashboard:
+            await self.appModel.handleDeepLink(url: url)
+        case let .gateway(link):
+            self.appModel.stageGatewaySetupLink(link)
+        }
+    }
+
     private static func installUncaughtExceptionLogger() {
         NSLog("OpenClaw: installing uncaught exception handler")
         NSSetUncaughtExceptionHandler { exception in

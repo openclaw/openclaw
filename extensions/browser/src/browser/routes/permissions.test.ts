@@ -1,3 +1,4 @@
+// Browser tests cover permissions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -37,7 +38,7 @@ vi.mock("../cdp.helpers.js", () => ({
   withCdpSocket: cdpMocks.withCdpSocket,
 }));
 
-const { registerBrowserPermissionRoutes, __testing } = await import("./permissions.js");
+const { registerBrowserPermissionRoutes, testing } = await import("./permissions.js");
 
 function createProfileContext() {
   return {
@@ -87,7 +88,7 @@ describe("browser permission routes", () => {
     cdpMocks.getChromeWebSocketUrl.mockClear();
     cdpMocks.send.mockReset().mockResolvedValue({});
     cdpMocks.withCdpSocket.mockClear();
-    __testing.setDepsForTest(null);
+    testing.setDepsForTest(null);
     pwMocks.getPwAiModule.mockReset().mockResolvedValue(null);
     pwMocks.getPageForTargetId.mockClear();
     pwMocks.grantPermissions.mockClear();
@@ -97,7 +98,7 @@ describe("browser permission routes", () => {
     pwMocks.getPwAiModule.mockResolvedValue({
       getPageForTargetId: pwMocks.getPageForTargetId,
     } as never);
-    __testing.setDepsForTest({ getPwAiModule: pwMocks.getPwAiModule as never });
+    testing.setDepsForTest({ getPwAiModule: pwMocks.getPwAiModule as never });
 
     const { response } = await callGrant({
       origin: "https://meet.google.com/abc-defg-hij",
@@ -107,7 +108,7 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expect(response.body).toStrictEqual({
       ok: true,
       origin: "https://meet.google.com",
       grantedPermissions: ["audioCapture", "videoCapture"],
@@ -134,11 +135,12 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expect(response.body).toStrictEqual({
       ok: true,
       origin: "https://meet.google.com",
       grantedPermissions: ["audioCapture", "videoCapture", "speakerSelection"],
       unsupportedPermissions: [],
+      grantMethod: "cdp",
     });
     expect(profileCtx.ensureBrowserAvailable).toHaveBeenCalled();
     expect(cdpMocks.getChromeWebSocketUrl).toHaveBeenCalledWith("http://127.0.0.1:18800", 1234, {
@@ -147,6 +149,33 @@ describe("browser permission routes", () => {
     expect(cdpMocks.send).toHaveBeenCalledWith("Browser.grantPermissions", {
       origin: "https://meet.google.com",
       permissions: ["audioCapture", "videoCapture", "speakerSelection"],
+    });
+  });
+
+  it("rejects loose timeoutMs values before granting permissions", async () => {
+    const { response, profileCtx } = await callGrant({
+      origin: "https://meet.google.com",
+      permissions: ["audioCapture"],
+      timeoutMs: "1e3",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toStrictEqual({ error: "timeoutMs must be a positive integer." });
+    expect(profileCtx.ensureBrowserAvailable).not.toHaveBeenCalled();
+    expect(cdpMocks.getChromeWebSocketUrl).not.toHaveBeenCalled();
+    expect(cdpMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps the minimum permission timeout for small valid values", async () => {
+    const { response } = await callGrant({
+      origin: "https://meet.google.com",
+      permissions: ["audioCapture"],
+      timeoutMs: "1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.getChromeWebSocketUrl).toHaveBeenCalledWith("http://127.0.0.1:18800", 1000, {
+      allowPrivateNetwork: false,
     });
   });
 
@@ -166,10 +195,12 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expect(response.body).toStrictEqual({
       ok: true,
+      origin: "https://meet.google.com",
       grantedPermissions: ["audioCapture", "videoCapture"],
       unsupportedPermissions: ["speakerSelection"],
+      grantMethod: "cdp",
     });
     expect(cdpMocks.send).toHaveBeenNthCalledWith(2, "Browser.grantPermissions", {
       origin: "https://meet.google.com",

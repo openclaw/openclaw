@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+// Control UI tests cover format behavior.
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  formatDateTimeMs,
+  formatDateMs,
+  formatMs,
   formatRelativeTimestamp,
+  formatTimeMs,
   formatUnknownText,
   parseSessionKeyParts,
+  setUiTimeFormatPreference,
   stripThinkingTags,
 } from "./format.ts";
 
@@ -34,6 +40,63 @@ describe("formatAgo", () => {
   it("returns 'n/a' for null/undefined", () => {
     expect(formatRelativeTimestamp(null)).toBe("n/a");
     expect(formatRelativeTimestamp(undefined)).toBe("n/a");
+  });
+});
+
+describe("formatMs", () => {
+  it("formats epoch timestamps", () => {
+    expect(formatMs(0)).not.toBe("n/a");
+  });
+
+  it("returns n/a for Date-invalid timestamps", () => {
+    expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
+    expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
+  });
+});
+
+describe("date/time millisecond formatters", () => {
+  it("return fallback text for Date-invalid timestamps", () => {
+    expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
+    expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
+    expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
+  });
+});
+
+describe("agents.defaults.timeFormat preference", () => {
+  // 19:30 UTC: 24-hour renders "19:30", 12-hour renders "7:30 PM".
+  const ts = Date.UTC(2026, 0, 15, 19, 30);
+  const opts: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  };
+
+  afterEach(() => {
+    setUiTimeFormatPreference("auto");
+  });
+
+  it("forces a 24-hour clock when preference is 24", () => {
+    setUiTimeFormatPreference("24");
+    expect(formatTimeMs(ts, opts, "")).toBe("19:30");
+  });
+
+  it("forces a 12-hour clock when preference is 12", () => {
+    setUiTimeFormatPreference("12");
+    const formatted = formatTimeMs(ts, opts, "");
+    expect(formatted).toContain("7:30");
+    expect(formatted).toMatch(/PM/i);
+  });
+
+  it("lets the caller override the resolved hour cycle", () => {
+    setUiTimeFormatPreference("24");
+    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toMatch(/PM/i);
+  });
+
+  it("leaves rendering to the browser locale default for auto", () => {
+    setUiTimeFormatPreference("auto");
+    const auto = formatDateTimeMs(ts, opts, "");
+    const native = new Date(ts).toLocaleString([], opts);
+    expect(auto).toBe(native);
   });
 });
 

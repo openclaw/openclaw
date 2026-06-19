@@ -1,5 +1,10 @@
+/**
+ * iMessage channel config types shared by core schema, bundled plugin runtime, and plugin SDK exports.
+ * Root fields apply to the default account; `accounts` entries override them per account.
+ */
 import type {
   BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -8,10 +13,11 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+/** Private-API and helper actions the iMessage runtime may expose to agents. */
 export type IMessageActionConfig = {
   reactions?: boolean;
   edit?: boolean;
@@ -26,6 +32,11 @@ export type IMessageActionConfig = {
   sendAttachment?: boolean;
 };
 
+/** Inbound tapback notification policy. */
+export type IMessageReactionNotificationMode = "off" | "own" | "all";
+export type IMessageSendTransport = "auto" | "bridge" | "applescript";
+
+/** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -47,6 +58,8 @@ export type IMessageAccountConfig = {
   actions?: IMessageActionConfig;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
+  /** Preferred imsg RPC send transport. Default: auto. */
+  sendTransport?: IMessageSendTransport;
   /** Optional default region (used when sending SMS). */
   region?: string;
   /** Direct message access policy (default: pairing). */
@@ -86,11 +99,20 @@ export type IMessageAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Structured streaming + chunking settings. */
+  streaming?: ChannelDeliveryStreamingConfig;
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** When private API is available, mark inbound chats read before dispatch (default: true). */
   sendReadReceipts?: boolean;
+  /**
+   * Controls inbound tapback notifications:
+   * - "off": ignore tapbacks
+   * - "own" (default): notify only when users react to bot-authored messages
+   * - "all": notify for all inbound tapbacks from authorized senders
+   */
+  reactionNotifications?: IMessageReactionNotificationMode;
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
    * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
@@ -157,15 +179,10 @@ export type IMessageAccountConfig = {
   responsePrefix?: string;
 };
 
+/** Top-level iMessage config, with optional account map layered over default account fields. */
 export type IMessageConfig = {
   /** Optional per-account iMessage configuration (multi-account). */
   accounts?: Record<string, IMessageAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & IMessageAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    imessage?: IMessageConfig;
-  }
-}

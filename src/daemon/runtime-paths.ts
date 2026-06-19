@@ -1,11 +1,12 @@
+/** Selects stable Node runtime paths for daemon installs across platforms. */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -44,6 +45,8 @@ function buildSystemNodeCandidates(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
 ): string[] {
+  // Prefer system package-manager Node paths over shell-managed shims; daemons
+  // launch without interactive shell init files.
   if (platform === "darwin") {
     return [
       "/opt/homebrew/bin/node",
@@ -104,12 +107,14 @@ async function isVersionManagedRealNodePath(
 ): Promise<boolean> {
   try {
     const realPath = await fs.realpath(nodePath);
+    // Symlinks in /usr/local/bin can resolve into version-manager trees.
     return isVersionManagedNodePath(realPath, platform);
   } catch {
     return false;
   }
 }
 
+/** True when a Node path lives under a known user version-manager root. */
 export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
@@ -118,6 +123,7 @@ export function isVersionManagedNodePath(
   return VERSION_MANAGER_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+/** True when a Node path matches known system install candidates for the platform. */
 export function isSystemNodePath(
   nodePath: string,
   env: Record<string, string | undefined> = process.env,
@@ -130,6 +136,7 @@ export function isSystemNodePath(
   });
 }
 
+/** Resolves the first available system Node candidate for the platform. */
 export async function resolveSystemNodePath(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -146,6 +153,7 @@ export async function resolveSystemNodePath(
   return null;
 }
 
+/** Resolves system Node info, preferring a supported non-version-managed install. */
 export async function resolveSystemNodeInfo(params: {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
@@ -178,6 +186,7 @@ export async function resolveSystemNodeInfo(params: {
   return firstAvailable;
 }
 
+/** Renders a warning when the system Node exists but is below the supported floor. */
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
   selectedNodePath?: string,
@@ -187,10 +196,11 @@ export function renderSystemNodeWarning(
   }
   const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
-  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.16+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
+  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.19+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
 }
 export { resolveStableNodePath };
 
+/** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
   runtime?: string;
@@ -212,6 +222,8 @@ export async function resolvePreferredNodePath(params: {
       if (!isVersionManagedNodePath(currentExecPath, platform)) {
         return stableCurrentPath;
       }
+      // Prefer system Node over a version-manager shim so daemon launch survives
+      // shell setup differences and package manager upgrades.
       const systemNode = await resolveSystemNodeInfo({
         env: params.env,
         platform,
@@ -224,7 +236,7 @@ export async function resolvePreferredNodePath(params: {
     }
   }
 
-  // Fall back to system node.
+  // Fall back to system Node when the current executable is unsupported or not Node.
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;

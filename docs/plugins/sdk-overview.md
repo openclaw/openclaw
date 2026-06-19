@@ -14,9 +14,8 @@ reference for **what to import** and **what you can register**.
 <Note>
   This page is for plugin authors using `openclaw/plugin-sdk/*` inside
   OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
-  that want to run agents through the Gateway, use the
-  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
-  instead.
+  that want to run agents through the Gateway, use
+  [Gateway integrations for external apps](/gateway/external-apps) instead.
 </Note>
 
 <Tip>
@@ -72,7 +71,15 @@ entry, channel, provider, auth, runtime, capability, memory, and reserved
 bundled-plugin helpers). For the full catalog — grouped and linked — see
 [Plugin SDK subpaths](/plugins/sdk-subpaths).
 
-The generated list of 200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
+The compiler entrypoint inventory lives in
+`scripts/lib/plugin-sdk-entrypoints.json`; package exports are generated from
+the public subset after subtracting repo-local test/internal subpaths listed in
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Run
+`pnpm plugin-sdk:surface` to audit the public export count. Deprecated public
+subpaths that are old enough and unused by bundled extension production code are
+tracked in `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; broad
+deprecated re-export barrels are tracked in
+`scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json`.
 
 ## Registration API
 
@@ -87,6 +94,7 @@ methods:
 | `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend           |
 | `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
@@ -97,7 +105,29 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
 | `api.registerWebSearchProvider(...)`             | Web search                            |
 
+Embedding providers registered with `api.registerEmbeddingProvider(...)` must
+also be listed in `contracts.embeddingProviders` in the plugin manifest. This
+is the generic embedding surface for reusable vector generation. Memory search
+can consume this generic provider surface. The older
+`api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
+existing memory-specific providers migrate.
+
+Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
+the existing per-file batching contract unless their runtime explicitly sets
+`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
+to the host batch limits. Batch adapters that upload JSONL request files must
+split provider jobs before their upload-size cap as well as their request-count
+cap. The provider must return one embedding per input chunk in the same order as
+`batch.chunks`; omit the flag when the provider expects file-local batches or
+cannot preserve input ordering across a larger source-wide job.
+
 ### Tools and commands
+
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
 
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
@@ -107,6 +137,27 @@ methods:
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
+];
+```
+
+Structured `surfaces` may include `openclaw_main`, `codex_app_server`,
+`cli_backend`, `acp_backend`, or `subagent`. `pi_main` remains a deprecated alias
+for `openclaw_main`. Omit `surfaces` for intentional all-surface guidance. Do
+not pass an empty `surfaces` array; it is rejected so accidental scope loss does
+not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 
@@ -132,25 +183,62 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                   | Contract it owns                                                                                                                  |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
-| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
-| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation                                                            |
-| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
-| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
-| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
-| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                                                                     |
-| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
-| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
+| Method                                                                               | Contract it owns                                                                                                                  |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                               |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                    |
+
+Use the grouped namespaces for new plugin code:
+
+- `api.session.state.registerSessionExtension(...)`
+- `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.registerSessionSchedulerJob(...)`
+- `api.session.workflow.sendSessionAttachment(...)`
+- `api.session.workflow.scheduleSessionTurn(...)`
+- `api.session.workflow.unscheduleSessionTurnsByTag(...)`
+- `api.session.controls.registerSessionAction(...)`
+- `api.session.controls.registerControlUiDescriptor(...)`
+- `api.agent.events.registerAgentEventSubscription(...)`
+- `api.agent.events.emitAgentEvent(...)`
+- `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
+- `api.lifecycle.registerRuntimeLifecycle(...)`
+
+The equivalent flat methods remain available as deprecated compatibility
+aliases for existing plugins. Do not add new plugin code that calls
+`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
+`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
+`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
+`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
+`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
+`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
+`api.unscheduleSessionTurnsByTag` directly.
+
+`scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
+Cron scheduler. Cron owns timing and creates the background task record when the
+turn runs; the Plugin SDK only constrains the target session, plugin-owned
+naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
+turn when the work itself needs durable multi-step Task Flow state.
 
 The contracts intentionally split authority:
 
 - External plugins can own session extensions, UI descriptors, commands, tool
   metadata, next-turn injections, and normal hooks.
 - Trusted tool policies run before ordinary `before_tool_call` hooks and are
-  bundled-only because they participate in host safety policy.
+  host-trusted. Bundled policies run first; installed-plugin policies require
+  explicit enablement plus their local ids in
+  `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
+  are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
@@ -175,16 +263,18 @@ Examples of non-Plan consumers:
 </Note>
 
 <Accordion title="When to use tool-result middleware">
-  Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
+  Bundled plugins and explicitly enabled installed plugins with matching
+  manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
   they need to rewrite a tool result after execution and before the runtime
   feeds that result back into the model. This is the trusted runtime-neutral
   seam for async output reducers such as tokenjuice.
 
-Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted runtime, for example `["pi", "codex"]`. External plugins
-cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing. The old Pi-only embedded
-extension factory registration path has been removed.
+Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
+runtime, for example `["openclaw", "codex"]`. Installed plugins without that
+contract, or without explicit enablement, cannot register this middleware; keep
+normal OpenClaw plugin hooks for work that does not need pre-model tool-result
+timing. The old
+embedded-runner-only extension factory registration path has been removed.
 </Accordion>
 
 ### Gateway discovery registration
@@ -278,9 +368,9 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.
@@ -288,22 +378,25 @@ AI CLI backend such as `codex-cli`.
   (for example normalizing old flag shapes).
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
-  flag.
+  flag. The hook receives `ctx.executionMode`; use `"side-question"` to add
+  backend-native isolation flags for ephemeral `/btw` calls. If those flags
+  reliably disable native tools for an otherwise always-on CLI, declare
+  `sideQuestionToolMode: "disabled"` too.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                         |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
+| Method                                     | What it registers                                                                                                                                                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
-### Memory embedding adapters
+### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |
 | ---------------------------------------------- | ---------------------------------------------- |
@@ -319,12 +412,12 @@ For an end-to-end authoring guide, see
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
-  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
-  plugin-defined id).
-- User config such as `agents.defaults.memorySearch.provider` and
-  `agents.defaults.memorySearch.fallback` resolves against those registered
-  adapter ids.
+- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
+  should use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`.
+- Existing memory-specific providers continue to work during the migration
+  window, but plugin inspection reports this as compatibility debt for
+  non-bundled plugins.
 
 ### Events and lifecycle
 
@@ -337,6 +430,10 @@ See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
 semantics.
 
 ### Hook decision semantics
+
+`before_install` is a plugin-runtime lifecycle hook, not the operator install
+policy surface. Use `security.installPolicy` when an allow/block decision must
+cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.

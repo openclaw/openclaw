@@ -1,5 +1,6 @@
+// Line plugin module implements outbound media behavior.
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LineOutboundMediaKind = "image" | "video" | "audio";
 
@@ -38,20 +39,6 @@ export async function validateLineMediaUrl(url: string): Promise<void> {
   await resolvePinnedHostnameWithPolicy(parsed.hostname, {
     policy: LINE_OUTBOUND_MEDIA_SSRF_POLICY,
   });
-}
-
-export function detectLineMediaKind(mimeType: string): LineOutboundMediaKind {
-  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
-  if (normalized.startsWith("image/")) {
-    return "image";
-  }
-  if (normalized.startsWith("video/")) {
-    return "video";
-  }
-  if (normalized.startsWith("audio/")) {
-    return "audio";
-  }
-  return "image";
 }
 
 function isHttpsUrl(url: string): boolean {

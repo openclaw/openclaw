@@ -1,3 +1,8 @@
+/**
+ * PTY fallback runtime tests.
+ * Verifies PTY-requested exec sessions can fall back through the supervisor
+ * path while still emitting diagnostics and registry state.
+ */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -80,6 +85,14 @@ function runPtyFallback(warnings: string[] = []) {
   });
 }
 
+function spawnInput(index: number): SpawnInput {
+  const call = supervisorSpawnMock.mock.calls[index] as [SpawnInput] | undefined;
+  if (!call) {
+    throw new Error(`expected supervisor spawn call ${index}`);
+  }
+  return call[0];
+}
+
 test("exec falls back when PTY spawn fails", async () => {
   supervisorSpawnMock
     .mockRejectedValueOnce(new Error("pty spawn failed"))
@@ -92,10 +105,8 @@ test("exec falls back when PTY spawn fails", async () => {
   expect(outcome.status).toBe("completed");
   expect(outcome.aggregated).toContain("ok");
   expect(warnings.join("\n")).toContain("PTY spawn failed");
-  const firstSpawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as SpawnInput | undefined;
-  const secondSpawnInput = supervisorSpawnMock.mock.calls[1]?.[0] as SpawnInput | undefined;
-  expect(firstSpawnInput?.mode).toBe("pty");
-  expect(secondSpawnInput?.mode).toBe("child");
+  expect(spawnInput(0).mode).toBe("pty");
+  expect(spawnInput(1).mode).toBe("child");
 });
 
 test("exec cleans session state when PTY fallback spawn also fails", async () => {
@@ -109,7 +120,9 @@ test("exec cleans session state when PTY fallback spawn also fails", async () =>
 });
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 test("exec emits bounded process diagnostics without command text", async () => {
@@ -141,11 +154,13 @@ test("exec emits bounded process diagnostics without command text", async () => 
     const event = events.find(
       (item): item is DiagnosticExecProcessCompletedEvent => item.type === "exec.process.completed",
     );
-    expect(event).toBeDefined();
-    expect(event?.type).toBe("exec.process.completed");
-    expect(event?.target).toBe("host");
-    expect(event?.mode).toBe("child");
-    expect(event?.outcome).toBe("completed");
+    if (!event) {
+      throw new Error("Expected exec process completed event");
+    }
+    expect(event.type).toBe("exec.process.completed");
+    expect(event.target).toBe("host");
+    expect(event.mode).toBe("child");
+    expect(event.outcome).toBe("completed");
     expect(typeof event?.durationMs).toBe("number");
     expect(event?.commandLength).toBe(command.length);
     expect(event?.exitCode).toBe(0);

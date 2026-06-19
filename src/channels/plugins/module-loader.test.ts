@@ -1,3 +1,4 @@
+// Module loader tests cover channel plugin module resolution and import failure handling.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -24,6 +25,16 @@ function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-module-loader-"));
   tempDirs.push(tempDir);
   return tempDir;
+}
+
+function requireCreateJitiCall(
+  createJiti: ReturnType<typeof vi.fn>,
+): [string, { tryNative?: boolean }] {
+  const call = createJiti.mock.calls[0];
+  if (!call) {
+    throw new Error("expected createJiti call");
+  }
+  return call as [string, { tryNative?: boolean }];
 }
 
 describe("channel plugin module loader helpers", () => {
@@ -70,7 +81,9 @@ describe("channel plugin module loader helpers", () => {
       loadedBy: "jiti",
       target,
     }));
-    const createJiti = vi.fn(() => loadWithJiti);
+    const createJiti = vi.fn(
+      (_filename: string, _options: { tryNative?: boolean }) => loadWithJiti,
+    );
     const sourceExtensions = [".ts", ".tsx", ".mts", ".cts"] as const;
     const sourceHooks = new Map<string, NodeJS.RequireExtensions[string] | undefined>();
     for (const extension of sourceExtensions) {
@@ -100,10 +113,9 @@ describe("channel plugin module loader helpers", () => {
         target: fs.realpathSync.native(modulePath),
       });
       expect(createJiti).toHaveBeenCalledOnce();
-      expect(createJiti).toHaveBeenCalledWith(
-        expect.stringContaining("module-loader.ts"),
-        expect.objectContaining({ tryNative: false }),
-      );
+      const [loaderFilename, loaderOptions] = requireCreateJitiCall(createJiti);
+      expect(loaderFilename).toContain("module-loader.ts");
+      expect(loaderOptions.tryNative).toBe(false);
       expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
     } finally {
       for (const [extension, hook] of sourceHooks) {

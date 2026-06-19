@@ -1,4 +1,9 @@
+// Gateway client bootstrap tests keep URL override provenance wired into shared
+// auth resolution so CLI and env callers authenticate against the intended target.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolveGatewayConnectionAuth } from "./connection-auth.js";
+
+type AuthResolutionParams = Parameters<typeof resolveGatewayConnectionAuth>[0];
 
 const mockState = vi.hoisted(() => ({
   buildGatewayConnectionDetails: vi.fn(),
@@ -17,6 +22,20 @@ vi.mock("./connection-auth.js", () => ({
 
 const { resolveGatewayClientBootstrap, resolveGatewayUrlOverrideSource } =
   await import("./client-bootstrap.js");
+
+function expectLastAuthResolutionParams(expected: {
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
+}) {
+  const [params] = mockState.resolveGatewayConnectionAuth.mock.calls.at(-1) ?? [];
+  if (params === undefined) {
+    throw new Error("Expected shared auth resolution to be called");
+  }
+  const authParams = params as AuthResolutionParams;
+  expect(authParams.env).toBe(process.env);
+  expect(authParams.urlOverride).toBe(expected.urlOverride);
+  expect(authParams.urlOverrideSource).toBe(expected.urlOverrideSource);
+}
 
 describe("resolveGatewayUrlOverrideSource", () => {
   it("maps override url sources only", () => {
@@ -57,13 +76,10 @@ describe("resolveGatewayClientBootstrap", () => {
         password: undefined,
       },
     });
-    expect(mockState.resolveGatewayConnectionAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        urlOverride: "wss://override.example/ws",
-        urlOverrideSource: "cli",
-      }),
-    );
+    expectLastAuthResolutionParams({
+      urlOverride: "wss://override.example/ws",
+      urlOverrideSource: "cli",
+    });
   });
 
   it("does not mark config-derived urls as overrides", async () => {
@@ -77,13 +93,10 @@ describe("resolveGatewayClientBootstrap", () => {
       env: process.env,
     });
 
-    expect(mockState.resolveGatewayConnectionAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        urlOverride: undefined,
-        urlOverrideSource: undefined,
-      }),
-    );
+    expectLastAuthResolutionParams({
+      urlOverride: undefined,
+      urlOverrideSource: undefined,
+    });
   });
 
   it("carries configured preauth handshake timeout for GatewayClient callers", async () => {

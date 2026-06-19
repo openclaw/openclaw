@@ -1,7 +1,12 @@
+// Control UI chat module implements realtime talk webrtc behavior.
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   createRealtimeTalkEventEmitter,
+  steerRealtimeTalkActiveConsult,
+  shouldAutoControlRealtimeVoiceAgentText,
+  submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
@@ -14,6 +19,7 @@ type RealtimeServerEvent = {
   name?: string;
   delta?: string;
   transcript?: string;
+  text?: string;
   arguments?: string;
   error?: unknown;
   response?: {
@@ -28,12 +34,17 @@ type ToolBuffer = {
   args: string;
 };
 
+const cancelledSetup = Symbol("cancelledSetup");
+
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
   private closed = false;
+  private responseActive = false;
+  private responseCreateInFlight = false;
+  private responseCreatePending = false;
   private toolBuffers = new Map<string, ToolBuffer>();
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
@@ -50,27 +61,44 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
-    this.peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection();
+    this.peer = peer;
     this.audio = document.createElement("audio");
     this.audio.autoplay = true;
     this.audio.style.display = "none";
     document.body.append(this.audio);
-    this.peer.addEventListener("track", (event) => {
+    peer.addEventListener("track", (event) => {
       if (this.audio) {
         this.audio.srcObject = event.streams[0];
       }
     });
-    this.media = await navigator.mediaDevices.getUserMedia({ audio: true });
-    for (const track of this.media.getAudioTracks()) {
-      this.peer.addTrack(track, this.media);
+    const media = await this.awaitSetupStep(
+      peer,
+      navigator.mediaDevices.getUserMedia({ audio: true }),
+    );
+    if (media === cancelledSetup) {
+      return;
     }
-    this.channel = this.peer.createDataChannel("oai-events");
-    this.channel.addEventListener("open", () => {
+    if (!this.isCurrentPeer(peer)) {
+      media.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.media = media;
+    for (const track of media.getAudioTracks()) {
+      peer.addTrack(track, media);
+    }
+    const channel = peer.createDataChannel("oai-events");
+    if (!this.isCurrentPeer(peer)) {
+      channel.close();
+      return;
+    }
+    this.channel = channel;
+    channel.addEventListener("open", () => {
       this.ctx.callbacks.onStatus?.("listening");
       this.emitTalkEvent({ type: "session.ready" });
     });
-    this.channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
-    this.peer.addEventListener("connectionstatechange", () => {
+    channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
+    peer.addEventListener("connectionstatechange", () => {
       if (this.closed) {
         return;
       }
@@ -79,24 +107,73 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     });
 
-    const offer = await this.peer.createOffer();
-    await this.peer.setLocalDescription(offer);
-    const sdp = await fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
-      method: "POST",
-      body: offer.sdp,
-      headers: {
-        ...this.session.offerHeaders,
-        Authorization: `Bearer ${this.session.clientSecret}`,
-        "Content-Type": "application/sdp",
-      },
-    });
+    const offer = await this.awaitSetupStep(peer, peer.createOffer());
+    if (offer === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    const localDescriptionResult = await this.awaitSetupStep(peer, peer.setLocalDescription(offer));
+    if (localDescriptionResult === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    const sdp = await this.awaitSetupStep(
+      peer,
+      fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          ...this.session.offerHeaders,
+          Authorization: `Bearer ${this.session.clientSecret}`,
+          "Content-Type": "application/sdp",
+        },
+      }),
+    );
+    if (sdp === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
     if (!sdp.ok) {
       throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
     }
-    await this.peer.setRemoteDescription({
-      type: "answer",
-      sdp: await sdp.text(),
-    });
+    const answerSdp = await this.awaitSetupStep(peer, sdp.text());
+    if (answerSdp === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    await this.awaitSetupStep(
+      peer,
+      peer.setRemoteDescription({
+        type: "answer",
+        sdp: answerSdp,
+      }),
+    );
+  }
+
+  private isCurrentPeer(peer: RTCPeerConnection): boolean {
+    return !this.closed && this.peer === peer;
+  }
+
+  private async awaitSetupStep<T>(
+    peer: RTCPeerConnection,
+    promise: Promise<T>,
+  ): Promise<T | typeof cancelledSetup> {
+    try {
+      return await promise;
+    } catch (error) {
+      if (!this.isCurrentPeer(peer)) {
+        return cancelledSetup;
+      }
+      throw error;
+    }
   }
 
   stop(): void {
@@ -117,6 +194,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     this.consultAbortControllers.clear();
     this.toolBuffers.clear();
+    this.responseActive = false;
+    this.responseCreateInFlight = false;
+    this.responseCreatePending = false;
   }
 
   private send(event: unknown): void {
@@ -145,22 +225,31 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             itemId: event.item_id,
             payload: { role: "user", text: event.transcript },
           });
+          if (
+            this.consultAbortControllers.size > 0 &&
+            shouldAutoControlRealtimeVoiceAgentText(event.transcript)
+          ) {
+            void steerRealtimeTalkActiveConsult({
+              ctx: this.ctx,
+              text: event.transcript,
+              emitTalkEvent: this.emitTalkEvent,
+              onControlResult: (result) => this.interruptSuppressedControlResponse(result),
+              speakControlResult: (message) => this.sendControlSpeechMessage(message),
+              suppressSpeechForModes: ["cancel"],
+            });
+          }
         }
         return;
+      case "conversation.output_transcript.delta":
+      case "response.output_text.delta":
+      case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
+        this.emitAssistantTranscript(event, false);
+        return;
+      case "response.output_text.done":
       case "response.audio_transcript.done":
-        if (event.transcript) {
-          this.ctx.callbacks.onTranscript?.({
-            role: "assistant",
-            text: event.transcript,
-            final: true,
-          });
-          this.emitTalkEvent({
-            type: "output.text.done",
-            final: true,
-            itemId: event.item_id,
-            payload: { text: event.transcript },
-          });
-        }
+      case "response.output_audio_transcript.done":
+        this.emitAssistantTranscript(event, true);
         return;
       case "response.function_call_arguments.delta":
         this.bufferToolDelta(event);
@@ -177,32 +266,60 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.emitTalkEvent({ type: "input.audio.committed", final: true });
         return;
       case "response.created":
+        this.responseActive = true;
+        this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("thinking", "Generating response");
         return;
+      case "response.cancelled":
       case "response.done":
+        this.responseActive = false;
+        this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
         this.emitTalkEvent({
           type: "turn.ended",
           final: true,
-          payload: { status: event.response?.status ?? "completed" },
+          payload: {
+            status:
+              event.response?.status ??
+              (event.type === "response.cancelled" ? "cancelled" : "completed"),
+          },
         });
+        this.flushPendingResponseCreate();
         return;
       case "error":
+        this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
         this.emitTalkEvent({
           type: "session.error",
           final: true,
           payload: { message: this.extractErrorDetail(event.error) },
         });
-        return;
+
       default:
-        return;
     }
   }
 
   private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
     const status = event.response?.status;
     return status && status !== "completed" ? `Response ${status}` : undefined;
+  }
+
+  private emitAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {
+    const text = final ? (event.transcript ?? event.text) : event.delta;
+    if (!text) {
+      return;
+    }
+    this.ctx.callbacks.onTranscript?.({
+      role: "assistant",
+      text,
+      final,
+    });
+    this.emitTalkEvent({
+      type: final ? "output.text.done" : "output.text.delta",
+      final,
+      itemId: event.item_id,
+      payload: { text },
+    });
   }
 
   private extractErrorDetail(error: unknown): string {
@@ -236,7 +353,20 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.toolBuffers.delete(key);
     const name = buffered?.name || event.name || "";
     const callId = buffered?.callId || event.call_id || "";
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME || !callId) {
+    if (!callId) {
+      return;
+    }
+    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
+      await submitRealtimeTalkAgentControl({
+        ctx: this.ctx,
+        callId,
+        args: buffered?.args || event.arguments || "{}",
+        emitTalkEvent: this.emitTalkEvent,
+        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+      });
+      return;
+    }
+    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       return;
     }
     this.emitTalkEvent({
@@ -253,6 +383,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         callId,
         args: buffered?.args || event.arguments || "{}",
         signal: abortController.signal,
+        emitTalkEvent: this.emitTalkEvent,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
@@ -269,6 +400,52 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         output: JSON.stringify(result),
       },
     });
+    this.requestResponseCreate();
+  }
+
+  private sendControlSpeechMessage(message: string): void {
+    if (this.responseActive) {
+      this.send({ type: "response.cancel" });
+    }
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: message }],
+      },
+    });
+    this.requestResponseCreate();
+  }
+
+  private interruptSuppressedControlResponse(result: unknown): void {
+    if (!this.responseActive || !result || typeof result !== "object") {
+      return;
+    }
+    const record = result as Record<string, unknown>;
+    if (
+      record.ok === true &&
+      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
+    ) {
+      this.send({ type: "response.cancel" });
+    }
+  }
+
+  private requestResponseCreate(): void {
+    if (this.responseActive || this.responseCreateInFlight) {
+      this.responseCreatePending = true;
+      return;
+    }
+    this.responseCreatePending = false;
+    this.responseCreateInFlight = true;
     this.send({ type: "response.create" });
+  }
+
+  private flushPendingResponseCreate(): void {
+    if (!this.responseCreatePending) {
+      return;
+    }
+    this.responseCreatePending = false;
+    this.requestResponseCreate();
   }
 }

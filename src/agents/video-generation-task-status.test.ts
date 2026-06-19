@@ -1,17 +1,26 @@
+// Video generation task-status tests cover active background task detection and
+// prompt/status text that prevents duplicate media generation requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.js";
 import {
   buildActiveVideoGenerationTaskPromptContextForSession,
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
-  getVideoGenerationTaskProviderId,
-  isActiveVideoGenerationTask,
   VIDEO_GENERATION_TASK_KIND,
 } from "./video-generation-task-status.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 
@@ -28,11 +37,17 @@ describe("video generation task status", () => {
   beforeEach(() => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+      taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+    );
+    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+    resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
   it("recognizes active session-backed video generation tasks", () => {
-    expect(
-      isActiveVideoGenerationTask({
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
         taskId: "task-1",
         runtime: "cli",
         taskKind: VIDEO_GENERATION_TASK_KIND,
@@ -45,10 +60,8 @@ describe("video generation task status", () => {
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
         createdAt: Date.now(),
-      }),
-    ).toBe(true);
-    expect(
-      isActiveVideoGenerationTask({
+      },
+      {
         taskId: "task-2",
         runtime: "cron",
         taskKind: VIDEO_GENERATION_TASK_KIND,
@@ -61,11 +74,15 @@ describe("video generation task status", () => {
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
         createdAt: Date.now(),
-      }),
-    ).toBe(false);
+      },
+    ]);
+
+    expect(findActiveVideoGenerationTaskForSession("agent:main")?.taskId).toBe("task-1");
   });
 
   it("prefers a running task over queued session siblings", () => {
+    // Running work should suppress duplicate generation even when older queued
+    // siblings still exist for the same session owner.
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-queued",
@@ -102,7 +119,6 @@ describe("video generation task status", () => {
 
     expect(task?.taskId).toBe("task-running");
     const activeTask = expectActiveVideoGenerationTask(task);
-    expect(getVideoGenerationTaskProviderId(activeTask)).toBe("openai");
     expect(buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true })).toContain(
       "Do not call video_generate again for this request.",
     );

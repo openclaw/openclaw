@@ -1,3 +1,4 @@
+// Control UI tests cover translate behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -134,10 +135,9 @@ describe("i18n", () => {
     const fresh = await importFreshTranslate();
 
     expect(fresh.i18n.getLocale()).toBe("en");
-    expect(warningSpy).not.toHaveBeenCalledWith(
+    const warningMessages = warningSpy.mock.calls.map((call) => String(call[0]));
+    expect(warningMessages).not.toContain(
       "`--localstorage-file` was provided without a valid path",
-      expect.anything(),
-      expect.anything(),
     );
   });
 

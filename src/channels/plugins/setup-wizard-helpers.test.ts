@@ -1,3 +1,4 @@
+// Setup wizard helper tests cover channel setup step formatting and config writes.
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
@@ -641,7 +642,7 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       placeholder: "placeholder",
       parseEntries: (raw) =>
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg }) => cfg.channels?.imessage?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg: cfgValue }) => cfgValue.channels?.imessage?.allowFrom ?? [],
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["alice"]);
@@ -673,8 +674,8 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) => ({ entries: [raw.trim()] }),
-      getExistingAllowFrom: ({ cfg, accountId }) =>
-        cfg.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg: cfgLocal, accountId }) =>
+        cfgLocal.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
     });
 
     expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["+15555550124"]);
@@ -2118,12 +2119,14 @@ describe("resolveAccountIdForConfigure", () => {
     });
 
     expect(accountId).toBe("prompted-id");
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Signal account",
-        initialValue: "fallback",
-      }),
-    );
+    const selectCalls = prompter.select.mock.calls as unknown as Array<
+      [{ message?: string; initialValue?: string }]
+    >;
+    const selectOptions = selectCalls[0]?.[0] as
+      | { message?: string; initialValue?: string }
+      | undefined;
+    expect(selectOptions?.message).toBe("Signal account");
+    expect(selectOptions?.initialValue).toBe("fallback");
     expect(prompter.text).not.toHaveBeenCalled();
   });
 });

@@ -1,16 +1,12 @@
-/**
- * Cron session reaper — prunes completed isolated cron run sessions
- * from the session store after a configurable retention period.
- *
- * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` are ephemeral
- * run records. The base session (`...:cron:<jobId>`) is kept as-is.
- */
-
+/** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+  type SessionEntryLifecycleRemoval,
+} from "../config/sessions/session-accessor.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
@@ -21,6 +17,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
 const lastSweepAtMsByStore = new Map<string, number>();
 
+/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
@@ -42,14 +39,10 @@ type ReaperResult = {
 };
 
 /**
- * Sweep the session store and prune expired cron run sessions.
- * Designed to be called from the cron timer tick — self-throttles via
- * MIN_SWEEP_INTERVAL_MS to avoid excessive I/O.
+ * Sweeps completed isolated cron run sessions while preserving base cron sessions.
  *
- * Lock ordering: this function acquires the session-store file lock via
- * `updateSessionStore`. It must be called OUTSIDE of the cron service's
- * own `locked()` section to avoid lock-order inversions. The cron timer
- * calls this after all `locked()` sections have been released.
+ * Must run outside the cron service `locked()` section because this acquires
+ * the session-store file lock; reversing that order can deadlock timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
@@ -64,7 +57,8 @@ export async function sweepCronRunSessions(params: {
   const storePath = params.sessionStorePath;
   const lastSweepAtMs = lastSweepAtMsByStore.get(storePath) ?? 0;
 
-  // Throttle: don't sweep more often than every 5 minutes.
+  // Timer ticks can be frequent; throttle per store path to avoid repeated
+  // session-store I/O while preserving a force path for deterministic tests.
   if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
@@ -76,28 +70,39 @@ export async function sweepCronRunSessions(params: {
   }
 
   let pruned = 0;
-  const prunedSessions = new Map<string, string | undefined>();
+  let transcriptCleanupError: unknown;
   try {
-    await updateSessionStore(storePath, (store) => {
-      const cutoff = now - retentionMs;
-      for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
-          continue;
-        }
-        const entry = store[key];
-        if (!entry) {
-          continue;
-        }
-        const updatedAt = entry.updatedAt ?? 0;
-        if (updatedAt < cutoff) {
-          if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
-            prunedSessions.set(entry.sessionId, entry.sessionFile);
-          }
-          delete store[key];
-          pruned++;
-        }
+    const cutoff = now - retentionMs;
+    const removals: SessionEntryLifecycleRemoval[] = [];
+    for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+      if (!isCronRunSessionKey(sessionKey)) {
+        continue;
       }
-    });
+      const updatedAt = entry.updatedAt ?? 0;
+      if (updatedAt < cutoff) {
+        removals.push({
+          sessionKey,
+          expectedEntry: entry,
+          ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
+          expectedUpdatedAt: entry.updatedAt,
+          archiveRemovedTranscript: true,
+        });
+      }
+    }
+    if (removals.length > 0) {
+      const result = await applySessionEntryLifecycleMutation({
+        storePath,
+        removals,
+        restrictArchivedTranscriptsToStoreDir: true,
+        cleanupArchivedTranscripts: {
+          rules: [{ reason: "deleted", olderThanMs: retentionMs }],
+          nowMs: now,
+        },
+        captureArtifactCleanupError: true,
+      });
+      pruned = result.removedEntries;
+      transcriptCleanupError = result.artifactCleanupError;
+    }
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
     return { swept: false, pruned: 0 };
@@ -105,32 +110,11 @@ export async function sweepCronRunSessions(params: {
 
   lastSweepAtMsByStore.set(storePath, now);
 
-  if (prunedSessions.size > 0) {
-    try {
-      const store = loadSessionStore(storePath, { skipCache: true });
-      const referencedSessionIds = new Set(
-        Object.values(store)
-          .map((entry) => entry?.sessionId)
-          .filter((id): id is string => Boolean(id)),
-      );
-      const archivedDirs = await archiveRemovedSessionTranscripts({
-        removedSessionFiles: prunedSessions,
-        referencedSessionIds,
-        storePath,
-        reason: "deleted",
-        restrictToStoreDir: true,
-      });
-      if (archivedDirs.size > 0) {
-        await cleanupArchivedSessionTranscripts({
-          directories: [...archivedDirs],
-          olderThanMs: retentionMs,
-          reason: "deleted",
-          nowMs: now,
-        });
-      }
-    } catch (err) {
-      params.log.warn({ err: String(err) }, "cron-reaper: transcript cleanup failed");
-    }
+  if (transcriptCleanupError) {
+    params.log.warn(
+      { err: formatErrorMessage(transcriptCleanupError) },
+      "cron-reaper: transcript cleanup failed",
+    );
   }
 
   if (pruned > 0) {
@@ -143,7 +127,7 @@ export async function sweepCronRunSessions(params: {
   return { swept: true, pruned };
 }
 
-/** Reset the throttle timer (for tests). */
+/** Resets per-store reaper throttles between tests. */
 export function resetReaperThrottle(): void {
   lastSweepAtMsByStore.clear();
 }

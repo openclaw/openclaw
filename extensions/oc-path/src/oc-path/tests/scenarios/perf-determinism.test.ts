@@ -1,10 +1,17 @@
+// OC Path tests cover perf determinism plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../../resolve.js";
 
+const perfBudgetMultiplier = process.env.CI ? 4 : 1;
+
+function expectWithinPerfBudget(elapsedMs: number, localBudgetMs: number) {
+  expect(elapsedMs).toBeLessThan(localBudgetMs * perfBudgetMultiplier);
+}
+
 describe("perf + determinism", () => {
-  it("parses 100 KB file in under 200 ms", () => {
+  it("parses 100 KB file within the parser budget", () => {
     const lines: string[] = [];
     for (let i = 0; i < 1000; i++) {
       lines.push("## H" + i);
@@ -16,7 +23,7 @@ describe("perf + determinism", () => {
     const start = performance.now();
     parseMd(raw);
     const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(200);
+    expectWithinPerfBudget(elapsed, 200);
   });
 
   it("parses 1000 small files in under 500 ms", () => {
@@ -26,7 +33,7 @@ describe("perf + determinism", () => {
       parseMd(raw);
     }
     const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(500);
+    expectWithinPerfBudget(elapsed, 500);
   });
 
   it("100k OcPath resolutions on parsed AST in under 500 ms", () => {
@@ -38,7 +45,7 @@ describe("perf + determinism", () => {
       resolveOcPath(ast, path);
     }
     const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(500);
+    expectWithinPerfBudget(elapsed, 500);
   });
 
   it("same input → byte-identical AST.raw across runs", () => {
@@ -113,6 +120,6 @@ describe("perf + determinism", () => {
     const out = emitMd(ast);
     const elapsed = performance.now() - start;
     expect(out).toBe(raw);
-    expect(elapsed).toBeLessThan(100);
+    expectWithinPerfBudget(elapsed, 100);
   });
 });

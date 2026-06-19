@@ -1,3 +1,4 @@
+// Line tests cover setup surface plugin behavior.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -19,11 +20,14 @@ import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
-  const getBotInfoMock = vi.fn();
-  const MessagingApiClientMock = vi.fn(function () {
-    return { getBotInfo: getBotInfoMock };
+  const getBotInfoMockLocal = vi.fn();
+  const MessagingApiClientMockLocal = vi.fn(function () {
+    return { getBotInfo: getBotInfoMockLocal };
   });
-  return { getBotInfoMock, MessagingApiClientMock };
+  return {
+    getBotInfoMock: getBotInfoMockLocal,
+    MessagingApiClientMock: MessagingApiClientMockLocal,
+  };
 });
 
 vi.mock("@line/bot-sdk", () => ({
@@ -388,11 +392,13 @@ describe("line runtime api", () => {
 });
 
 function createRuntime() {
-  const monitorLineProvider = vi.fn(async () => ({
-    account: { accountId: "default" },
-    handleWebhook: async () => {},
-    stop: () => {},
-  }));
+  const monitorLineProvider = vi.fn(
+    async (_opts: { accountId?: string; channelAccessToken: string; channelSecret: string }) => ({
+      account: { accountId: "default" },
+      handleWebhook: async () => {},
+      stop: () => {},
+    }),
+  );
 
   const runtime = {
     channel: {
@@ -464,14 +470,14 @@ describe("linePlugin gateway.startAccount", () => {
     });
 
     await vi.waitFor(() => {
-      expect(monitorLineProvider).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelAccessToken: "token",
-          channelSecret: "secret",
-          accountId: "default",
-        }),
-      );
+      expect(monitorLineProvider).toHaveBeenCalledTimes(1);
     });
+    const startupParams = (monitorLineProvider.mock.calls as unknown[][])[0]?.[0] as
+      | { accountId?: string; channelAccessToken?: string; channelSecret?: string }
+      | undefined;
+    expect(startupParams?.channelAccessToken).toBe("token");
+    expect(startupParams?.channelSecret).toBe("secret");
+    expect(startupParams?.accountId).toBe("default");
 
     abort.abort();
     await task;

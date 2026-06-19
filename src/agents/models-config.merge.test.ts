@@ -1,3 +1,4 @@
+// Verifies models.json provider/model merge behavior and secret preservation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExistingProviderConfig } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -8,6 +9,8 @@ let mergeProviders: typeof import("./models-config.merge.js").mergeProviders;
 let mergeWithExistingProviderSecrets: typeof import("./models-config.merge.js").mergeWithExistingProviderSecrets;
 
 async function loadMergeModules() {
+  // Merge helpers depend on real manifest registry behavior; undo previous
+  // mocks before importing the module under test.
   vi.doUnmock("../plugins/manifest-registry.js");
   ({ NON_ENV_SECRETREF_MARKER } = await import("./model-auth-markers.js"));
   ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
@@ -88,14 +91,17 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    const model = merged.models?.[0];
-    expect(merged.models).toHaveLength(1);
-    expect(model?.id).toBe("gpt-5.4");
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.reasoning).toBe(false);
-    expect(model?.cost).toEqual({ input: 123, output: 456, cacheRead: 0, cacheWrite: 0 });
-    expect(model?.contextWindow).toBe(2_000_000);
-    expect(model?.maxTokens).toBe(200_000);
+    expect(merged.models).toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        input: ["text"],
+        reasoning: false,
+        cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 2_000_000,
+        maxTokens: 200_000,
+      },
+    ]);
   });
 
   it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
@@ -127,10 +133,16 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    const model = merged.models?.[0];
-    expect(model?.id).toBe("qwen3-vl:latest");
-    expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.reasoning).toBe(true);
+    expect(merged.models).toEqual([
+      {
+        id: "qwen3-vl:latest",
+        name: "Qwen3 VL",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 128_000,
+        maxTokens: 8192,
+      },
+    ]);
   });
 
   it("merges explicit providers onto trimmed keys", () => {
@@ -171,7 +183,40 @@ describe("models-config merge helpers", () => {
     expect(merged["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
   });
 
+  it("drops stale invalid existing providers that would poison models.json", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        openai: createConfigProvider(),
+      },
+      existingProviders: {
+        "claude-cli": {
+          api: "anthropic-messages",
+          models: [
+            createModel({
+              id: "claude-sonnet-4-6",
+              name: "Claude Sonnet",
+              reasoning: true,
+            }),
+          ],
+        } as unknown as ExistingProviderConfig,
+        "auth-only": {
+          baseUrl: "https://auth.example/v1",
+          api: "openai-responses",
+          apiKey: preservedApiKey,
+          models: [],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["claude-cli"]).toBeUndefined();
+    expect(merged["auth-only"]?.apiKey).toBe(preservedApiKey);
+    expect(merged.openai).toBeDefined();
+  });
+
   it("preserves non-empty existing apiKey and baseUrl from models.json", () => {
+    // Existing local secrets win over regenerated provider config so planning
+    // does not overwrite operator-owned credentials.
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),

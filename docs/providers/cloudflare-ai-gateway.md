@@ -24,6 +24,15 @@ assistant prefill turns before sending the payload through Cloudflare AI Gateway
 Anthropic rejects response prefilling with extended thinking, while ordinary
 non-thinking prefill remains available.
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/cloudflare-ai-gateway-provider
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>
@@ -101,7 +110,7 @@ openclaw onboard --non-interactive \
     If the Gateway runs as a daemon (launchd/systemd), make sure `CLOUDFLARE_AI_GATEWAY_API_KEY` is available to that process.
 
     <Warning>
-    A key sitting only in `~/.profile` will not help a launchd/systemd daemon unless that environment is imported there as well. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway process can read it.
+    A key exported only in an interactive shell will not help a launchd/systemd daemon unless that environment is imported there as well. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway process can read it.
     </Warning>
 
   </Accordion>

@@ -1,17 +1,18 @@
+// Coordinates parsed reply directives before get-reply executes commands or agents.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
@@ -50,7 +51,9 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 const commandsRegistryLoader = createLazyImportLoader(
   () => import("../commands-registry.runtime.js"),
 );
-const skillCommandsLoader = createLazyImportLoader(() => import("../skill-commands.runtime.js"));
+const skillCommandsLoader = createLazyImportLoader(
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
+);
 
 function loadCommandsRegistry() {
   return commandsRegistryLoader.load();
@@ -102,7 +105,7 @@ function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: Temp
   };
 }
 
-export type ReplyDirectiveContinuation = {
+type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
   allowTextCommands: boolean;
@@ -142,7 +145,7 @@ export type ReplyDirectiveContinuation = {
   };
 };
 
-export type ReplyDirectiveResult =
+type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
 
@@ -166,9 +169,12 @@ export async function resolveReplyDirectives(params: {
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
@@ -194,8 +200,11 @@ export async function resolveReplyDirectives(params: {
     commandAuthorized,
     defaultProvider,
     defaultModel,
+    primaryProvider,
+    primaryModel,
     provider: initialProvider,
     model: initialModel,
+    skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -526,10 +535,14 @@ export async function resolveReplyDirectives(params: {
         storePath,
         defaultProvider,
         defaultModel,
+        primaryProvider,
+        primaryModel,
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
+        skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
+        isHeartbeat: opts?.isHeartbeat === true,
       });
   provider = modelState.provider;
   model = modelState.model;
@@ -572,6 +585,8 @@ export async function resolveReplyDirectives(params: {
         agentCfg,
         provider,
         model,
+        modelContextWindow: modelState.modelContextWindow,
+        modelContextTokens: modelState.modelContextTokens,
       });
 
   const initialModelLabel = `${provider}/${model}`;

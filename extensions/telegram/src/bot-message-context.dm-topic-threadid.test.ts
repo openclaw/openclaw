@@ -1,3 +1,4 @@
+// Telegram tests cover bot message contextm topic threadid plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRecordedUpdateLastRoute,
@@ -27,11 +28,13 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     message: Record<string, unknown>;
     options?: Record<string, unknown>;
     resolveGroupActivation?: () => boolean | undefined;
+    sessionRuntime?: Parameters<typeof buildTelegramMessageContextForTest>[0]["sessionRuntime"];
   }) {
     return await buildTelegramMessageContextForTest({
       message: params.message,
       options: params.options,
       resolveGroupActivation: params.resolveGroupActivation,
+      ...(params.sessionRuntime !== undefined ? { sessionRuntime: params.sessionRuntime } : {}),
     });
   }
 
@@ -73,6 +76,61 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     expectRecordedRoute({ to: "telegram:1234", threadId: "42" });
+  });
+
+  it("builds Telegram payloads through the shared channel turn context", async () => {
+    const { buildChannelInboundEventContext } = await import("openclaw/plugin-sdk/channel-inbound");
+    const buildChannelInboundEventContextMock = vi.fn(buildChannelInboundEventContext);
+
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        reply_to_message: {
+          message_id: 9,
+          date: 1_700_000_001,
+          text: "parent",
+          from: { id: 99, first_name: "Bob" },
+        },
+      },
+      sessionRuntime: {
+        buildChannelInboundEventContext:
+          buildChannelInboundEventContextMock as unknown as typeof buildChannelInboundEventContext,
+      },
+    });
+
+    expect(ctx?.ctxPayload.ReplyToBody).toBe("parent");
+    expect(buildChannelInboundEventContextMock).toHaveBeenCalledOnce();
+    const [turnOptions] = buildChannelInboundEventContextMock.mock.calls.at(0) ?? [];
+    expect(turnOptions?.channel).toBe("telegram");
+    expect(turnOptions?.from).toBe("telegram:1234");
+    expect(turnOptions?.message.rawBody).toBe("hello");
+    expect(turnOptions?.message.bodyForAgent).toBe("hello");
+    expect(turnOptions?.reply?.to).toBe("telegram:1234");
+    expect(turnOptions?.reply?.originatingTo).toBeUndefined();
+    expect(turnOptions?.reply?.replyToId).toBe("9");
+    expect(turnOptions?.supplemental?.quote?.id).toBe("9");
+    expect(turnOptions?.supplemental?.quote?.body).toBe("parent");
+    expect(turnOptions?.supplemental?.quote?.sender).toBe("Bob");
+    expect(turnOptions?.supplemental?.quote?.senderAllowed).toBe(true);
+  });
+
+  it("preserves voice-note source modality without treating ordinary audio as voice", async () => {
+    const voiceCtx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        voice: { file_id: "voice-1" },
+      },
+    });
+    const audioCtx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        audio: { file_id: "audio-1" },
+      },
+    });
+
+    expect(voiceCtx?.ctxPayload.SourceModality).toBe("voice");
+    expect(audioCtx?.ctxPayload.SourceModality).toBeUndefined();
   });
 
   it("does not pass threadId for regular DM without topic", async () => {

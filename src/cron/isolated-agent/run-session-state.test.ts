@@ -1,10 +1,15 @@
+// Run session state tests cover persisted session state for isolated cron agents.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createPersistCronSessionEntry, type MutableCronSession } from "./run-session-state.js";
+import {
+  adoptCronRunSessionMetadata,
+  createPersistCronSessionEntry,
+  type MutableCronSession,
+} from "./run-session-state.js";
 
 function makeSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return {
@@ -77,15 +82,12 @@ describe("createPersistCronSessionEntry", () => {
       async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
         const store: Record<string, SessionEntry> = {};
         update(store);
-        expect(store["agent:main:cron:shell-only"]).toEqual(
-          expect.objectContaining({
-            label: "Cron: shell-only",
-            status: "running",
-            updatedAt: 1000,
-          }),
-        );
-        expect(store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
-        expect(store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
+        expect(store["agent:main:cron:shell-only"]).toEqual({
+          label: "Cron: shell-only",
+          status: "running",
+          updatedAt: 1000,
+          systemSent: true,
+        });
       },
     );
 
@@ -119,10 +121,12 @@ describe("createPersistCronSessionEntry", () => {
         async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
           const store: Record<string, SessionEntry> = {};
           update(store);
-          expect(store["agent:main:cron:completed"]).toMatchObject({
+          expect(store["agent:main:cron:completed"]).toEqual({
             sessionId: "run-session-id",
             sessionFile: transcriptPath,
             label: "Cron: completed",
+            updatedAt: 1000,
+            systemSent: true,
           });
         },
       ),
@@ -130,9 +134,12 @@ describe("createPersistCronSessionEntry", () => {
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:completed"]).toMatchObject({
+    expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",
       sessionFile: transcriptPath,
+      label: "Cron: completed",
+      updatedAt: 1000,
+      systemSent: true,
     });
   });
 
@@ -156,6 +163,56 @@ describe("createPersistCronSessionEntry", () => {
     await persist();
 
     expect(cronSession.store["agent:main:session"]).toBe(cronSession.sessionEntry);
+  });
+
+  it("adopts rotated run transcript metadata before persisting session-bound cron state", async () => {
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        sessionId: "bound-session",
+        sessionFile: "/tmp/bound-session.jsonl",
+      }),
+    );
+    const changed = adoptCronRunSessionMetadata({
+      entry: cronSession.sessionEntry,
+      sessionKey: "agent:main:telegram:direct:42",
+      runMeta: {
+        sessionId: "bound-session-rotated",
+        sessionFile: "/tmp/bound-session-rotated.jsonl",
+      },
+    });
+    const updateSessionStore = vi.fn(
+      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
+        const store: Record<string, SessionEntry> = {};
+        update(store);
+        expect(store["agent:main:telegram:direct:42"]).toEqual({
+          sessionId: "bound-session-rotated",
+          sessionFile: "/tmp/bound-session-rotated.jsonl",
+          usageFamilyKey: "agent:main:telegram:direct:42",
+          usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
+          updatedAt: 1000,
+          systemSent: true,
+        });
+      },
+    );
+
+    expect(changed).toBe(true);
+    const persist = createPersistCronSessionEntry({
+      isFastTestEnv: false,
+      cronSession,
+      agentSessionKey: "agent:main:telegram:direct:42",
+      updateSessionStore,
+    });
+
+    await persist();
+
+    expect(cronSession.store["agent:main:telegram:direct:42"]).toEqual({
+      sessionId: "bound-session-rotated",
+      sessionFile: "/tmp/bound-session-rotated.jsonl",
+      usageFamilyKey: "agent:main:telegram:direct:42",
+      usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
+      updatedAt: 1000,
+      systemSent: true,
+    });
   });
 });
 

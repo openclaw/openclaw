@@ -1,3 +1,4 @@
+// Covers channel account metadata security audit findings.
 import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -43,12 +44,10 @@ function requireDangerousMatchingFinding(
   const finding = findings.find(
     (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
   );
-  expect(finding).toMatchObject({
-    checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
-  });
   if (!finding) {
     throw new Error("Expected dangerous name matching finding");
   }
+  expect(finding.checkId).toBe("channels.discord.allowFrom.dangerous_name_matching_enabled");
   return finding;
 }
 

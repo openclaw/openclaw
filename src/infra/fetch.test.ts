@@ -1,9 +1,12 @@
+// Covers fetch resolution and abort-signal wrapping.
 import { describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { resolveFetch, wrapFetchWithAbortSignal } from "./fetch.js";
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 function createForeignSignalHarness() {
@@ -37,7 +40,7 @@ function createThrowingCleanupSignalHarness(cleanupError: Error) {
   });
   const fakeSignal = {
     aborted: false,
-    addEventListener: (_event: string, _handler: () => void) => {},
+    addEventListener: (_eventValue: string, _handler: () => void) => {},
     removeEventListener,
   } as unknown as AbortSignal;
   return { fakeSignal, removeEventListener };
@@ -105,7 +108,7 @@ describe("wrapFetchWithAbortSignal", () => {
       duplex: "half",
     } as RequestInit & { duplex: "half" });
 
-    expect(getSeenInit()).toMatchObject({ duplex: "half" });
+    expect((getSeenInit() as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
   });
 
   it("converts foreign abort signals to native controllers", async () => {

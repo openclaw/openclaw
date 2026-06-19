@@ -1,7 +1,8 @@
+// Discord plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordApiError, fetchDiscord } from "./api.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -141,8 +142,9 @@ export async function probeDiscord(
       elapsedMs: Date.now() - started,
     };
   }
+  let res: Response | undefined;
   try {
-    const res = await fetchWithTimeout(
+    res = await fetchWithTimeout(
       `${DISCORD_API_BASE}/users/@me`,
       { headers: { Authorization: `Bot ${normalized}` } },
       timeoutMs,
@@ -171,6 +173,10 @@ export async function probeDiscord(
       error: formatErrorMessage(err),
       elapsedMs: Date.now() - started,
     };
+  } finally {
+    if (res?.bodyUsed !== true) {
+      await res?.body?.cancel().catch(() => undefined);
+    }
   }
 }
 

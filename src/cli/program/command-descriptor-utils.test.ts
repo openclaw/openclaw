@@ -1,3 +1,4 @@
+// Command descriptor utility tests cover CLI descriptor helpers and Commander integration.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,13 +7,14 @@ import {
   defineCommandDescriptorCatalog,
   getCommandDescriptorNames,
   getCommandsWithSubcommands,
+  getParentDefaultHelpCommands,
 } from "./command-descriptor-utils.js";
 
 describe("command-descriptor-utils", () => {
   const descriptors = [
     { name: "alpha", description: "Alpha", hasSubcommands: false },
     { name: "beta", description: "Beta", hasSubcommands: true },
-    { name: "gamma", description: "Gamma", hasSubcommands: true },
+    { name: "gamma", description: "Gamma", hasSubcommands: true, parentDefaultHelp: true },
   ] as const;
 
   it("returns descriptor names in order", () => {
@@ -21,6 +23,10 @@ describe("command-descriptor-utils", () => {
 
   it("returns commands with subcommands", () => {
     expect(getCommandsWithSubcommands(descriptors)).toEqual(["beta", "gamma"]);
+  });
+
+  it("returns commands with parent default help", () => {
+    expect(getParentDefaultHelpCommands(descriptors)).toEqual(["gamma"]);
   });
 
   it("collects unique descriptors across groups in order", () => {
@@ -49,6 +55,7 @@ describe("command-descriptor-utils", () => {
     expect(catalog.getDescriptors()).toBe(descriptors);
     expect(catalog.getNames()).toEqual(["alpha", "beta", "gamma"]);
     expect(catalog.getCommandsWithSubcommands()).toEqual(["beta", "gamma"]);
+    expect(catalog.getParentDefaultHelpCommands()).toEqual(["gamma"]);
   });
 
   it("adds descriptors without duplicating existing commands", () => {

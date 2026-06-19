@@ -1,3 +1,4 @@
+// Nostr tests cover nostr profile.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import {
@@ -53,8 +54,10 @@ describe("profile unicode attacks", () => {
       if (!result.profile) {
         throw new Error("expected validated profile");
       }
-      expect(result.valid).toBe(true);
-      expect(result.profile).toMatchObject({ name: "\u202Eevil\u202C" });
+      expect(result).toEqual({
+        valid: true,
+        profile: { name: "\u202Eevil\u202C" },
+      });
 
       // UI should escape or handle this
       const sanitized = sanitizeProfileForDisplay(result.profile);

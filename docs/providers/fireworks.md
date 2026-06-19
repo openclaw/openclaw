@@ -82,7 +82,7 @@ openclaw onboard --non-interactive \
 
 ## Custom Fireworks model ids
 
-OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input, OpenAI-compatible API, default cost zero) and disables thinking automatically when the id matches the Kimi pattern.
+OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input, OpenAI-compatible API, default cost zero) and disables thinking automatically when the id matches the Kimi pattern. GLM dynamic ids are marked text-only unless you configure a custom model entry with image input.
 
 ```json5
 {
@@ -118,7 +118,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
     If the Gateway runs as a managed service (launchd, systemd, Docker), the Fireworks key must be visible to that process — not just to your interactive shell.
 
     <Warning>
-      A key sitting only in `~/.profile` will not help a launchd or systemd daemon unless that environment is imported there too. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to make it readable from the gateway process.
+      A key exported only in an interactive shell will not help a launchd or systemd daemon unless that environment is imported there too. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to make it readable from the gateway process.
     </Warning>
 
     On macOS, `openclaw gateway install` already wires `~/.openclaw/.env` into the LaunchAgent environment file. Re-run install (or `openclaw doctor --fix`) after rotating the key.

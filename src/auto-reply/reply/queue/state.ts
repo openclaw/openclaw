@@ -1,7 +1,14 @@
+// Tracks queue state for active, pending, and recently deduped reply runs.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
-import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+import {
+  completeFollowupRunLifecycle,
+  type FollowupRun,
+  type QueueDropPolicy,
+  type QueueMode,
+  type QueueSettings,
+} from "./types.js";
 
 export type FollowupQueueState = {
   items: FollowupRun[];
@@ -13,6 +20,14 @@ export type FollowupQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  summarySources: FollowupRun[];
+  summaryElisions: Array<{
+    contextKey: string;
+    count: number;
+    source: FollowupRun;
+    sourceRefs: WeakSet<FollowupRun>;
+  }>;
+  evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];
 };
 
@@ -36,6 +51,17 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+function trimSummaryElisionsToCap(queue: FollowupQueueState): void {
+  while (queue.summaryElisions.length > queue.cap) {
+    const evicted = queue.summaryElisions.shift();
+    if (!evicted) {
+      return;
+    }
+    queue.evictedSummaryCount += evicted.count;
+    completeFollowupRunLifecycle(evicted.source);
+  }
+}
+
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
@@ -43,6 +69,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
       target: existing,
       settings,
     });
+    trimSummaryElisionsToCap(existing);
     return existing;
   }
 
@@ -62,6 +89,9 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
+    summarySources: [],
+    summaryElisions: [],
+    evictedSummaryCount: 0,
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -78,9 +108,21 @@ export function clearFollowupQueue(key: string): number {
     return 0;
   }
   const cleared = queue.items.length + queue.droppedCount;
+  for (const item of queue.items) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const item of queue.summarySources) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const entry of queue.summaryElisions) {
+    completeFollowupRunLifecycle(entry.source);
+  }
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
+  queue.summarySources = [];
+  queue.summaryElisions = [];
+  queue.evictedSummaryCount = 0;
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
@@ -110,10 +152,12 @@ export function refreshQueuedFollowupSession(params: {
     Boolean(params.previousSessionId) &&
     Boolean(params.nextSessionId) &&
     params.previousSessionId !== params.nextSessionId;
-  const shouldRewriteSelection =
+  const shouldRewriteModelSelection =
     typeof params.nextProvider === "string" ||
     typeof params.nextModel === "string" ||
-    Object.hasOwn(params, "nextModelOverrideSource") ||
+    Object.hasOwn(params, "nextModelOverrideSource");
+  const shouldRewriteSelection =
+    shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource");
   if (!shouldRewriteSession && !shouldRewriteSelection) {
@@ -138,6 +182,9 @@ export function refreshQueuedFollowupSession(params: {
       if (typeof params.nextModel === "string") {
         run.model = params.nextModel;
       }
+      if (shouldRewriteModelSelection) {
+        delete run.hasAutoFallbackProvenance;
+      }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
         run.hasSessionModelOverride = Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
@@ -154,5 +201,11 @@ export function refreshQueuedFollowupSession(params: {
   rewriteRun(queue.lastRun);
   for (const item of queue.items) {
     rewriteRun(item.run);
+  }
+  for (const item of queue.summarySources) {
+    rewriteRun(item.run);
+  }
+  for (const entry of queue.summaryElisions) {
+    rewriteRun(entry.source.run);
   }
 }

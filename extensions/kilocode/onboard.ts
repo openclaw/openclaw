@@ -1,3 +1,4 @@
+// Kilocode setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -17,10 +18,6 @@ const kilocodePresetAppliers = createModelCatalogPresetAppliers({
     aliases: [{ modelRef: KILOCODE_DEFAULT_MODEL_REF, alias: "Kilo Gateway" }],
   }),
 });
-
-export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return kilocodePresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return kilocodePresetAppliers.applyConfig(cfg);

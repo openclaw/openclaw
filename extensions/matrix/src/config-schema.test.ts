@@ -1,3 +1,4 @@
+// Matrix tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MatrixConfigSchema } from "./config-schema.js";
 
@@ -39,6 +40,15 @@ describe("MatrixConfigSchema SecretInput", () => {
         policy: "pairing",
         sessionScope: "per-room",
       },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts the Matrix name matching compatibility flag", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dangerouslyAllowNameMatching: true,
     });
     expect(result.success).toBe(true);
   });

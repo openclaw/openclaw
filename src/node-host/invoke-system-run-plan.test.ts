@@ -1,9 +1,11 @@
+/** Tests system.run approval plans, cwd snapshots, and mutable script operand binding. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
@@ -63,6 +65,22 @@ function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
 
 function sha256FileSync(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function canWritePathSync(targetPath: string): boolean {
+  try {
+    fs.accessSync(targetPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canMutateNativeBinaryFixturePath(binaryPath: string): boolean {
+  const realPath = fs.realpathSync(binaryPath);
+  return [binaryPath, path.dirname(binaryPath), realPath, path.dirname(realPath)].some((entry) =>
+    canWritePathSync(entry),
+  );
 }
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
@@ -137,17 +155,10 @@ function withFakeRuntimeBins<T>(params: {
     writeFakeRuntimeBin(sharedRuntimeBinDir, binName);
     sharedRuntimeBins.add(binName);
   }
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${sharedRuntimeBinDir}${path.delimiter}${oldPath ?? ""}`;
-  try {
-    return params.run();
-  } finally {
-    if (oldPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = oldPath;
-    }
-  }
+  return withEnv(
+    { PATH: `${sharedRuntimeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
+    params.run,
+  );
 }
 
 function uniqueRuntimeBinNames(
@@ -319,6 +330,16 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     },
   },
   {
+    name: "rejects node inline import values that contain equals signs",
+    binName: "node",
+    tmpPrefix: "openclaw-node-import-inline-equals-",
+    command: ["node", "--import=./pre=load.mjs", "./main.mjs"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
+      fs.writeFileSync(path.join(tmp, "pre=load.mjs"), 'console.log("SAFE")\n');
+    },
+  },
+  {
     name: "rejects ruby require preloads that approval cannot bind completely",
     binName: "ruby",
     tmpPrefix: "openclaw-ruby-require-",
@@ -434,17 +455,9 @@ describe("hardenApprovedExecutionPaths", () => {
     for (const testCase of cases) {
       runNamedCase(testCase.name, () => {
         const tmp = createFixtureDir("openclaw-approval-hardening-");
-        const oldPath = process.env.PATH;
         let pathToken: PathTokenSetup | null = null;
-        if (testCase.withPathToken) {
-          const binDir = path.join(tmp, "bin");
-          fs.mkdirSync(binDir, { recursive: true });
-          const link = path.join(binDir, "poccmd");
-          fs.symlinkSync("/bin/echo", link);
-          pathToken = { expected: fs.realpathSync(link) };
-          process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
-        }
-        try {
+
+        const checkCase = () => {
           if (testCase.mode === "build-plan") {
             const prepared = buildSystemRunApprovalPlan({
               command: testCase.argv,
@@ -481,15 +494,21 @@ describe("hardenApprovedExecutionPaths", () => {
           if (typeof testCase.expectedArgvChanged === "boolean") {
             expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
           }
-        } finally {
-          if (testCase.withPathToken) {
-            if (oldPath === undefined) {
-              delete process.env.PATH;
-            } else {
-              process.env.PATH = oldPath;
-            }
-          }
+        };
+
+        if (testCase.withPathToken) {
+          const binDir = path.join(tmp, "bin");
+          fs.mkdirSync(binDir, { recursive: true });
+          const link = path.join(binDir, "poccmd");
+          fs.symlinkSync("/bin/echo", link);
+          pathToken = { expected: fs.realpathSync(link) };
+          return withEnv(
+            { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+            checkCase,
+          );
         }
+
+        return checkCase();
       });
     }
   });
@@ -646,7 +665,7 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
-  it("allows shell payloads that invoke absolute-path native binaries", () => {
+  it("handles shell payloads that invoke absolute-path native binaries", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -656,6 +675,10 @@ describe("hardenApprovedExecutionPaths", () => {
       rawCommand: binaryPath,
       cwd: process.cwd(),
     });
+    if (canMutateNativeBinaryFixturePath(binaryPath)) {
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+      return;
+    }
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       throw new Error("unreachable");
@@ -883,7 +906,7 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],
       run: () => {
-        const cases = [
+        const casesResult = [
           {
             prefix: "openclaw-pnpm-dlx-package-bin-",
             command: ["pnpm", "dlx", "cowsay", "hello"],
@@ -912,7 +935,7 @@ describe("hardenApprovedExecutionPaths", () => {
             },
           },
         ];
-        for (const testCase of cases) {
+        for (const testCase of casesResult) {
           const tmp = createFixtureDir(testCase.prefix);
           testCase.setup?.(tmp);
           expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
@@ -945,22 +968,127 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("captures the real shell script operand after value-taking shell flags", () => {
-    const tmp = createFixtureDir("openclaw-shell-option-value-");
-    const scriptPath = path.join(tmp, "run.sh");
-    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
-    fs.writeFileSync(path.join(tmp, "errexit"), "decoy\n");
-    const snapshot = resolveMutableFileOperandSnapshotSync({
-      argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
-      cwd: tmp,
-      shellCommand: null,
-    });
-    expect(snapshot).toEqual({
-      ok: true,
-      snapshot: {
-        argvIndex: 3,
-        path: fs.realpathSync(scriptPath),
-        sha256: sha256FileSync(scriptPath),
+    const casesValue = [
+      {
+        name: "separate set option",
+        argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
       },
-    });
+      {
+        name: "combined set option",
+        argv: ["/bin/bash", "-eo", "pipefail", "./run.sh"],
+        decoyName: "pipefail",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "combined trace option",
+        argv: ["/bin/bash", "-xo", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "combined unset option",
+        argv: ["/bin/bash", "-uo", "nounset", "./run.sh"],
+        decoyName: "nounset",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "plus set option",
+        argv: ["/bin/bash", "+o", "histexpand", "./run.sh"],
+        decoyName: "histexpand",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "plus shopt option",
+        argv: ["/bin/bash", "+O", "extglob", "./run.sh"],
+        decoyName: "extglob",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "combined plus set option",
+        argv: ["/bin/bash", "+eo", "pipefail", "./run.sh"],
+        decoyName: "pipefail",
+        expectedArgvIndex: 3,
+      },
+    ];
+
+    for (const testCase of casesValue) {
+      runNamedCase(testCase.name, () => {
+        const tmp = createFixtureDir("openclaw-shell-option-value-");
+        const scriptPath = path.join(tmp, "run.sh");
+        fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+        fs.writeFileSync(path.join(tmp, testCase.decoyName), "decoy\n");
+        const snapshot = resolveMutableFileOperandSnapshotSync({
+          argv: testCase.argv,
+          cwd: tmp,
+          shellCommand: null,
+        });
+        expect(snapshot).toEqual({
+          ok: true,
+          snapshot: {
+            argvIndex: testCase.expectedArgvIndex,
+            path: fs.realpathSync(scriptPath),
+            sha256: sha256FileSync(scriptPath),
+          },
+        });
+        if (!snapshot.ok || snapshot.snapshot === null) {
+          throw new Error("expected mutable file operand snapshot");
+        }
+        fs.writeFileSync(scriptPath, "#!/bin/sh\necho CHANGED\n");
+        expect(
+          revalidateApprovedMutableFileOperand({
+            snapshot: snapshot.snapshot,
+            argv: testCase.argv,
+            cwd: tmp,
+          }),
+        ).toBe(false);
+      });
+    }
+  });
+
+  it("captures fish script operands with plus-prefixed filenames", () => {
+    const casesLocal = [
+      {
+        name: "plus-prefixed fish script",
+        argv: ["fish", "+setup.fish"],
+      },
+      {
+        name: "plus-prefixed fish script before script args",
+        argv: ["fish", "+setup.fish", "-c", "echo arg"],
+      },
+    ];
+
+    for (const testCase of casesLocal) {
+      runNamedCase(testCase.name, () => {
+        const tmp = createFixtureDir("openclaw-fish-plus-script-");
+        const scriptPath = path.join(tmp, "+setup.fish");
+        fs.writeFileSync(scriptPath, "echo SAFE\n");
+        const snapshot = resolveMutableFileOperandSnapshotSync({
+          argv: testCase.argv,
+          cwd: tmp,
+          shellCommand: null,
+        });
+        expect(snapshot).toEqual({
+          ok: true,
+          snapshot: {
+            argvIndex: 1,
+            path: fs.realpathSync(scriptPath),
+            sha256: sha256FileSync(scriptPath),
+          },
+        });
+        if (!snapshot.ok || snapshot.snapshot === null) {
+          throw new Error("expected mutable file operand snapshot");
+        }
+        fs.writeFileSync(scriptPath, "echo CHANGED\n");
+        expect(
+          revalidateApprovedMutableFileOperand({
+            snapshot: snapshot.snapshot,
+            argv: testCase.argv,
+            cwd: tmp,
+          }),
+        ).toBe(false);
+      });
+    }
   });
 });

@@ -1,4 +1,5 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+// Zalouser plugin module implements group policy behavior.
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";
 
 type ZalouserGroups = Record<string, ZalouserGroupConfig>;

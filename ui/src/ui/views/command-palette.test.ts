@@ -1,3 +1,4 @@
+// Control UI tests cover command palette behavior.
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -123,34 +124,30 @@ describe("command palette", () => {
     });
 
     const items = getPaletteItems();
-    expect(items).toContainEqual(
-      expect.objectContaining({
-        id: "slash:pair",
-        label: "/pair",
-      }),
-    );
-    expect(items).toContainEqual(
-      expect.objectContaining({
-        id: "slash:prose",
-        label: "/prose",
-      }),
-    );
+    const pair = items.find((item) => item.id === "slash:pair");
+    const prose = items.find((item) => item.id === "slash:prose");
+    expect(pair?.label).toBe("/pair");
+    expect(prose?.label).toBe("/prose");
+  });
+
+  it("requests slash command hydration when the palette opens", async () => {
+    const onOpen = vi.fn();
+
+    await renderPalette({ onOpen });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    render(renderCommandPalette(createProps({ onOpen, query: "overview" })), container);
+    await nextFrame();
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it("matches localized base item labels and descriptions", async () => {
     await i18n.setLocale("zh-CN");
 
-    expect(getPaletteItems()).toContainEqual(
-      expect.objectContaining({
-        id: "nav-config",
-        label: "设置",
-      }),
-    );
-    expect(getFilteredPaletteItems("切换调试")).toContainEqual(
-      expect.objectContaining({
-        id: "skill-debug",
-      }),
-    );
+    const configItem = getPaletteItems().find((item) => item.id === "nav-config");
+    const debugItem = getFilteredPaletteItems("切换调试").find((item) => item.id === "skill-debug");
+    expect(configItem?.label).toBe("设置");
+    expect(debugItem?.id).toBe("skill-debug");
   });
 
   it("renders a labelled modal combobox with listbox options", async () => {

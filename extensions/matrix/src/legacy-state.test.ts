@@ -1,6 +1,7 @@
+// Matrix tests cover legacy state plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { autoMigrateLegacyMatrixState, detectLegacyMatrixState } from "./legacy-state.js";

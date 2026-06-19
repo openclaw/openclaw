@@ -32,8 +32,19 @@ This is for cooperative/shared inbox hardening. A single Gateway shared by mutua
 It also emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules), and reminds you that OpenClaw is a personal-assistant trust model by default.
 For intentional shared-user setups, the audit guidance is to sandbox all sessions, keep filesystem access workspace-scoped, and keep personal/private identities or credentials off that runtime.
 It also warns when small models (`<=300B`) are used without sandboxing and with web/browser tools enabled.
-For webhook ingress, it warns when `hooks.token` reuses the Gateway token, when `hooks.token` is short, when `hooks.path="/"`, when `hooks.defaultSessionKey` is unset, when `hooks.allowedAgentIds` is unrestricted, when request `sessionKey` overrides are enabled, and when overrides are enabled without `hooks.allowedSessionKeyPrefixes`.
-It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (exact node command-name matching only, not shell-text filtering), when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary, when open groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed plugin tools may be reachable under permissive tool policy.
+For webhook ingress, startup logs a non-fatal security warning and audit flags `hooks.token` reuse of active Gateway shared-secret auth values, including `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` and `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`. It also warns when:
+
+- `hooks.token` is short
+- `hooks.path="/"`
+- `hooks.defaultSessionKey` is unset
+- `hooks.allowedAgentIds` is unrestricted
+- request `sessionKey` overrides are enabled
+- overrides are enabled without `hooks.allowedSessionKeyPrefixes`
+
+If Gateway password auth is supplied only at startup, pass the same value to `openclaw security audit --auth password --password <password>` so the audit can check it against `hooks.token`.
+Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
+
+It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (exact node command-name matching only, not shell-text filtering), when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary, when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed plugin tools may be reachable under permissive tool policy.
 It also flags `gateway.allowRealIpFallback=true` (header-spoofing risk if proxies are misconfigured) and `discovery.mdns.mode="full"` (metadata leakage via mDNS TXT records).
 It also warns when sandbox browser uses Docker `bridge` network without `sandbox.browser.cdpSourceRange`.
 It also flags dangerous sandbox Docker network modes (including `host` and `container:*` namespace joins).
@@ -43,6 +54,37 @@ It warns when channel allowlists rely on mutable names/emails/tags instead of st
 It warns when `gateway.auth.mode="none"` leaves Gateway HTTP APIs reachable without a shared secret (`/tools/invoke` plus any enabled `/v1/*` endpoint).
 Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operator overrides; enabling one is not, by itself, a security vulnerability report.
 For the complete dangerous-parameter inventory, see the "Insecure or dangerous flags summary" section in [Security](/gateway/security).
+
+Intentional standing findings can be accepted with `security.audit.suppressions`.
+Each suppression matches an exact `checkId` and can be narrowed with
+`titleIncludes` and/or `detailIncludes` case-insensitive substrings:
+
+```json
+{
+  "security": {
+    "audit": {
+      "suppressions": [
+        {
+          "checkId": "plugins.tools_reachable_permissive_policy",
+          "detailIncludes": "Enabled extension plugins: gbrain",
+          "reason": "trusted local operator plugin"
+        }
+      ]
+    }
+  }
+}
+```
+
+Suppressed findings are removed from the active `summary` and `findings` list.
+JSON output keeps them under `suppressedFindings` for auditability.
+When suppressions are configured, active output also keeps an unsuppressible
+`security.audit.suppressions.active` info finding so readers can tell the audit
+was filtered. Dangerous config flags are emitted one flag per finding, so
+accepting one dangerous flag does not hide other enabled flags that share the
+same `config.insecure_or_dangerous_flags` checkId.
+Because suppressions can hide standing risk, adding or removing them through
+agent-run shell commands requires exec approval unless exec is already running
+with `security="full"` and `ask="off"` for trusted local automation.
 
 SecretRef behavior:
 

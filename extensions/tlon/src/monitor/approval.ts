@@ -7,7 +7,7 @@
 
 // Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
@@ -143,31 +143,6 @@ export function findPendingApproval(
   }
   // Return most recent
   return pendingApprovals[pendingApprovals.length - 1];
-}
-
-/**
- * Check if there's already a pending approval for the same ship/channel/group combo.
- * Used to avoid sending duplicate notifications.
- */
-export function hasDuplicatePending(
-  pendingApprovals: PendingApproval[],
-  type: ApprovalType,
-  requestingShip: string,
-  channelNest?: string,
-  groupFlag?: string,
-): boolean {
-  return pendingApprovals.some((approval) => {
-    if (approval.type !== type || approval.requestingShip !== requestingShip) {
-      return false;
-    }
-    if (type === "channel" && approval.channelNest !== channelNest) {
-      return false;
-    }
-    if (type === "group" && approval.groupFlag !== groupFlag) {
-      return false;
-    }
-    return true;
-  });
 }
 
 /**

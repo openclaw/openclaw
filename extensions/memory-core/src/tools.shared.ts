@@ -1,3 +1,5 @@
+// Memory Core plugin module implements tools.shared behavior.
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -6,7 +8,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
@@ -18,6 +20,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  oneShotCliRun?: boolean;
 };
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
@@ -29,25 +32,16 @@ export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
 
 export const MemorySearchSchema = Type.Object({
   query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([
-      Type.Literal("memory"),
-      Type.Literal("wiki"),
-      Type.Literal("all"),
-      Type.Literal("sessions"),
-    ]),
-  ),
+  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
+  minScore: optionalFiniteNumberSchema(),
+  corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
 });
 
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
+  from: Type.Optional(Type.Integer()),
+  lines: Type.Optional(Type.Integer()),
+  corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
 });
 
 function resolveMemoryToolContext(options: MemoryToolOptions) {
@@ -64,20 +58,6 @@ function resolveMemoryToolContext(options: MemoryToolOptions) {
     return null;
   }
   return { cfg, agentId };
-}
-
-export async function getMemoryManagerContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<
-  | {
-      manager: NonNullable<MemorySearchManagerResult["manager"]>;
-    }
-  | {
-      error: string | undefined;
-    }
-> {
-  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
 }
 
 export async function getMemoryManagerContextWithPurpose(params: {
@@ -125,15 +105,25 @@ export function createMemoryTool(params: {
   };
 }
 
-export function buildMemorySearchUnavailableResult(error: string | undefined) {
+export function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  overrides?: {
+    warning?: string;
+    action?: string;
+  },
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning = isQuotaError
-    ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const warning =
+    overrides?.warning ??
+    (isQuotaError
+      ? "Memory search is unavailable because the embedding provider quota is exhausted."
+      : "Memory search is unavailable due to an embedding/provider error.");
+  const action =
+    overrides?.action ??
+    (isQuotaError
+      ? "Top up or switch embedding provider, then retry memory_search."
+      : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

@@ -1,5 +1,6 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+/** Validates and normalizes provider plugin definitions before registry registration. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
@@ -11,18 +12,20 @@ type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"
 type ProviderWizardModelAllowlist = NonNullable<ProviderWizardSetup["modelAllowlist"]>;
 
 function normalizeTextList(values: string[] | undefined): string[] | undefined {
-  const normalized = Array.from(new Set(normalizeTrimmedStringList(values)));
+  const normalized = normalizeUniqueTrimmedStringList(values);
   return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeOnboardingScopes(
-  values: Array<"text-inference" | "image-generation"> | undefined,
-): Array<"text-inference" | "image-generation"> | undefined {
+  values: Array<"text-inference" | "image-generation" | "music-generation"> | undefined,
+): Array<"text-inference" | "image-generation" | "music-generation"> | undefined {
   const normalized = Array.from(
     new Set(
       (values ?? []).filter(
-        (value): value is "text-inference" | "image-generation" =>
-          value === "text-inference" || value === "image-generation",
+        (value): value is "text-inference" | "image-generation" | "music-generation" =>
+          value === "text-inference" ||
+          value === "image-generation" ||
+          value === "music-generation",
       ),
     ),
   );
@@ -121,6 +124,7 @@ function buildNormalizedWizardSetup(params: {
     params.setup.assistantVisibility === "visible"
       ? { assistantVisibility: params.setup.assistantVisibility }
       : {}),
+    ...(params.setup.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
     ...(groupId ? { groupId } : {}),
     ...(groupLabel ? { groupLabel } : {}),
     ...(groupHint ? { groupHint } : {}),
@@ -306,6 +310,8 @@ function normalizeProviderWizard(params: {
   };
 }
 
+/** Normalizes provider plugin metadata and emits diagnostics for invalid public fields. */
+/** Returns a normalized provider plugin plus validation diagnostics for registry insertion. */
 export function normalizeRegisteredProvider(params: {
   pluginId: string;
   source: string;

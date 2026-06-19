@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Duckduckgo plugin module implements ddg client behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -204,9 +205,10 @@ export async function runDuckDuckGoSearch(params: {
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   decodeDuckDuckGoUrl,
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
 };
+export { testing as __testing };

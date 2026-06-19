@@ -1,3 +1,4 @@
+// Qa Channel tests cover bus client plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
@@ -73,7 +74,7 @@ describe("qa-bus client", () => {
     const server = await startJsonServer(() => ({
       body: '{"cursor":1,"events":[',
     }));
-    stops.push(server.stop);
+    stops.push(server["stop"]);
 
     await expect(
       pollQaBus({
@@ -117,9 +118,13 @@ describe("qa-bus client", () => {
     });
     abort.abort();
 
-    await expect(withTimeout(request, 500, "poll abort did not settle")).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    try {
+      await withTimeout(request, 500, "poll abort did not settle");
+      throw new Error("expected poll abort to reject");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("AbortError");
+    }
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {
@@ -136,10 +141,13 @@ describe("qa-bus client", () => {
             })
           : JSON.stringify({ error: `unexpected path: ${req.url}` }),
     }));
-    stops.push(server.stop);
+    stops.push(server["stop"]);
 
-    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toMatchObject({
+    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toEqual({
       cursor: 1,
+      conversations: [],
+      threads: [],
+      messages: [],
       events: [],
     });
   });

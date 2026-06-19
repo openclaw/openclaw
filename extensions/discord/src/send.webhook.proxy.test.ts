@@ -1,5 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover send.webhook.proxy plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscordError, RateLimitError } from "./internal/rest-errors.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
@@ -13,6 +15,28 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
     makeProxyFetch: makeProxyFetchMock,
   };
 });
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
@@ -145,18 +169,30 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       },
     } as OpenClawConfig;
 
-    await expect(
-      sendWebhookMessageDiscord("hello", {
-        cfg,
-        accountId: "default",
-        webhookId: "123",
-        webhookToken: "abc",
-        wait: true,
-      }),
-    ).rejects.toMatchObject({
-      name: "RateLimitError",
-      status: 429,
-      retryAfter: 0.25,
+    const thrown = await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(RateLimitError);
+    const error = thrown as RateLimitError;
+    expect(error.name).toBe("RateLimitError");
+    expect(error.status).toBe(429);
+    expect(error.statusCode).toBe(429);
+    expect(error.retryAfter).toBe(0.25);
+    expect(error.scope).toBeNull();
+    expect(error.bucket).toBeNull();
+    expect(error.message).toBe("Slow down");
+    expect(error.rawBody).toEqual({
+      message: "Slow down",
+      retry_after: 0.25,
+      code: undefined,
+      global: false,
     });
     globalFetchMock.mockRestore();
   });
@@ -174,18 +210,59 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       },
     } as OpenClawConfig;
 
-    await expect(
-      sendWebhookMessageDiscord("hello", {
-        cfg,
-        accountId: "default",
-        webhookId: "123",
-        webhookToken: "abc",
-        wait: true,
-      }),
-    ).rejects.toMatchObject({
-      name: "DiscordError",
+    const thrown = await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(DiscordError);
+    expect(thrown).not.toBeInstanceOf(RateLimitError);
+    const error = thrown as DiscordError;
+    expect(error.name).toBe("DiscordError");
+    expect(error.status).toBe(503);
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe("upstream unavailable");
+    expect(error.rawBody).toEqual({ message: "upstream unavailable" });
+    globalFetchMock.mockRestore();
+  });
+
+  it("bounds webhook error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(1024)}tail`, {
       status: 503,
+      headers: { "content-type": "text/plain" },
     });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(tracked.response);
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const thrown = await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(DiscordError);
+    const error = thrown as DiscordError;
+    expect(error.message).toContain("upstream unavailable");
+    expect(JSON.stringify(error.rawBody)).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
 });

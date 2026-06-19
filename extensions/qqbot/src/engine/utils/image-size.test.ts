@@ -1,3 +1,4 @@
+// Qqbot tests cover image size plugin behavior.
 import { Buffer } from "node:buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,7 +51,7 @@ describe("getImageSizeFromUrl", () => {
       await getImageSizeFromUrl("https://cdn.example.com/photo.png");
 
       expect(adapterMocks.fetchMedia).toHaveBeenCalledOnce();
-      const opts = adapterMocks.fetchMedia.mock.calls[0][0];
+      const opts = adapterMocks.fetchMedia.mock.calls[0]?.[0];
 
       expect(opts.url).toBe("https://cdn.example.com/photo.png");
       expect(opts.maxBytes).toBe(65_536);
@@ -70,7 +71,7 @@ describe("getImageSizeFromUrl", () => {
 
       await getImageSizeFromUrl("https://cdn.example.com/img.png", 3000);
 
-      const opts = adapterMocks.fetchMedia.mock.calls[0][0];
+      const opts = adapterMocks.fetchMedia.mock.calls[0]?.[0];
       expect(opts.requestInit.signal).toBeInstanceOf(AbortSignal);
     });
   });

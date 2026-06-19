@@ -1,9 +1,14 @@
+// Covers config path resolution across env, home, and agent roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isNixMode,
+  normalizeStateDirEnv,
+  pinRuntimePaths,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
@@ -12,6 +17,7 @@ import {
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
+  STATE_DIR,
 } from "./paths.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
@@ -86,6 +92,24 @@ describe("gateway port resolution", () => {
     ).toBe(19003);
   });
 
+  it("falls back to config when env ports exceed TCP bounds", () => {
+    expect(
+      resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "65536" })),
+    ).toBe(19003);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19004 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:65536" }),
+      ),
+    ).toBe(19004);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19005 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "[::1]:65536" }),
+      ),
+    ).toBe(19005);
+  });
+
   it("falls back when malformed IPv6 inputs do not provide an explicit port", () => {
     expect(
       resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "::1" })),
@@ -121,6 +145,61 @@ describe("state + config path candidates", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
+  });
+
+  it("normalizes relative OPENCLAW_STATE_DIR overrides to absolute paths", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: ".",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
+  });
+
+  it("pins a relative state-dir override before later resolution", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "relative-state",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+    const normalized = env.OPENCLAW_STATE_DIR;
+
+    expect(normalized).toBe(path.resolve("relative-state"));
+    expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
+  });
+
+  it("re-pins exported runtime paths after startup environment selection", () => {
+    const originalConfigPath = CONFIG_PATH;
+    const originalNixMode = isNixMode;
+    const originalStateDir = STATE_DIR;
+    const selectedStateDir = path.resolve("/tmp/openclaw-selected-runtime-state");
+    const selectedConfigPath = path.join(selectedStateDir, "selected.json");
+    try {
+      const pinned = pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: selectedConfigPath,
+        OPENCLAW_NIX_MODE: "1",
+        OPENCLAW_STATE_DIR: selectedStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+
+      expect(pinned).toEqual({
+        configPath: selectedConfigPath,
+        stateDir: selectedStateDir,
+      });
+      expect(CONFIG_PATH).toBe(selectedConfigPath);
+      expect(isNixMode).toBe(true);
+      expect(STATE_DIR).toBe(selectedStateDir);
+    } finally {
+      pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: originalConfigPath,
+        OPENCLAW_NIX_MODE: originalNixMode ? "1" : undefined,
+        OPENCLAW_STATE_DIR: originalStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+    }
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {

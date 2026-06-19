@@ -1,3 +1,7 @@
+/**
+ * Core plugin SDK contract-test fixture builders and registration helpers.
+ */
+import type { PluginRegistryParams } from "../../plugins/registry-types.js";
 import type { OpenClawPluginApi } from "../plugin-entry.js";
 import {
   createPluginRecord,
@@ -13,7 +17,11 @@ import { uniqueSortedStrings } from "./string-utils.js";
 
 export { registerProviders, requireProvider, uniqueSortedStrings };
 
-export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
+/** Creates a minimal plugin registry fixture with quiet logger defaults. */
+export function createPluginRegistryFixture(
+  config = {} as OpenClawConfig,
+  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+) {
   return {
     config,
     registry: createPluginRegistry({
@@ -24,10 +32,12 @@ export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
         debug() {},
       },
       runtime: {} as PluginRuntime,
+      ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),
   };
 }
 
+/** Registers one plugin record against a registry fixture and invokes its register hook. */
 export function registerTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
   config: OpenClawConfig;
@@ -42,6 +52,7 @@ export function registerTestPlugin(params: {
   );
 }
 
+/** Registers a virtual plugin record for tests that do not need a real package path. */
 export function registerVirtualTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
   config: OpenClawConfig;

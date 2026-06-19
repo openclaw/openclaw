@@ -1,3 +1,5 @@
+// Sandbox fs bridge shell tests cover POSIX shell compatibility, path
+// canonicalization, bind reads, and pinned mutation helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,11 +15,11 @@ import {
 } from "./fs-bridge.test-helpers.js";
 
 function expectNoScriptsContaining(scripts: string[], needle: string) {
-  expect(scripts.some((script) => script.includes(needle))).toBe(false);
+  expect(scripts.join("\n")).not.toContain(needle);
 }
 
 function expectSomeScriptContaining(scripts: string[], needle: string) {
-  expect(scripts.some((script) => script.includes(needle))).toBe(true);
+  expect(scripts.join("\n")).toContain(needle);
 }
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -54,7 +56,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "c.txt" });
       await bridge.stat({ filePath: "c.txt" });
 
-      expect(mockedExecDockerRaw).toHaveBeenCalled();
+      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(19);
 
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
@@ -144,6 +146,8 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("writes via temp file + atomic rename (never direct truncation)", async () => {
+    // Writes must go through the Python mutation helper so validation and
+    // atomic replacement happen together inside the sandbox.
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
     await bridge.writeFile({ filePath: "b.txt", data: "hello" });

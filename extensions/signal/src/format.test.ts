@@ -1,3 +1,4 @@
+// Signal tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToSignalText } from "./format.js";
 
@@ -100,19 +101,19 @@ describe("markdownToSignalText", () => {
     it("renders headings as bold text", () => {
       const res = markdownToSignalText("# Heading 1");
       expect(res.text).toBe("Heading 1");
-      expect(res.styles).toContainEqual({ start: 0, length: 9, style: "BOLD" });
+      expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
     });
 
     it("renders h2 headings as bold text", () => {
       const res = markdownToSignalText("## Heading 2");
       expect(res.text).toBe("Heading 2");
-      expect(res.styles).toContainEqual({ start: 0, length: 9, style: "BOLD" });
+      expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
     });
 
     it("renders h3 headings as bold text", () => {
       const res = markdownToSignalText("### Heading 3");
       expect(res.text).toBe("Heading 3");
-      expect(res.styles).toContainEqual({ start: 0, length: 9, style: "BOLD" });
+      expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
     });
 
     it("renders blockquotes with a visible prefix", () => {

@@ -1,3 +1,5 @@
+// Gateway model catalog cache.
+// Serves model catalogs with stale-while-refresh behavior for Gateway surfaces.
 import { getRuntimeConfig } from "../config/io.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
@@ -19,6 +21,8 @@ type GatewayModelCatalogCache = {
   staleGeneration: number;
   appliedGeneration: number;
 };
+
+const loadModelCatalogModule = async () => await import("../agents/model-catalog.js");
 
 function createGatewayModelCatalogCache(): GatewayModelCatalogCache {
   return {
@@ -57,7 +61,7 @@ async function resolveLoadModelCatalog(
   if (params?.loadModelCatalog) {
     return params.loadModelCatalog;
   }
-  const { loadModelCatalog } = await import("../agents/model-catalog.js");
+  const { loadModelCatalog } = await loadModelCatalogModule();
   return loadModelCatalog;
 }
 
@@ -86,6 +90,7 @@ function startGatewayModelCatalogRefresh(
   return refresh;
 }
 
+/** Mark cached model catalogs stale after config/plugin reload changes. */
 export function markGatewayModelCatalogStaleForReload(): void {
   readOnlyModelCatalogCache.staleGeneration += 1;
   fullModelCatalogCache.staleGeneration += 1;
@@ -94,12 +99,14 @@ export function markGatewayModelCatalogStaleForReload(): void {
 // Test-only escape hatch: model catalog is cached at module scope for the
 // process lifetime, which is fine for the real gateway daemon, but makes
 // isolated unit tests harder. Keep this intentionally obscure.
-export async function __resetModelCatalogCacheForTest(): Promise<void> {
+export async function resetModelCatalogCacheForTest(): Promise<void> {
   resetGatewayModelCatalogState();
-  const { resetModelCatalogCacheForTest } = await import("../agents/model-catalog.js");
-  resetModelCatalogCacheForTest();
+  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+    await loadModelCatalogModule();
+  resetModelCatalogCacheForTestLocal();
 }
 
+/** Load the Gateway model catalog, returning cached data while stale refreshes run. */
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {

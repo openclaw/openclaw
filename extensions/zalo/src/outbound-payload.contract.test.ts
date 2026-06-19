@@ -1,3 +1,4 @@
+// Zalo tests cover outbound payload.contract plugin behavior.
 import {
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,
@@ -6,7 +7,7 @@ import {
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import { zaloMessageAdapter, zaloPlugin } from "./channel.js";
 
@@ -99,39 +100,46 @@ describe("Zalo outbound payload contract", () => {
     const sendText = requireZaloTextSender();
     const sendMedia = requireZaloMediaSender();
 
-    await expect(
-      verifyChannelMessageAdapterCapabilityProofs({
-        adapterName: "zalo",
-        adapter: zaloMessageAdapter,
-        proofs: {
-          text: async () => {
-            const result = await sendText({
-              cfg: {},
-              to: "123456789",
-              text: "hello",
-            });
-            expect(result.receipt.platformMessageIds).toEqual(["zl-text-1"]);
-          },
-          media: async () => {
-            const result = await sendMedia({
-              cfg: {},
-              to: "123456789",
-              text: "image",
-              mediaUrl: "https://example.com/image.png",
-            });
-            expect(result.receipt.platformMessageIds).toEqual(["zl-media-1"]);
-          },
-          messageSendingHooks: () => {
-            expect(sendText).toBeTypeOf("function");
-          },
+    const proofs = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "zalo",
+      adapter: zaloMessageAdapter,
+      proofs: {
+        text: async () => {
+          const result = await sendText({
+            cfg: {},
+            to: "123456789",
+            text: "hello",
+          });
+          expect(result.receipt.platformMessageIds).toEqual(["zl-text-1"]);
         },
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { capability: "text", status: "verified" },
-        { capability: "media", status: "verified" },
-        { capability: "messageSendingHooks", status: "verified" },
-      ]),
-    );
+        media: async () => {
+          const result = await sendMedia({
+            cfg: {},
+            to: "123456789",
+            text: "image",
+            mediaUrl: "https://example.com/image.png",
+          });
+          expect(result.receipt.platformMessageIds).toEqual(["zl-media-1"]);
+        },
+        messageSendingHooks: () => {
+          expect(sendText).toBeTypeOf("function");
+        },
+      },
+    });
+    expect(proofs).toStrictEqual([
+      { capability: "text", status: "verified" },
+      { capability: "media", status: "verified" },
+      { capability: "poll", status: "not_declared" },
+      { capability: "payload", status: "not_declared" },
+      { capability: "silent", status: "not_declared" },
+      { capability: "replyTo", status: "not_declared" },
+      { capability: "thread", status: "not_declared" },
+      { capability: "nativeQuote", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "verified" },
+      { capability: "batch", status: "not_declared" },
+      { capability: "reconcileUnknownSend", status: "not_declared" },
+      { capability: "afterSendSuccess", status: "not_declared" },
+      { capability: "afterCommit", status: "not_declared" },
+    ]);
   });
 });

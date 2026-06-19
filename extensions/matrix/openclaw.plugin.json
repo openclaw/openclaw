@@ -1,7 +1,11 @@
 {
   "id": "matrix",
+  "name": "Matrix",
+  "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
+  "commandAliases": [{ "name": "matrix" }],
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onCommands": ["matrix"]
   },
   "channels": ["matrix"],
   "channelEnvVars": {

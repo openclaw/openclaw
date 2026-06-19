@@ -1,9 +1,7 @@
+// Session key isolation tests cover separate keys for concurrent cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
@@ -11,10 +9,18 @@ import {
   mockRunCronFallbackPassthrough,
   resolveCronSessionMock,
   runCliAgentMock,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+
+function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls[0]?.[0];
+  if (arg === undefined) {
+    throw new Error(`Expected ${label} to be called with a first argument`);
+  }
+  return arg;
+}
 
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -31,27 +37,90 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "cron:daily-monitor",
+        job: makeIsolatedAgentJobFixture({
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            lightContext: true,
+          },
+        }),
       }),
     );
 
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
-    expect(resolveCronSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forceNew: true,
-        sessionKey: "agent:default:cron:daily-monitor",
+    const sessionRequest = requireFirstMockArg(
+      resolveCronSessionMock,
+      "resolveCronSessionMock",
+    ) as { forceNew?: boolean; sessionKey?: string };
+    expect(sessionRequest.forceNew).toBe(true);
+    expect(sessionRequest.sessionKey).toBe("agent:default:cron:daily-monitor");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const runRequest = requireFirstMockArg(runEmbeddedAgentMock, "runEmbeddedAgentMock") as {
+      sessionId?: string;
+      sessionKey?: string;
+      promptCacheKey?: string;
+      bootstrapContextMode?: string;
+      bootstrapContextRunKind?: string;
+    };
+    expect(runRequest.sessionId).toBe("isolated-run-1");
+    expect(runRequest.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
+    expect(runRequest.sessionKey).not.toBe("agent:default:cron:daily-monitor");
+    expect(runRequest.promptCacheKey).toMatch(/^openclaw-cron-[a-f0-9]{32}$/u);
+    expect(runRequest.promptCacheKey).not.toContain("isolated-run-1");
+    expect(runRequest.promptCacheKey).not.toContain("daily-monitor");
+    expect(runRequest.bootstrapContextMode).toBe("lightweight");
+    expect(runRequest.bootstrapContextRunKind).toBe("cron");
+  });
+
+  it("keeps embedded isolated cron prompt-cache affinity stable across run sessions", async () => {
+    resolveCronSessionMock
+      .mockReturnValueOnce(
+        makeCronSession({
+          sessionEntry: {
+            ...makeCronSession().sessionEntry,
+            sessionId: "isolated-run-a",
+          },
+        }),
+      )
+      .mockReturnValueOnce(
+        makeCronSession({
+          sessionEntry: {
+            ...makeCronSession().sessionEntry,
+            sessionId: "isolated-run-b",
+          },
+        }),
+      );
+    mockRunCronFallbackPassthrough();
+
+    const params = makeIsolatedAgentParamsFixture({
+      sessionKey: "cron:daily-monitor",
+      job: makeIsolatedAgentJobFixture({
+        payload: {
+          kind: "agentTurn",
+          message: "test",
+          lightContext: true,
+        },
       }),
-    );
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionId: "isolated-run-1",
-      sessionKey: "agent:default:cron:daily-monitor:run:isolated-run-1",
     });
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionKey).not.toBe(
-      "agent:default:cron:daily-monitor",
+    await runCronIsolatedAgentTurn(params);
+    await runCronIsolatedAgentTurn(params);
+
+    const requests = runEmbeddedAgentMock.mock.calls.map(
+      ([arg]) =>
+        arg as {
+          sessionId?: string;
+          sessionKey?: string;
+          promptCacheKey?: string;
+        },
     );
+    expect(requests[0]?.sessionId).toBe("isolated-run-a");
+    expect(requests[1]?.sessionId).toBe("isolated-run-b");
+    expect(requests[0]?.sessionKey).not.toBe(requests[1]?.sessionKey);
+    expect(requests[0]?.promptCacheKey).toBe(requests[1]?.promptCacheKey);
+    expect(requests[0]?.promptCacheKey).toMatch(/^openclaw-cron-[a-f0-9]{32}$/u);
   });
 
   it("keeps explicit session-bound cron execution on the requested session key", async () => {
@@ -66,9 +135,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "project-alpha-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           sessionTarget: "session:project-alpha-monitor",
         }),
       }),
@@ -76,11 +145,19 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe("agent:default:project-alpha-monitor");
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionId: "bound-run-1",
-      sessionKey: "agent:default:project-alpha-monitor",
-    });
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const runRequest = requireFirstMockArg(runEmbeddedAgentMock, "runEmbeddedAgentMock") as {
+      sessionId?: string;
+      sessionKey?: string;
+      promptCacheKey?: string;
+      bootstrapContextMode?: string;
+      bootstrapContextRunKind?: string;
+    };
+    expect(runRequest.sessionId).toBe("bound-run-1");
+    expect(runRequest.sessionKey).toBe("agent:default:project-alpha-monitor");
+    expect(runRequest.promptCacheKey).toBeUndefined();
+    expect(runRequest.bootstrapContextMode).toBeUndefined();
+    expect(runRequest.bootstrapContextRunKind).toBe("cron");
   });
 
   it("uses a run-scoped key for CLI isolated cron execution", async () => {
@@ -100,20 +177,58 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "cron:cli-monitor",
+        job: makeIsolatedAgentJobFixture({
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            lightContext: true,
+          },
+        }),
       }),
     );
 
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
     expect(runCliAgentMock).toHaveBeenCalledOnce();
-    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionId: "isolated-cli-run-1",
-      sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
+    const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
+      sessionId?: string;
+      sessionKey?: string;
+      promptCacheKey?: string;
+      bootstrapContextMode?: string;
+      bootstrapContextRunKind?: string;
+    };
+    expect(runRequest.sessionId).toBe("isolated-cli-run-1");
+    expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
+    expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
+    expect(runRequest.promptCacheKey).toBeUndefined();
+    expect(runRequest.bootstrapContextMode).toBe("lightweight");
+    expect(runRequest.bootstrapContextRunKind).toBe("cron");
+  });
+
+  it("runs externally sourced CLI hook turns", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    mockRunCronFallbackPassthrough();
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.sessionKey).not.toBe(
-      "agent:default:cron:cli-monitor",
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        sessionKey: "hook:webhook:cli-monitor",
+        job: makeIsolatedAgentJobFixture({
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            externalContentSource: "webhook",
+          },
+        }),
+      }),
     );
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
   });
 });

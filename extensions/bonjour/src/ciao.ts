@@ -1,3 +1,8 @@
+/**
+ * Ciao process-error classifier. It recognizes known noisy ciao failures so
+ * the Bonjour plugin can suppress or repair expected mDNS lifecycle issues.
+ */
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { formatBonjourError } from "./errors.js";
 
 const CIAO_CANCELLATION_MESSAGE_RE = /^CIAO (?:ANNOUNCEMENT|PROBING) CANCELLED\b/u;
@@ -12,6 +17,7 @@ const CIAO_SELF_PROBE_MESSAGE_RE =
 // Node surfaces this as a SystemError mentioning the libuv syscall by name.
 const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
 
+/** Known ciao process-level errors that OpenClaw handles specially. */
 export type CiaoProcessErrorClassification =
   | { kind: "cancellation"; formatted: string }
   | { kind: "interface-assertion"; formatted: string }
@@ -19,48 +25,16 @@ export type CiaoProcessErrorClassification =
   | { kind: "self-probe"; formatted: string }
   | { kind: "interface-enumeration-failure"; formatted: string };
 
-function collectCiaoProcessErrorCandidates(reason: unknown): unknown[] {
-  const queue: unknown[] = [reason];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    for (const nested of [
-      record.cause,
-      record.reason,
-      record.original,
-      record.error,
-      record.data,
-    ]) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-    if (Array.isArray(record.errors)) {
-      for (const nested of record.errors) {
-        if (nested != null && !seen.has(nested)) {
-          queue.push(nested);
-        }
-      }
-    }
-  }
-
-  return candidates;
-}
-
+/** Classify a ciao error/rejection chain into a known category. */
 export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClassification | null {
-  for (const candidate of collectCiaoProcessErrorCandidates(reason)) {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+    current.data,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
     const formatted = formatBonjourError(candidate);
     const message = formatted.toUpperCase();
     if (CIAO_CANCELLATION_MESSAGE_RE.test(message)) {
@@ -80,10 +54,4 @@ export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClass
     }
   }
   return null;
-}
-
-export const classifyCiaoUnhandledRejection = classifyCiaoProcessError;
-
-export function ignoreCiaoUnhandledRejection(reason: unknown): boolean {
-  return classifyCiaoProcessError(reason) !== null;
 }

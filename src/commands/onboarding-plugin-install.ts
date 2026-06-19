@@ -1,18 +1,29 @@
+/**
+ * Onboarding plugin installation flow.
+ *
+ * It selects local, ClawHub, npm, or override install sources; records durable
+ * install metadata; and enables plugins requested by setup workflows.
+ */
 import fs from "node:fs";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
+import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
-import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import {
+  enableExplicitlySelectedPluginInConfig,
+  type PluginEnableResult,
+} from "../plugins/enable.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -29,12 +40,16 @@ import {
   installPluginFromNpmPackArchive,
   type InstallPluginResult,
 } from "../plugins/install.js";
-import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
+import {
+  buildNpmResolutionInstallFields,
+  recordPluginInstall,
+  resolveNpmInstallRecordSpec,
+} from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 type InstallChoice = "clawhub" | "npm" | "local" | "skip";
@@ -44,6 +59,7 @@ type InstallPluginFromClawHubResult = Awaited<
 const ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS = ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS + 5_000;
 
+/** Catalog entry used by onboarding to offer or require a plugin install. */
 export type OnboardingPluginInstallEntry = {
   pluginId: string;
   label: string;
@@ -52,19 +68,31 @@ export type OnboardingPluginInstallEntry = {
   preferRemoteInstall?: boolean;
 };
 
+/** Outcome status for a single onboarding plugin install attempt. */
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
 
-export type OnboardingPluginInstallResult = {
+/** Config and status returned after attempting an onboarding plugin install. */
+type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
   pluginId: string;
   status: OnboardingPluginInstallStatus;
 };
 
-function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
+function shouldFallbackClawHubToNpm(params: {
+  result: { ok: false; code?: string };
+  npmSpec?: string;
+}): boolean {
+  if (!isOpenClawOrgNpmSpec(params.npmSpec)) {
+    return false;
+  }
+  // Only official OpenClaw npm packages are safe fallback targets for ClawHub
+  // availability failures; arbitrary npm fallbacks would change trust source.
   return (
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE
   );
 }
 
@@ -136,7 +164,7 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
   const existing = cfg.plugins?.load?.paths ?? [];
-  const merged = Array.from(new Set([...existing, pluginPath]));
+  const merged = uniqueStrings([...existing, pluginPath]);
   return {
     ...cfg,
     plugins: {
@@ -224,6 +252,8 @@ function resolveLocalPath(params: {
   for (const candidate of candidates) {
     try {
       const resolved = fs.realpathSync(candidate);
+      // Local plugin paths must stay inside the current repo/workspace roots so
+      // catalog metadata cannot point setup at arbitrary filesystem locations.
       if (
         !bases.some((base) => {
           const realBase = resolveRealDirectory(base);
@@ -320,6 +350,8 @@ function resolveInstallDefaultChoice(params: {
     return "local";
   }
   const updateChannel = cfg.update?.channel;
+  // Dev builds prefer checked-out local plugins; stable/beta prefer published
+  // artifacts so installed records match the user's release channel.
   if (updateChannel === "dev") {
     return "local";
   }
@@ -368,19 +400,19 @@ async function promptInstallChoice(params: {
   if (safeClawHubSpec) {
     options.push({
       value: "clawhub",
-      label: `Download from ClawHub (${safeClawHubSpec})`,
+      label: t("wizard.plugins.downloadFromClawHub", { spec: safeClawHubSpec }),
     });
   }
   if (safeNpmSpec) {
     options.push({
       value: "npm",
-      label: `Download from npm (${safeNpmSpec})`,
+      label: t("wizard.plugins.downloadFromNpm", { spec: safeNpmSpec }),
     });
   }
   if (params.localPath) {
     options.push({
       value: "local",
-      label: "Use local plugin path",
+      label: t("wizard.plugins.useLocalPluginPath"),
       ...(safeLocalPath ? { hint: safeLocalPath } : {}),
     });
   }
@@ -397,11 +429,13 @@ async function promptInstallChoice(params: {
       realSources.push("local");
     }
     if (realSources.length === 1) {
+      // Callers that already selected a plugin/channel can skip an extra prompt
+      // when there is only one viable source.
       return realSources[0];
     }
   }
 
-  options.push({ value: "skip", label: "Skip for now" });
+  options.push({ value: "skip", label: t("common.skipForNow") });
 
   const initialValue =
     params.defaultChoice === "local" && !params.localPath
@@ -425,7 +459,7 @@ async function promptInstallChoice(params: {
           : params.defaultChoice;
 
   return await params.prompter.select<InstallChoice>({
-    message: `Install ${safeLabel} plugin?`,
+    message: t("wizard.plugins.installPluginPrompt", { plugin: safeLabel }),
     options,
     initialValue,
   });
@@ -434,10 +468,36 @@ async function promptInstallChoice(params: {
 function formatDurationLabel(timeoutMs: number): string {
   if (timeoutMs % 60_000 === 0) {
     const minutes = timeoutMs / 60_000;
-    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+    return t(minutes === 1 ? "common.minute" : "common.minutes", { count: minutes });
   }
   const seconds = Math.round(timeoutMs / 1000);
-  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  return t(seconds === 1 ? "common.second" : "common.seconds", { count: seconds });
+}
+
+function formatPluginInstallProgress(label: string): string {
+  return t("wizard.plugins.installingPlugin", { plugin: label });
+}
+
+function formatPluginInstalled(label: string): string {
+  return t("wizard.plugins.installedPlugin", { plugin: label });
+}
+
+function formatPluginInstallFailed(label: string): string {
+  return t("wizard.plugins.installFailedShort", { plugin: label });
+}
+
+function formatPluginInstallTimedOut(label: string): string {
+  return t("wizard.plugins.installTimedOutShort", { plugin: label });
+}
+
+function formatPluginInstallTimedOutNote(spec: string): string {
+  return [
+    t("wizard.plugins.installTimedOut", {
+      spec,
+      duration: formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS),
+    }),
+    t("wizard.plugins.returningToSelection"),
+  ].join("\n");
 }
 
 function summarizeInstallError(message: string): string {
@@ -461,13 +521,16 @@ async function applyPluginEnablement(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 }): Promise<PluginEnableResult> {
-  const enableResult = enablePluginInConfig(params.cfg, params.pluginId);
+  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, params.pluginId);
   if (enableResult.enabled) {
     return enableResult;
   }
   const safeLabel = sanitizeTerminalText(params.label);
   const reason = enableResult.reason ?? "plugin disabled";
-  await params.prompter.note(`Cannot enable ${safeLabel}: ${reason}.`, "Plugin install");
+  await params.prompter.note(
+    t("wizard.plugins.enableFailed", { plugin: safeLabel, reason }),
+    t("wizard.plugins.installTitle"),
+  );
   params.runtime.error?.(
     `Plugin install failed: ${sanitizeTerminalText(params.pluginId)} is disabled (${reason}).`,
   );
@@ -507,6 +570,7 @@ function shortenInstallLabel(message: string): string {
     [/^Preparing\b/i, "Preparing"],
     [/^Linking\b/i, "Linking"],
     [/^Linked\b/i, "Linking"],
+    [/^npm rejected managed npm alias overrides\b/i, "Retrying"],
     [/^Compatibility\b/i, "Resolving"],
     [/^ClawHub\b/i, "Resolving"],
   ];
@@ -587,7 +651,16 @@ function createAnimatedInstallProgress(
   };
 }
 
+function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): void {
+  const sanitized = sanitizeTerminalText(message).trim();
+  if (!sanitized) {
+    return;
+  }
+  runtime.log?.(`${sanitized}\n`);
+}
+
 async function installPluginFromNpmSpecWithProgress(params: {
+  cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   npmSpec: string;
   prompter: WizardPrompter;
@@ -601,9 +674,9 @@ async function installPluginFromNpmSpecWithProgress(params: {
     }
 > {
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(`Installing ${safeLabel} plugin…`);
+  const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
   const animated = createAnimatedInstallProgress(progress);
-  animated.setLabel("Preparing");
+  animated.setLabel(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
     if (!sanitized) {
@@ -616,6 +689,8 @@ async function installPluginFromNpmSpecWithProgress(params: {
     const result = await withTimeout(
       installPluginFromNpmSpec({
         spec: params.npmSpec,
+        mode: "update",
+        config: params.cfg,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
@@ -628,7 +703,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
@@ -636,9 +711,9 @@ async function installPluginFromNpmSpecWithProgress(params: {
     );
     animated.stop();
     if (result.ok) {
-      progress.stop(`Installed ${safeLabel} plugin`);
+      progress.stop(formatPluginInstalled(safeLabel));
     } else {
-      progress.stop(`Install failed: ${safeLabel}`);
+      progress.stop(formatPluginInstallFailed(safeLabel));
     }
     return {
       status: "completed",
@@ -647,10 +722,10 @@ async function installPluginFromNpmSpecWithProgress(params: {
   } catch (error) {
     animated.stop();
     if (isTimeoutError(error)) {
-      progress.stop(`Install timed out: ${safeLabel}`);
+      progress.stop(formatPluginInstallTimedOut(safeLabel));
       return { status: "timed_out" };
     }
-    progress.stop(`Install failed: ${safeLabel}`);
+    progress.stop(formatPluginInstallFailed(safeLabel));
     return {
       status: "completed",
       result: {
@@ -662,6 +737,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
 }
 
 async function installPluginFromNpmPackArchiveWithProgress(params: {
+  cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   archivePath: string;
   prompter: WizardPrompter;
@@ -674,9 +750,9 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
     }
 > {
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(`Installing ${safeLabel} plugin…`);
+  const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
   const animated = createAnimatedInstallProgress(progress);
-  animated.setLabel("Preparing");
+  animated.setLabel(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
     if (!sanitized) {
@@ -690,6 +766,7 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
       installPluginFromNpmPackArchive({
         archivePath: params.archivePath,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        config: params.cfg,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
         extensionsDir: resolveDefaultPluginExtensionsDir(),
@@ -697,22 +774,24 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
     );
     animated.stop();
-    progress.stop(result.ok ? `Installed ${safeLabel} plugin` : `Install failed: ${safeLabel}`);
+    progress.stop(
+      result.ok ? formatPluginInstalled(safeLabel) : formatPluginInstallFailed(safeLabel),
+    );
     return { status: "completed", result };
   } catch (error) {
     animated.stop();
     if (isTimeoutError(error)) {
-      progress.stop(`Install timed out: ${safeLabel}`);
+      progress.stop(formatPluginInstallTimedOut(safeLabel));
       return { status: "timed_out" };
     }
-    progress.stop(`Install failed: ${safeLabel}`);
+    progress.stop(formatPluginInstallFailed(safeLabel));
     throw error;
   } finally {
     animated.stop();
@@ -730,9 +809,12 @@ async function installPluginFromOverride(params: {
   runtime.log?.(
     `Using plugin install override for ${sanitizeTerminalText(entry.pluginId)} from ${PLUGIN_INSTALL_OVERRIDES_ENV} (${ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV}=1).`,
   );
+  // Overrides are explicit operator/developer input and intentionally bypass
+  // catalog trust defaults while still recording the resulting install source.
   const installOutcome =
     params.override.kind === "npm"
       ? await installPluginFromNpmSpecWithProgress({
+          cfg: params.cfg,
           entry,
           npmSpec: params.override.spec,
           prompter,
@@ -740,6 +822,7 @@ async function installPluginFromOverride(params: {
           trustedSourceLinkedOfficialInstall: false,
         })
       : await installPluginFromNpmPackArchiveWithProgress({
+          cfg: params.cfg,
           entry,
           archivePath: params.override.archivePath,
           prompter,
@@ -752,11 +835,8 @@ async function installPluginFromOverride(params: {
       : `npm-pack:${params.override.archivePath}`;
   if (installOutcome.status === "timed_out") {
     await prompter.note(
-      [
-        `Installing ${sanitizeTerminalText(displaySpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
-        "Returning to selection.",
-      ].join("\n"),
-      "Plugin install",
+      formatPluginInstallTimedOutNote(sanitizeTerminalText(displaySpec)),
+      t("wizard.plugins.installTitle"),
     );
     runtime.error?.(
       `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(displaySpec)}`,
@@ -773,10 +853,13 @@ async function installPluginFromOverride(params: {
   if (!result.ok) {
     await prompter.note(
       [
-        `Failed to install ${sanitizeTerminalText(displaySpec)}: ${summarizeInstallError(result.error)}`,
-        "Returning to selection.",
+        t("wizard.plugins.installFailed", {
+          spec: sanitizeTerminalText(displaySpec),
+          error: summarizeInstallError(result.error),
+        }),
+        t("wizard.plugins.returningToSelection"),
       ].join("\n"),
-      "Plugin install",
+      t("wizard.plugins.installTitle"),
     );
     runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
     return {
@@ -841,6 +924,7 @@ async function installPluginFromOverride(params: {
 }
 
 async function installPluginFromClawHubSpecWithProgress(params: {
+  cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   clawhubSpec: string;
   prompter: WizardPrompter;
@@ -853,9 +937,9 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     }
 > {
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(`Installing ${safeLabel} plugin…`);
+  const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
   const animated = createAnimatedInstallProgress(progress);
-  animated.setLabel("Preparing");
+  animated.setLabel(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
     if (!sanitized) {
@@ -870,6 +954,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
       installPluginFromClawHub({
         spec: params.clawhubSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        config: params.cfg,
         extensionsDir: resolveDefaultPluginExtensionsDir(),
         expectedPluginId: params.entry.pluginId,
         mode: "install",
@@ -877,7 +962,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
@@ -885,9 +970,9 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     );
     animated.stop();
     if (result.ok) {
-      progress.stop(`Installed ${safeLabel} plugin`);
+      progress.stop(formatPluginInstalled(safeLabel));
     } else {
-      progress.stop(`Install failed: ${safeLabel}`);
+      progress.stop(formatPluginInstallFailed(safeLabel));
     }
     return {
       status: "completed",
@@ -896,10 +981,10 @@ async function installPluginFromClawHubSpecWithProgress(params: {
   } catch (error) {
     animated.stop();
     if (isTimeoutError(error)) {
-      progress.stop(`Install timed out: ${safeLabel}`);
+      progress.stop(formatPluginInstallTimedOut(safeLabel));
       return { status: "timed_out" };
     }
-    progress.stop(`Install failed: ${safeLabel}`);
+    progress.stop(formatPluginInstallFailed(safeLabel));
     return {
       status: "completed",
       result: {
@@ -910,6 +995,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
   }
 }
 
+/** Ensures an onboarding plugin is installed, enabled, and recorded in config. */
 export async function ensureOnboardingPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -923,6 +1009,8 @@ export async function ensureOnboardingPluginInstalled(params: {
   let next = params.cfg;
   const installOverride = resolvePluginInstallOverride({ pluginId: entry.pluginId });
   if (installOverride) {
+    // Any install override mutates config/install records, so guard it with the
+    // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
     return await installPluginFromOverride({
       cfg: next,
@@ -998,6 +1086,8 @@ export async function ensureOnboardingPluginInstalled(params: {
   assertConfigWriteAllowedInCurrentMode();
 
   if (choice === "local" && localPath) {
+    // Bundled plugin sources are already part of the host checkout; enabling is
+    // enough and no install record/load path should be added for that case.
     const enableResult = await applyPluginEnablement({
       cfg: next,
       pluginId: entry.pluginId,
@@ -1034,6 +1124,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   let shouldTryNpm = choice === "npm";
   if (choice === "clawhub" && clawhubInstallSpec) {
     const installOutcome = await installPluginFromClawHubSpecWithProgress({
+      cfg: next,
       entry,
       clawhubSpec: clawhubInstallSpec,
       prompter,
@@ -1042,11 +1133,8 @@ export async function ensureOnboardingPluginInstalled(params: {
 
     if (installOutcome.status === "timed_out") {
       await prompter.note(
-        [
-          `Installing ${sanitizeTerminalText(clawhubInstallSpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
-          "Returning to selection.",
-        ].join("\n"),
-        "Plugin install",
+        formatPluginInstallTimedOutNote(sanitizeTerminalText(clawhubInstallSpec)),
+        t("wizard.plugins.installTitle"),
       );
       runtime.error?.(
         `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(clawhubInstallSpec)}`,
@@ -1093,13 +1181,16 @@ export async function ensureOnboardingPluginInstalled(params: {
 
     await prompter.note(
       [
-        `Failed to install ${sanitizeTerminalText(clawhubInstallSpec)}: ${summarizeInstallError(result.error)}`,
-        "Returning to selection.",
+        t("wizard.plugins.installFailed", {
+          spec: sanitizeTerminalText(clawhubInstallSpec),
+          error: summarizeInstallError(result.error),
+        }),
+        t("wizard.plugins.returningToSelection"),
       ].join("\n"),
-      "Plugin install",
+      t("wizard.plugins.installTitle"),
     );
 
-    if (!npmInstallSpec || !shouldFallbackClawHubToNpm(result)) {
+    if (!npmInstallSpec || !shouldFallbackClawHubToNpm({ result, npmSpec: npmInstallSpec })) {
       runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
       return {
         cfg: next,
@@ -1109,8 +1200,12 @@ export async function ensureOnboardingPluginInstalled(params: {
       };
     }
 
+    // ClawHub package/version misses for official packages can recover through
+    // npm, but keep the operator in control before changing install source.
     shouldTryNpm = await prompter.confirm({
-      message: `Use npm package instead? (${sanitizeTerminalText(npmInstallSpec)})`,
+      message: t("wizard.plugins.useNpmPackageInstead", {
+        spec: sanitizeTerminalText(npmInstallSpec),
+      }),
       initialValue: true,
     });
     if (!shouldTryNpm) {
@@ -1126,8 +1221,10 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   if (!shouldTryNpm || !npmInstallSpec) {
     await prompter.note(
-      `No remote install source is available for ${sanitizeTerminalText(entry.label)}. Returning to selection.`,
-      "Plugin install",
+      t("wizard.plugins.noRemoteInstallSource", {
+        plugin: sanitizeTerminalText(entry.label),
+      }),
+      t("wizard.plugins.installTitle"),
     );
     runtime.error?.(
       `Plugin install failed: no remote spec available for ${sanitizeTerminalText(entry.pluginId)}.`,
@@ -1141,6 +1238,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
 
   const installOutcome = await installPluginFromNpmSpecWithProgress({
+    cfg: next,
     entry,
     npmSpec: npmInstallSpec,
     prompter,
@@ -1149,11 +1247,8 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   if (installOutcome.status === "timed_out") {
     await prompter.note(
-      [
-        `Installing ${sanitizeTerminalText(npmInstallSpec)} timed out after ${formatDurationLabel(ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS)}.`,
-        "Returning to selection.",
-      ].join("\n"),
-      "Plugin install",
+      formatPluginInstallTimedOutNote(sanitizeTerminalText(npmInstallSpec)),
+      t("wizard.plugins.installTitle"),
     );
     runtime.error?.(
       `Plugin install timed out after ${ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS}ms: ${sanitizeTerminalText(npmInstallSpec)}`,
@@ -1188,7 +1283,11 @@ export async function ensureOnboardingPluginInstalled(params: {
     const install = {
       pluginId: result.pluginId,
       source: "npm",
-      spec: npmSpecs?.recordSpec ?? npmInstallSpec,
+      spec: resolveNpmInstallRecordSpec({
+        requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+        resolution: result.npmResolution,
+        pinResolvedRegistrySpec: entry.trustedSourceLinkedOfficialInstall === true,
+      }),
       installPath: result.targetDir,
       version: result.version,
       ...buildNpmResolutionInstallFields(result.npmResolution),
@@ -1204,15 +1303,22 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   await prompter.note(
     [
-      `Failed to install ${sanitizeTerminalText(npmInstallSpec)}: ${summarizeInstallError(result.error)}`,
-      "Returning to selection.",
+      t("wizard.plugins.installFailed", {
+        spec: sanitizeTerminalText(npmInstallSpec),
+        error: summarizeInstallError(result.error),
+      }),
+      t("wizard.plugins.returningToSelection"),
     ].join("\n"),
-    "Plugin install",
+    t("wizard.plugins.installTitle"),
   );
 
   if (localPath) {
+    // If npm fails and a trusted local checkout exists, offer it as a recovery
+    // path instead of leaving setup stuck on the remote artifact.
     const fallback = await prompter.confirm({
-      message: `Use local plugin path instead? (${sanitizeTerminalText(localPath)})`,
+      message: t("wizard.plugins.useLocalPluginPathInstead", {
+        path: sanitizeTerminalText(localPath),
+      }),
       initialValue: true,
     });
     if (fallback) {

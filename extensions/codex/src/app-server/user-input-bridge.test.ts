@@ -1,3 +1,4 @@
+// Codex tests cover user input bridge plugin behavior.
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
@@ -54,9 +55,7 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(params.onBlockReply).toHaveBeenCalledWith({
-      text: expect.stringContaining("Pick a mode"),
-    });
+    expect(expectFirstBlockReplyText(params)).toContain("Pick a mode");
     expect(bridge.handleQueuedMessage("2")).toBe(true);
 
     await expect(response).resolves.toEqual({

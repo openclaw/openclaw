@@ -1,3 +1,4 @@
+// Agent runtime config tests cover agent-specific runtime config resolution from temp homes.
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,6 +62,15 @@ const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
+}
+
+function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
+  const call = resolveCommandConfigWithSecretsMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected command config resolution call ${callIndex}`);
+  }
+  const [params] = call;
+  return params;
 }
 
 function mockConfig(home: string, storePath: string): OpenClawConfig {
@@ -153,7 +163,7 @@ describe("agentCommand runtime config", () => {
         targetIds: new Set(["models.providers.*.apiKey"]),
         runtime,
       });
-      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
@@ -180,7 +190,7 @@ describe("agentCommand runtime config", () => {
         runtimeTargetsChannelSecrets: true,
       });
 
-      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("channels.telegram.botToken")).toBe(true);
     });
   });
@@ -192,7 +202,9 @@ describe("agentCommand runtime config", () => {
 
       const prepared = await resolveAgentRuntimeConfig(runtime);
 
+      expect(readConfigFileSnapshotForWriteMock).toHaveBeenCalledTimes(1);
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
+      expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(loadedConfig, loadedConfig);
       expect(prepared.cfg).toBe(loadedConfig);
     });
   });

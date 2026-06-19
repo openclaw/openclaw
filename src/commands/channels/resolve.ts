@@ -1,3 +1,9 @@
+// Implements `openclaw channels resolve` for provider-specific user/group target resolution.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelResolveKind,
@@ -6,6 +12,7 @@ import type {
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -16,10 +23,6 @@ import {
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
@@ -118,6 +121,7 @@ function formatResolveResult(result: ResolveResult): string {
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
+/** Resolve user/group/channel labels into plugin-specific stable target ids. */
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = getRuntimeConfig();
@@ -129,7 +133,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     runtime,
     autoEnable: true,
   });
-  const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
     throw new Error(
       `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
@@ -197,12 +201,15 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   if (!plugin?.resolver?.resolveTargets) {
     const channelText = selection.channel ?? explicitChannel ?? "";
     throw new Error(
-      `Channel ${channelText} does not support resolve. Run ${formatCliCommand("openclaw channels capabilities --channel " + channelText)} to inspect supported actions.`,
+      formatUnsupportedChannelActionMessage({
+        channel: channelText,
+        action: "resolve",
+      }),
     );
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
-  let results: ResolveResult[] = [];
+  let results: ResolveResult[];
   if (preferredKind) {
     const resolved = await plugin.resolver.resolveTargets({
       cfg,

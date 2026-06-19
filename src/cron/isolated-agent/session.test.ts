@@ -1,3 +1,4 @@
+// Isolated agent session tests cover session creation and metadata for cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -489,13 +490,10 @@ describe("resolveCronSession", () => {
         },
       });
 
-      expect(result).toMatchObject({
-        isNewSession: true,
-        sessionEntry: {
-          sessionId: expect.any(String),
-          modelOverride: "some-model",
-        },
-      });
+      expect(result.isNewSession).toBe(true);
+      expect(typeof result.sessionEntry.sessionId).toBe("string");
+      expect(result.sessionEntry.sessionId).not.toHaveLength(0);
+      expect(result.sessionEntry.modelOverride).toBe("some-model");
     });
   });
 });

@@ -19,6 +19,15 @@ This page is the Perplexity **provider** setup. For the Perplexity **tool** (how
 | Auth        | `PERPLEXITY_API_KEY` (direct) or `OPENROUTER_API_KEY` (via OpenRouter) |
 | Config path | `plugins.entries.perplexity.config.webSearch.apiKey`                   |
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/perplexity-plugin
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>
@@ -89,10 +98,10 @@ When using the native Perplexity API, searches support the following filters:
     `PERPLEXITY_API_KEY` is available to that process.
 
     <Warning>
-    A key set only in `~/.profile` will not be visible to a launchd/systemd
-    daemon unless that environment is explicitly imported. Set the key in
-    `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway process can
-    read it.
+    A key exported only in an interactive shell will not be visible to a
+    launchd/systemd daemon unless that environment is explicitly imported. Set
+    the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway
+    process can read it.
     </Warning>
 
   </Accordion>

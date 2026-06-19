@@ -1,7 +1,8 @@
+// Resolves Windows system and Program Files install roots.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -233,7 +234,7 @@ export function getWindowsProgramFilesRoots(
   return result;
 }
 
-export function _resetWindowsInstallRootsForTests(
+export function resetWindowsInstallRootsForTests(
   overrides: WindowsInstallRootsTestOverrides = {},
 ): void {
   queryRegistryValueFn = overrides.queryRegistryValue ?? defaultQueryRegistryValue;
@@ -241,7 +242,7 @@ export function _resetWindowsInstallRootsForTests(
   cachedProcessInstallRoots = null;
 }
 
-export const _private = {
+export const privateTestApi = {
   getWindowsRegExeCandidates,
   locateWindowsRegExe,
 };

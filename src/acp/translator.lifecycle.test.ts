@@ -1,3 +1,4 @@
+/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
 import type {
   CloseSessionRequest,
   InitializeRequest,
@@ -7,10 +8,10 @@ import type {
   ResumeSessionRequest,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -43,7 +44,7 @@ function createListSessionsRequest(params: {
     request.cursor = params.cursor;
   }
   if (params.limit !== undefined) {
-    request._meta = { limit: params.limit };
+    request["_meta"] = { limit: params.limit };
   }
   return request;
 }
@@ -254,6 +255,33 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+  it("lists Gateway sessions with invalid updated timestamps", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([
+          createSessionRow({
+            key: "agent:main:work",
+            cwd: "/tmp/openclaw",
+            title: "Work session",
+            updatedAt: Number.POSITIVE_INFINITY,
+          }),
+        ]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/tmp/openclaw" }));
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.updatedAt).toBeUndefined();
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("rejects session/list cursors when the cwd filter changes", async () => {
     const allRows = [
       createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
@@ -312,7 +340,7 @@ describe("acp translator stable lifecycle handlers", () => {
 
   it("resumes an existing Gateway session without replaying transcript history", async () => {
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return createGatewaySessions([
@@ -336,22 +364,25 @@ describe("acp translator stable lifecycle handlers", () => {
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "thought_level",
-          currentValue: "adaptive",
-        }),
-      ]),
-    );
+    if (!result.configOptions) {
+      throw new Error("expected resume session config options");
+    }
+    const thoughtLevelOption = result.configOptions.find((option) => option.id === "thought_level");
+    expect(thoughtLevelOption?.currentValue).toBe("adaptive");
     expect(sessionStore.getSession("agent:main:work")?.sessionKey).toBe("agent:main:work");
-    expect(request).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    const requestCalls = (request as unknown as { mock: { calls: Array<[string]> } }).mock.calls;
+    expect(requestCalls.map((call) => call[0])).not.toContain("sessions.get");
     expect(sessionUpdate).toHaveBeenCalledWith({
       sessionId: "agent:main:work",
       update: {
         sessionUpdate: "session_info_update",
         title: "Work session",
         updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: {
+          sessionKey: "agent:main:work",
+          kind: "direct",
+          spawnedWorkspaceDir: "/tmp/openclaw",
+        },
       },
     });
 

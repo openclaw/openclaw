@@ -1,3 +1,5 @@
+// Covers gateway protected-path canonicalization for repeated encoding,
+// malformed encodings, dot segments, and plugin route prefixes.
 import { describe, expect, it } from "vitest";
 import {
   PROTECTED_PLUGIN_ROUTE_PREFIXES,
@@ -17,16 +19,14 @@ function buildRepeatedEncodedSlashPath(depth: number): string {
 
 describe("security-path canonicalization", () => {
   it("canonicalizes decoded case/slash variants", () => {
-    expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual(
-      expect.objectContaining({
-        canonicalPath: "/api/channels/nostr/default/profile",
-        candidates: ["/api/channels/nostr/default/profile"],
-        malformedEncoding: false,
-        decodePasses: 0,
-        decodePassLimitReached: false,
-        rawNormalizedPath: "/api/channels/nostr/default/profile",
-      }),
-    );
+    expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual({
+      canonicalPath: "/api/channels/nostr/default/profile",
+      candidates: ["/api/channels/nostr/default/profile"],
+      malformedEncoding: false,
+      decodePasses: 0,
+      decodePassLimitReached: false,
+      rawNormalizedPath: "/api/channels/nostr/default/profile",
+    });
     const encoded = canonicalizePathForSecurity("/api/%63hannels%2Fnostr%2Fdefault%2Fprofile");
     expect(encoded.canonicalPath).toBe("/api/channels/nostr/default/profile");
     expect(encoded.candidates).toContain("/api/%63hannels%2fnostr%2fdefault%2fprofile");

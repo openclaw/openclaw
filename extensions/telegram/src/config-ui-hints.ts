@@ -1,3 +1,4 @@
+// Telegram helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -17,17 +18,29 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   },
-  "dm.threadReplies": {
-    label: "Telegram DM Thread Replies",
-    help: 'Controls whether Telegram DMs with message_thread_id use flat sessions ("off", default) or thread-scoped sessions ("inbound" or "always"). Thread IDs are still preserved for replies when sessions stay flat.',
-  },
-  "direct.*.threadReplies": {
-    label: "Telegram Per-DM Thread Replies",
-    help: 'Per-DM override for message_thread_id session threading. Use "inbound" only when a specific direct chat intentionally uses Telegram DM topics as separate sessions.',
-  },
   configWrites: {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",
+  },
+  mentionPatterns: {
+    label: "Telegram Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Telegram group chat IDs or chatId:topic:threadId topic IDs. Native Telegram bot mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Telegram Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Telegram Mention Pattern Allowlist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Telegram Mention Pattern Denylist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
+  },
+  includeGroupHistoryContext: {
+    label: "Telegram Group History Context",
+    help: 'Controls prior Telegram group messages included in model context: "mention-only" keeps messages addressed to the bot and bot replies (default), "recent" includes recent room history, and "none" disables group history context.',
   },
   "commands.native": {
     label: "Telegram Native Commands",
@@ -48,6 +61,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.chunkMode": {
     label: "Telegram Chunk Mode",
     help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+  },
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",
@@ -89,6 +106,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Telegram Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "Telegram Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
@@ -96,6 +117,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.progress.commandText": {
     label: "Telegram Progress Command Text",
     help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.commentary": {
+    label: "Telegram Progress Commentary",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
   },
   "retry.attempts": {
     label: "Telegram Retry Attempts",

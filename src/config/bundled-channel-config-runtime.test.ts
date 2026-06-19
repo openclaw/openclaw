@@ -1,3 +1,4 @@
+// Verifies bundled channel config runtime loading stays lazy and bounded.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,10 +54,9 @@ describe("bundled channel config runtime", () => {
       "../../test/helpers/config/bundled-channel-config-runtime.js?scope=missing-bundled-list",
     );
 
-    expect(runtimeModule.getBundledChannelConfigSchemaMap().get("msteams")).toMatchObject({
-      schema: { type: "object" },
-      runtime: {},
-    });
+    const schemaEntry = runtimeModule.getBundledChannelConfigSchemaMap().get("msteams");
+    expect(schemaEntry?.schema).toEqual({ type: "object" });
+    expect(schemaEntry?.runtime).toEqual({});
     expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toStrictEqual({});
   });
 

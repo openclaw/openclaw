@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Mistral tests cover realtime transcription provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   buildMistralRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
@@ -27,8 +28,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       apiKey: "mistral-key",
+      baseUrl: undefined,
       model: "voxtral-mini-transcribe-realtime-2602",
       encoding: "pcm_mulaw",
       sampleRate: 8000,
@@ -36,8 +38,24 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
   });
 
+  it("normalizes pasted API key artifacts for realtime auth headers", () => {
+    const provider = buildMistralRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as OpenClawConfig,
+      rawConfig: {
+        providers: {
+          mistral: {
+            apiKey: "  sk-\r\nmistral│  ",
+          },
+        },
+      },
+    });
+
+    expect(resolved?.apiKey).toBe("sk-mistral");
+  });
+
   it("builds a Mistral realtime websocket URL", () => {
-    const url = __testing.toMistralRealtimeWsUrl({
+    const url = testing.toMistralRealtimeWsUrl({
       apiKey: "mistral-key",
       baseUrl: "https://api.mistral.ai/v1",
       model: "voxtral-mini-transcribe-realtime-2602",

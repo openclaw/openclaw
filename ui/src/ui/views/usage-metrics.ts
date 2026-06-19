@@ -1,3 +1,4 @@
+// Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   buildUsageAggregateTail,
@@ -6,7 +7,7 @@ import {
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -291,9 +292,9 @@ function buildUsageMosaicStats(
     }
 
     if (
-      !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
-        hourTotals[hour] += usage.totalTokens * share;
-        weekdayTotals[weekday] += usage.totalTokens * share;
+      !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
+        hourTotals[hour] += usageLocal.totalTokens * share;
+        weekdayTotals[weekday] += usageLocal.totalTokens * share;
       })
     ) {
       continue;
@@ -451,8 +452,19 @@ function parseYmdDate(dateStr: string): Date | null {
     return null;
   }
   const [, y, m, d] = match;
-  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
-  return Number.isNaN(date.valueOf()) ? null : date;
+  const year = Number(y);
+  const monthIndex = Number(m) - 1;
+  const day = Number(d);
+  const date = new Date(year, monthIndex, day);
+  if (
+    Number.isNaN(date.valueOf()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== monthIndex ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
 }
 
 function formatDayLabel(dateStr: string): string {

@@ -1,10 +1,11 @@
+// Stepfun plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawConfig,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyStepFunPlanConfig,
   applyStepFunPlanConfigCn,

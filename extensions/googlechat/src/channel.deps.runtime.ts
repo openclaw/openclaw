@@ -1,8 +1,9 @@
+// Googlechat plugin module implements channeleps behavior.
 export {
   buildChannelConfigSchema,
   chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
-  fetchRemoteMedia,
+  readRemoteMediaBuffer,
   GoogleChatConfigSchema,
   loadOutboundMediaFromUrl,
   missingTargetError,

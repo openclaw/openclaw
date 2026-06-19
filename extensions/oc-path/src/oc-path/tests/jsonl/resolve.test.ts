@@ -1,3 +1,4 @@
+// OC Path tests cover resolve plugin behavior.
 import { describe, expect, it } from "vitest";
 import { findOcPaths } from "../../find.js";
 import { parseJsonl } from "../../jsonl/parse.js";
@@ -30,7 +31,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/L2/event");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "step" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("step");
+      }
     }
   });
 
@@ -38,7 +42,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/L2/result.ok");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "boolean", value: true });
+      expect(m.node.value.kind).toBe("boolean");
+      if (m.node.value.kind === "boolean") {
+        expect(m.node.value.value).toBe(true);
+      }
     }
   });
 
@@ -46,7 +53,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/$last/event");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "end" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("end");
+      }
     }
   });
 
@@ -67,7 +77,7 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   // line's bytes; the universal resolve was preferring that local
   // number over the JsonlLine's file-relative line.
 
-  const log = [
+  const logLocal = [
     '{"event":"start"}', // line 1
     '{"event":"step","n":1}', // line 2
     '{"event":"step","n":2}', // line 3
@@ -76,25 +86,25 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   ].join("\n");
 
   it("resolves L2/event with line=2 (not 1)", () => {
-    const { ast } = parseJsonl(log);
+    const { ast } = parseJsonl(logLocal);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L2/event"));
-    expect(m).not.toBeNull();
-    if (m !== null) {
-      expect(m.line).toBe(2);
+    if (m === null) {
+      throw new Error("expected L2/event match");
     }
+    expect(m.line).toBe(2);
   });
 
   it("resolves L4/event with line=4", () => {
-    const { ast } = parseJsonl(log);
+    const { ast } = parseJsonl(logLocal);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L4/event"));
-    expect(m).not.toBeNull();
-    if (m !== null) {
-      expect(m.line).toBe(4);
+    if (m === null) {
+      throw new Error("expected L4/event match");
     }
+    expect(m.line).toBe(4);
   });
 
   it("findOcPaths over wildcard surfaces correct file-relative lines", () => {
-    const { ast } = parseJsonl(log);
+    const { ast } = parseJsonl(logLocal);
     const matches = findOcPaths(ast, parseOcPath("oc://session.jsonl/*/event"));
     expect(matches).toHaveLength(4);
     const lines = matches.map((m) => m.match.line);

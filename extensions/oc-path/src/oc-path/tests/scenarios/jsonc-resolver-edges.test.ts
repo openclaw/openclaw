@@ -1,3 +1,4 @@
+// OC Path tests cover jsonc resolver edges plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
@@ -33,7 +34,10 @@ describe("jsonc resolver edges", () => {
     const m = rs('{"items":["a","b","c"]}', "oc://config/items.1");
     expect(m?.kind).toBe("value");
     if (m?.kind === "value") {
-      expect(m.node).toMatchObject({ kind: "string", value: "b" });
+      expect(m.node.kind).toBe("string");
+      if (m.node.kind === "string") {
+        expect(m.node.value).toBe("b");
+      }
     }
   });
 
@@ -101,7 +105,10 @@ describe("jsonc resolver edges", () => {
     const m = rs(json, `oc://config/${segs.join(".")}`);
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "leaf" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("leaf");
+      }
     }
   });
 

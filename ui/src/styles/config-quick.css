@@ -1,5 +1,113 @@
 /* ── Quick Settings ── */
 
+.settings-workspace {
+  width: 100%;
+}
+
+.settings-workspace__body {
+  width: 100%;
+}
+
+/* Logs opt into a fill-height chain so the log stream, not the page, owns
+   desktop scrolling. Other settings routes keep the default `.content` scroll.
+
+   The chain works because the entire ancestor stack is converted to flex
+   columns so the workspace can take the remaining viewport after the
+   `.content-header` breadcrumb without triggering `.content`'s overflow scroll. */
+.content--logs {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content--logs .settings-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: auto;
+}
+
+.content--logs .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  max-width: 1520px;
+  margin: 0 auto;
+  padding: 24px 16px 16px;
+}
+
+.settings-section-nav__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.settings-section-nav__item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.settings-section-nav__item:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.settings-section-nav__item--active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--card) 86%);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border) 56%);
+  color: var(--text-strong);
+}
+
+.settings-section-nav__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+
+.settings-section-nav__icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-section-nav__icon svg * {
+  stroke: currentColor;
+  fill: none;
+}
+
+.settings-section-nav__label {
+  overflow-wrap: anywhere;
+}
+
 .qs-container {
   width: 100%;
   max-width: 1520px;
@@ -51,7 +159,7 @@
 
 .qs-side-stack {
   display: grid;
-  grid-column: span 4;
+  grid-column: span 3;
   grid-template-rows: auto 1fr;
   align-self: stretch;
   gap: 14px;
@@ -87,7 +195,7 @@
 }
 
 .qs-card--personal {
-  grid-column: span 8;
+  grid-column: span 9;
 }
 
 .qs-card--personal .qs-identity-grid {
@@ -212,6 +320,23 @@
   font-family: var(--mono);
   font-size: 0.75rem;
   color: var(--accent);
+}
+
+.qs-row--tool-profile {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+  padding-block: 10px;
+}
+
+.qs-row--tool-profile .qs-row__label {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.qs-row--tool-profile .qs-segmented {
+  align-self: stretch;
+  justify-content: flex-start;
 }
 
 .qs-field {
@@ -1113,11 +1238,11 @@
   }
 
   .qs-card--appearance {
-    order: 4;
+    order: 5;
   }
 
   .qs-card--personal {
-    order: 5;
+    order: 4;
   }
 
   .qs-card--automations {
@@ -1141,6 +1266,15 @@
 }
 
 @media (max-width: 480px) {
+  .settings-section-nav {
+    padding: 16px 0 12px;
+  }
+
+  .settings-section-nav__item {
+    flex: 1 1 calc(50% - 4px);
+    justify-content: center;
+  }
+
   .qs-container {
     padding: 20px 0 40px;
   }

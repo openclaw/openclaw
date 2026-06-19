@@ -1,3 +1,4 @@
+// Memory Core tests cover manager source state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   loadMemorySourceFileState,
@@ -15,8 +16,8 @@ describe("memory source state", () => {
           all: (...args) => {
             calls.push({ sql, args });
             return [
-              { path: "memory/one.md", hash: "hash-1" },
-              { path: "memory/two.md", hash: "hash-2" },
+              { path: "memory/one.md", hash: "hash-1", mtime: 100, size: 10 },
+              { path: "memory/two.md", hash: "hash-2", mtime: 200, size: 20 },
             ];
           },
           get: () => undefined,
@@ -27,8 +28,8 @@ describe("memory source state", () => {
 
     expect(calls).toEqual([{ sql: MEMORY_SOURCE_FILE_STATE_SQL, args: ["memory"] }]);
     expect(state.rows).toEqual([
-      { path: "memory/one.md", hash: "hash-1" },
-      { path: "memory/two.md", hash: "hash-2" },
+      { path: "memory/one.md", hash: "hash-1", mtime: 100, size: 10 },
+      { path: "memory/two.md", hash: "hash-2", mtime: 200, size: 20 },
     ]);
     expect(state.hashes).toEqual(
       new Map([

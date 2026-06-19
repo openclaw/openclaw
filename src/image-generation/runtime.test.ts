@@ -1,3 +1,4 @@
+/** Tests image-generation runtime fallback, overrides, and error reporting. */
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -178,6 +179,45 @@ describe("image-generation runtime", () => {
     });
 
     expect(seenTimeoutMs).toBe(180_000);
+  });
+
+  it("uses provider default image-generation timeout when the call and config omit timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    const provider: ImageGenerationProvider = {
+      id: "image-plugin",
+      defaultTimeoutMs: 600_000,
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [
+            {
+              buffer: Buffer.from("png-bytes"),
+              mimeType: "image/png",
+              fileName: "sample.png",
+            },
+          ],
+          model: "img-v1",
+        };
+      },
+    };
+    providers = [provider];
+
+    await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "image-plugin/img-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(600_000);
   });
 
   it("auto-detects and falls through to another configured image-generation provider by default", async () => {
@@ -488,16 +528,71 @@ describe("image-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      aspectRatio: {
-        applied: "16:9",
-        derivedFrom: "size",
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected image-generation normalization metadata");
+    }
+    expect(result.normalization.aspectRatio?.applied).toBe("16:9");
+    expect(result.normalization.aspectRatio?.derivedFrom).toBe("size");
+    expect(result.metadata.requestedSize).toBe("1280x720");
+    expect(result.metadata.normalizedAspectRatio).toBe("16:9");
+    expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
+  });
+
+  it("uses model-specific geometry lists before provider normalization", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {
+            supportsSize: true,
+            supportsAspectRatio: true,
+          },
+          edit: {
+            enabled: true,
+            supportsSize: true,
+            supportsAspectRatio: true,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1536x1024", "1024x1536"],
+            sizesByModel: {
+              "krea/v2/medium/text-to-image": [],
+            },
+            aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
+          },
+        },
+        async generateImage(req) {
+          seenRequest = {
+            size: req.size,
+            aspectRatio: req.aspectRatio,
+          };
+          return {
+            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          };
+        },
       },
+    ];
+
+    await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "fal/krea/v2/medium/text-to-image" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      size: "1024x768",
     });
-    expect(result.metadata).toMatchObject({
-      requestedSize: "1280x720",
-      normalizedAspectRatio: "16:9",
-      aspectRatioDerivedFromSize: "16:9",
+
+    expect(seenRequest).toEqual({
+      size: "1024x768",
+      aspectRatio: undefined,
     });
   });
 

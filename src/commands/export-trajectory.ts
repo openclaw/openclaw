@@ -1,3 +1,4 @@
+/** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -5,8 +6,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -46,18 +46,38 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   if (!ENCODED_EXPORT_REQUEST_RE.test(trimmed)) {
     throw new Error("Encoded trajectory export request is invalid");
   }
-  const decoded = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8")) as unknown;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8")) as unknown;
+  } catch {
+    throw new Error("Encoded trajectory export request is invalid JSON");
+  }
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
     throw new Error("Encoded trajectory export request must be a JSON object");
   }
   const request = decoded as EncodedExportTrajectoryRequest;
-  return {
-    sessionKey: readOptionalString(request.sessionKey) ?? "",
-    output: readOptionalString(request.output),
-    store: readOptionalString(request.store),
-    agent: readOptionalString(request.agent),
-    workspace: readOptionalString(request.workspace),
-  };
+  const opts: Partial<ExportTrajectoryCommandOptions> = {};
+  const sessionKey = readOptionalString(request.sessionKey);
+  if (sessionKey !== undefined) {
+    opts.sessionKey = sessionKey;
+  }
+  const output = readOptionalString(request.output);
+  if (output !== undefined) {
+    opts.output = output;
+  }
+  const store = readOptionalString(request.store);
+  if (store !== undefined) {
+    opts.store = store;
+  }
+  const agent = readOptionalString(request.agent);
+  if (agent !== undefined) {
+    opts.agent = agent;
+  }
+  const workspace = readOptionalString(request.workspace);
+  if (workspace !== undefined) {
+    opts.workspace = workspace;
+  }
+  return opts;
 }
 
 function resolveExportTrajectoryOptions(
@@ -73,6 +93,7 @@ function resolveExportTrajectoryOptions(
   };
 }
 
+/** Resolves the requested session and exports its trajectory summary or JSON result. */
 export async function exportTrajectoryCommand(
   opts: ExportTrajectoryCommandOptions,
   runtime: RuntimeEnv,
@@ -88,7 +109,7 @@ export async function exportTrajectoryCommand(
   const sessionKey = resolvedOpts.sessionKey?.trim();
   if (!sessionKey) {
     runtime.error(
-      `--session-key is required. Run ${formatCliCommand("openclaw sessions list")} to choose a session.`,
+      `--session-key is required. Run ${formatCliCommand("openclaw sessions")} to choose a session.`,
     );
     runtime.exit(1);
     return;
@@ -97,11 +118,14 @@ export async function exportTrajectoryCommand(
   const storePath = resolvedOpts.store
     ? path.resolve(resolvedOpts.store)
     : resolveDefaultSessionStorePath(targetAgentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey] as SessionEntry | undefined;
+  const entry = loadSessionEntry({
+    agentId: targetAgentId,
+    sessionKey,
+    storePath,
+  });
   if (!entry?.sessionId) {
     runtime.error(
-      `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions list")} to see available sessions.`,
+      `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions")} to see available sessions.`,
     );
     runtime.exit(1);
     return;

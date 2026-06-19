@@ -1,3 +1,4 @@
+// Regresses accepted legacy iMessage dmPolicy config detection.
 import { describe, expect, it } from "vitest";
 import {
   expectSchemaConfigValue,
@@ -131,6 +132,23 @@ describe("legacy config detection", () => {
           }
         ).messages?.queue?.byProvider?.whatsapp,
       expectedValue: "queue",
+    });
+  });
+  it("rejects retired messages.queue.mode without mutating the source", () => {
+    expectOpenClawSchemaInvalidPreservesField({
+      config: { messages: { queue: { mode: "queue" } } },
+      readValue: (parsed) =>
+        (
+          parsed as {
+            messages?: {
+              queue?: {
+                mode?: unknown;
+              };
+            };
+          }
+        ).messages?.queue?.mode,
+      expectedValue: "queue",
+      expectedPath: "messages.queue.mode",
     });
   });
 });

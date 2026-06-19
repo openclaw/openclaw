@@ -1,3 +1,5 @@
+// Covers message-action cross-context policy, markers, and presentation
+// decoration behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -42,6 +44,42 @@ const localChatTestPlugin: ChannelPlugin = {
   },
 };
 
+const resolvedDmTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "slackdm",
+    label: "Resolved DM",
+    capabilities: { chatTypes: ["direct"], media: true },
+  }),
+  outbound: directOutbound,
+  messaging: {
+    normalizeTarget: (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      const userId = trimmed.replace(/^user:/i, "");
+      return /^user:/i.test(trimmed)
+        ? `user:${userId.toLowerCase()}`
+        : `channel:${trimmed.toLowerCase()}`;
+    },
+    targetResolver: {
+      looksLikeId: (raw) => /^(?:user:)?[UW][A-Z0-9]+$/i.test(raw.trim()),
+      hint: "<user:ID>",
+      resolveTarget: async ({ input }) => {
+        const userId = input.trim().replace(/^user:/i, "");
+        return /^[UW][A-Z0-9]+$/i.test(userId)
+          ? { to: userId, kind: "user", source: "normalized" }
+          : null;
+      },
+    },
+  },
+  threading: {
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      target.toLowerCase() ===
+      toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
+  },
+};
+
 describe("runMessageAction context isolation", () => {
   beforeEach(() => {
     setActivePluginRegistry(
@@ -65,6 +103,11 @@ describe("runMessageAction context isolation", () => {
           pluginId: "localchat",
           source: "test",
           plugin: localChatTestPlugin,
+        },
+        {
+          pluginId: "slackdm",
+          source: "test",
+          plugin: resolvedDmTestPlugin,
         },
       ]),
     );
@@ -134,6 +177,33 @@ describe("runMessageAction context isolation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it("allows the active DM after target resolution strips its user prefix", async () => {
+    const result = await runDrySend({
+      cfg: {
+        channels: { slackdm: {} },
+        tools: {
+          message: {
+            crossContext: {
+              allowWithinProvider: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      actionParams: {
+        channel: "slackdm",
+        target: "user:U123",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentChannelProvider: "slackdm",
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "send", to: "U123" });
   });
 
   it.each([
@@ -291,6 +361,55 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
+      name: "blocks cross-provider message mutations by default",
+      action: "edit" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+        message: "updated",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider delete mutations by default",
+      action: "delete" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider pin mutations by default",
+      action: "pin" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
+      name: "blocks cross-provider unpin mutations by default",
+      action: "unpin" as const,
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "forum",
+        target: "@opsbot",
+        messageId: "forum-message-1",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
+      message: /Cross-context messaging denied/,
+    },
+    {
       name: "blocks same-provider cross-context when disabled",
       action: "send" as const,
       cfg: {
@@ -342,13 +461,41 @@ describe("runMessageAction context isolation", () => {
       },
       message: 'Channel id "U12345678" resolved to a user target.',
     },
-  ])("$name", async ({ action, cfg, actionParams, toolContext, message }) => {
+    {
+      name: "blocks actions outside the per-agent allowlist",
+      action: "channel-info" as const,
+      cfg: {
+        ...workspaceConfig,
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  actions: {
+                    allow: ["send"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agentId: "sandbox",
+      actionParams: {
+        channel: "workspace",
+        channelId: "C12345678",
+      },
+      message: 'Message action "channel-info" is disabled for this agent.',
+    },
+  ])("$name", async ({ action, cfg, actionParams, toolContext, message, agentId }) => {
     await expect(
       runDryAction({
         cfg,
         action,
         actionParams,
         toolContext,
+        agentId,
       }),
     ).rejects.toThrow(message);
   });
@@ -384,6 +531,12 @@ describe("runMessageAction context isolation", () => {
   ])("aborts $name when abortSignal is already aborted", async ({ run }) => {
     const controller = new AbortController();
     controller.abort();
-    await expect(run(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    let rejection: unknown;
+    try {
+      await run(controller.signal);
+    } catch (error) {
+      rejection = error;
+    }
+    expect((rejection as { name?: unknown }).name).toBe("AbortError");
   });
 });

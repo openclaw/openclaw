@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements discord live behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,11 +9,13 @@ import {
   requestDiscord,
 } from "@openclaw/discord/api.js";
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
+import { z } from "zod";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -23,10 +26,13 @@ import {
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
-  type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+  redactQaLiveLaneIssues,
+} from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -152,6 +158,8 @@ type DiscordObservedMessage = {
   scenarioTitle?: string;
   matchedScenario?: boolean;
   text: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
   replyToMessageId?: string;
   timestamp?: string;
 };
@@ -167,6 +175,8 @@ type DiscordObservedMessageArtifact = {
   scenarioTitle?: string;
   matchedScenario?: boolean;
   text?: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
   replyToMessageId?: string;
   timestamp?: string;
 };
@@ -175,8 +185,18 @@ type DiscordQaScenarioResult = {
   artifactPaths?: Record<string, string>;
   id: string;
   title: string;
+  standardId?: string;
   status: "pass" | "fail";
   details: string;
+  requestStartedAt?: string;
+  responseObservedAt?: string;
+  rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
 };
 
 type DiscordQaRunResult = {
@@ -186,33 +206,6 @@ type DiscordQaRunResult = {
   summaryPath: string;
   observedMessagesPath: string;
   gatewayDebugDirPath?: string;
-  scenarios: DiscordQaScenarioResult[];
-};
-
-type DiscordQaSummary = {
-  artifacts: {
-    observedMessagesPath: string;
-    reactionTimelinesPath?: string;
-    reportPath: string;
-    summaryPath: string;
-  };
-  credentials: {
-    credentialId?: string;
-    kind: string;
-    ownerId?: string;
-    role?: QaCredentialRole;
-    source: "convex" | "env";
-  };
-  guildId: string;
-  channelId: string;
-  startedAt: string;
-  finishedAt: string;
-  cleanupIssues: string[];
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-  };
   scenarios: DiscordQaScenarioResult[];
 };
 
@@ -448,7 +441,7 @@ function buildDiscordQaConfig(
     };
   } = {},
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "discord"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "discord"]);
   const pluginEntries = {
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
@@ -639,7 +632,9 @@ async function waitForDiscordVoiceState(params: {
     } catch (error) {
       lastError = formatErrorMessage(error);
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const stateDetails = lastState
     ? `last voice state channel=${lastState.channel_id ?? "none"} user=${lastState.user_id ?? "unknown"}`
@@ -758,6 +753,18 @@ function normalizeDiscordReactionSnapshot(params: {
       .filter((reaction) => reaction.emoji.length > 0)
       .toSorted((a, b) => a.emoji.localeCompare(b.emoji)),
   };
+}
+
+function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
+  if (!triggerTimestamp || !replyTimestamp) {
+    return undefined;
+  }
+  const triggerAtMs = Date.parse(triggerTimestamp);
+  const replyAtMs = Date.parse(replyTimestamp);
+  if (!Number.isFinite(triggerAtMs) || !Number.isFinite(replyAtMs)) {
+    return undefined;
+  }
+  return Math.max(0, Math.round(replyAtMs - triggerAtMs));
 }
 
 function collectSeenReactionSequence(
@@ -1032,7 +1039,9 @@ async function observeStatusReactionTimeline(params: {
     if (params.expectedSequence.every((emoji) => seenSequence.includes(emoji))) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   return {
     expectedSequence: params.expectedSequence,
@@ -1096,6 +1105,8 @@ async function pollChannelMessages(params: {
   observedMessages: DiscordObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
@@ -1120,13 +1131,17 @@ async function pollChannelMessages(params: {
         scenarioId: params.observationScenarioId,
         scenarioTitle: params.observationScenarioTitle,
         matchedScenario,
+        triggerMessageId: params.triggerMessageId,
+        triggerTimestamp: params.triggerTimestamp,
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
         return { message: observedMessage, afterSnowflake };
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Discord message`);
 }
@@ -1152,7 +1167,9 @@ async function pollThreadReplyMessage(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   return undefined;
 }
@@ -1259,6 +1276,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
+      standardId: params.scenario.standardId,
       status,
       details:
         status === "pass"
@@ -1336,7 +1354,9 @@ async function waitForDiscordChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const details = lastStatus
     ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
@@ -1414,6 +1434,8 @@ function buildObservedMessagesArtifact(params: {
       ? {
           ...scenarioContext,
           senderIsBot: message.senderIsBot,
+          triggerTimestamp: message.triggerTimestamp,
+          timestamp: message.timestamp,
         }
       : {
           ...scenarioContext,
@@ -1423,6 +1445,8 @@ function buildObservedMessagesArtifact(params: {
           senderId: message.senderId,
           senderIsBot: message.senderIsBot,
           senderUsername: message.senderUsername,
+          triggerMessageId: message.triggerMessageId,
+          triggerTimestamp: message.triggerTimestamp,
           replyToMessageId: message.replyToMessageId,
           timestamp: message.timestamp,
         };
@@ -1496,7 +1520,9 @@ async function assertDiscordApplicationCommandsRegistered(params: {
     if (missing.length === 0) {
       return { commandNames: lastNames };
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(
     `missing Discord native command(s): ${params.expectedCommandNames
@@ -1640,6 +1666,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "native command registered"
@@ -1661,6 +1688,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "SUT bot joined voice channel"
@@ -1715,6 +1743,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
+              standardId: scenario.standardId,
               status: missing.length === 0 ? "pass" : "fail",
               details:
                 missing.length === 0
@@ -1737,6 +1766,8 @@ export async function runDiscordQaLive(params: {
             observedMessages,
             observationScenarioId: scenario.id,
             observationScenarioTitle: scenario.title,
+            triggerMessageId: sent.id,
+            triggerTimestamp: sent.timestamp,
             predicate: (message) =>
               matchesDiscordScenarioReply({
                 channelId: runtimeEnv.channelId,
@@ -1752,13 +1783,32 @@ export async function runDiscordQaLive(params: {
             expectedTextIncludes: scenarioRun.expectedTextIncludes,
             message: matched.message,
           });
+          const requestStartedAt = sent.timestamp;
+          const responseObservedAt = matched.message.timestamp;
+          const rttMs = computeDiscordRttMs(requestStartedAt, responseObservedAt);
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
+            standardId: scenario.standardId,
             status: "pass",
             details: redactPublicMetadata
               ? "reply matched"
               : `reply message ${matched.message.messageId} matched`,
+            ...(requestStartedAt === undefined ? {} : { requestStartedAt }),
+            ...(responseObservedAt === undefined ? {} : { responseObservedAt }),
+            ...(rttMs === undefined ||
+            requestStartedAt === undefined ||
+            responseObservedAt === undefined
+              ? {}
+              : {
+                  rttMs,
+                  rttMeasurement: {
+                    finalMatchedReplyRttMs: rttMs,
+                    requestStartedAt,
+                    responseObservedAt,
+                    source: "request-to-observed-message",
+                  },
+                }),
           });
         } catch (error) {
           if (scenarioRun.kind === "channel-message" && !scenarioRun.expectReply) {
@@ -1767,6 +1817,7 @@ export async function runDiscordQaLive(params: {
               scenarioResults.push({
                 id: scenario.id,
                 title: scenario.title,
+                standardId: scenario.standardId,
                 status: "pass",
                 details: "no reply",
               });
@@ -1776,6 +1827,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
+            standardId: scenario.standardId,
             status: "fail",
             details: formatErrorMessage(error),
           });
@@ -1806,42 +1858,31 @@ export async function runDiscordQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const publishedCleanupIssues = redactPublicMetadata
-    ? cleanupIssues.map(() => "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)")
+    ? redactQaLiveLaneIssues(cleanupIssues)
     : cleanupIssues;
-  const passedCount = scenarioResults.filter((entry) => entry.status === "pass").length;
-  const failedCount = scenarioResults.filter((entry) => entry.status === "fail").length;
-  const summary: DiscordQaSummary = {
-    artifacts: {
-      reportPath: path.join(outputDir, "discord-qa-report.md"),
-      summaryPath: path.join(outputDir, "discord-qa-summary.json"),
-      observedMessagesPath: path.join(outputDir, "discord-qa-observed-messages.json"),
-      ...(reactionTimelines.length > 0
-        ? { reactionTimelinesPath: path.join(outputDir, "discord-qa-reaction-timelines.json") }
-        : {}),
-    },
-    credentials: {
-      source: credentialLease.source,
-      kind: credentialLease.kind,
-      role: credentialLease.role,
-      ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
-      credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
-    },
-    guildId: redactPublicMetadata ? "<redacted>" : runtimeEnv.guildId,
-    channelId: redactPublicMetadata ? "<redacted>" : runtimeEnv.channelId,
-    startedAt,
-    finishedAt,
-    cleanupIssues: publishedCleanupIssues,
-    counts: {
-      total: scenarioResults.length,
-      passed: passedCount,
-      failed: failedCount,
-    },
-    scenarios: scenarioResults,
-  };
   const reportPath = path.join(outputDir, "discord-qa-report.md");
-  const summaryPath = path.join(outputDir, "discord-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "discord-qa-observed-messages.json");
   const reactionTimelinesPath = path.join(outputDir, "discord-qa-reaction-timelines.json");
+  const evidence = buildLiveTransportEvidenceSummary({
+    artifactPaths: [
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
+      ...(reactionTimelines.length > 0
+        ? [{ kind: "reaction-timelines", path: path.basename(reactionTimelinesPath) }]
+        : []),
+    ],
+    checks: scenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.discord.${standardId}`] : undefined,
+    })),
+    env: process.env,
+    generatedAt: finishedAt,
+    primaryModel,
+    providerMode,
+    transportId: "discord",
+  });
   await fs.writeFile(
     reportPath,
     `${renderDiscordQaMarkdown({
@@ -1857,7 +1898,7 @@ export async function runDiscordQaLive(params: {
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+  await fs.writeFile(summaryPath, `${JSON.stringify(evidence, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });
@@ -1908,7 +1949,7 @@ export async function runDiscordQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
@@ -1917,6 +1958,7 @@ export const __testing = {
   buildDiscordQaConfig,
   buildDiscordWebMessageUrl,
   buildObservedMessagesArtifact,
+  computeDiscordRttMs,
   findScenario,
   getCurrentDiscordUser,
   getChannelMessage,
@@ -1932,3 +1974,4 @@ export const __testing = {
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };
+export { testing as __testing };

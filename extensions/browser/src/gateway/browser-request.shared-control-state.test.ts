@@ -1,3 +1,4 @@
+// Browser tests cover browser request.shared control state plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../browser/test-port.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -100,9 +101,12 @@ async function browserRequestStatus(): Promise<unknown> {
     req: { type: "req", id: "req-1", method: "browser.request" },
     isWebchatConnect: () => false,
   });
-  const call = respond.mock.calls[0];
-  expect(call?.[0]).toBe(true);
-  return call?.[1];
+  const [call] = respond.mock.calls;
+  if (!call) {
+    throw new Error("expected browser request response");
+  }
+  expect(call[0]).toBe(true);
+  return call[1];
 }
 
 describe("browser.request local control state", () => {
@@ -136,10 +140,13 @@ describe("browser.request local control state", () => {
       noSandbox: false,
     });
 
-    await expect(browserRequestStatus()).resolves.toMatchObject({
-      executablePath: "/usr/bin/google-chrome",
-      headless: true,
-      noSandbox: true,
-    });
+    const status = (await browserRequestStatus()) as {
+      executablePath?: unknown;
+      headless?: unknown;
+      noSandbox?: unknown;
+    };
+    expect(status.executablePath).toBe("/usr/bin/google-chrome");
+    expect(status.headless).toBe(true);
+    expect(status.noSandbox).toBe(true);
   });
 });

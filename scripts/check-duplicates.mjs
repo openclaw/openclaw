@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs duplicate-code detection with repo-specific excludes.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,7 @@ const targets = [
   "qa",
   "security",
   "test",
+  "skills",
   "openclaw.mjs",
   "config/knip.config.ts",
   "tsdown.config.ts",
@@ -31,8 +33,6 @@ const intentionallyUnscannedPrefixes = [".agents/", "vendor/"];
 
 const generatedIgnores = [
   "extensions/qa-matrix/src/shared/**",
-  "extensions/qa-matrix/src/report.ts",
-  "extensions/qa-matrix/src/docker-runtime.ts",
   "extensions/qa-matrix/src/cli-paths.ts",
   "**/node_modules/**",
   "**/dist/**",

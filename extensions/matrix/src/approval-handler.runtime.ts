@@ -1,3 +1,4 @@
+// Matrix plugin module implements approval handler behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type {
   ChannelApprovalCapabilityHandlerContext,
@@ -19,7 +20,8 @@ import type {
 import {
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
@@ -155,9 +157,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function normalizePendingMessageIds(entry: PendingMessage): string[] {
-  return Array.from(
-    new Set(entry.platformMessageIds.map((messageId) => messageId.trim()).filter(Boolean)),
-  );
+  return normalizeUniqueStringEntries(entry.platformMessageIds);
 }
 
 function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
@@ -576,6 +576,16 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
     unbindPending: (params) => {
       const target = normalizeReactionTargetRef(params.binding);
+      if (!target) {
+        return;
+      }
+      unregisterMatrixApprovalReactionTarget(target);
+    },
+    cancelDelivered: (params) => {
+      const target = normalizeReactionTargetRef({
+        roomId: params.entry.roomId,
+        eventId: params.entry.reactionEventId,
+      });
       if (!target) {
         return;
       }

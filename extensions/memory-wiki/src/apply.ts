@@ -1,9 +1,12 @@
+// Memory Wiki plugin module implements apply behavior.
 import path from "node:path";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -53,6 +56,8 @@ export type ApplyMemoryWikiMutation =
   | CreateSynthesisMemoryWikiMutation
   | UpdateMetadataMemoryWikiMutation;
 
+type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
+
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
@@ -61,9 +66,42 @@ type ApplyMemoryWikiMutationResult = {
   compile: CompileMemoryWikiResult;
 };
 
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: false },
+): number | undefined;
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: true },
+): number | null | undefined;
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: boolean },
+): number | null | undefined {
+  if (options.allowNull && params.confidence === null) {
+    return null;
+  }
+  return readFiniteNumberParam(params, "confidence", {
+    min: 0,
+    max: 1,
+  });
+}
+
+function normalizeMemoryWikiMutationOp(
+  op: MemoryWikiMutationInputOp,
+): ApplyMemoryWikiMutation["op"] {
+  if (op === "synthesis") {
+    return "create_synthesis";
+  }
+  if (op === "metadata") {
+    return "update_metadata";
+  }
+  return op;
+}
+
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = rawParams as {
-    op: ApplyMemoryWikiMutation["op"];
+    op: MemoryWikiMutationInputOp;
     title?: string;
     body?: string;
     lookup?: string;
@@ -74,7 +112,8 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     confidence?: number | null;
     status?: string;
   };
-  if (params.op === "create_synthesis") {
+  const op = normalizeMemoryWikiMutationOp(params.op);
+  if (op === "create_synthesis") {
     if (!params.title?.trim()) {
       throw new Error("wiki mutation requires title for create_synthesis.");
     }
@@ -84,6 +123,9 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     if (!params.sourceIds || params.sourceIds.length === 0) {
       throw new Error("wiki mutation requires at least one sourceId for create_synthesis.");
     }
+    const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
+      allowNull: false,
+    });
     return {
       op: "create_synthesis",
       title: params.title,
@@ -92,13 +134,16 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
-      ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
+      ...(typeof confidence === "number" ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }
   if (!params.lookup?.trim()) {
     throw new Error("wiki mutation requires lookup for update_metadata.");
   }
+  const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
+    allowNull: true,
+  });
   return {
     op: "update_metadata",
     lookup: params.lookup,
@@ -106,7 +151,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
-    ...(params.confidence !== undefined ? { confidence: params.confidence } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
     ...(params.status ? { status: params.status } : {}),
   };
 }
@@ -115,11 +160,7 @@ function normalizeUniqueStrings(values: string[] | undefined): string[] | undefi
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized;
+  return uniqueStrings(normalizeStringEntries(values));
 }
 
 function ensureHumanNotesBlock(body: string): string {

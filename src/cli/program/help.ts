@@ -1,9 +1,10 @@
+// Root Commander help, global options, banner, version, and example formatting.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../../infra/git-commit.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
-import { hasFlag, hasRootVersionAlias } from "../argv.js";
+import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
@@ -23,8 +24,11 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["openclaw onboard", "Run guided setup for a local Gateway, workspace, auth, and channels."],
+  ["openclaw setup", "Create the baseline config, workspace, and session folders."],
+  ["openclaw configure", "Change models, Gateway, channels, plugins, skills, and health checks."],
   ["openclaw status", "Check Gateway, channel, model, and recent-session status."],
   ["openclaw doctor --fix", "Repair common config, service, plugin, and channel problems."],
+  ["openclaw channels add", "Add or update a chat channel account with guided prompts."],
   ["openclaw channels status", "See connected messaging accounts and login state."],
   ["openclaw --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
   ["openclaw gateway run --force", "Start the Gateway and replace anything bound to its port."],
@@ -40,7 +44,16 @@ const EXAMPLES = [
   ],
 ] as const;
 
-export function configureProgramHelp(program: Command, ctx: ProgramContext) {
+export function configureProgramHelp(
+  program: Command,
+  ctx: ProgramContext,
+  options?: { commandsWithSubcommands?: ReadonlySet<string> },
+) {
+  const commandsWithSubcommands = new Set([
+    ...ROOT_COMMANDS_WITH_SUBCOMMANDS,
+    ...(options?.commandsWithSubcommands ?? []),
+  ]);
+
   program
     .name(CLI_NAME)
     .description("")
@@ -74,12 +87,13 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => {
       const isRootCommand = cmd.parent === program;
-      const hasSubcommands = isRootCommand && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(cmd.name());
+      const hasSubcommands = isRootCommand && commandsWithSubcommands.has(cmd.name());
       return theme.command(hasSubcommands ? `${cmd.name()} *` : cmd.name());
     },
   });
 
   const formatHelpOutput = (str: string) => {
+    // Commander emits plain section labels; decorate them after command-specific help renders.
     let output = str;
     const isRootHelp = new RegExp(
       `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
@@ -105,11 +119,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
   });
 
-  if (
-    hasFlag(process.argv, "-V") ||
-    hasFlag(process.argv, "--version") ||
-    hasRootVersionAlias(process.argv)
-  ) {
+  if (isRootVersionInvocation(process.argv)) {
     const commit = resolveCommitHash({ moduleUrl: import.meta.url });
     console.log(
       commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
@@ -122,7 +132,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       return "";
     }
     const rich = isRich();
-    const line = formatCliBannerLine(ctx.programVersion, { richTty: rich });
+    const line = formatCliBannerLine(ctx.programVersion, { richTty: rich, mode: "default" });
     return `\n${line}\n`;
   });
 

@@ -6,18 +6,27 @@ read_when:
   - You need the Cerebras API key env var or CLI auth choice
 ---
 
-[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. OpenClaw includes a bundled Cerebras provider plugin with a static four-model catalog.
+[Cerebras](https://www.cerebras.ai) provides high-speed OpenAI-compatible inference on custom inference hardware. The Cerebras provider plugin includes a static four-model catalog.
 
 | Property        | Value                                    |
 | --------------- | ---------------------------------------- |
 | Provider id     | `cerebras`                               |
-| Plugin          | bundled, `enabledByDefault: true`        |
+| Plugin          | official external package                |
 | Auth env var    | `CEREBRAS_API_KEY`                       |
 | Onboarding flag | `--auth-choice cerebras-api-key`         |
 | Direct CLI flag | `--cerebras-api-key <key>`               |
 | API             | OpenAI-compatible (`openai-completions`) |
 | Base URL        | `https://api.cerebras.ai/v1`             |
 | Default model   | `cerebras/zai-glm-4.7`                   |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/cerebras-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -50,7 +59,7 @@ export CEREBRAS_API_KEY=csk-...
     openclaw models list --provider cerebras
     ```
 
-    The list should include all four bundled models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    The list should include all four static models. If `CEREBRAS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -81,7 +90,7 @@ OpenClaw ships a static Cerebras catalog that mirrors the public OpenAI-compatib
 
 ## Manual config
 
-The bundled plugin usually means you only need the API key. Use explicit `models.providers.cerebras` config when you want to override model metadata or run in `mode: "merge"` against the static catalog:
+The plugin usually means you only need the API key. Use explicit `models.providers.cerebras` config when you want to override model metadata or run in `mode: "merge"` against the static catalog:
 
 ```json5
 {
@@ -109,7 +118,7 @@ The bundled plugin usually means you only need the API key. Use explicit `models
 ```
 
 <Note>
-  If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `CEREBRAS_API_KEY` is available to that process — for example in `~/.openclaw/.env` or through `env.shellEnv`. A key sitting only in `~/.profile` will not help a managed service unless the env is imported separately.
+  If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `CEREBRAS_API_KEY` is available to that process — for example in `~/.openclaw/.env` or through `env.shellEnv`. A key exported only in an interactive shell will not help a managed service unless the env is imported separately.
 </Note>
 
 ## Related

@@ -24,9 +24,9 @@
   --text: #d4d4d8;
   --text-strong: #f4f4f5;
   --chat-text: #d4d4d8;
-  --muted: #838387;
-  --muted-strong: #75757d;
-  --muted-foreground: #838387;
+  --muted: #8b8b94;
+  --muted-strong: #898990;
+  --muted-foreground: #8b8b94;
 
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
@@ -85,6 +85,13 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
+  --control-ui-text-scale: 1;
+  --control-ui-text-xs: calc(11px * var(--control-ui-text-scale));
+  --control-ui-text-sm: calc(12px * var(--control-ui-text-scale));
+  --control-ui-text-md: calc(14px * var(--control-ui-text-scale));
+  --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
+  --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
+  --chat-text-size: var(--control-ui-text-md);
 
   /* Shadows - Subtle, layered depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
@@ -113,6 +120,9 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
 
+  /* Layering */
+  --z-dropdown: 100;
+
   color-scheme: dark;
 }
 
@@ -140,9 +150,9 @@
   --text: #3c3c43;
   --text-strong: #1a1a1e;
   --chat-text: #3c3c43;
-  --muted: #6e6e73;
+  --muted: #6a6a6f;
   --muted-strong: #545458;
-  --muted-foreground: #6e6e73;
+  --muted-foreground: #6a6a6f;
 
   --border: #e5e5ea;
   --border-strong: #d1d1d6;
@@ -252,9 +262,9 @@
   --text: #e0e0e2;
   --text-strong: #f5f5f7;
   --chat-text: #e0e0e2;
-  --muted: #7a7a80;
-  --muted-strong: #6e6e76;
-  --muted-foreground: #7a7a80;
+  --muted: #8a8a94;
+  --muted-strong: #888892;
+  --muted-foreground: #8a8a94;
 
   /* Borders — whisper-thin, barely visible */
   --border: #1a1a1e;
@@ -318,9 +328,9 @@
   --text: #3a3a42;
   --text-strong: #18181b;
   --chat-text: #3a3a42;
-  --muted: #6e6e78;
+  --muted: #6a6a72;
   --muted-strong: #52525a;
-  --muted-foreground: #6e6e78;
+  --muted-foreground: #6a6a72;
 
   /* Borders — clean, minimal */
   --border: #e2e2e8;
@@ -762,6 +772,10 @@ select {
 
 /* Focus visible styles */
 :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
   outline: none;
-  box-shadow: var(--focus-ring);
 }

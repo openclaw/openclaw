@@ -1,3 +1,4 @@
+// OC Path tests cover cross kind properties plugin behavior.
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
 import { setMdOcPath } from "../../edit.js";
@@ -115,7 +116,10 @@ describe("cross-kind property invariants", () => {
     if (r.ok) {
       const m = resolveJsoncOcPath(r.ast, parseOcPath("oc://X/k"));
       if (m?.kind === "object-entry") {
-        expect(m.node.value).toMatchObject({ kind: "number", value: 42 });
+        expect(m.node.value.kind).toBe("number");
+        if (m.node.value.kind === "number") {
+          expect(m.node.value.value).toBe(42);
+        }
       }
     }
   });

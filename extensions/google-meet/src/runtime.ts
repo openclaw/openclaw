@@ -1,9 +1,10 @@
+// Google Meet plugin module implements runtime behavior.
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GoogleMeetConfig,
   GoogleMeetMode,
@@ -207,7 +208,7 @@ function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
         config.chrome.audioOutputCommand?.[0],
         config.chrome.bargeInInputCommand?.[0],
       ];
-  return [...new Set(commands.filter((value): value is string => Boolean(value?.trim())))];
+  return uniqueStrings(commands.filter((value): value is string => Boolean(value?.trim())));
 }
 
 async function commandExists(runtime: PluginRuntime, command: string): Promise<boolean> {
@@ -674,6 +675,13 @@ export class GoogleMeetRuntime {
         "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
       );
     }
+    const requestedMode = request.mode ? resolveMode(request.mode, this.params.config) : undefined;
+    const mode =
+      requestedMode && isGoogleMeetTalkBackMode(requestedMode)
+        ? requestedMode
+        : isGoogleMeetTalkBackMode(this.params.config.defaultMode)
+          ? this.params.config.defaultMode
+          : "agent";
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
     const beforeSessions = this.list();
@@ -690,7 +698,7 @@ export class GoogleMeetRuntime {
       ...request,
       transport,
       url,
-      mode: "agent",
+      mode,
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
     let health = result.session.chrome?.health;
@@ -821,10 +829,6 @@ export class GoogleMeetRuntime {
 
   async #refreshStatusHealthForSession(session: GoogleMeetSession) {
     if (session.transport === "chrome" || session.transport === "chrome-node") {
-      if (session.chrome?.health?.manualActionRequired) {
-        this.#refreshSpeechReadiness(session);
-        return;
-      }
       await this.#refreshBrowserHealthForChromeSession(session, { force: true, readOnly: true });
       return;
     }

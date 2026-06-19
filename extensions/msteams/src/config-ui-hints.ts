@@ -1,3 +1,4 @@
+// Msteams helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const msTeamsChannelConfigUiHints = {
@@ -8,6 +9,14 @@ export const msTeamsChannelConfigUiHints = {
   configWrites: {
     label: "MS Teams Config Writes",
     help: "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
+  },
+  cloud: {
+    label: "MS Teams Cloud",
+    help: 'Teams SDK cloud environment for auth, token validation, and token services: "Public", "USGov", "USGovDoD", or "China" (default: Public).',
+  },
+  serviceUrl: {
+    label: "MS Teams Service URL",
+    help: "Bot Connector service URL for SDK proactive sends/edits/deletes. Set with cloud for USGov/DoD; set alone for GCC.",
   },
   streaming: {
     label: "MS Teams Streaming",
@@ -24,6 +33,10 @@ export const msTeamsChannelConfigUiHints = {
   "streaming.progress.maxLines": {
     label: "MS Teams Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the progress title (default: 8).",
+  },
+  "streaming.progress.maxLineChars": {
+    label: "MS Teams Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
   },
   "streaming.progress.toolProgress": {
     label: "MS Teams Progress Tool Lines",

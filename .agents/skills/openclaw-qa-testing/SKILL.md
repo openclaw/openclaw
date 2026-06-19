@@ -13,7 +13,7 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 - `docs/help/testing.md`
 - `docs/channels/qa-channel.md`
 - `qa/README.md`
-- `qa/scenarios/index.md`
+- `qa/scenarios/index.yaml`
 - `extensions/qa-lab/src/suite.ts`
 - `extensions/qa-lab/src/character-eval.ts`
 
@@ -198,7 +198,9 @@ pnpm openclaw qa character-eval \
 - Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
 - Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
 - Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
-- Scenario source should stay markdown-driven under `qa/scenarios/`.
+- Scenario source is YAML-only under `qa/scenarios/`: use `index.yaml` and
+  per-scenario `*.yaml` files with top-level `title`, `scenario`, and optional
+  `flow`. Never add fenced `qa-scenario` / `qa-flow` Markdown files.
 - For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
 - Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.
 - Prefer at least one real task, such as creating or editing a tiny workspace artifact, so the transcript captures character under normal tool use instead of pure roleplay.
@@ -227,12 +229,15 @@ pnpm openclaw qa manual \
 - Treat the concrete Codex model name as user/config input; do not hardcode it in source, docs examples, or scenarios.
 - Live QA preserves `CODEX_HOME` so Codex CLI auth/config works while keeping `HOME` and `OPENCLAW_HOME` sandboxed.
 - Mock QA should scrub `CODEX_HOME`.
-- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`, `~/.profile`, and gateway child logs before changing scenario assertions.
+- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`,
+  relevant secret-backed auth, and gateway child logs before changing
+  scenario assertions.
 - For model comparison, include `codex-cli/<codex-model>` as another candidate in `qa character-eval`; the report should label it as an opaque model name.
 
 ## Repo facts
 
-- Seed scenarios live in `qa/`.
+- Seed scenarios live in `qa/scenarios/index.yaml` and
+  `qa/scenarios/<theme>/*.yaml`.
 - Main live runner: `extensions/qa-lab/src/suite.ts`
 - QA lab server: `extensions/qa-lab/src/lab-server.ts`
 - Child gateway harness: `extensions/qa-lab/src/gateway-child.ts`
@@ -260,8 +265,9 @@ pnpm openclaw qa manual \
 
 ## When adding scenarios
 
-- Add or update scenario markdown under `qa/scenarios/`
-- Keep kickoff expectations in `qa/scenarios/index.md` aligned
+- Add or update scenario YAML under `qa/scenarios/`; do not add `.md` scenario
+  files or fenced YAML blocks.
+- Keep kickoff expectations in `qa/scenarios/index.yaml` aligned
 - Add executable coverage in `extensions/qa-lab/src/suite.ts`
 - Prefer end-to-end assertions over mock-only checks
 - Save outputs under `.artifacts/qa-e2e/`

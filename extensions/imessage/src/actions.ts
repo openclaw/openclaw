@@ -1,8 +1,10 @@
+// Imessage plugin module implements actions behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
   jsonResult,
-  readNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -11,20 +13,27 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
-import { findLatestIMessageEntryForChat, type IMessageChatContext } from "./monitor-reply-cache.js";
-import { getCachedIMessagePrivateApiStatus } from "./probe.js";
+import {
+  findLatestIMessageEntryForChat,
+  rememberIMessageReplyCache,
+  type IMessageChatContext,
+} from "./monitor-reply-cache.js";
+import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
   "imessageActionsRuntime",
 );
+
+const log = createSubsystemLogger("channels/imessage");
 
 const providerId = "imessage";
 
@@ -34,6 +43,24 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
+}
+
+function rememberOutboundBridgeMessage(params: {
+  accountId: string;
+  messageId?: string;
+  chatGuid: string;
+}): void {
+  const messageId = params.messageId?.trim();
+  if (!messageId || messageId === "ok" || messageId === "unknown") {
+    return;
+  }
+  rememberIMessageReplyCache({
+    accountId: params.accountId,
+    messageId,
+    chatGuid: params.chatGuid,
+    timestamp: Date.now(),
+    isFromMe: true,
+  });
 }
 
 /**
@@ -78,7 +105,7 @@ async function resolveChatGuid(params: {
   if (explicitChatGuid) {
     return explicitChatGuid;
   }
-  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  const explicitChatId = readPositiveIntegerParam(params.actionParams, "chatId");
   if (typeof explicitChatId === "number") {
     const resolved = await params.runtime.resolveChatGuidForTarget({
       target: { kind: "chat_id", chatId: explicitChatId },
@@ -173,7 +200,7 @@ function buildChatContextFromActionParams(params: {
 }): IMessageChatContext {
   const explicitChatGuid = readStringParam(params.actionParams, "chatGuid")?.trim();
   const explicitChatIdentifier = readStringParam(params.actionParams, "chatIdentifier")?.trim();
-  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  const explicitChatId = readPositiveIntegerParam(params.actionParams, "chatId");
   // Trim before the truthy check so a whitespace-only currentChannelId can't
   // reach parseIMessageTarget (which throws on empty/whitespace input and
   // would abort the whole action with a confusing "target is required").
@@ -238,6 +265,51 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
     throw new Error(`iMessage ${action} requires buffer (base64) parameter.`);
   }
   return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
+}
+
+// Path-shaped attachment params the message-tool schema declares. We only
+// look at these to detect an unhydrated bypass attempt — the resolver in
+// hydrateAttachmentParamsForAction is responsible for loading them into
+// `buffer`/`filename` after enforcing localRoots, sandbox, and size limits.
+const REPLY_ATTACHMENT_PATH_PARAM_NAMES: readonly string[] = [
+  "filePath",
+  "path",
+  "media",
+  "mediaUrl",
+  "fileUrl",
+] as const;
+
+type ReplyAttachmentSpec = { kind: "buffer"; buffer: Uint8Array; filename: string };
+
+// Reply attachments must arrive hydrated: the core message-action runner
+// loads `path`/`media`/`mediaUrl`/`filePath`/`fileUrl` through the outbound
+// media resolver (mediaLocalRoots / sandbox / size limits / SSRF) and writes
+// the result into `buffer` + `filename`. We deliberately do not consume raw
+// path params here — accepting them would let an agent send any host file
+// imsg can read, bypassing the resolver. If a path-shaped param is present
+// without a corresponding `buffer`, the caller skipped hydration (most
+// likely calling handleAction directly in a test); fail loudly instead.
+function extractReplyAttachment(
+  params: Record<string, unknown>,
+): { spec: ReplyAttachmentSpec; sourceParam: string } | { spec: null; bypassParam: string } | null {
+  const buffer = readStringParam(params, "buffer");
+  if (buffer) {
+    const filename = readStringParam(params, "filename") ?? "attachment.bin";
+    return {
+      spec: {
+        kind: "buffer",
+        buffer: Uint8Array.from(Buffer.from(buffer, "base64")),
+        filename,
+      },
+      sourceParam: "buffer",
+    };
+  }
+  for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
+    if (readStringParam(params, name)) {
+      return { spec: null, bypassParam: name };
+    }
+  }
+  return null;
 }
 
 // Whitelist of expressive-send effect IDs the bridge accepts. Restricting
@@ -320,10 +392,22 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
     unsend: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    reply: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    sendWithEffect: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    sendAttachment: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    reply: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    sendWithEffect: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    sendAttachment: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
+    "upload-file": {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
     renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
@@ -346,15 +430,29 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // status adapter, which doesn't fire eagerly on first dispatch. Run
         // an inline probe so the first react/send-rich attempt after `imsg
         // launch` succeeds without requiring a manual `channels status`.
-        const { probeIMessagePrivateApi } = await import("./probe.js");
         privateApiStatus = await probeIMessagePrivateApi(
           cliPathForProbe,
           account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
         );
       }
       if (!privateApiStatus?.available) {
+        // Surface the silent-drop case: the throw becomes a tool-result
+        // `success:false`, which the model may or may not relay clearly to the
+        // user. Without a log line, an operator has no signal that a reply
+        // disappeared — they only see "channel: running" in `channels status`.
+        // Common cause: gateway restart un-injects the imsg-bridge-helper.dylib
+        // from Messages.app while imsg rpc keeps running.
+        // imsg's status message names the actual blocker (SIP, library
+        // validation, macOS 26 AMFI gate) — append it so the operator isn't
+        // told to "run imsg launch" when the OS is rejecting the dylib.
+        const reason = privateApiStatus?.statusMessage
+          ? ` imsg reports: ${privateApiStatus.statusMessage}`
+          : "";
+        log.warn(
+          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.${reason}`,
+        );
         throw new Error(
-          `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.`,
+          `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.${reason}`,
         );
       }
     };
@@ -407,7 +505,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         );
       }
       const resolvedMessageId = messageId();
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
       const reactionsToSend = remove && !reaction ? [...TAPBACK_KINDS] : reaction ? [reaction] : [];
       for (const kind of reactionsToSend) {
@@ -433,7 +531,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage edit requires text, newText, or message.");
       }
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
       const resolvedChatGuid = await chatGuid();
       await runtime.editMessage({
@@ -450,7 +548,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "unsend") {
       await assertPrivateApiEnabled();
       const resolvedMessageId = messageId({ requireFromMe: true });
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
       await runtime.unsendMessage({
         chatGuid: resolvedChatGuid,
@@ -468,14 +566,42 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
       }
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const attachment = extractReplyAttachment(params);
+      if (attachment) {
+        if (attachment.spec === null) {
+          throw new Error(
+            `iMessage reply rejected \`${attachment.bypassParam}\` because it did not pass through the outbound media resolver. ` +
+              'Pass a base64 `buffer` + `filename` directly, or invoke message(action: "reply") through the runner so the resolver ' +
+              "can validate the path against mediaLocalRoots/sandbox/size before sending.",
+          );
+        }
+        // Reply-with-attachment requires the `imsg send-rich --file` flag
+        // (openclaw/imsg#114). Older imsg builds reject the option, so
+        // refuse loudly here rather than letting send-rich ship the text
+        // alone and silently drop the attachment — the original symptom
+        // of openclaw/openclaw#79822.
+        if (privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true) {
+          throw new Error(
+            "iMessage reply with an attachment needs an imsg build that exposes `send-rich --file` " +
+              "(openclaw/imsg#114). Upgrade imsg, or use action 'upload-file' (with filePath/filename) " +
+              "or action 'send' (with media) to deliver the file plus a separate 'reply' for any text.",
+          );
+        }
+      }
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({
         chatGuid: resolvedChatGuid,
         text,
         replyToMessageId: resolvedMessageId,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId, repliedTo: resolvedMessageId });
     }
@@ -495,6 +621,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         effectId,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId, effect: effectId });
     }
@@ -572,6 +703,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         filename,
         asVoice: asVoice ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
     }

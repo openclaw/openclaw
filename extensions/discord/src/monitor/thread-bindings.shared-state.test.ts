@@ -1,7 +1,8 @@
+// Discord tests cover thread bindings.shared state plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
-  __testing as threadBindingsTesting,
+  testing as threadBindingsTesting,
   createThreadBindingManager,
   getThreadBindingManager,
 } from "./thread-bindings.js";
@@ -31,7 +32,9 @@ describe("thread binding manager state", () => {
     });
 
     const direct = getThreadBindingManager("work");
-    expect(direct).toBeDefined();
+    if (!direct) {
+      throw new Error("expected direct thread binding manager");
+    }
     expect(viaAlternateLoader.getThreadBindingManager("work")).toBe(direct);
   });
 });

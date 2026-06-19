@@ -1,3 +1,4 @@
+// Covers tools alsoAllow config parsing and validation.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
@@ -44,6 +45,49 @@ describe("config: tools.alsoAllow", () => {
       tools: {
         profile: "coding",
         alsoAllow: ["lobster"],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("allows per-agent message tool cross-context policy", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "sandbox",
+            tools: {
+              message: {
+                crossContext: {
+                  allowWithinProvider: false,
+                  allowAcrossProviders: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("allows per-agent message tool action allowlists", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "sandbox",
+            tools: {
+              message: {
+                actions: {
+                  allow: ["send"],
+                },
+              },
+            },
+          },
+        ],
       },
     });
 

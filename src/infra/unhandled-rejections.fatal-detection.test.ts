@@ -1,9 +1,10 @@
+// Tests fatal unhandled rejection detection in process bootstrap.
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 
@@ -54,6 +55,16 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.emit("unhandledRejection", reason, Promise.resolve());
   }
 
+  function expectConsoleLogWithMessage(
+    spy: ReturnType<typeof vi.spyOn>,
+    label: string,
+    message: string,
+  ): void {
+    const call = spy.mock.calls.find((entry: unknown[]) => entry[0] === label);
+    expect(call?.[0]).toBe(label);
+    expect(String(call?.[1])).toContain(message);
+  }
+
   function expectExitCodeFromUnhandled(
     reason: unknown,
     expected: number[],
@@ -88,9 +99,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         );
       }
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleErrorSpy,
         "[openclaw] FATAL unhandled rejection:",
-        expect.stringContaining("Out of memory"),
+        "Out of memory",
       );
     });
   });
@@ -124,9 +136,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         );
       }
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleErrorSpy,
         "[openclaw] CONFIGURATION ERROR - requires fix:",
-        expect.stringContaining("Invalid config"),
+        "Invalid config",
       );
     });
   });
@@ -138,6 +151,9 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
+        Object.assign(new Error("connect ENETDOWN 149.154.167.220:443"), {
+          code: "ENETDOWN",
+        }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
         Object.assign(
@@ -167,9 +183,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expectExitCodeFromUnhandled(transientErr, []);
       }
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleWarnSpy,
         "[openclaw] Non-fatal unhandled rejection (continuing):",
-        expect.stringContaining("fetch failed"),
+        "fetch failed",
       );
     });
 
@@ -190,9 +207,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expectExitCodeFromUnhandled(sqliteErr, []);
       }
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleWarnSpy,
         "[openclaw] Non-fatal unhandled rejection (continuing):",
-        expect.stringContaining("unable to open database file"),
+        "unable to open database file",
       );
     });
 
@@ -200,9 +218,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       const genericErr = new Error("Something went wrong");
 
       expectExitCodeFromUnhandled(genericErr, [1], "unhandled rejection");
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleErrorSpy,
         "[openclaw] Unhandled promise rejection:",
-        expect.stringContaining("Something went wrong"),
+        "Something went wrong",
       );
     });
 
@@ -222,9 +241,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       abortErr.name = "AbortError";
 
       expectExitCodeFromUnhandled(abortErr, []);
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expectConsoleLogWithMessage(
+        consoleWarnSpy,
         "[openclaw] Suppressed AbortError:",
-        expect.stringContaining("This operation was aborted"),
+        "This operation was aborted",
       );
     });
   });

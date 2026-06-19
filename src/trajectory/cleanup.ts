@@ -1,5 +1,7 @@
+// Trajectory cleanup helpers remove old trajectory files by retention policy.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -8,7 +10,7 @@ import {
   safeTrajectorySessionFileName,
 } from "./paths.js";
 
-export type RemovedTrajectoryArtifact = {
+type RemovedTrajectoryArtifact = {
   kind: "pointer" | "runtime";
   path: string;
 };
@@ -16,10 +18,6 @@ export type RemovedTrajectoryArtifact = {
 type TrajectoryPointer = {
   runtimeFile: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);

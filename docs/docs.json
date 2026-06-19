@@ -61,16 +61,40 @@
       "destination": "/channels/matrix-migration"
     },
     {
-      "source": "/help/gpt54-codex-agentic-parity",
-      "destination": "/help/gpt55-codex-agentic-parity"
+      "source": "/concepts/openclaw-sdk",
+      "destination": "/gateway/external-apps"
     },
     {
-      "source": "/help/gpt54-codex-agentic-parity-maintainers",
-      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+      "source": "/reference/openclaw-sdk-api-design",
+      "destination": "/gateway/external-apps"
     },
     {
       "source": "/mcp",
       "destination": "/cli/mcp"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity-maintainers",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/help/gpt55-codex-agentic-parity",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/help/gpt55-codex-agentic-parity-maintainers",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi-dev",
+      "destination": "/openclaw-agent-runtime"
     },
     {
       "source": "/providers/modelstudio",
@@ -99,6 +123,10 @@
     {
       "source": "/plugins/agent-tools",
       "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/gateway/admin-http-rpc",
+      "destination": "/plugins/admin-http-rpc"
     },
     {
       "source": "/cli/capability",
@@ -222,10 +250,14 @@
     },
     {
       "source": "/glm",
-      "destination": "/providers/glm"
+      "destination": "/providers/zai"
     },
     {
       "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/providers/glm",
       "destination": "/providers/zai"
     },
     {
@@ -283,6 +315,10 @@
     {
       "source": "/providers/zalo",
       "destination": "/channels/zalo"
+    },
+    {
+      "source": "/channels/openclaw-zaloclawbot",
+      "destination": "/channels/zaloclawbot"
     },
     {
       "source": "/providers/whatsapp",
@@ -725,6 +761,14 @@
       "destination": "/tools/skills"
     },
     {
+      "source": "/skill-workshop",
+      "destination": "/tools/skill-workshop"
+    },
+    {
+      "source": "/tools/skills-workshop",
+      "destination": "/tools/skill-workshop"
+    },
+    {
       "source": "/skills-config",
       "destination": "/tools/skills-config"
     },
@@ -1036,12 +1080,13 @@
                   "install/oracle",
                   "install/railway",
                   "install/raspberry-pi",
-                  "install/render"
+                  "install/render",
+                  "install/upstash"
                 ]
               },
               {
                 "group": "Advanced setup",
-                "pages": ["start/setup", "pi-dev"]
+                "pages": ["start/setup", "openclaw-agent-runtime"]
               }
             ]
           },
@@ -1050,7 +1095,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index"]
+                "pages": ["channels/index", "announcements/bluebubbles-imessage"]
               },
               {
                 "group": "Mainstream messaging",
@@ -1091,6 +1136,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },
@@ -1101,6 +1147,7 @@
                   "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
+                  "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
@@ -1129,6 +1176,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
+                  "concepts/personal-agent-benchmark-pack",
                   "concepts/qa-matrix"
                 ]
               },
@@ -1179,7 +1227,7 @@
             ]
           },
           {
-            "tab": "Tools & Plugins",
+            "tab": "Capabilities",
             "groups": [
               {
                 "group": "Overview",
@@ -1191,58 +1239,45 @@
                   "tools/plugin",
                   "plugins/manage-plugins",
                   "plugins/community",
-                  "plugins/plugin-inventory",
-                  "plugins/reference",
-                  "plugins/bundles",
-                  "plugins/dependency-resolution",
-                  "plugins/install-overrides",
+                  "plugins/bundles"
+                ]
+              },
+              {
+                "group": "Bundled plugin guides",
+                "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
+                  "plugins/workboard",
                   "plugins/webhooks",
+                  "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/llama-cpp",
                   "plugins/memory-lancedb",
-                  "plugins/message-presentation",
                   "plugins/oc-path",
-                  "plugins/skill-workshop",
-                  "plugins/zalouser",
-                  {
-                    "group": "Building plugins",
-                    "pages": [
-                      "plugins/building-plugins",
-                      "plugins/hooks",
-                      "plugins/sdk-channel-plugins",
-                      "plugins/sdk-channel-message",
-                      "plugins/sdk-provider-plugins",
-                      "plugins/cli-backend-plugins",
-                      "plugins/adding-capabilities",
-                      "plugins/compatibility",
-                      "plugins/sdk-migration"
-                    ]
-                  },
-                  {
-                    "group": "Plugin SDK reference",
-                    "pages": [
-                      "plugins/sdk-overview",
-                      "plugins/sdk-subpaths",
-                      "plugins/sdk-entrypoints",
-                      "plugins/sdk-runtime",
-                      "plugins/sdk-channel-turn",
-                      "plugins/sdk-agent-harness",
-                      "plugins/sdk-setup",
-                      "plugins/sdk-testing",
-                      "plugins/manifest",
-                      "plugins/architecture",
-                      "plugins/architecture-internals"
-                    ]
-                  }
+                  "plugins/zalouser"
+                ]
+              },
+              {
+                "group": "Building plugins",
+                "pages": [
+                  "plugins/building-plugins",
+                  "plugins/tool-plugins",
+                  "plugins/sdk-channel-plugins",
+                  "plugins/sdk-provider-plugins",
+                  "plugins/cli-backend-plugins",
+                  "plugins/hooks",
+                  "plugins/plugin-permission-requests",
+                  "plugins/adding-capabilities"
                 ]
               },
               {
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/skill-workshop",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1250,7 +1285,7 @@
                 ]
               },
               {
-                "group": "Automation and tasks",
+                "group": "Automation",
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
@@ -1268,6 +1303,7 @@
                   "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
+                  "tools/permission-modes",
                   "tools/exec-approvals",
                   "tools/exec-approvals-advanced",
                   "tools/exec",
@@ -1280,6 +1316,7 @@
                   "tools/reactions",
                   "tools/thinking",
                   "tools/tokenjuice",
+                  "tools/tool-search",
                   "tools/loop-detection",
                   "tools/trajectory",
                   "tools/tts",
@@ -1308,6 +1345,7 @@
                       "tools/kimi-search",
                       "tools/minimax-search",
                       "tools/ollama-search",
+                      "tools/parallel-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
                       "tools/tavily"
@@ -1319,6 +1357,7 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/goal",
                   "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
@@ -1341,7 +1380,6 @@
                   "clawhub/cli",
                   "clawhub/publishing",
                   "clawhub/skill-format",
-                  "clawhub/soul-format",
                   "clawhub/auth",
                   "clawhub/telemetry",
                   "clawhub/troubleshooting"
@@ -1352,8 +1390,9 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/security",
-                  "clawhub/acceptable-usage"
+                  "clawhub/acceptable-usage",
+                  "clawhub/moderation",
+                  "clawhub/security-audits"
                 ]
               }
             ]
@@ -1380,17 +1419,19 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
                   "providers/deepinfra",
                   "providers/deepseek",
+                  "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
-                  "providers/glm",
+                  "providers/gmi",
                   "providers/google",
                   "providers/gradium",
                   "providers/groq",
@@ -1403,15 +1444,19 @@
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
+                  "providers/novita",
                   "providers/nvidia",
                   "providers/ollama",
+                  "providers/ollama-cloud",
                   "providers/openai",
                   "providers/opencode",
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
+                  "providers/qwen-oauth",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",
@@ -1442,7 +1487,8 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
-                  "platforms/ios"
+                  "platforms/ios",
+                  "platforms/easyrunner"
                 ]
               },
               {
@@ -1538,7 +1584,9 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
+                      "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
@@ -1555,7 +1603,8 @@
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
                       "gateway/cli-backends",
-                      "gateway/local-models"
+                      "gateway/local-models",
+                      "gateway/local-model-services"
                     ]
                   },
                   {
@@ -1677,7 +1726,13 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
+                    "pages": [
+                      "cli/plugins",
+                      "cli/path",
+                      "cli/policy",
+                      "cli/skills",
+                      "cli/workboard"
+                    ]
                   },
                   {
                     "group": "Interfaces",
@@ -1702,9 +1757,51 @@
                 "group": "RPC and API",
                 "pages": [
                   "reference/rpc",
-                  "concepts/openclaw-sdk",
-                  "reference/openclaw-sdk-api-design",
+                  "gateway/external-apps",
+                  "reference/code-mode",
                   "reference/device-models"
+                ]
+              },
+              {
+                "group": "Codex harness",
+                "pages": [
+                  "plugins/codex-harness-reference",
+                  "plugins/codex-harness-runtime"
+                ]
+              },
+              {
+                "group": "Plugin reference",
+                "pages": [
+                  "plugins/plugin-inventory",
+                  "plugins/reference",
+                  "plugins/dependency-resolution",
+                  "plugins/install-overrides"
+                ]
+              },
+              {
+                "group": "Plugin SDK reference",
+                "pages": [
+                  "plugins/sdk-overview",
+                  "plugins/sdk-subpaths",
+                  "plugins/sdk-entrypoints",
+                  "plugins/sdk-runtime",
+                  "plugins/sdk-agent-harness",
+                  "plugins/sdk-setup",
+                  "plugins/sdk-testing",
+                  "plugins/manifest"
+                ]
+              },
+              {
+                "group": "Plugin maintainer reference",
+                "pages": [
+                  "plugins/architecture",
+                  "plugins/architecture-internals",
+                  "plugins/sdk-migration",
+                  "plugins/compatibility",
+                  "plugins/sdk-channel-outbound",
+                  "plugins/sdk-channel-inbound",
+                  "plugins/sdk-channel-ingress",
+                  "plugins/message-presentation"
                 ]
               },
               {
@@ -1724,7 +1821,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
-                  "pi",
+                  "agent-runtime-architecture",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
@@ -1744,9 +1841,7 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone",
-                  "help/gpt55-codex-agentic-parity",
-                  "help/gpt55-codex-agentic-parity-maintainers"
+                  "concepts/timezone"
                 ]
               },
               {
@@ -1758,6 +1853,7 @@
                 "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
+                  "reference/release-performance-sweep",
                   "reference/test",
                   "ci",
                   "help/scripts"

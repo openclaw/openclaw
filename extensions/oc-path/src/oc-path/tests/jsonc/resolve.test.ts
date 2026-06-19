@@ -1,3 +1,4 @@
+// OC Path tests cover resolve plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
@@ -32,7 +33,10 @@ describe("resolveJsoncOcPath", () => {
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
       expect(m.node.key).toBe("token");
-      expect(m.node.value).toMatchObject({ kind: "string", value: "secret" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("secret");
+      }
     }
   });
 
@@ -53,7 +57,10 @@ describe("resolveJsoncOcPath", () => {
     const m = rs(config, "oc://config/limits.1");
     expect(m?.kind).toBe("value");
     if (m?.kind === "value") {
-      expect(m.node).toMatchObject({ kind: "number", value: 20 });
+      expect(m.node.kind).toBe("number");
+      if (m.node.kind === "number") {
+        expect(m.node.value).toBe(20);
+      }
     }
   });
 
@@ -63,6 +70,10 @@ describe("resolveJsoncOcPath", () => {
 
   it("returns null for out-of-bounds array indexes", () => {
     expect(rs(config, "oc://config/limits.99")).toBeNull();
+  });
+
+  it("returns null for noncanonical array indexes", () => {
+    expect(rs(config, "oc://config/limits.01")).toBeNull();
   });
 
   it("returns null when descending past a primitive", () => {

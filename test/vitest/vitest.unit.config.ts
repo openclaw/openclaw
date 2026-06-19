@@ -1,8 +1,12 @@
+// Vitest unit config wires the unit test shard.
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
-import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
+import {
+  resolveVitestIsolation,
+  shouldPassWithNoTestsForCliIncludes,
+} from "./vitest.scoped-config.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
@@ -84,6 +88,20 @@ export function resolveDefaultUnitCoverageIncludePatterns(
   return [...sourceFiles].toSorted((left, right) => left.localeCompare(right));
 }
 
+function isEnabledFlagValue(value: string): boolean {
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+}
+
+function isCoverageEnabledFromArgv(argv: string[] = process.argv): boolean {
+  return argv.some((arg) => {
+    if (arg === "--coverage" || arg === "--coverage.enabled") {
+      return true;
+    }
+    const match = arg.match(/^--coverage(?:\.enabled)?=(.*)$/u);
+    return match ? isEnabledFlagValue(match[1] ?? "") : false;
+  });
+}
+
 export function createUnitVitestConfigWithOptions(
   env: Record<string, string | undefined> = process.env,
   options: {
@@ -95,11 +113,13 @@ export function createUnitVitestConfigWithOptions(
   } = {},
 ) {
   const isolate = resolveVitestIsolation(env);
+  const argv = options.argv ?? process.argv;
   const unitFastTestFiles = getUnitFastTestFiles();
   const envIncludePatterns = loadIncludePatternsFromEnv(env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
-  const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
+  const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, argv);
   const coverageIncludePatterns =
+    isCoverageEnabledFromArgv(argv) &&
     options.includePatterns === undefined &&
     envIncludePatterns === null &&
     cliIncludePatterns === null
@@ -115,6 +135,15 @@ export function createUnitVitestConfigWithOptions(
     return ![...protectedIncludeFiles].some((file) => pattern === file || pattern.endsWith("/**"));
   });
   const extraExcludePatterns = options.extraExcludePatterns ?? [];
+  const resolvedExcludePatterns = [
+    ...new Set([
+      ...exclude,
+      ...baseExcludePatterns,
+      ...unitFastTestFiles,
+      ...extraExcludePatterns,
+      ...loadExtraExcludePatternsFromEnv(env),
+    ]),
+  ];
   return defineConfig({
     ...sharedVitestConfig,
     test: {
@@ -130,15 +159,7 @@ export function createUnitVitestConfigWithOptions(
         ),
       ],
       include: envIncludePatterns ?? cliIncludePatterns ?? defaultIncludePatterns,
-      exclude: [
-        ...new Set([
-          ...exclude,
-          ...baseExcludePatterns,
-          ...unitFastTestFiles,
-          ...extraExcludePatterns,
-          ...loadExtraExcludePatternsFromEnv(env),
-        ]),
-      ],
+      exclude: resolvedExcludePatterns,
       coverage: {
         ...sharedTest.coverage,
         ...(coverageIncludePatterns !== null && coverageIncludePatterns.length > 0
@@ -152,7 +173,10 @@ export function createUnitVitestConfigWithOptions(
           ]),
         ],
       },
-      ...(options.passWithNoTests || cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      ...(options.passWithNoTests ||
+      shouldPassWithNoTestsForCliIncludes(cliIncludePatterns, resolvedExcludePatterns)
+        ? { passWithNoTests: true }
+        : {}),
     },
   });
 }

@@ -1,3 +1,4 @@
+// Agent command-list tests cover provider metadata and command output for configured agents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
@@ -80,7 +81,7 @@ describe("agentsListCommand", () => {
 
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
     const summary = (runtime.json[0] as Array<Record<string, unknown>>)[0];
-    expect(summary).toMatchObject({ id: "main" });
+    expect(summary?.id).toBe("main");
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
   });
@@ -121,9 +122,21 @@ describe("agentsListCommand", () => {
 
     expect(buildProviderStatusIndexMock).toHaveBeenCalledOnce();
     expect(buildProviderSummaryMetadataIndexMock).toHaveBeenCalledOnce();
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Providers:"));
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Telegram default: configured"),
-    );
+    expect(vi.mocked(runtime.log).mock.calls).toEqual([
+      [
+        [
+          "Agents:",
+          "- main (default)",
+          "  Workspace: ~/.openclaw/workspace",
+          "  Agent dir: ~/.openclaw/agents/main/agent",
+          "  Routing rules: 1",
+          "  Routing: Telegram default",
+          "  Providers:",
+          "    - Telegram default: configured",
+          "Routing rules map channel/account/peer to an agent. Use --bindings for full rules.",
+          "Channel status reflects local config/creds. For live health: openclaw channels status --probe.",
+        ].join("\n"),
+      ],
+    ]);
   });
 });

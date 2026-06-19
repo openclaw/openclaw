@@ -109,7 +109,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [PDF tool](/tools/pdf)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
-- [Automation & Tasks](/automation)
+- [Automation](/automation)
 - [Thinking + verbose](/tools/thinking)
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
@@ -135,7 +135,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS](/platforms/macos)
 - [iOS](/platforms/ios)
 - [Android](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
+- [Windows Hub](/platforms/windows)
 - [Linux](/platforms/linux)
 - [Web surfaces](/web)
 

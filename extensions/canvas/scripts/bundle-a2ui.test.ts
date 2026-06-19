@@ -1,8 +1,8 @@
+// Canvas tests cover bundle a2ui plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   compareNormalizedPaths,
-  getBundleHashInputPaths,
   getBundleHashRepoInputPaths,
   getLocalRolldownCliCandidates,
   isBundleHashInputPath,
@@ -51,7 +51,7 @@ describe("scripts/bundle-a2ui.mjs", () => {
 
   it("keeps local node_modules state out of bundle hash inputs", () => {
     const repoRoot = process.cwd();
-    const inputPaths = getBundleHashInputPaths(repoRoot);
+    const inputPaths = getBundleHashRepoInputPaths(repoRoot);
 
     expect(inputPaths).not.toContain(path.join(repoRoot, "node_modules", "lit", "package.json"));
     expect(inputPaths).not.toContain(

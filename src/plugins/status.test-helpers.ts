@@ -1,3 +1,4 @@
+/** Shared helpers for plugin status tests and installed-index fixture setup. */
 import type { PluginLoadResult } from "./loader.js";
 import type { PluginRecord } from "./registry.js";
 import type { PluginCompatibilityNotice } from "./status.js";
@@ -7,6 +8,8 @@ export const LEGACY_BEFORE_AGENT_START_MESSAGE =
   "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.";
 export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
+export const DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE =
+  "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.";
 
 export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
@@ -27,6 +30,14 @@ export function createCompatibilityNotice(
         compatCode: "hook-only-plugin-shape",
         severity: "info",
         message: HOOK_ONLY_MESSAGE,
+      };
+    case "deprecated-memory-embedding-provider-api":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "deprecated-memory-embedding-provider-api",
+        severity: "warn",
+        message: DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
       };
   }
   const unsupportedCode: never = params.code;
@@ -56,10 +67,12 @@ export function createPluginRecord(
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],
@@ -69,7 +82,6 @@ export function createPluginRecord(
     contextEngineIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -79,6 +91,15 @@ export function createPluginRecord(
     configSchema: false,
     ...rest,
   };
+}
+
+export function createBundledPluginRecord(id: string): PluginRecord {
+  return createPluginRecord({
+    id,
+    source: `bundled:${id}`,
+    rootDir: `/bundled/${id}`,
+    origin: "bundled",
+  });
 }
 
 export function createTypedHook(params: {
@@ -124,6 +145,7 @@ export function createPluginLoadResult(
 ): PluginLoadResult {
   const {
     plugins,
+    embeddingProviders,
     modelCatalogProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -135,8 +157,10 @@ export function createPluginLoadResult(
     channels: [],
     channelSetups: [],
     providers: [],
+    embeddingProviders: embeddingProviders ?? [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],
@@ -153,6 +177,7 @@ export function createPluginLoadResult(
     typedHooks: [],
     httpRoutes: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     cliRegistrars: [],
     services: [],
     commands: [],

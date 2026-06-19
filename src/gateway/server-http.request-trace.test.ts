@@ -1,3 +1,5 @@
+// HTTP request trace tests ensure gateway request scope reaches logs and
+// diagnostic events for per-request debugging.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,9 +31,9 @@ async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promi
 }
 
 async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): Promise<void> {
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
 }
 
 afterEach(() => {
@@ -93,10 +95,8 @@ describe("gateway HTTP request trace scope", () => {
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>)
         .find((record) => record.message === "handled request trace");
-      expect(traceRecord).toMatchObject({
-        traceId: activeTraceInHandler?.traceId,
-        spanId: activeTraceInHandler?.spanId,
-      });
+      expect(traceRecord?.traceId).toBe(activeTraceInHandler?.traceId);
+      expect(traceRecord?.spanId).toBe(activeTraceInHandler?.spanId);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+// Checks or refreshes generated release artifacts before a release publish.
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const args = new Set(process.argv.slice(2));
 const fix = args.has("--fix");
@@ -9,10 +10,9 @@ if (fix && args.has("--check")) {
   process.exit(1);
 }
 
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-
 const fixCommands = [
   { name: "plugin versions", args: ["plugins:sync"] },
+  { name: "npm shrinkwraps", args: ["deps:shrinkwrap:changed:generate"] },
   { name: "plugin inventory", args: ["plugins:inventory:gen"] },
   { name: "base config schema", args: ["config:schema:gen"] },
   { name: "bundled channel config metadata", args: ["config:channels:gen"] },
@@ -23,6 +23,7 @@ const fixCommands = [
 
 const checkCommands = [
   { name: "root dependency ownership", args: ["deps:root-ownership:check"] },
+  { name: "npm shrinkwraps", args: ["deps:shrinkwrap:check"] },
   { name: "plugin versions", args: ["plugins:sync:check"] },
   { name: "plugin inventory", args: ["plugins:inventory:check"] },
   { name: "base config schema", args: ["config:schema:check"] },
@@ -30,6 +31,7 @@ const checkCommands = [
   { name: "config docs baseline", args: ["config:docs:check"] },
   { name: "plugin SDK exports", args: ["plugin-sdk:check-exports"] },
   { name: "plugin SDK API baseline", args: ["plugin-sdk:api:check"] },
+  { name: "plugin SDK surface budget", args: ["plugin-sdk:surface:check"] },
 ];
 
 if (fix) {
@@ -53,43 +55,39 @@ if (failed.length !== 0) {
 console.log("[release-preflight] OK");
 
 async function runSerial(commands) {
-  const failed = [];
+  const failedValue = [];
   for (const command of commands) {
     const status = await runCommand(command);
     if (status !== 0) {
-      failed.push({ ...command, status });
+      failedValue.push({ ...command, status });
       break;
     }
   }
-  return failed;
+  return failedValue;
 }
 
 async function runAll(commands) {
-  const failed = [];
+  const failedLocal = [];
   for (const command of commands) {
     const status = await runCommand(command);
     if (status !== 0) {
-      failed.push({ ...command, status });
+      failedLocal.push({ ...command, status });
     }
   }
-  return failed;
+  return failedLocal;
 }
 
 async function runCommand(command) {
   console.log(`\n[release-preflight] ${command.name}: pnpm ${command.args.join(" ")}`);
-  const child = spawn(pnpm, command.args, {
-    stdio: "inherit",
-    shell: false,
-  });
-  return await new Promise((resolve) => {
-    child.once("error", (error) => {
-      console.error(error);
-      resolve(1);
+  try {
+    return await runManagedCommand({
+      args: command.args,
+      bin: "pnpm",
     });
-    child.once("close", (status) => {
-      resolve(status ?? 1);
-    });
-  });
+  } catch (error) {
+    console.error(error);
+    return 1;
+  }
 }
 
 function printFailures(title, failures) {

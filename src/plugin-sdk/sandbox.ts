@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for sandbox backends, SSH execution, and temp workspace helpers.
+ */
 export type {
   CreateSandboxBackendParams,
   RemoteShellSandboxHandle,
@@ -13,6 +16,7 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirResolver,
   SandboxContext,
   SandboxResolvedPath,
   SandboxSshConfig,
@@ -25,6 +29,7 @@ export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
@@ -32,8 +37,11 @@ export {
   disposeSshSandboxSession,
   getSandboxBackendFactory,
   getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
+  isToolAllowed,
   registerSandboxBackend,
   requireSandboxBackendFactory,
+  resolveSandboxRuntimeStatus,
   resolveWritableRenameTargets,
   resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,

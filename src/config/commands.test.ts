@@ -1,3 +1,4 @@
+// Covers command config normalization and path validation.
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -286,7 +287,7 @@ describe("deprecated commands compatibility", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.commands).toMatchObject({ text: true });
+      expect(result.config.commands?.text).toBe(true);
       expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
     }
   });

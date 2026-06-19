@@ -1,36 +1,43 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway as defaultCallGateway } from "../gateway/call.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+// Session visibility helpers decide which plugin sessions appear in user-facing lists.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { callGateway as defaultCallGateway } from "../gateway/call.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
 let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
 
-/** Test hook: must stay aligned with `sessions-resolution` `__testing.setDepsForTest`. */
+/** Test hook: must stay aligned with `sessions-resolution` `testing.setDepsForTest`. */
 export const sessionVisibilityGatewayTesting = {
   setCallGatewayForListSpawned(overrides?: GatewayCaller) {
     callGatewayForListSpawned = overrides ?? defaultCallGateway;
   },
 };
 
+/** Configured visibility mode for session tools and session-related commands. */
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
 
+/** Agent-to-agent access policy compiled from `tools.agentToAgent` config. */
 export type AgentToAgentPolicy = {
   enabled: boolean;
   matchesAllow: (agentId: string) => boolean;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
+/** Session operation whose visibility error copy should be rendered. */
 export type SessionAccessAction = "history" | "send" | "list" | "status";
 
+/** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
 
+/** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
 export type SessionVisibilityRow = {
   key: string;
   agentId?: string;
@@ -39,6 +46,7 @@ export type SessionVisibilityRow = {
   parentSessionKey?: string;
 };
 
+/** List sessions spawned by the requester through the gateway session list method. */
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
@@ -58,13 +66,14 @@ export async function listSpawnedSessionKeys(params: {
       },
     });
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
+    const keys = normalizeTrimmedStringList(sessions.map((entry) => entry?.key));
     return new Set(keys);
   } catch {
     return new Set();
   }
 }
 
+/** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
@@ -75,6 +84,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   return "tree";
 }
 
+/** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */
 export function resolveEffectiveSessionToolsVisibility(params: {
   cfg: OpenClawConfig;
   sandboxed: boolean;
@@ -90,34 +100,98 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   return visibility;
 }
 
+/** Resolve sandbox-specific session visibility clamp for agent defaults. */
 export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
+type CompiledAgentAllowPattern =
+  | { kind: "all" }
+  | { kind: "deny" }
+  | { kind: "exact"; value: string }
+  | {
+      kind: "wildcard";
+      first: string;
+      last: string;
+      interior: string[];
+    };
+
+function compileAgentAllowPattern(pattern: string): CompiledAgentAllowPattern {
+  const raw = normalizeOptionalString(pattern) ?? "";
+  if (!raw) {
+    return { kind: "deny" };
+  }
+  if (raw === "*") {
+    return { kind: "all" };
+  }
+  if (!raw.includes("*")) {
+    return { kind: "exact", value: raw };
+  }
+  const parts = raw.toLowerCase().split("*");
+  return {
+    kind: "wildcard",
+    first: parts[0] ?? "",
+    last: parts[parts.length - 1] ?? "",
+    interior: parts.slice(1, -1).filter(Boolean),
+  };
+}
+
+/**
+ * Linear-time case-insensitive glob matcher for precompiled `*` patterns.
+ * Checks prefix, suffix, then ordered interior segments without entering the
+ * regex engine, avoiding polynomial backtracking on repeated wildcards.
+ */
+function matchesCompiledWildcard(
+  pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
+  lower: string,
+): boolean {
+  let pos = 0;
+  if (pattern.first) {
+    if (!lower.startsWith(pattern.first)) {
+      return false;
+    }
+    pos = pattern.first.length;
+  }
+
+  const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
+  if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
+    return false;
+  }
+
+  for (const part of pattern.interior) {
+    const idx = lower.indexOf(part, pos);
+    if (idx === -1 || idx + part.length > endBound) {
+      return false;
+    }
+    pos = idx + part.length;
+  }
+
+  return true;
+}
+
+/** Compile agent-to-agent allow rules into reusable matching predicates. */
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
-  const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
+  const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
       return true;
     }
+    const lowerAgentId = hasWildcardPatterns ? agentId.toLowerCase() : "";
     return allowPatterns.some((pattern) => {
-      const raw =
-        normalizeOptionalString(typeof pattern === "string" ? pattern : String(pattern ?? "")) ??
-        "";
-      if (!raw) {
-        return false;
-      }
-      if (raw === "*") {
+      if (pattern.kind === "all") {
         return true;
       }
-      if (!raw.includes("*")) {
-        return raw === agentId;
+      if (pattern.kind === "deny") {
+        return false;
       }
-      const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-      return re.test(agentId);
+      if (pattern.kind === "exact") {
+        return pattern.value === agentId;
+      }
+      return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
   const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
@@ -192,6 +266,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
 }
 
+/** Create a direct session-key visibility checker for one requester/action pair. */
 export function createSessionVisibilityChecker(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
@@ -226,6 +301,7 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
   );
 }
 
+/** Create a row-aware visibility checker that can use owner/spawn metadata. */
 export function createSessionVisibilityRowChecker(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
@@ -297,6 +373,7 @@ export function createSessionVisibilityRowChecker(params: {
   return { check };
 }
 
+/** Create a visibility guard, loading spawned-session ownership when direct keys need it. */
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;

@@ -1,126 +1,157 @@
+// WebSocket client helpers for gateway network E2E scenarios.
+import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
-
-const url = process.env.GW_URL;
-const token = process.env.GW_TOKEN;
-if (!url || !token) {
-  throw new Error("missing GW_URL/GW_TOKEN");
-}
-
-const deadlineMs = Number.parseInt(
-  process.env.OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS ??
-    process.env.OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS ??
-    "80000",
-  10,
-);
-if (!Number.isFinite(deadlineMs) || deadlineMs < 0) {
-  throw new Error(`invalid gateway network client timeout: ${String(deadlineMs)}`);
-}
-const deadline = Date.now() + Math.max(1_000, deadlineMs);
+import { waitForWebSocketOpen } from "../websocket-open.mjs";
+import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
+import { onceFrame } from "./ws-frames.mjs";
 
 function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-async function openSocket(timeoutMs = 10_000) {
+function remainingDeadlineMs(deadline) {
+  return Math.max(1, deadline - Date.now());
+}
+
+async function openSocket(url, timeoutMs = 10_000) {
   const ws = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(new Error("ws open timeout"));
-    }, timeoutMs);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
+  await waitForWebSocketOpen(ws, timeoutMs, "ws open timeout");
   return ws;
 }
 
-function onceFrame(ws, filter, timeoutMs = 10_000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.off("message", handler);
-      reject(new Error("timeout"));
-    }, timeoutMs);
-    const handler = (data) => {
-      const obj = JSON.parse(String(data));
-      if (!filter(obj)) {
-        return;
-      }
-      clearTimeout(timer);
-      ws.off("message", handler);
-      resolve(obj);
-    };
-    ws.on("message", handler);
-  });
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-let lastError;
-while (Date.now() < deadline) {
-  let ws;
-  try {
-    ws = await openSocket();
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "c1",
-        method: "connect",
-        params: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: {
-            id: "test",
-            displayName: "docker-net-e2e",
-            version: "dev",
-            platform: process.platform,
-            mode: "test",
+export function hasGatewayHealthSummaryPayload(response) {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return false;
+  }
+  const { payload } = response;
+  return (
+    payload.ok === true &&
+    typeof payload.ts === "number" &&
+    typeof payload.durationMs === "number" &&
+    typeof payload.defaultAgentId === "string" &&
+    payload.defaultAgentId.trim() !== "" &&
+    Array.isArray(payload.agents) &&
+    isRecord(payload.channels) &&
+    Array.isArray(payload.channelOrder) &&
+    isRecord(payload.sessions)
+  );
+}
+
+export function responseError(method, response) {
+  const message = response.error?.message ?? "unknown";
+  return new Error(`${method} failed: ${message}`);
+}
+
+export function isRetryableStartupError(message) {
+  return (
+    message.includes("gateway starting") ||
+    message.includes("closed before frame") ||
+    message.includes("closed before open") ||
+    message.includes("ws open timeout") ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("ECONNRESET") ||
+    message.includes("timeout")
+  );
+}
+
+async function readProtocolVersion() {
+  const protocol = await import("../../../../dist/gateway/protocol/index.js");
+  return protocol.PROTOCOL_VERSION;
+}
+
+export async function runGatewayNetworkClient(
+  { token, url, timeoutMs = readGatewayNetworkClientConnectTimeoutMs() },
+  deps = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  const delayImpl = deps.delay ?? delay;
+  const onceFrameImpl = deps.onceFrame ?? onceFrame;
+  const openSocketImpl = deps.openSocket ?? openSocket;
+  const protocolVersion = deps.protocolVersion ?? (await readProtocolVersion());
+  const stdout = deps.stdout ?? console.log;
+
+  let lastError;
+  while (Date.now() < deadline) {
+    let ws;
+    try {
+      ws = await openSocketImpl(url, remainingDeadlineMs(deadline));
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "c1",
+          method: "connect",
+          params: {
+            minProtocol: protocolVersion,
+            maxProtocol: protocolVersion,
+            client: {
+              id: "test",
+              displayName: "docker-net-e2e",
+              version: "dev",
+              platform: process.platform,
+              mode: "test",
+            },
+            caps: [],
+            auth: { token },
           },
-          caps: [],
-          auth: { token },
-        },
-      }),
-    );
+        }),
+      );
 
-    const connectRes = await onceFrame(ws, (frame) => frame?.type === "res" && frame?.id === "c1");
-    if (connectRes.ok) {
-      ws.close();
-      console.log("ok");
-      process.exit(0);
+      const connectRes = await onceFrameImpl(
+        ws,
+        (frame) => frame?.type === "res" && frame?.id === "c1",
+        remainingDeadlineMs(deadline),
+      );
+      if (!connectRes.ok) {
+        lastError = responseError("connect", connectRes);
+        if (!isRetryableStartupError(lastError.message)) {
+          throw lastError;
+        }
+      } else {
+        ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
+        const healthRes = await onceFrameImpl(
+          ws,
+          (frame) => frame?.type === "res" && frame?.id === "h1",
+          remainingDeadlineMs(deadline),
+        );
+        if (healthRes.ok) {
+          if (!hasGatewayHealthSummaryPayload(healthRes)) {
+            throw new Error("health failed: missing health summary payload");
+          }
+          stdout("ok");
+          return;
+        }
+
+        throw responseError("health", healthRes);
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableStartupError(lastError.message)) {
+        throw lastError;
+      }
+    } finally {
+      ws?.close();
     }
 
-    const message = connectRes.error?.message ?? "unknown";
-    lastError = new Error(`connect failed: ${message}`);
-    if (
-      !message.includes("gateway starting") &&
-      !message.includes("ws open timeout") &&
-      !message.includes("ECONNREFUSED") &&
-      !message.includes("ECONNRESET") &&
-      !message.includes("timeout")
-    ) {
-      throw lastError;
+    const retryDelayMs = Math.min(500, deadline - Date.now());
+    if (retryDelayMs > 0) {
+      await delayImpl(retryDelayMs);
     }
-  } catch (error) {
-    lastError = error instanceof Error ? error : new Error(String(error));
-    const message = lastError.message;
-    if (
-      !message.includes("gateway starting") &&
-      !message.includes("ws open timeout") &&
-      !message.includes("ECONNREFUSED") &&
-      !message.includes("ECONNRESET") &&
-      !message.includes("timeout")
-    ) {
-      throw lastError;
-    }
-  } finally {
-    ws?.close();
   }
 
-  await delay(500);
+  throw lastError ?? new Error("connect failed: timeout");
 }
 
-throw lastError ?? new Error("connect failed: timeout");
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const url = process.env.GW_URL;
+  const token = process.env.GW_TOKEN;
+  if (!url || !token) {
+    throw new Error("missing GW_URL/GW_TOKEN");
+  }
+  await runGatewayNetworkClient({ token, url });
+}

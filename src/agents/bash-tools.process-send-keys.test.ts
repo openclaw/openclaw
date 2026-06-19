@@ -1,10 +1,14 @@
+/**
+ * Regression coverage for process send-keys cursor-mode handling.
+ * Cursor-sensitive keys must wait until PTY startup output establishes mode.
+ */
 import { expect, test } from "vitest";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
 
 function createWritableStdinStub(): WritableStdin {
   return {
-    write(_data: string, cb?: (err?: Error | null) => void) {
+    write(dataValue: string, cb?: (err?: Error | null) => void) {
       cb?.();
     },
     end() {},

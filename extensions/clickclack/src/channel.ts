@@ -1,3 +1,7 @@
+/**
+ * ClickClack channel plugin definition: target parsing, account config, status,
+ * gateway startup, and outbound delivery wiring.
+ */
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -7,7 +11,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createComputedAccountStatusAdapter,
@@ -68,6 +72,9 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+/**
+ * Channel plugin instance registered by the bundled ClickClack entry.
+ */
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
@@ -93,14 +100,6 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     messaging: {
       targetPrefixes: ["clickclack", "cc"],
       normalizeTarget: normalizeClickClackTarget,
-      parseExplicitTarget: ({ raw }) => {
-        const parsed = parseClickClackTarget(raw);
-        return {
-          to: buildClickClackTarget(parsed),
-          threadId: parsed.kind === "thread" ? parsed.id : undefined,
-          chatType: parsed.chatType,
-        };
-      },
       inferTargetChatType: ({ to }) => parseClickClackTarget(to).chatType,
       targetResolver: {
         looksLikeId: looksLikeClickClackTarget,

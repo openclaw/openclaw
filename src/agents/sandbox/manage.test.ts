@@ -1,3 +1,5 @@
+// Sandbox management tests cover browser runtime listing/removal metadata and
+// backend manager wiring.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
@@ -50,6 +52,40 @@ beforeAll(async () => {
   ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
 });
 
+function firstDescribeRuntimeInput(): { agentId?: string; entry?: { configLabelKind?: string } } {
+  const input = backendMocks.describeRuntime.mock.calls[0]?.[0] as
+    | { agentId?: string; entry?: { configLabelKind?: string } }
+    | undefined;
+  if (!input) {
+    throw new Error("expected describe runtime input");
+  }
+  return input;
+}
+
+function firstRemoveRuntimeInput(): {
+  entry?: {
+    containerName?: string;
+    configLabelKind?: string;
+    runtimeLabel?: string;
+    backendId?: string;
+  };
+} {
+  const input = backendMocks.removeRuntime.mock.calls[0]?.[0] as
+    | {
+        entry?: {
+          containerName?: string;
+          configLabelKind?: string;
+          runtimeLabel?: string;
+          backendId?: string;
+        };
+      }
+    | undefined;
+  if (!input) {
+    throw new Error("expected remove runtime input");
+  }
+  return input;
+}
+
 describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
     configMocks.getRuntimeConfig.mockReset();
@@ -99,11 +135,11 @@ describe("listSandboxBrowsers", () => {
   });
 
   it("compares browser runtimes against sandbox.browser.image", async () => {
+    // Browser containers have a different configured image than shell sandboxes;
+    // management views must compare against the browser label kind.
     const results = await listSandboxBrowsers();
 
-    const describeInput = backendMocks.describeRuntime.mock.calls[0]?.[0] as
-      | { agentId?: string; entry?: { configLabelKind?: string } }
-      | undefined;
+    const describeInput = firstDescribeRuntimeInput();
     expect(describeInput?.agentId).toBe("coder");
     expect(describeInput?.entry?.configLabelKind).toBe("BrowserImage");
     expect(results).toHaveLength(1);
@@ -115,16 +151,7 @@ describe("listSandboxBrowsers", () => {
   it("removes browser runtimes with BrowserImage config label kind", async () => {
     await removeSandboxBrowserContainer("browser-1");
 
-    const removeInput = backendMocks.removeRuntime.mock.calls[0]?.[0] as
-      | {
-          entry?: {
-            containerName?: string;
-            configLabelKind?: string;
-            runtimeLabel?: string;
-            backendId?: string;
-          };
-        }
-      | undefined;
+    const removeInput = firstRemoveRuntimeInput();
     expect(removeInput?.entry?.containerName).toBe("browser-1");
     expect(removeInput?.entry?.configLabelKind).toBe("BrowserImage");
     expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");

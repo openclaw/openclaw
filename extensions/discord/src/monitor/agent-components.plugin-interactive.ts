@@ -1,5 +1,6 @@
+// Discord plugin module implements agent components.plugin interactive behavior.
 import { ChannelType } from "discord-api-types/v10";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   dispatchDiscordPluginInteractiveHandler,
   type DiscordInteractiveHandlerContext,

@@ -1,9 +1,10 @@
+// Mattermost tests cover channel actions setup status.contract plugin behavior.
 import {
   installChannelActionsContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect } from "vitest";
 import { mattermostPlugin, mattermostSetupPlugin } from "../channel-plugin-api.js";
 

@@ -43,6 +43,7 @@ Quick rule:
 | --------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `initialize`, `newSession`, `prompt`, `cancel`                        | Implemented | Core bridge flow over stdio to Gateway chat/send + abort.                                                                                                                                                                                        |
 | `listSessions`, slash commands                                        | Implemented | Session list works against Gateway session state with bounded cursor pagination and `cwd` filtering where Gateway session rows carry workspace metadata; commands are advertised via `available_commands_update`.                                |
+| Session lineage metadata                                              | Implemented | Session listings and session info snapshots include OpenClaw parent and child lineage in `_meta` so ACP clients can render subagent graphs without private Gateway side channels.                                                                |
 | `resumeSession`, `closeSession`                                       | Implemented | Resume rebinds an ACP session to an existing Gateway session without replaying history. Close cancels active bridge work, resolves pending prompts as cancelled, and releases bridge session state.                                              |
 | `loadSession`                                                         | Partial     | Rebinds the ACP session to a Gateway session key and replays ACP event-ledger history for bridge-created sessions. Older/no-ledger sessions fall back to stored user/assistant text.                                                             |
 | Prompt content (`text`, embedded `resource`, images)                  | Partial     | Text/resources are flattened into chat input; images become Gateway attachments.                                                                                                                                                                 |
@@ -62,7 +63,7 @@ Quick rule:
   fallback and do not reconstruct historic tool calls or system notices.
 - If multiple ACP clients share the same Gateway session key, event and cancel
   routing are best-effort rather than strictly isolated per client. Prefer the
-  default isolated `acp:<uuid>` sessions when you need clean editor-local
+  default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local
   turns.
 - Gateway stop states are translated into ACP stop reasons, but that mapping is
   less expressive than a fully ACP-native runtime.
@@ -205,7 +206,7 @@ openclaw acp --session agent:qa:bug-123
 ```
 
 Each ACP session maps to a single Gateway session key. One agent can have many
-sessions; ACP defaults to an isolated `acp:<uuid>` session unless you override
+sessions; ACP defaults to an isolated `acp-bridge:<uuid>` session unless you override
 the key or label.
 
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client
@@ -308,8 +309,10 @@ In Zed, open the Agent panel and select "OpenClaw ACP" to start a thread.
 
 ## Session mapping
 
-By default, ACP sessions get an isolated Gateway session key with an `acp:` prefix.
-To reuse a known session, pass a session key or label:
+By default, ACP bridge sessions get an isolated Gateway session key with an
+`acp-bridge:` prefix. These normal-model bridge sessions are synthetic and
+subject to stale-entry pruning and entry-count caps. To reuse a known session,
+pass a session key or label:
 
 - `--session <key>`: use a specific Gateway session key.
 - `--session-label <label>`: resolve an existing session by label.

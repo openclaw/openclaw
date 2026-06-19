@@ -1,3 +1,5 @@
+// Covers interpreter inline-eval flag detection, positional program forms, and
+// allowlist pattern matching for approval policy.
 import { describe, expect, it } from "vitest";
 import type { InterpreterInlineEvalHit } from "./inline-eval.js";
 import {
@@ -7,7 +9,6 @@ import {
 } from "./inline-eval.js";
 
 function expectInlineEvalDescription(hit: InterpreterInlineEvalHit | null, expected: string) {
-  expect(hit).not.toBeNull();
   if (hit === null) {
     throw new Error(`Expected inline eval hit for ${expected}`);
   }

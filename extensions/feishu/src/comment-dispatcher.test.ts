@@ -1,3 +1,4 @@
+// Feishu tests cover comment dispatcher plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
@@ -35,19 +36,12 @@ vi.mock("./runtime.js", () => ({
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 describe("createFeishuCommentReplyDispatcher", () => {
@@ -155,16 +149,17 @@ describe("createFeishuCommentReplyDispatcher", () => {
     const status = await raceWithNextMacrotask(deliverPromise.then(() => "done"));
 
     expect(status).toBe("done");
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        content: "hello world",
-        is_whole_comment: false,
-      }),
-    );
+    const client = createFeishuClientMock.mock.results[0]?.value;
+    if (!client) {
+      throw new Error("Expected Feishu client");
+    }
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(client, {
+      file_token: "doc_token_1",
+      file_type: "docx",
+      comment_id: "comment_1",
+      content: "hello world",
+      is_whole_comment: false,
+    });
     expect(cleanup).not.toHaveBeenCalled();
 
     void options.onCleanup?.();

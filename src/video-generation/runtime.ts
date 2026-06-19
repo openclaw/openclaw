@@ -1,4 +1,6 @@
+// Video generation runtime coordinates provider auth, fallbacks, and job polling.
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -6,6 +8,7 @@ import {
   buildNoCapabilityModelConfiguredMessage,
   recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
@@ -26,7 +29,7 @@ const MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS = 5_000;
 // Internal request hint for providers that perform their own final snapping.
 const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedDurations");
 
-export type VideoGenerationRuntimeDeps = {
+type VideoGenerationRuntimeDeps = {
   getProvider?: typeof getVideoGenerationProvider;
   listProviders?: typeof listVideoGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
@@ -116,6 +119,9 @@ export async function generateVideo(
   const getProvider = deps.getProvider ?? getVideoGenerationProvider;
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;
   const logger = deps.log ?? log;
+  const requestedTimeoutMs =
+    params.timeoutMs ??
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.videoGenerationModel);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
@@ -155,6 +161,10 @@ export async function generateVideo(
       lastError = new Error(error);
       continue;
     }
+    const timeoutMs = resolveMediaProviderRequestTimeoutMs({
+      timeoutMs: requestedTimeoutMs,
+      providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+    });
     const activeProvider = await resolveProviderWithModelCapabilities({
       provider,
       providerId: candidate.provider,
@@ -302,7 +312,7 @@ export async function generateVideo(
         inputVideos: params.inputVideos,
         inputAudios: params.inputAudios,
         providerOptions: params.providerOptions,
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
       if (supportedDurations) {
         generationRequest[SUPPORTED_DURATIONS_HINT] = supportedDurations;

@@ -1,5 +1,6 @@
+// Slack tests cover inbound context.contract plugin behavior.
 import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTempHomeEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, it } from "vitest";
 import {

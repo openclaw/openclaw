@@ -1,6 +1,10 @@
+/**
+ * Channel health monitor regression tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
 
@@ -93,6 +97,20 @@ function runningConnectedSlackAccount(
   };
 }
 
+function disconnectedAccount(
+  lastStartAt: number,
+  overrides: Partial<ChannelAccountSnapshot> = {},
+): Partial<ChannelAccountSnapshot> {
+  return {
+    running: true,
+    connected: false,
+    enabled: true,
+    configured: true,
+    lastStartAt,
+    ...overrides,
+  };
+}
+
 function createSlackSnapshotManager(
   account: Partial<ChannelAccountSnapshot>,
   overrides?: Partial<ChannelManager>,
@@ -112,11 +130,7 @@ function createBusyDisconnectedManager(lastRunActivityAt: number): ChannelManage
   return createSnapshotManager({
     discord: {
       default: {
-        running: true,
-        connected: false,
-        enabled: true,
-        configured: true,
-        lastStartAt: now - 300_000,
+        ...disconnectedAccount(now - 300_000),
         activeRuns: 1,
         busy: true,
         lastRunActivityAt,
@@ -149,12 +163,38 @@ async function expectNoStart(manager: ChannelManager) {
   monitor.stop();
 }
 
+async function advanceHealthCheck() {
+  await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+}
+
 describe("channel-health-monitor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("removes abort listener when stopped manually", () => {
+    const signal = new AbortController().signal;
+    const addEventListener = vi.spyOn(signal, "addEventListener");
+    const removeEventListener = vi.spyOn(signal, "removeEventListener");
+    const monitor = startDefaultMonitor(createMockChannelManager(), { abortSignal: signal });
+
+    monitor.stop();
+
+    expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
+  });
+
+  it("normalizes oversized check intervals before arming timers", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const monitor = startDefaultMonitor(createMockChannelManager(), {
+      checkIntervalMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    monitor.stop();
   });
 
   it("does not run before the grace period", async () => {
@@ -263,20 +303,8 @@ describe("channel-health-monitor", () => {
     const manager = createSnapshotManager(
       {
         discord: {
-          default: {
-            running: true,
-            connected: false,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - 300_000,
-          },
-          quiet: {
-            running: true,
-            connected: false,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - 300_000,
-          },
+          default: disconnectedAccount(now - 300_000),
+          quiet: disconnectedAccount(now - 300_000),
         },
       },
       {
@@ -297,14 +325,9 @@ describe("channel-health-monitor", () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
+        default: disconnectedAccount(now - 300_000, {
           linked: true,
-          lastStartAt: now - 300_000,
-        },
+        }),
       },
     });
     const monitor = await startAndRunCheck(manager);
@@ -318,16 +341,11 @@ describe("channel-health-monitor", () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       discord: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
-          lastStartAt: now - 300_000,
+        default: disconnectedAccount(now - 300_000, {
           activeRuns: 2,
           busy: true,
           lastRunActivityAt: now - 30_000,
-        },
+        }),
       },
     });
     await expectNoRestart(manager);
@@ -429,11 +447,11 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
     monitor.stop();
   });

@@ -1,3 +1,4 @@
+// Doctor default-account tests cover warnings for missing explicit default channel accounts.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectMissingExplicitDefaultAccountWarnings } from "./doctor/shared/default-account-warnings.js";
@@ -17,7 +18,7 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
 
     const warnings = collectMissingExplicitDefaultAccountWarnings(cfg);
     expect(warnings).toEqual([
-      expect.stringContaining("channels.telegram: multiple accounts are configured"),
+      "- channels.telegram: multiple accounts are configured but no explicit default is set. Set channels.telegram.defaultAccount or add channels.telegram.accounts.default to avoid fallback routing.",
     ]);
   });
 
@@ -97,7 +98,7 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
 
     const warnings = collectMissingExplicitDefaultAccountWarnings(cfg);
     expect(warnings).toEqual([
-      expect.stringContaining('channels.telegram: defaultAccount is set to "missing"'),
+      '- channels.telegram: defaultAccount is set to "missing" but does not match configured accounts (alerts, work). Set channels.telegram.defaultAccount to one of these accounts, or add channels.telegram.accounts.default to avoid fallback routing.',
     ]);
   });
 
@@ -121,9 +122,8 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
 
     const warnings = collectMissingExplicitDefaultAccountWarnings(cfg);
     expect(warnings).toHaveLength(2);
-    expect(warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("channels.telegram")]),
-    );
-    expect(warnings).toEqual(expect.arrayContaining([expect.stringContaining("channels.slack")]));
+    const warningOutput = warnings.join("\n");
+    expect(warningOutput).toContain("channels.telegram");
+    expect(warningOutput).toContain("channels.slack");
   });
 });

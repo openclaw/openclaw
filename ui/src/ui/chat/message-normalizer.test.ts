@@ -1,3 +1,4 @@
+// Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { normalizeMessage } from "./message-normalizer.ts";
 
@@ -87,6 +88,83 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+    });
+
+    it("normalizes structured base64 audio content blocks as renderable attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            label: "tts.mp3",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+              data: "//uQAA==",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "data:audio/mpeg;base64,//uQAA==",
+            kind: "audio",
+            label: "tts.mp3",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("normalizes structured URL audio content blocks as renderable attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            label: "clip.mp3",
+            source: {
+              type: "url",
+              media_type: "audio/mpeg",
+              url: "/tmp/openclaw/clip.mp3",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/clip.mp3",
+            kind: "audio",
+            label: "clip.mp3",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("does not normalize non-assistant structured audio blocks as attachments", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          {
+            type: "audio",
+            label: "upload.mp3",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+              data: "//uQAA==",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([]);
     });
 
     it("does not reinterpret directive-like user text blocks inside array content", () => {

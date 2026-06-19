@@ -1,3 +1,4 @@
+// Codex plugin module implements plan behavior.
 import path from "node:path";
 import {
   createMigrationItem,
@@ -12,9 +13,12 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import { buildCodexAuthItems } from "./auth.js";
 import { exists, sanitizeName } from "./helpers.js";
 import {
+  codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
   type CodexPluginSource,
@@ -33,11 +37,20 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
   "codexPlugins",
 ] as const;
 const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
+const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
   enabled: boolean;
+  allowDestructiveActions?: "auto";
+};
+
+type CodexPluginMigrationBlockSkipDetails = {
+  pluginName: string;
+  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  apps?: NonNullable<CodexPluginSource["migrationBlock"]>["apps"];
+  error?: string;
 };
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
@@ -122,9 +135,11 @@ function hasExistingCodexPluginEntry(
   existingEntries: Record<string, unknown>,
   configKey: string,
   pluginName: string,
+  nextEntry: Record<string, unknown>,
 ): boolean {
-  if (existingEntries[configKey] !== undefined) {
-    return true;
+  const existingEntry = existingEntries[configKey];
+  if (existingEntry !== undefined) {
+    return !isLegacyDestructivePolicyRepair(existingEntry, nextEntry);
   }
   return Object.values(existingEntries).some((entry) => {
     if (!isRecord(entry)) {
@@ -132,6 +147,36 @@ function hasExistingCodexPluginEntry(
     }
     return entry.pluginName === pluginName;
   });
+}
+
+function isLegacyDestructivePolicyRepair(
+  existing: unknown,
+  nextEntry: Record<string, unknown>,
+): boolean {
+  const existingEntry = isRecord(existing) ? existing : undefined;
+  if (
+    existingEntry?.allow_destructive_actions !== "on-request" ||
+    nextEntry.allow_destructive_actions !== "auto"
+  ) {
+    return false;
+  }
+  const normalizedExisting = { ...existingEntry, allow_destructive_actions: "auto" };
+  const normalizedEntries = Object.entries(normalizedExisting);
+  return (
+    normalizedEntries.length === Object.keys(nextEntry).length &&
+    normalizedEntries.every(([key, value]) => nextEntry[key] === value)
+  );
+}
+
+function isLegacyDestructivePolicyConfigEntryRepair(
+  existing: unknown,
+  pluginName: string,
+): boolean {
+  const existingEntry = isRecord(existing) ? existing : undefined;
+  return (
+    existingEntry?.allow_destructive_actions === "on-request" &&
+    existingEntry.pluginName === pluginName
+  );
 }
 
 function buildPluginItems(
@@ -154,9 +199,25 @@ function buildPluginItems(
       plugin.pluginName
     ) {
       const configKey = uniquePluginConfigKey(plugin, baseCounts, usedCounts);
+      const plannedEntry = {
+        enabled: true,
+        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+        pluginName: plugin.pluginName,
+        ...(isLegacyDestructivePolicyConfigEntryRepair(
+          existingPluginEntries[configKey],
+          plugin.pluginName,
+        )
+          ? { allow_destructive_actions: "auto" }
+          : {}),
+      };
       const conflict =
         !ctx.overwrite &&
-        hasExistingCodexPluginEntry(existingPluginEntries, configKey, plugin.pluginName);
+        hasExistingCodexPluginEntry(
+          existingPluginEntries,
+          configKey,
+          plugin.pluginName,
+          plannedEntry,
+        );
       items.push(
         createMigrationItem({
           id: `plugin:${configKey}`,
@@ -173,6 +234,12 @@ function buildPluginItems(
             pluginName: plugin.pluginName,
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
+            ...(plannedEntry.allow_destructive_actions === "auto"
+              ? { allowDestructiveActions: "auto" }
+              : {}),
+            ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
+              ? { sourceAppVerification: CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED }
+              : {}),
           },
         }),
       );
@@ -180,6 +247,29 @@ function buildPluginItems(
     }
 
     manualIndex += 1;
+    if (plugin.migrationBlock && plugin.pluginName) {
+      const details: CodexPluginMigrationBlockSkipDetails = {
+        pluginName: plugin.pluginName,
+        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+        ...(plugin.migrationBlock.apps ? { apps: plugin.migrationBlock.apps } : {}),
+        ...(plugin.migrationBlock.error ? { error: plugin.migrationBlock.error } : {}),
+      };
+      items.push(
+        createMigrationItem({
+          id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
+          kind: "manual",
+          action: "manual",
+          source: plugin.source,
+          status: "skipped",
+          reason: plugin.migrationBlock.code,
+          message:
+            plugin.message ??
+            `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+          details: { ...details },
+        }),
+      );
+      continue;
+    }
     items.push(
       createMigrationManualItem({
         id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
@@ -193,6 +283,10 @@ function buildPluginItems(
     );
   }
   return items;
+}
+
+function shouldVerifyPluginApps(ctx: MigrationProviderContext): boolean {
+  return ctx.providerOptions?.verifyPluginApps === true;
 }
 
 export function readCodexPluginMigrationConfigEntry(
@@ -211,21 +305,44 @@ export function readCodexPluginMigrationConfigEntry(
   ) {
     return undefined;
   }
-  return { configKey, pluginName, enabled };
+  const allowDestructiveActions = item.details?.allowDestructiveActions;
+  return {
+    configKey,
+    pluginName,
+    enabled,
+    ...(allowDestructiveActions === "auto" ? { allowDestructiveActions: "auto" } : {}),
+  };
 }
 
 function readExistingAllowDestructiveActions(
   config: MigrationProviderContext["config"],
-): boolean | undefined {
+): boolean | "auto" | undefined {
   const value = readMigrationConfigPath(config as Record<string, unknown>, [
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
   ]);
-  return typeof value === "boolean" ? value : undefined;
+  return normalizeExistingAllowDestructiveActions(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function normalizeExistingAllowDestructiveActions(value: unknown): boolean | "auto" | undefined {
+  return value === "auto" || value === "on-request" ? "auto" : asBoolean(value);
+}
+
+function readExistingPluginPolicyRepairs(
+  config: MigrationProviderContext["config"] | undefined,
+): Record<string, unknown> {
+  if (config === undefined) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(readExistingCodexPluginEntries(config)).flatMap(([configKey, entry]) => {
+      const pluginEntry = isRecord(entry) ? entry : undefined;
+      if (pluginEntry?.allow_destructive_actions !== "on-request") {
+        return [];
+      }
+      return [[configKey, { ...pluginEntry, allow_destructive_actions: "auto" }]];
+    }),
+  );
 }
 
 export function buildCodexPluginsConfigValue(
@@ -234,25 +351,31 @@ export function buildCodexPluginsConfigValue(
     config?: MigrationProviderContext["config"];
   } = {},
 ): Record<string, unknown> {
-  const plugins = Object.fromEntries(
-    entries
-      .toSorted((a, b) => a.configKey.localeCompare(b.configKey))
-      .map((entry) => [
-        entry.configKey,
-        {
-          enabled: entry.enabled,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: entry.pluginName,
-        },
-      ]),
-  );
+  const plugins = {
+    ...readExistingPluginPolicyRepairs(params.config),
+    ...Object.fromEntries(
+      entries
+        .toSorted((a, b) => a.configKey.localeCompare(b.configKey))
+        .map((entry) => [
+          entry.configKey,
+          {
+            enabled: entry.enabled,
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: entry.pluginName,
+            ...(entry.allowDestructiveActions
+              ? { allow_destructive_actions: entry.allowDestructiveActions }
+              : {}),
+          },
+        ]),
+    ),
+  };
   const config: Record<string, unknown> = {
     codexPlugins: {
       enabled: true,
       allow_destructive_actions:
         params.config === undefined
-          ? false
-          : (readExistingAllowDestructiveActions(params.config) ?? false),
+          ? true
+          : (readExistingAllowDestructiveActions(params.config) ?? true),
       plugins,
     },
   };
@@ -291,9 +414,12 @@ export function hasCodexPluginConfigConflict(
     return true;
   }
   const allowDestructiveActions = nativeConfig.allow_destructive_actions;
+  const existingAllowDestructiveActions = normalizeExistingAllowDestructiveActions(
+    existingNativeConfig.allow_destructive_actions,
+  );
   if (
     existingNativeConfig.allow_destructive_actions !== undefined &&
-    existingNativeConfig.allow_destructive_actions !== allowDestructiveActions
+    existingAllowDestructiveActions !== allowDestructiveActions
   ) {
     return true;
   }
@@ -309,6 +435,7 @@ export function hasCodexPluginConfigConflict(
       readExistingCodexPluginEntries(config),
       configKey,
       typeof plugin.pluginName === "string" ? plugin.pluginName : configKey,
+      plugin,
     );
   });
 }
@@ -345,14 +472,19 @@ function buildPluginConfigItem(
 export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
-  const source = await discoverCodexSource(ctx.source);
+  const targets = resolveCodexMigrationTargets(ctx);
+  const source = await discoverCodexSource({
+    input: ctx.source,
+    evaluatePluginMigrationEligibility: true,
+    verifyPluginApps: shouldVerifyPluginApps(ctx),
+  });
   if (!hasCodexSource(source)) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
-  const targets = resolveCodexMigrationTargets(ctx);
   const items: MigrationItem[] = [];
+  items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
   items.push(
     ...(await buildSkillItems({
       skills: source.skills,
@@ -381,14 +513,14 @@ export async function buildCodexMigrationPlan(
     );
   }
   const warnings = [
+    ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
+      ? [
+          "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
+        ]
+      : []),
     ...(items.some((item) => item.status === "conflict")
       ? [
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
-        ]
-      : []),
-    ...(source.plugins.length > 0
-      ? [
-          "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
         ]
       : []),
     ...(source.pluginDiscoveryError
@@ -396,10 +528,10 @@ export async function buildCodexMigrationPlan(
           `Codex app-server plugin inventory discovery failed: ${source.pluginDiscoveryError}. Cached plugin bundles, if any, are advisory only.`,
         ]
       : []),
-    ...(source.archivePaths.length > 0
-      ? [
-          "Codex config and hook files are archive-only. They are preserved in the migration report, not loaded into OpenClaw automatically.",
-        ]
+    ...(source.plugins.some(
+      (plugin) => plugin.migrationBlock?.code === "codex_subscription_required",
+    )
+      ? [codexPluginMigrationSubscriptionWarning()]
       : []),
   ];
   return {

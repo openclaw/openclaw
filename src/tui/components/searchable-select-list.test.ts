@@ -1,5 +1,6 @@
+// Searchable select list tests cover filtering and selection behavior.
 import { describe, expect, it } from "vitest";
-import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
+import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
@@ -60,7 +61,7 @@ describe("SearchableSelectList", () => {
   function expectNoMatchesForQuery(list: SearchableSelectList, query: string) {
     typeInput(list, query);
     const output = list.render(80);
-    expect(output).toEqual(expect.arrayContaining([expect.stringContaining("No matches")]));
+    expect(output.join("\n")).toContain("No matches");
   }
 
   function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {

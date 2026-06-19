@@ -1,3 +1,4 @@
+// Tests channel runtime context assembly and hook inputs.
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import {
@@ -100,19 +101,29 @@ describe("channel runtime context helpers", () => {
         capability: "approval.native",
       }),
     ).toEqual({ client: "matrix" });
-    expect(onEvent).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        type: "registered",
-        context: { app: "slack" },
-      }),
-    );
-    expect(onEvent).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        type: "unregistered",
-      }),
-    );
+    expect(onEvent.mock.calls).toEqual([
+      [
+        {
+          type: "registered",
+          key: {
+            channelId: "slack",
+            accountId: "default",
+            capability: "approval.native",
+          },
+          context: { app: "slack" },
+        },
+      ],
+      [
+        {
+          type: "unregistered",
+          key: {
+            channelId: "slack",
+            accountId: "default",
+            capability: "approval.native",
+          },
+        },
+      ],
+    ]);
 
     persistentLease?.dispose();
     unsubscribe?.();

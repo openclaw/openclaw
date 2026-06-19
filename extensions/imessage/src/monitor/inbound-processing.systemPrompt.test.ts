@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Imessage tests cover inbound processing.systemPrompt plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildIMessageInboundContext,
@@ -52,8 +53,8 @@ function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionP
 }
 
 describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
-  it("captures the per-chat_id systemPrompt on group dispatch decisions", () => {
-    const decision = resolveIMessageInboundDecision(
+  it("captures the per-chat_id systemPrompt on group dispatch decisions", async () => {
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "7": { systemPrompt: "Keep responses under 3 sentences." },
@@ -67,8 +68,8 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBe("Keep responses under 3 sentences.");
   });
 
-  it("falls back to the groups['*'] wildcard systemPrompt", () => {
-    const decision = resolveIMessageInboundDecision(
+  it("falls back to the groups['*'] wildcard systemPrompt", async () => {
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "*": { systemPrompt: "Default group voice." },
@@ -82,8 +83,8 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBe("Default group voice.");
   });
 
-  it("prefers the per-chat_id systemPrompt over the wildcard when both are set", () => {
-    const decision = resolveIMessageInboundDecision(
+  it("prefers the per-chat_id systemPrompt over the wildcard when both are set", async () => {
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "*": { systemPrompt: "Default group voice." },
@@ -98,11 +99,11 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBe("Specific group voice.");
   });
 
-  it("treats whitespace-only per-chat_id systemPrompt as suppression of the wildcard", () => {
+  it("treats whitespace-only per-chat_id systemPrompt as suppression of the wildcard", async () => {
     // Mirrors WhatsApp semantic: defining the systemPrompt key on a specific
     // group entry (even as whitespace) means "this group has no prompt" and
     // suppresses the groups["*"] fallback.
-    const decision = resolveIMessageInboundDecision(
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "*": { systemPrompt: "Wildcard." },
@@ -117,8 +118,8 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBeUndefined();
   });
 
-  it("treats explicit empty-string per-chat_id systemPrompt as suppression of the wildcard", () => {
-    const decision = resolveIMessageInboundDecision(
+  it("treats explicit empty-string per-chat_id systemPrompt as suppression of the wildcard", async () => {
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "*": { systemPrompt: "Wildcard." },
@@ -133,8 +134,8 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBeUndefined();
   });
 
-  it("falls back to the wildcard when the per-chat_id entry has no systemPrompt key at all", () => {
-    const decision = resolveIMessageInboundDecision(
+  it("falls back to the wildcard when the per-chat_id entry has no systemPrompt key at all", async () => {
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "*": { systemPrompt: "Wildcard." },
@@ -149,12 +150,12 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBe("Wildcard.");
   });
 
-  it("does not set groupSystemPrompt on true DM decisions", () => {
+  it("does not set groupSystemPrompt on true DM decisions", async () => {
     // Use a chat_id that does NOT match any configured group entry, and
     // route through the DM-shaped message (is_group=false, no chat_id key
     // in groups). Without a groupConfig match the path stays a DM and the
     // group prompt must not bleed into the ctx.
-    const decision = resolveIMessageInboundDecision(
+    const decision = await resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
           "999": { systemPrompt: "Other group." },
@@ -213,6 +214,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
         replyContext: null,
         effectiveWasMentioned: false,
         commandAuthorized: false,
+        hasControlCommand: false,
         effectiveDmAllowFrom: [],
         effectiveGroupAllowFrom: [],
         groupSystemPrompt: decision.groupSystemPrompt,
@@ -229,22 +231,22 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
     } as Parameters<typeof buildIMessageInboundContext>[0];
   }
 
-  it("sets ctxPayload.GroupSystemPrompt for group messages", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("sets ctxPayload.GroupSystemPrompt for group messages", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildBuildParams({ isGroup: true, groupSystemPrompt: "Be concise." }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBe("Be concise.");
   });
 
-  it("leaves ctxPayload.GroupSystemPrompt undefined when no per-group prompt is configured", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("leaves ctxPayload.GroupSystemPrompt undefined when no per-group prompt is configured", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildBuildParams({ isGroup: true, groupSystemPrompt: undefined }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBeUndefined();
   });
 
-  it("leaves ctxPayload.GroupSystemPrompt undefined for DMs even if a prompt is somehow on decision", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("leaves ctxPayload.GroupSystemPrompt undefined for DMs even if a prompt is somehow on decision", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildBuildParams({ isGroup: false, groupSystemPrompt: "should-not-leak" }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBeUndefined();

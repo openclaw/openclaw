@@ -1,3 +1,4 @@
+// Config footprint guardrail tests cover forbidden direct plugin config access patterns.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,8 +54,9 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  expect(value).not.toBeNull();
-  expect(typeof value).toBe("object");
+  if (!value || typeof value !== "object") {
+    throw new Error("expected record");
+  }
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
@@ -178,12 +180,12 @@ describe("config footprint guardrails", () => {
     );
     const bundledSchemaExportBlocks = Array.from(
       bundledSection.matchAll(
-        /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:core|whatsapp)\.js";/g,
+        /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:core|googlechat|whatsapp)\.js";/g,
       ),
     )
       .map((match) => match.groups?.exports)
       .filter((block): block is string => Boolean(block));
-    expect(bundledSchemaExportBlocks).toHaveLength(2);
+    expect(bundledSchemaExportBlocks).toHaveLength(3);
     const exportedSchemaNames = Array.from(
       bundledSchemaExportBlocks.join("\n").matchAll(/\b([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
     )

@@ -1,15 +1,16 @@
+// Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
-import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
+import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { getLineRuntime } from "./runtime.js";
@@ -421,7 +422,7 @@ export const lineMessageAdapter = defineChannelMessageAdapter({
     },
   },
   receive: {
-    defaultAckPolicy: "after_agent_dispatch",
-    supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
+    defaultAckPolicy: "after_receive_record",
+    supportedAckPolicies: ["after_receive_record"],
   },
 });

@@ -1,3 +1,4 @@
+// Verifies multi-agent agent directory validation and rejection paths.
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -18,8 +19,19 @@ describe("multi-agent agentDir validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.map((issue) => issue.path)).toContain("agents.list");
-      expect(res.issues[0]?.message).toContain("Duplicate agentDir");
+      expect(res.issues).toEqual([
+        {
+          path: "agents.list",
+          message: `Duplicate agentDir detected (multi-agent config).
+Each agent must have a unique agentDir; sharing it causes auth/session state collisions and token invalidation.
+
+Conflicts:
+- ${shared}: "a", "b"
+
+Fix: remove the shared agents.list[].agentDir override (or give each agent its own directory).
+If you want to share credentials, copy auth-profiles.json instead of sharing the entire agentDir.`,
+        },
+      ]);
     }
   });
 

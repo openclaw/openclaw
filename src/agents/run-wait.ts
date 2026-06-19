@@ -1,5 +1,28 @@
+/**
+ * Gateway-backed agent run wait helpers.
+ * Normalizes run wait responses, reads the latest assistant reply, and drains
+ * pending run sets for tools that need synchronous completion semantics.
+ */
+import {
+  addTimerTimeoutGraceMs,
+  asDateTimestampMs,
+  clampTimerTimeoutMs,
+  parseFiniteNumber,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
+import {
+  buildAgentRunTerminalOutcomeFromWaitResult,
+  type AgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "./run-timeout-attribution.js";
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
@@ -12,11 +35,27 @@ let runWaitDeps: {
   callGateway: GatewayCaller;
 } = defaultRunWaitDeps;
 
+function resolveRunWaitTimeoutMs(value: number | undefined): number {
+  return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
+}
+
+function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?: number }): number {
+  if (params.deadlineAtMs !== undefined) {
+    return asDateTimestampMs(params.deadlineAtMs) ?? resolveDateTimestampMs(Date.now());
+  }
+  return (
+    resolveExpiresAtMsFromDurationMs(resolveRunWaitTimeoutMs(params.timeoutMs)) ??
+    resolveDateTimestampMs(Date.now())
+  );
+}
+
+/** Latest assistant reply plus a stable fingerprint for baseline comparisons. */
 export type AssistantReplySnapshot = {
   text?: string;
   fingerprint?: string;
 };
 
+/** Normalized terminal or pending state returned by `agent.wait`. */
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
   error?: string;
@@ -25,8 +64,12 @@ export type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
 };
 
+/** Summary returned after waiting for a dynamic set of pending runs to drain. */
 export type AgentRunsDrainResult = {
   timedOut: boolean;
   pendingRunIds: string[];
@@ -41,21 +84,45 @@ type RawAgentWaitResponse = {
   stopReason?: unknown;
   livenessState?: unknown;
   yielded?: unknown;
+  pendingError?: unknown;
+  timeoutPhase?: unknown;
+  providerStarted?: unknown;
 };
 
 function normalizeAgentWaitResult(
   status: AgentWaitResult["status"],
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
+  const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult({ ...wait, status });
+  const normalized = normalizeTerminalOutcomeForWait(terminalOutcome, status, wait?.livenessState);
   return {
-    status,
-    error: typeof wait?.error === "string" ? wait.error : undefined,
+    status: normalized.status,
+    error: normalized.error,
     startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
     endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
-    stopReason: typeof wait?.stopReason === "string" ? wait.stopReason : undefined,
+    stopReason,
     livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
     yielded: wait?.yielded === true ? true : undefined,
+    pendingError: wait?.pendingError === true ? true : undefined,
+    timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
+    providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };
+}
+
+function normalizeTerminalOutcomeForWait(
+  outcome: AgentRunTerminalOutcome | undefined,
+  fallbackStatus: AgentWaitResult["status"],
+  livenessState?: unknown,
+): { status: AgentWaitResult["status"]; error?: string } {
+  if (outcome?.reason === "hard_timeout") {
+    return { status: outcome.status, error: outcome.error };
+  }
+  return normalizeBlockedLivenessWaitStatus({
+    status: outcome?.status ?? fallbackStatus,
+    livenessState,
+    error: outcome?.error,
+  });
 }
 
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
@@ -69,6 +136,7 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/i,
 ];
 
+/** Return true for transient gateway/transport failures that callers may retry. */
 export function isRecoverableAgentWaitError(error: string | undefined): boolean {
   const message = error?.trim();
   if (!message) {
@@ -116,6 +184,7 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
   return {};
 }
 
+/** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
   limit?: number;
@@ -132,6 +201,7 @@ export async function readLatestAssistantReplySnapshot(params: {
   );
 }
 
+/** Read only the latest assistant text for call sites that do not need fingerprints. */
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   limit?: number;
@@ -146,12 +216,13 @@ export async function readLatestAssistantReply(params: {
   ).text;
 }
 
+/** Wait for one agent run through the gateway and normalize timeout/error states. */
 export async function waitForAgentRun(params: {
   runId: string;
   timeoutMs: number;
   callGateway?: GatewayCaller;
 }): Promise<AgentWaitResult> {
-  const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
+  const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
     const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
       method: "agent.wait",
@@ -159,7 +230,7 @@ export async function waitForAgentRun(params: {
         runId: params.runId,
         timeoutMs,
       },
-      timeoutMs: timeoutMs + 2000,
+      timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
     });
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", wait);
@@ -180,6 +251,7 @@ export async function waitForAgentRun(params: {
   }
 }
 
+/** Wait for a run and return a reply only when it differs from the supplied baseline. */
 export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   runId: string;
   sessionKey: string;
@@ -213,6 +285,7 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   };
 }
 
+/** Wait until the current and newly spawned pending run IDs are drained or timed out. */
 export async function waitForAgentRunsToDrain(params: {
   getPendingRunIds: () => Iterable<string>;
   initialPendingRunIds?: Iterable<string>;
@@ -220,8 +293,7 @@ export async function waitForAgentRunsToDrain(params: {
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
 }): Promise<AgentRunsDrainResult> {
-  const deadlineAtMs =
-    params.deadlineAtMs ?? Date.now() + Math.max(1, Math.floor(params.timeoutMs ?? 0));
+  const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
   let pendingRunIds = new Set<string>(
@@ -249,7 +321,8 @@ export async function waitForAgentRunsToDrain(params: {
   };
 }
 
-export const __testing = {
+/** Test-only dependency injection for gateway calls. */
+export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     runWaitDeps = overrides
       ? {
@@ -259,3 +332,4 @@ export const __testing = {
       : defaultRunWaitDeps;
   },
 };
+export { testing as __testing };

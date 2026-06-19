@@ -1,5 +1,7 @@
+/** Resolves manifest-declared command and tool ownership at runtime. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
   resolveManifestToolOwnerInRegistry,
@@ -14,6 +16,7 @@ import {
 } from "./manifest-contract-eligibility.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 
+/** Resolves the manifest owner for a CLI command alias when one is declared. */
 export function resolveManifestCommandAliasOwner(params: {
   command: string | undefined;
   config?: OpenClawConfig;
@@ -32,6 +35,32 @@ export function resolveManifestCommandAliasOwner(params: {
     command: params.command,
     registry,
   });
+}
+
+/** Resolves the plugin id that should be activated for a CLI command surface. */
+export function resolveManifestCliCommandSurfaceOwner(params: {
+  command: string | undefined;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  registry?: PluginManifestCommandAliasRegistry;
+}): string | undefined {
+  const normalizedCommand = normalizeOptionalLowercaseString(params.command);
+  if (!normalizedCommand) {
+    return undefined;
+  }
+  if (params.registry) {
+    return resolveManifestCommandAliasOwnerInRegistry({
+      command: normalizedCommand,
+      registry: params.registry,
+    })?.pluginId;
+  }
+  return resolveManifestActivationPluginIds({
+    trigger: { kind: "command", command: normalizedCommand },
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })[0];
 }
 
 /**

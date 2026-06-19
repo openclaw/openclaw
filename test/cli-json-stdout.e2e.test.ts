@@ -1,3 +1,4 @@
+// CLI JSON stdout E2E tests validate machine-readable CLI output.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -37,7 +38,11 @@ describe("cli json stdout contract", () => {
         if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error(`Expected JSON object stdout, got: ${stdout}`);
         }
-        expect(Object.keys(parsed).sort()).toEqual(["availability", "channel", "update"]);
+        expect(Object.keys(parsed).toSorted((a, b) => a.localeCompare(b))).toEqual([
+          "availability",
+          "channel",
+          "update",
+        ]);
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");
         expect(stdout).not.toContain("Config invalid");

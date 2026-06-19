@@ -1,7 +1,11 @@
+// Config-only channel status formatter used when the gateway is unreachable.
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
   buildChannelAccountSnapshot,
@@ -14,8 +18,6 @@ import {
   type OfficialExternalPluginRepairHint,
   resolveMissingOfficialExternalChannelPluginRepairHint,
 } from "../../plugins/official-external-plugin-repair-hints.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -30,13 +32,16 @@ type ChannelStatusPluginLabel = {
   meta: { label?: string };
 };
 
+/** Render channel status lines from config snapshots without calling the gateway. */
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; channel?: string; fallbackReason?: string },
 ): Promise<string[]> {
   const lines: string[] = [];
-  lines.push(theme.warn("Gateway not reachable; showing config-only status."));
+  lines.push(
+    theme.warn(opts?.fallbackReason ?? "Gateway not reachable; showing config-only status."),
+  );
   if (meta.path) {
     lines.push(`Config: ${meta.path}`);
   }
@@ -63,10 +68,11 @@ export async function formatConfigChannelsStatusLines(
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const requestedChannel = opts?.channel ? normalizeChannelId(opts.channel) : null;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins: true,
-  });
+  }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
   const visibleChannelIds = new Set<string>();
   for (const plugin of plugins) {
     visibleChannelIds.add(plugin.id);
@@ -108,6 +114,9 @@ export async function formatConfigChannelsStatusLines(
     ]),
   ];
   for (const channelId of missingChannelIds) {
+    if (requestedChannel && channelId !== requestedChannel) {
+      continue;
+    }
     if (visibleChannelIds.has(channelId)) {
       continue;
     }

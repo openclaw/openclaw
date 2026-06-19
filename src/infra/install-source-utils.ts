@@ -1,12 +1,16 @@
+// Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
+import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 
+/** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
   name?: string;
   version?: string;
@@ -14,8 +18,10 @@ export type NpmSpecResolution = {
   integrity?: string;
   shasum?: string;
   resolvedAt?: string;
+  packageOpenClaw?: Record<string, unknown>;
 };
 
+/** Flattened npm resolution fields stored on install results and diagnostics. */
 export type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
@@ -25,6 +31,7 @@ export type NpmResolutionFields = {
   resolvedAt?: string;
 };
 
+/** Converts npm resolution metadata into stable result field names. */
 export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
   return {
     resolvedName: resolution?.name,
@@ -34,6 +41,18 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
     shasum: resolution?.shasum,
     resolvedAt: resolution?.resolvedAt,
   };
+}
+
+/** Creates a script-free npm environment for metadata and pack commands. */
+export function createNpmMetadataEnv(
+  scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    NPM_CONFIG_IGNORE_SCRIPTS: "true",
+  };
+  applyNpmFreshnessBypassEnv(env, new Date(), scope);
+  return env;
 }
 
 function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
@@ -52,9 +71,11 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
     resolvedSpec,
     integrity: toOptionalString(rec["dist.integrity"]) ?? toOptionalString(dist.integrity),
     shasum: toOptionalString(rec["dist.shasum"]) ?? toOptionalString(dist.shasum),
+    ...(isRecord(rec.openclaw) ? { packageOpenClaw: rec.openclaw } : {}),
   };
 }
 
+/** Reads npm registry metadata for a package spec without running package scripts. */
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
       ok: true;
@@ -66,13 +87,20 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     }
 > {
   const res = await runCommandWithTimeout(
-    ["npm", "view", params.spec, "name", "version", "dist.integrity", "dist.shasum", "--json"],
+    [
+      "npm",
+      "view",
+      params.spec,
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv(),
     },
   );
   if (res.code !== 0) {
@@ -98,11 +126,13 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   }
 }
 
+/** Captures expected and actual npm integrity values when an install source drifts. */
 export type NpmIntegrityDrift = {
   expectedIntegrity: string;
   actualIntegrity: string;
 };
 
+/** Runs a callback in a private temp directory and removes it afterward. */
 export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
@@ -110,6 +140,7 @@ export async function withTempDir<T>(
   return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
 }
 
+/** Resolves and validates a user-supplied archive path before extraction. */
 export async function resolveArchiveSourcePath(archivePath: string): Promise<
   | {
       ok: true;
@@ -138,6 +169,10 @@ function toOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseResolvedSpecFromId(id: string): string | undefined {
@@ -224,10 +259,7 @@ function parseNpmPackJsonOutput(
 }
 
 function parsePackedArchiveFromStdout(stdout: string): string | undefined {
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(stdout.split(/\r?\n/));
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
@@ -259,6 +291,7 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
   return sortedByMtime[0]?.name;
 }
 
+/** Packs an npm spec into a tarball in `cwd` and returns archive metadata. */
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
@@ -279,10 +312,7 @@ export async function packNpmSpecToArchive(params: {
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
       cwd: params.cwd,
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
   );
   if (res.code !== 0) {
@@ -322,6 +352,10 @@ export async function packNpmSpecToArchive(params: {
   };
 }
 
+/**
+ * Reads package metadata from an existing npm archive using `npm pack --dry-run`.
+ * The archive path is validated first so callers get path errors before npm errors.
+ */
 export async function resolveNpmPackArchiveMetadata(params: {
   archivePath: string;
   timeoutMs?: number;
@@ -342,14 +376,14 @@ export async function resolveNpmPackArchiveMetadata(params: {
     return archivePathResult;
   }
   const archivePath = archivePathResult.path;
+  const archiveStat = await fs.stat(archivePath).catch(() => null);
+  const archiveMetadataTimeoutMs =
+    archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
   const res = await runCommandWithTimeout(
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
-      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      env: createNpmMetadataEnv(),
     },
   );
   if (res.code !== 0) {

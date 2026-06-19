@@ -10,6 +10,8 @@ export type {
   WizardSelectParams,
 } from "../wizard/prompts.js";
 export { WizardCancelledError } from "../wizard/prompts.js";
+export { createSetupTranslator } from "../wizard/i18n/index.js";
+export type { SetupTranslator, WizardI18nParams } from "../wizard/i18n/index.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 export type {
@@ -22,8 +24,8 @@ export type {
 
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { formatCliCommand } from "../cli/command-format.js";
-export { detectBinary } from "../plugins/setup-binary.js";
-export { formatDocsLink } from "../terminal/links.js";
+export { detectBinary } from "../infra/detect-binary.js";
+export { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 export { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 export { normalizeE164, pathExists } from "../utils.js";
 

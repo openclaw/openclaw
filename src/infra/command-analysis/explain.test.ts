@@ -1,6 +1,9 @@
+// Covers command-analysis summary formatting for parsed shell explanations and
+// policy-only argv/shell segment analysis.
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "../command-explainer/index.js";
 import {
+  explainCommandForDisplay,
   resolveCommandAnalysisSummaryForDisplay,
   summarizeCommandExplanation,
   summarizeCommandSegmentsForDisplay,
@@ -12,11 +15,18 @@ describe("command-analysis explanation summary", () => {
     const summary = summarizeCommandExplanation(explanation);
 
     expect(summary.commandCount).toBe(1);
-    expect(summary.riskKinds).toContain("shell-wrapper");
-    expect(summary.riskKinds).toContain("inline-eval");
-    expect(summary.warningLines).toEqual(
-      expect.arrayContaining([expect.stringContaining("inline-eval")]),
-    );
+    expect(summary.riskKinds).toEqual(["shell-wrapper", "inline-eval"]);
+    expect(summary.warningLines).toEqual([
+      "Contains shell-wrapper: bash -lc",
+      "Contains inline-eval: python3 -c",
+    ]);
+  });
+
+  it("loads the rich command explainer for rich display summaries", async () => {
+    const result = await explainCommandForDisplay(`bash -lc 'python3 -c "print(1)"'`);
+
+    expect(result?.summary.commandCount).toBe(1);
+    expect(result?.summary.riskKinds).toEqual(["shell-wrapper", "inline-eval"]);
   });
 
   it("summarizes policy command segments without async parsing", () => {
@@ -33,55 +43,51 @@ describe("command-analysis explanation summary", () => {
     expect(summary.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
   });
 
-  it("resolves node display summaries from argv", () => {
+  it("resolves node display summaries from argv", async () => {
+    const summary = await resolveCommandAnalysisSummaryForDisplay({
+      host: "node",
+      commandText: "python3 script.py",
+      commandArgv: ["python3", "-c", "print(1)"],
+    });
+    expect(summary?.commandCount).toBe(1);
+    expect(summary?.riskKinds).toEqual(["inline-eval"]);
+    expect(summary?.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
+
     expect(
-      resolveCommandAnalysisSummaryForDisplay({
-        host: "node",
-        commandText: "python3 script.py",
-        commandArgv: ["python3", "-c", "print(1)"],
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        commandCount: 1,
-        riskKinds: ["inline-eval"],
-        warningLines: ["Contains inline-eval: python3 -c"],
-      }),
-    );
-    expect(
-      resolveCommandAnalysisSummaryForDisplay({
+      await resolveCommandAnalysisSummaryForDisplay({
         host: "node",
         commandText: "python3 -c 'print(1)'",
       }),
     ).toBeNull();
   });
 
-  it("resolves gateway display summaries from shell text even when argv is stale", () => {
+  it("resolves gateway display summaries from shell text even when argv is stale", async () => {
+    const summary = await resolveCommandAnalysisSummaryForDisplay({
+      host: "gateway",
+      commandText: "python3 -c 'print(1)'",
+      commandArgv: ["python3", "script.py"],
+    });
+    expect(summary?.commandCount).toBe(1);
+    expect(summary?.riskKinds).toEqual(["inline-eval"]);
+    expect(summary?.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
+
     expect(
-      resolveCommandAnalysisSummaryForDisplay({
-        host: "gateway",
-        commandText: "python3 -c 'print(1)'",
-        commandArgv: ["python3", "script.py"],
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        commandCount: 1,
-        riskKinds: ["inline-eval"],
-        warningLines: ["Contains inline-eval: python3 -c"],
-      }),
-    );
-    expect(
-      resolveCommandAnalysisSummaryForDisplay({
+      (
+        await resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",
         commandText: "echo ok",
         commandArgv: ["python3", "-c", "print(1)"],
-      })?.riskKinds,
+        })
+      )?.riskKinds,
     ).toStrictEqual([]);
     expect(
-      resolveCommandAnalysisSummaryForDisplay({
+      (
+        await resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",
         commandText: "python3 -c 'print(1)'",
         sanitizeText: (value) => value.replaceAll("python3", "python"),
-      })?.warningLines,
+        })
+      )?.warningLines,
     ).toEqual(["Contains inline-eval: python -c"]);
   });
 });

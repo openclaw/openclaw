@@ -1,5 +1,26 @@
-// Shared config/runtime boundary for plugins that need config loading,
-// config writes, or session-store helpers without importing src internals.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer narrower config subpaths such as plugin-config-runtime,
+ * config-mutation, and runtime-config-snapshot.
+ */
+
+import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
+export {
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  readSessionUpdatedAt,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "./session-store-runtime.js";
+
+/**
+ * @deprecated Use getSessionEntry/listSessionEntries for reads and
+ * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
+ * kept only during the transition before SQLite migration. Callers must
+ * migrate away from reading sessions.json directly.
+ */
+export const loadSessionStore = loadSessionStoreImpl;
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -129,13 +150,10 @@ export type {
 } from "../config/types.js";
 export {
   clearSessionStoreCacheForTest,
-  loadSessionStore,
-  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
-  updateSessionStoreEntry,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

@@ -1,4 +1,5 @@
-import { z } from "openclaw/plugin-sdk/zod";
+// Webhooks helper module supports config behavior.
+import { z } from "zod";
 import { normalizeWebhookPath } from "../runtime-api.js";
 
 const secretRefSchema = z

@@ -1,3 +1,4 @@
+// Discord tests cover interactions plugin behavior.
 import {
   ComponentType,
   type GuildMemberFlags,
@@ -13,6 +14,7 @@ import {
   createInteraction,
   type RawInteraction,
 } from "./interactions.js";
+import { Message } from "./structures.js";
 import {
   attachRestMock,
   createInternalComponentInteractionPayload,
@@ -237,12 +239,15 @@ describe("BaseInteraction", () => {
       }),
     );
 
-    await expect(wait).resolves.toEqual({
-      success: true,
-      customId: "button1",
-      message: expect.objectContaining({ id: "message1", channelId: "channel1" }),
-      values: undefined,
-    });
+    const result = await wait;
+    if (!result.success) {
+      throw new Error("expected component wait to succeed");
+    }
+    expect(result.customId).toBe("button1");
+    expect(result.message).toBeInstanceOf(Message);
+    expect(result.message?.id).toBe("message1");
+    expect(result.message?.channelId).toBe("channel1");
+    expect(result.values).toBeUndefined();
     expect(post).toHaveBeenNthCalledWith(
       2,
       "/interactions/component-interaction1/component-token1/callback",

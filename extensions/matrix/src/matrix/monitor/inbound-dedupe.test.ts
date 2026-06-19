@@ -1,15 +1,34 @@
+// Matrix tests cover inbound dedupe plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../runtime-api.js";
+import { setMatrixRuntime } from "../../runtime.js";
+import { LogService } from "../sdk/logger.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
 describe("Matrix inbound event dedupe", () => {
   const tempDirs: string[] = [];
 
+  beforeEach(() => {
+    setMatrixRuntime({
+      state: {
+        openKeyedStore: (options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests("matrix", options),
+      },
+    } as unknown as PluginRuntime);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -28,6 +47,7 @@ describe("Matrix inbound event dedupe", () => {
     accessToken: "token",
     deviceId: "DEVICE",
   } as const;
+  const persistenceTestTtlMs = 60_000;
 
   it("persists committed events across restarts", async () => {
     const storagePath = createStoragePath();
@@ -104,7 +124,9 @@ describe("Matrix inbound event dedupe", () => {
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,
-      ttlMs: 20,
+      // Plugin-state TTL uses real wall-clock time; keep restart/import tests
+      // away from millisecond expiry races while fake nowMs drives dedupe pruning.
+      ttlMs: persistenceTestTtlMs,
       nowMs: () => now,
     });
 
@@ -119,28 +141,80 @@ describe("Matrix inbound event dedupe", () => {
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,
-      ttlMs: 20,
+      ttlMs: persistenceTestTtlMs,
       nowMs: () => now,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
   });
 
-  it("treats stop persistence failures as best-effort cleanup", async () => {
-    const blockingPath = createStoragePath();
-    fs.writeFileSync(blockingPath, "blocking file", "utf8");
+  it("imports legacy JSON entries into plugin state", async () => {
+    const storagePath = createStoragePath();
+    fs.writeFileSync(
+      storagePath,
+      JSON.stringify({
+        version: 1,
+        entries: [{ key: "!room:example.org|$legacy", ts: 90 }],
+      }),
+      "utf8",
+    );
+
+    const first = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath,
+      // Plugin-state TTL uses real wall-clock time; this test proves migration
+      // durability after the legacy JSON file is gone, not expiry behavior.
+      ttlMs: persistenceTestTtlMs,
+      nowMs: () => 100,
+    });
+    expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$legacy" })).toBe(false);
+
+    fs.rmSync(storagePath, { force: true });
+    const second = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath,
+      ttlMs: persistenceTestTtlMs,
+      nowMs: () => 100,
+    });
+    expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$legacy" })).toBe(false);
+  });
+
+  it("keeps committed events in memory when plugin-state persistence fails", async () => {
+    const storagePath = createStoragePath();
+    const warnSpy = vi.spyOn(LogService, "warn").mockImplementation(() => {});
+    setMatrixRuntime({
+      state: {
+        openKeyedStore: () => ({
+          entries: async () => [],
+          register: async () => {
+            throw new Error("sqlite unavailable");
+          },
+          registerIfAbsent: async () => false,
+          lookup: async () => undefined,
+          consume: async () => undefined,
+          delete: async () => false,
+          clear: async () => {},
+        }),
+      },
+    } as unknown as PluginRuntime);
     const deduper = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      storagePath: path.join(blockingPath, "nested", "inbound-dedupe.json"),
+      storagePath,
     });
 
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$persist-fail" })).toBe(
-      true,
+    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$best-effort" })).toBe(true);
+    await expect(
+      deduper.commitEvent({
+        roomId: "!room:example.org",
+        eventId: "$best-effort",
+      }),
+    ).resolves.toBeUndefined();
+    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$best-effort" })).toBe(
+      false,
     );
-    await deduper.commitEvent({
-      roomId: "!room:example.org",
-      eventId: "$persist-fail",
-    });
-
-    await expect(deduper.stop()).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "MatrixInboundDedupe",
+      "Failed persisting Matrix inbound dedupe entry:",
+      expect.any(Error),
+    );
   });
 });

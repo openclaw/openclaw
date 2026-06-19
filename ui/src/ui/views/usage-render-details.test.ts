@@ -1,8 +1,11 @@
+// Control UI tests cover usage render details behavior.
+import { render } from "lit";
 import { describe, it, expect } from "vitest";
 import {
   computeFilteredUsage,
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
+  renderTimeSeriesCompact,
 } from "./usage-render-details.ts";
 import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
@@ -23,7 +26,7 @@ function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
 
 const baseUsage = {
   totalTokens: 1000,
-  totalCost: 1.0,
+  totalCost: 1,
   input: 300,
   output: 400,
   cacheRead: 200,
@@ -70,9 +73,7 @@ describe("computeFilteredUsage", () => {
     ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
     const filtered = expectFilteredUsage(result);
-    expect(filtered).toMatchObject({
-      totalTokens: 300, // 100 + 200
-    });
+    expect(filtered.totalTokens).toBe(300); // 100 + 200
     expect(filtered.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
   });
 
@@ -82,7 +83,7 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 2000, totalTokens: 75 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 2000, 1000);
-    expect(result).toMatchObject({ totalTokens: 125 });
+    expect(expectFilteredUsage(result).totalTokens).toBe(125);
   });
 
   it("counts message types based on input/output presence", () => {
@@ -92,13 +93,13 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 3000, input: 5, output: 15 }),
     ];
     const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 3000));
-    expect(result).toMatchObject({
-      messageCounts: {
-        user: 2, // points with input > 0
-        assistant: 2, // points with output > 0
-        total: 3,
-      },
-    });
+    const counts = result.messageCounts;
+    if (!counts) {
+      throw new Error("expected filtered usage to include message counts");
+    }
+    expect(counts.user).toBe(2); // points with input > 0
+    expect(counts.assistant).toBe(2); // points with output > 0
+    expect(counts.total).toBe(3);
   });
 
   it("computes duration from first to last filtered point", () => {
@@ -123,10 +124,9 @@ describe("computeFilteredUsage", () => {
 });
 
 describe("chart bar sizing", () => {
-  it("bar width ratio and max are reasonable", () => {
-    expect(CHART_BAR_WIDTH_RATIO).toBeGreaterThan(0);
-    expect(CHART_BAR_WIDTH_RATIO).toBeLessThan(1);
-    expect(CHART_MAX_BAR_WIDTH).toBeGreaterThan(0);
+  it("keeps the chart bar sizing constants stable", () => {
+    expect(CHART_BAR_WIDTH_RATIO).toBe(0.75);
+    expect(CHART_MAX_BAR_WIDTH).toBe(8);
   });
 
   it("bars fit within chart width for typical point counts", () => {
@@ -146,5 +146,30 @@ describe("chart bar sizing", () => {
         expect(barGap).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+});
+
+describe("renderTimeSeriesCompact", () => {
+  it("does not render Invalid Date for Date-invalid point timestamps", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderTimeSeriesCompact(
+        {
+          points: [
+            makePoint({ timestamp: 8_640_000_000_000_001, totalTokens: 10 }),
+            makePoint({ timestamp: 8_640_000_000_000_002, totalTokens: 20 }),
+          ],
+        },
+        false,
+        "per-turn",
+        () => undefined,
+        "total",
+        () => undefined,
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Invalid Date");
   });
 });

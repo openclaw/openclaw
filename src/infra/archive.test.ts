@@ -1,3 +1,4 @@
+// Tests archive creation and extraction helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
@@ -5,6 +6,7 @@ import * as tar from "tar";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
+import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
 import type { ArchiveSecurityError } from "./archive.js";
 import {
   extractArchive,
@@ -55,8 +57,23 @@ async function createDirectorySymlink(targetDir: string, linkPath: string) {
   await fs.symlink(targetDir, linkPath, directorySymlinkType);
 }
 
+async function expectRejectedCode(promise: Promise<unknown>, expected: string | RegExp) {
+  try {
+    await promise;
+  } catch (error) {
+    const code = (error as Partial<ArchiveSecurityError>).code;
+    if (typeof expected === "string") {
+      expect(code).toBe(expected);
+      return;
+    }
+    expect(String(code)).toMatch(expected);
+    return;
+  }
+  throw new Error("expected promise to reject");
+}
+
 async function expectPathMissing(filePath: string) {
-  await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expectRejectedCode(fs.stat(filePath), "ENOENT");
 }
 
 async function expectExtractedSizeBudgetExceeded(params: {
@@ -73,31 +90,6 @@ async function expectExtractedSizeBudgetExceeded(params: {
       limits: { maxExtractedBytes: params.maxExtractedBytes },
     }),
   ).rejects.toThrow("archive extracted size exceeds limit");
-}
-
-function createZipCentralDirectoryArchive(params: {
-  actualEntryCount: number;
-  declaredEntryCount?: number;
-  declaredCentralDirectorySize?: number;
-}): Buffer {
-  const centralDirectory = Buffer.concat(
-    Array.from({ length: params.actualEntryCount }, (_, index) => {
-      const name = Buffer.from(`file-${index}.txt`);
-      const header = Buffer.alloc(46 + name.byteLength);
-      header.writeUInt32LE(0x02014b50, 0);
-      header.writeUInt16LE(name.byteLength, 28);
-      name.copy(header, 46);
-      return header;
-    }),
-  );
-  const declaredEntryCount = params.declaredEntryCount ?? params.actualEntryCount;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 8);
-  eocd.writeUInt16LE(Math.min(declaredEntryCount, 0xffff), 10);
-  eocd.writeUInt32LE(params.declaredCentralDirectorySize ?? centralDirectory.byteLength, 12);
-  eocd.writeUInt32LE(0, 16);
-  return Buffer.concat([centralDirectory, eocd]);
 }
 
 beforeAll(async () => {
@@ -148,15 +140,14 @@ describe("archive utils", () => {
         await fs.rm(extractDir, { recursive: true, force: true });
         await createDirectorySymlink(realExtractDir, extractDir);
 
-        await expect(
+        await expectRejectedCode(
           extractArchive({
             archivePath,
             destDir: extractDir,
             timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
           }),
-        ).rejects.toMatchObject({
-          code: "destination-symlink",
-        } satisfies Partial<ArchiveSecurityError>);
+          "destination-symlink",
+        );
 
         await expectPathMissing(path.join(realExtractDir, "package", "hello.txt"));
       });
@@ -189,15 +180,14 @@ describe("archive utils", () => {
       zip.file("escape/pwn.txt", "owned");
       await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-      await expect(
+      await expectRejectedCode(
         extractArchive({
           archivePath,
           destDir: extractDir,
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
-      ).rejects.toMatchObject({
-        code: "destination-symlink-traversal",
-      } satisfies Partial<ArchiveSecurityError>);
+        "destination-symlink-traversal",
+      );
 
       const outsideFile = path.join(outsideDir, "pwn.txt");
       const outsideExists = await fs
@@ -239,9 +229,8 @@ describe("archive utils", () => {
         });
       } catch (error) {
         rejected = true;
-        expect(error).toMatchObject({
-          code: expect.stringMatching(/destination-symlink-traversal|not-file/),
-        } satisfies Partial<ArchiveSecurityError>);
+        const code = (error as Partial<ArchiveSecurityError>).code;
+        expect(String(code)).toMatch(/destination-symlink-traversal|not-file/);
       }
 
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("SAFE");
@@ -280,21 +269,20 @@ describe("archive utils", () => {
         });
 
         try {
-          await expect(
+          await expectRejectedCode(
             extractArchive({
               archivePath,
               destDir: extractDir,
               timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
             }),
-          ).rejects.toMatchObject({
-            code: expect.stringMatching(/^(?:destination-symlink-traversal|hardlink)$/u),
-          });
+            /^(?:destination-symlink-traversal|hardlink)$/u,
+          );
         } finally {
           lstatSpy.mockRestore();
         }
 
         await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("");
-        await expect(fs.stat(extractedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectPathMissing(extractedPath);
       });
     },
   );
@@ -327,15 +315,14 @@ describe("archive utils", () => {
       await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
       await tar.c({ cwd: archiveRoot, file: archivePath }, ["escape"]);
 
-      await expect(
+      await expectRejectedCode(
         extractArchive({
           archivePath,
           destDir: extractDir,
           timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
         }),
-      ).rejects.toMatchObject({
-        code: "destination-symlink-traversal",
-      } satisfies Partial<ArchiveSecurityError>);
+        "destination-symlink-traversal",
+      );
 
       await expectPathMissing(path.join(outsideDir, "pwn.txt"));
     });

@@ -1,4 +1,6 @@
+// Memory Wiki plugin module implements source page shared behavior.
 import fs from "node:fs/promises";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   setImportedSourceEntry,
@@ -7,6 +9,23 @@ import {
 } from "./source-sync-state.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
+
+type FileStatLike = {
+  isFile?: unknown;
+  nlink?: unknown;
+};
+
+function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const stat = value as FileStatLike;
+  const isFile =
+    typeof stat.isFile === "function"
+      ? (stat.isFile as () => boolean).call(stat)
+      : stat.isFile === true;
+  return isFile && typeof stat.nlink === "number";
+}
 
 export async function writeImportedSourcePage(params: {
   vaultRoot: string;
@@ -31,7 +50,7 @@ export async function writeImportedSourcePage(params: {
     throw error;
   });
   const created = !pageStat;
-  const updatedAt = new Date(params.sourceUpdatedAtMs).toISOString();
+  const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
   const shouldSkip = await shouldSkipImportedSourceWrite({
     vaultRoot: params.vaultRoot,
     syncKey: params.syncKey,
@@ -51,12 +70,18 @@ export async function writeImportedSourcePage(params: {
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (existing !== rendered) {
     try {
-      if (pageStat && pageStat.nlink > 1) {
+      if (isRegularFileStat(pageStat) && pageStat.nlink > 1) {
         await vault.remove(params.pagePath);
       }
       await vault.write(params.pagePath, rendered);
     } catch (error) {
       if (error instanceof FsSafeError) {
+        if (error.code !== "symlink" && error.code !== "path-alias") {
+          throw new Error(
+            `Refusing to write imported source page (${error.code}): ${params.pagePath}: ${error.message}`,
+            { cause: error },
+          );
+        }
         throw new Error(
           `Refusing to write imported source page through symlink: ${params.pagePath}`,
           { cause: error },

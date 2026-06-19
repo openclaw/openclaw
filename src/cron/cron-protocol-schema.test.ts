@@ -1,5 +1,6 @@
+// Cron protocol schema tests cover runtime validation for cron protocol payloads.
 import { describe, expect, it } from "vitest";
-import { CronJobStateSchema } from "../gateway/protocol/schema.js";
+import { CronJobStateSchema } from "../../packages/gateway-protocol/src/schema.js";
 
 type SchemaLike = {
   properties?: Record<string, unknown>;
@@ -14,5 +15,12 @@ describe("cron protocol schema", () => {
       throw new Error("expected legacy lastStatus schema alias");
     }
     expect(lastStatus.deprecated).toBe(true);
+  });
+
+  it("exposes failure-notification delivery state", () => {
+    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(properties.lastFailureNotificationDelivered).toBeDefined();
+    expect(properties.lastFailureNotificationDeliveryStatus).toBeDefined();
+    expect(properties.lastFailureNotificationDeliveryError).toBeDefined();
   });
 });

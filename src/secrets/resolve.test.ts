@@ -1,9 +1,18 @@
+/** Tests SecretRef provider resolution for env, file, and exec sources. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import {
+  killPidIfAlive,
+  readPidFile,
+  waitForPidToExit,
+  writeForkingNoOutputScript,
+} from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   resolveSecretRefString,
   resolveSecretRefValue,
@@ -52,7 +61,10 @@ describe("secret ref resolver", () => {
     jsonOnly?: boolean;
     allowSymlinkCommand?: boolean;
     trustedDirs?: string[];
+    env?: Record<string, string>;
     args?: string[];
+    timeoutMs?: number;
+    noOutputTimeoutMs?: number;
   };
   type FileProviderConfig = {
     source: "file";
@@ -204,6 +216,18 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  itPosix("clamps oversized exec provider timeouts", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const value = await resolveExecSecret(execProtocolV1ScriptPath, {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(value).toBe("value:openai/api-key");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
   itPosix("uses timeoutMs as the default no-output timeout for exec providers", async () => {
     const root = await createCaseDir("exec-delay");
     const scriptPath = path.join(root, "resolver-delay.sh");
@@ -236,6 +260,28 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("ok");
+  });
+
+  itPosix("kills forked exec provider children on no-output timeout", async () => {
+    const root = await createCaseDir("exec-fork-timeout");
+    const scriptPath = await writeForkingNoOutputScript(root);
+    const pidPath = path.join(root, "forked.pid");
+    let childPid: number | undefined;
+
+    try {
+      await expect(
+        resolveExecSecret(scriptPath, {
+          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+          noOutputTimeoutMs: 150,
+          timeoutMs: 2000,
+        }),
+      ).rejects.toThrow('Exec provider "execmain" produced no output');
+
+      childPid = await readPidFile(pidPath);
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    } finally {
+      killPidIfAlive(childPid);
+    }
   });
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {
@@ -459,6 +505,35 @@ describe("secret ref resolver", () => {
     }
   });
 
+  it("rejects invalid env, file, and provider refs before provider resolution", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "env", provider: "default", id: "bad id" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("Env secret reference id must match");
+
+    await expect(
+      resolveSecretRefValue(
+        { source: "file", provider: "default", id: "providers/openai/apiKey" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("File secret reference id must be an absolute JSON pointer");
+
+    await expect(
+      resolveSecretRefValue(
+        { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("Secret reference provider must match");
+  });
+
   it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {
     const dir = await createCaseDir("bom-file");
     const filePath = path.join(dir, "secrets-with-bom.json");
@@ -503,9 +578,7 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -524,15 +597,11 @@ describe("secret ref resolver", () => {
           },
         ),
       ).rejects.toThrow(/ACL verification unavailable on Windows/);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl-opt-out");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -550,20 +619,14 @@ describe("secret ref resolver", () => {
         },
       );
       expect(value).toBe("abc123");
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
         /ACL verification unavailable on Windows/,
       );
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 });

@@ -1,3 +1,4 @@
+// Shared Vitest runtime capture helpers for CLI command output assertions.
 import { vi } from "vitest";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
@@ -32,6 +33,7 @@ function stringifyRuntimeJson(value: unknown, space = 2): string {
 }
 
 export function createCliRuntimeCapture(): CliRuntimeCapture {
+  // Capture output in arrays while preserving vi mock call inspection.
   const runtimeLogs: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
@@ -91,5 +93,5 @@ export function spyRuntimeJson(runtime: Pick<OutputRuntimeEnv, "writeJson">) {
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets callers ascribe captured JSON shape.
 export function firstWrittenJsonArg<T>(writeJson: MockCallsWithFirstArg): T | null {
-  return (writeJson.mock.calls[0]?.[0] ?? null) as T | null;
+  return (writeJson.mock.calls.at(0)?.[0] ?? null) as T | null;
 }

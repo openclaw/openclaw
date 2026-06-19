@@ -35,9 +35,9 @@
           }
         },
         "install": {
-          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.4.23",
+          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.5.7",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ=="
+          "expectedIntegrity": "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug=="
         }
       }
     },
@@ -76,9 +76,9 @@
           }
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.13.0",
+          "npmSpec": "openclaw-plugin-yuanbao@2.13.1",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-mx6b2gO8oqZxECG9NLLQofScaIZXjmQXqJxevagVx8IKXLGeLrpTWlvnW1P2NP5dqaSMrkvBsgJqtW+rVM7h4w=="
+          "expectedIntegrity": "sha512-lH2I9/nsmrg7l0YJJSQhOSpWMEFBAa6FwKbZcRLDFHDT2+mOZkHa44XE+8KYN4VmorlUdAxHzpZQmVr7C98IuA=="
         }
       }
     },
@@ -114,10 +114,49 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.1",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.3",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-FZnUVMQRpKGTKezeplr/DYal+5RSif2tXE51pljIFrO8rn7bVnnvpbj81/i9UMrYbuGiom1sl8OeSDzWRDKGhQ==",
+          "expectedIntegrity": "sha512-dPQbidUNWigC6V10vGW4i+GLH09x+6zUhafZRjuxkJ9GDu8o62WBsnUTojp4KqUH756hz+t2v9khiCRSi0dBDw==",
           "minHostVersion": ">=2026.3.22"
+        }
+      }
+    },
+    {
+      "name": "@zalo-platforms/openclaw-zaloclawbot",
+      "description": "OpenClaw Zalo ClawBot channel plugin by the Zalo Platforms team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": {
+          "id": "openclaw-zaloclawbot",
+          "label": "Zalo ClawBot"
+        },
+        "channel": {
+          "id": "openclaw-zaloclawbot",
+          "label": "Zalo ClawBot",
+          "selectionLabel": "Zalo ClawBot (QR)",
+          "detailLabel": "Zalo ClawBot",
+          "docsPath": "/channels/zaloclawbot",
+          "docsLabel": "zaloclawbot",
+          "blurb": "Personal Zalo assistant bot via QR-code login — owner-bound, no setup.",
+          "aliases": ["zaloclawbot", "zalo-clawbot"],
+          "order": 82
+        },
+        "channelConfigs": {
+          "openclaw-zaloclawbot": {
+            "label": "Zalo ClawBot",
+            "description": "Personal Zalo assistant — QR-onboarded, owner-bound.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@zalo-platforms/openclaw-zaloclawbot@0.1.4",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-5IxZriHJYACLLGqkCPPsTP9tas62kXEOFqTFAFMdunAM3SPhIJwVFRp0WvoP/m7L2PX85weD0g8LOtxM93VDYg==",
+          "minHostVersion": ">=2026.4.10"
         }
       }
     },
@@ -167,7 +206,7 @@
         "install": {
           "npmSpec": "@openclaw/feishu",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.25"
+          "minHostVersion": ">=2026.5.29"
         }
       }
     },
@@ -260,6 +299,7 @@
           "docsLabel": "matrix",
           "blurb": "open protocol; install the plugin to enable.",
           "order": 70,
+          "markdownCapable": true,
           "quickstartAllowFrom": true,
           "doctorCapabilities": {
             "dmAllowFromMode": "nestedOnly",
@@ -393,6 +433,41 @@
       }
     },
     {
+      "name": "@openclaw/slack",
+      "description": "OpenClaw Slack channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "slack",
+          "label": "Slack",
+          "selectionLabel": "Slack (Socket Mode)",
+          "detailLabel": "Slack Bot",
+          "docsPath": "/channels/slack",
+          "docsLabel": "slack",
+          "blurb": "supported (Socket Mode).",
+          "systemImage": "number",
+          "markdownCapable": true
+        },
+        "channelConfigs": {
+          "slack": {
+            "label": "Slack",
+            "description": "Slack channel, DM, command, and app event integration.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@openclaw/slack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/synology-chat",
       "description": "Synology Chat channel plugin for OpenClaw",
       "source": "official",
@@ -475,8 +550,9 @@
           "systemImage": "message"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/whatsapp",
           "npmSpec": "@openclaw/whatsapp",
-          "defaultChoice": "npm",
+          "defaultChoice": "clawhub",
           "minHostVersion": ">=2026.4.25"
         }
       }

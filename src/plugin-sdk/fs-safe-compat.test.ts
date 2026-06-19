@@ -1,3 +1,6 @@
+/**
+ * Tests fs-safe compatibility exports used by plugin SDK callers.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { loadSecretFileSync as loadSecretFileSyncFromCore } from "openclaw/plugin-sdk/core";
@@ -16,15 +19,19 @@ describe("plugin SDK fs-safe compatibility exports", () => {
       fs.writeFileSync(secretPath, "secret\n", { mode: 0o600 });
 
       const result: SecretFileReadResult = loadSecretFileSync(secretPath, "token");
-      expect(result).toMatchObject({
-        ok: true,
-        secret: "secret",
-        resolvedPath: secretPath,
-      });
-      expect(loadSecretFileSyncFromCore(secretPath, "token")).toMatchObject({
-        ok: true,
-        secret: "secret",
-      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected secret-file read to succeed");
+      }
+      expect(result.secret).toBe("secret");
+      expect(result.resolvedPath).toBe(secretPath);
+
+      const coreResult = loadSecretFileSyncFromCore(secretPath, "token");
+      expect(coreResult.ok).toBe(true);
+      if (!coreResult.ok) {
+        throw new Error("expected core secret-file read to succeed");
+      }
+      expect(coreResult.secret).toBe("secret");
     });
   });
 

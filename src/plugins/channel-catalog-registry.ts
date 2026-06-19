@@ -1,12 +1,9 @@
+// Maintains channel catalog entries advertised by plugins.
+import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
-import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import {
-  loadPluginManifest,
-  type PluginPackageChannel,
-  type PluginPackageInstall,
-} from "./manifest.js";
+import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginChannelCatalogEntry = {
@@ -24,6 +21,7 @@ export function listChannelCatalogEntries(
     origin?: PluginOrigin;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    extraPaths?: string[];
     /**
      * Optional override.  When omitted and `origin !== "bundled"`, the persisted
      * plugin install ledger is loaded synchronously so that npm-installed
@@ -31,14 +29,19 @@ export function listChannelCatalogEntries(
      * Bundled-only callers skip the load to avoid the disk read.
      */
     installRecords?: Record<string, PluginInstallRecord>;
+    discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginChannelCatalogEntry[] {
   const installRecords = resolveInstallRecords(params);
-  return discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
-  }).candidates.flatMap((candidate) => {
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      extraPaths: params.extraPaths,
+      ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
+    });
+  return discovery.candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
     }
@@ -46,20 +49,13 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const manifest = loadPluginManifest(
-      candidate.rootDir,
-      shouldRejectHardlinkedPluginFiles({
-        origin: candidate.origin,
-        rootDir: candidate.rootDir,
-        env: params.env,
-      }),
-    );
-    if (!manifest.ok) {
+    const pluginId = resolveChannelCatalogPluginId(candidate);
+    if (!pluginId) {
       return [];
     }
     return [
       {
-        pluginId: manifest.manifest.id,
+        pluginId,
         origin: candidate.origin,
         packageName: candidate.packageName,
         workspaceDir: candidate.workspaceDir,
@@ -71,6 +67,17 @@ export function listChannelCatalogEntries(
       },
     ];
   });
+}
+
+function resolveChannelCatalogPluginId(
+  candidate: PluginDiscoveryResult["candidates"][number],
+): string | undefined {
+  return (
+    resolveOptionalString(candidate.bundledManifest?.id) ??
+    resolveOptionalString(candidate.bundledManifestId) ??
+    resolveOptionalString(candidate.packageManifest?.plugin?.id) ??
+    resolveOptionalString(candidate.idHint)
+  );
 }
 
 function resolveInstallRecords(params: {

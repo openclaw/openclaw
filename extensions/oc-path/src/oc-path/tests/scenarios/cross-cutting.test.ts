@@ -1,3 +1,4 @@
+// OC Path tests cover cross cutting plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { formatOcPath, parseOcPath } from "../../oc-path.js";
@@ -126,7 +127,9 @@ describe("cross-cutting", () => {
     ];
     for (const path of cases) {
       const m = resolveOcPath(ast, path);
-      expect(m, `failed for ${JSON.stringify(path)}`).not.toBeNull();
+      if (m === null) {
+        throw new Error(`failed for ${JSON.stringify(path)}`);
+      }
     }
   });
 });

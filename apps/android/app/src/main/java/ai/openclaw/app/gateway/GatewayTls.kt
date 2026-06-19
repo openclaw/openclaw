@@ -25,6 +25,7 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
+/** TLS pinning inputs for a discovered or manually configured gateway endpoint. */
 data class GatewayTlsParams(
   val required: Boolean,
   val expectedFingerprint: String?,
@@ -32,28 +33,35 @@ data class GatewayTlsParams(
   val stableId: String,
 )
 
+/** SSL primitives installed into OkHttp when a gateway needs TLS pinning/TOFU. */
 data class GatewayTlsConfig(
   val sslSocketFactory: SSLSocketFactory,
   val trustManager: X509TrustManager,
   val hostnameVerifier: HostnameVerifier,
 )
 
+/** Distinguishes non-TLS endpoints from unreachable endpoints during probing. */
 enum class GatewayTlsProbeFailure {
   TLS_UNAVAILABLE,
   ENDPOINT_UNREACHABLE,
 }
 
+/** Result of probing a gateway TLS endpoint for first-use fingerprint capture. */
 data class GatewayTlsProbeResult(
   val fingerprintSha256: String? = null,
   val failure: GatewayTlsProbeFailure? = null,
 )
 
+/** Builds a TLS config that supports pinned fingerprints and trust-on-first-use. */
 fun buildGatewayTlsConfig(
   params: GatewayTlsParams?,
   onStore: ((String) -> Unit)? = null,
 ): GatewayTlsConfig? {
   if (params == null) return null
-  val expected = params.expectedFingerprint?.let(::normalizeFingerprint)
+  val expected =
+    params.expectedFingerprint
+      ?.let(::normalizeGatewayTlsFingerprint)
+      ?.takeIf { it.isNotBlank() }
   val defaultTrust = defaultTrustManager()
 
   @SuppressLint("CustomX509TrustManager")
@@ -79,6 +87,9 @@ fun buildGatewayTlsConfig(
           return
         }
         if (params.allowTOFU) {
+          // Store only after the TLS stack presents a concrete server cert; the
+          // caller persists the fingerprint against the endpoint's stable id,
+          // and later connects must come back through the pinned branch above.
           onStore?.invoke(fingerprint)
           return
         }
@@ -104,6 +115,7 @@ fun buildGatewayTlsConfig(
   )
 }
 
+/** Connects with a probe trust manager that captures the presented cert hash. */
 suspend fun probeGatewayTlsFingerprint(
   host: String,
   port: Int,
@@ -129,6 +141,7 @@ suspend fun probeGatewayTlsFingerprint(
         ) {
           if (chain.isEmpty()) throw CertificateException("empty certificate chain")
           fingerprintRef.set(sha256Hex(chain[0].encoded))
+          // Abort validation after capture; the probe is not deciding trust.
           throw CertificateException("gateway TLS probe captured fingerprint")
         }
 
@@ -151,7 +164,8 @@ suspend fun probeGatewayTlsFingerprint(
           socket.sslParameters = params
         }
       } catch (_: Throwable) {
-        // ignore
+        // SNI is only a probe hint. IP literals and odd Bonjour names should
+        // still be probed instead of failing before the TLS handshake.
       }
 
       socket.startHandshake()
@@ -200,7 +214,8 @@ private fun sha256Hex(data: ByteArray): String {
   return out.toString()
 }
 
-private fun normalizeFingerprint(raw: String): String {
+/** Normalizes user-visible fingerprint text to lowercase bare SHA-256 hex. */
+fun normalizeGatewayTlsFingerprint(raw: String): String {
   val stripped =
     raw
       .trim()

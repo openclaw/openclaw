@@ -1,3 +1,4 @@
+// Msteams tests cover attachments.helpers plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
@@ -7,7 +8,6 @@ import {
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-const _GRAPH_HOST = "graph.microsoft.com";
 const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;

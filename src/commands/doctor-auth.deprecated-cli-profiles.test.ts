@@ -1,3 +1,4 @@
+// Doctor deprecated CLI profile tests cover legacy auth profile migration and warnings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -26,7 +27,7 @@ vi.mock("../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStore: () => authProfileStoreMock.store,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
@@ -55,6 +56,15 @@ function requireAuthConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["
     throw new Error("expected repaired auth config");
   }
   return config.auth;
+}
+
+function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return arg;
 }
 
 beforeEach(() => {
@@ -140,17 +150,15 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
     );
 
     expect(repairMocks.repairOAuthProfileIdMismatch).toHaveBeenCalledOnce();
-    const repairCall = repairMocks.repairOAuthProfileIdMismatch.mock.calls[0]?.[0] as
-      | {
-          cfg?: OpenClawConfig;
-          store?: AuthProfileStore;
-          provider?: unknown;
-          legacyProfileId?: unknown;
-        }
-      | undefined;
-    if (!repairCall) {
-      throw new Error("expected OAuth profile repair call");
-    }
+    const repairCall = requireFirstMockArg(
+      repairMocks.repairOAuthProfileIdMismatch,
+      "OAuth profile repair",
+    ) as {
+      cfg?: OpenClawConfig;
+      store?: AuthProfileStore;
+      provider?: unknown;
+      legacyProfileId?: unknown;
+    };
     expect(repairCall.cfg?.auth?.profiles?.["anthropic:default"]).toEqual({
       provider: "anthropic",
       mode: "oauth",

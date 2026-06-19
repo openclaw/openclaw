@@ -1,3 +1,4 @@
+// Message receipt tests cover receipt state and acknowledgement metadata for channel messages.
 import { describe, expect, it } from "vitest";
 import {
   createMessageReceiptFromOutboundResults,
@@ -18,18 +19,20 @@ describe("createMessageReceiptFromOutboundResults", () => {
       sentAt: 123,
     });
 
-    expect(receipt).toEqual(
-      expect.objectContaining({
-        primaryPlatformMessageId: "m1",
-        platformMessageIds: ["m1", "m2"],
-        threadId: "topic-1",
-        replyToId: "reply-1",
-        sentAt: 123,
-      }),
-    );
-    expect(receipt.parts).toEqual([
-      expect.objectContaining({ platformMessageId: "m1", kind: "text", index: 0 }),
-      expect.objectContaining({ platformMessageId: "m2", kind: "text", index: 1 }),
+    expect(receipt.primaryPlatformMessageId).toBe("m1");
+    expect(receipt.platformMessageIds).toEqual(["m1", "m2"]);
+    expect(receipt.threadId).toBe("topic-1");
+    expect(receipt.replyToId).toBe("reply-1");
+    expect(receipt.sentAt).toBe(123);
+    expect(
+      receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual([
+      { platformMessageId: "m1", kind: "text", index: 0 },
+      { platformMessageId: "m2", kind: "text", index: 1 },
     ]);
   });
 
@@ -68,10 +71,16 @@ describe("createMessageReceiptFromOutboundResults", () => {
 
     expect(receipt.primaryPlatformMessageId).toBe("platform-1");
     expect(receipt.platformMessageIds).toEqual(["platform-1", "platform-2", "fallback-1"]);
-    expect(receipt.parts).toEqual([
-      expect.objectContaining({ platformMessageId: "platform-1", kind: "text", index: 0 }),
-      expect.objectContaining({ platformMessageId: "platform-2", kind: "media", index: 1 }),
-      expect.objectContaining({ platformMessageId: "fallback-1", kind: "text", index: 1 }),
+    expect(
+      receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual([
+      { platformMessageId: "platform-1", kind: "text", index: 0 },
+      { platformMessageId: "platform-2", kind: "media", index: 1 },
+      { platformMessageId: "fallback-1", kind: "text", index: 1 },
     ]);
     expect(receipt.threadId).toBe("native-thread");
     expect(receipt.sentAt).toBe(456);

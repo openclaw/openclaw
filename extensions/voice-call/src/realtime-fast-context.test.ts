@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Voice Call tests cover realtime fast context plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallRealtimeFastContextConfig } from "./config.js";
 

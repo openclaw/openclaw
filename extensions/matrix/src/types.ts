@@ -1,3 +1,8 @@
+// Matrix type declarations define plugin contracts.
+import type {
+  ChannelBotLoopProtectionConfig,
+  MentionPatternsPolicyConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import type {
   ContextVisibilityMode,
   DmPolicy,
@@ -37,6 +42,8 @@ export type MatrixRoomConfig = {
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted configured-bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Optional tool policy overrides for this room. */
   tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
@@ -91,7 +98,7 @@ export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 export type MatrixStreamingConfig = {
   /** Preview streaming mode for Matrix replies. Default: "off". */
   mode?: MatrixStreamingMode;
-  progress?: import("openclaw/plugin-sdk/channel-streaming").ChannelStreamingProgressConfig;
+  progress?: import("openclaw/plugin-sdk/channel-outbound").ChannelStreamingProgressConfig;
   preview?: {
     /** Show tool/progress activity in the live draft preview. Default: true. */
     toolProgress?: boolean;
@@ -139,13 +146,19 @@ export type MatrixConfig = {
   encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
+  /** Break-glass compatibility mode for resolving mutable Matrix display names and room names in allowlists. */
+  dangerouslyAllowNameMatching?: boolean;
   /**
    * Allow messages from other configured Matrix bot accounts.
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted configured-bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected Matrix room IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
   /**
@@ -231,6 +244,7 @@ export type CoreConfig = {
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
       contextVisibility?: ContextVisibilityMode;
+      botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
   commands?: {

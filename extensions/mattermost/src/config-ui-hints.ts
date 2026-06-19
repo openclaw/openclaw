@@ -1,3 +1,4 @@
+// Mattermost helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const mattermostChannelConfigUiHints = {
@@ -28,6 +29,10 @@ export const mattermostChannelConfigUiHints = {
   "streaming.progress.maxLines": {
     label: "Mattermost Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.maxLineChars": {
+    label: "Mattermost Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
   },
   "streaming.progress.toolProgress": {
     label: "Mattermost Progress Tool Lines",

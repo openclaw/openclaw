@@ -1,3 +1,5 @@
+// Gateway WebSocket broadcaster.
+// Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
   ADMIN_SCOPE,
@@ -21,6 +23,7 @@ import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [READ_SCOPE],
   chat: [READ_SCOPE],
+  "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
   cron: [READ_SCOPE],
   health: [],
@@ -43,6 +46,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.pair.resolved": [PAIRING_SCOPE],
   "sessions.changed": [READ_SCOPE],
   "session.message": [READ_SCOPE],
+  "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
 };
 
@@ -50,6 +54,15 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
 const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
+
+function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
+  // Serialize one field through JSON.stringify so embedded values keep JSON
+  // escaping, then splice it into the shared per-client frame body.
+  const fieldJSON = JSON.stringify({ [name]: value });
+  const keyJSON = JSON.stringify(name);
+  const prefix = `{${keyJSON}:`;
+  return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+}
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
@@ -113,6 +126,26 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       logWs("out", "event", logMeta);
     }
+    let frameBase:
+      | {
+          eventJSON: string;
+          payloadFragment: string;
+          stateVersionFragment: string;
+        }
+      | undefined;
+    const getFrameBase = () => {
+      if (!frameBase) {
+        frameBase = {
+          eventJSON: JSON.stringify(event),
+          payloadFragment: serializeFrameField("payload", payload),
+          stateVersionFragment:
+            opts?.stateVersion === undefined
+              ? ""
+              : serializeFrameField("stateVersion", opts.stateVersion),
+        };
+      }
+      return frameBase;
+    };
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
@@ -152,13 +185,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);
         }
-        const frame = JSON.stringify({
-          type: "event",
-          event,
-          payload,
-          seq: eventSeq,
-          stateVersion: opts?.stateVersion,
-        });
+        const base = getFrameBase();
+        const seqFragment = eventSeq === undefined ? "" : `,"seq":${eventSeq}`;
+        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}}`;
         c.socket.send(frame);
       } catch {
         /* ignore */

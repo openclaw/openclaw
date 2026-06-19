@@ -1,3 +1,4 @@
+// Zalo tests cover channel.startup plugin behavior.
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
@@ -69,6 +70,15 @@ function buildAccount(): ResolvedZaloAccount {
   };
 }
 
+function requireMonitorArgs() {
+  const [call] = hoisted.monitorZaloProvider.mock.calls;
+  if (!call) {
+    throw new Error("expected Zalo monitor call");
+  }
+  const [monitorArgs] = call;
+  return monitorArgs;
+}
+
 describe("zaloPlugin gateway.startAccount", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -100,13 +110,13 @@ describe("zaloPlugin gateway.startAccount", () => {
 
     expectLifecyclePatch(patches, { accountId: "default" });
     expect(isSettled()).toBe(true);
-    expect(hoisted.monitorZaloProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "test-token",
-        account: expect.objectContaining({ accountId: "default" }),
-        abortSignal: abort.signal,
-        useWebhook: false,
-      }),
-    );
+    expect(hoisted.monitorZaloProvider).toHaveBeenCalledTimes(1);
+    const monitorArgs = requireMonitorArgs();
+    expect(monitorArgs).toStrictEqual({
+      token: "test-token",
+      account: buildAccount(),
+      abortSignal: abort.signal,
+      useWebhook: false,
+    });
   });
 });

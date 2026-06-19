@@ -1,6 +1,7 @@
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+/** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -66,7 +67,7 @@ function listBundledWebProviderSecretTargetRegistryEntries(
 }
 
 function listBundledPluginConfigSecretTargetRegistryEntries(
-  bundledPlugins: readonly PluginManifestRecord[],
+  bundledPlugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
@@ -83,6 +84,24 @@ function listBundledPluginConfigSecretTargetRegistryEntries(
     }
   }
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function listSourceBundledPluginConfigContractRecords(): Array<
+  Pick<PluginManifestRecord, "id" | "configContracts">
+> {
+  return listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  }).flatMap((metadata) =>
+    metadata.manifest.configContracts
+      ? [
+          {
+            id: metadata.manifest.id,
+            configContracts: metadata.manifest.configContracts,
+          },
+        ]
+      : [],
+  );
 }
 
 function listChannelSecretTargetRegistryEntries(
@@ -428,6 +447,18 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     providerIdPathSegmentIndex: 2,
   },
   {
+    id: "talk.realtime.providers.*.apiKey",
+    targetType: "talk.realtime.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "talk.realtime.providers.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 3,
+  },
+  {
     id: "tools.web.search.apiKey",
     targetType: "tools.web.search.apiKey",
     configFile: "openclaw.json",
@@ -438,6 +469,29 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
+  {
+    id: "tools.web.fetch.firecrawl.apiKey",
+    targetType: "tools.web.fetch.firecrawl.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.fetch.firecrawl.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "tools.web.search.*.apiKey",
+    targetType: "tools.web.search.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.search.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: false,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 3,
+  },
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
@@ -446,33 +500,32 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
 }): SecretTargetRegistryEntry[] {
-  const plugins =
-    (params.preferPersisted === false
-      ? undefined
-      : getCurrentPluginMetadataSnapshot({
-          config: {},
-          env: params.env,
-        })
-    )?.plugins ??
-    loadPluginMetadataSnapshot({
-      config: {},
-      env: params.env,
-      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-    }).plugins;
+  const plugins = resolvePluginMetadataSnapshot({
+    config: {},
+    env: params.env,
+    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+  }).plugins;
   const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
   return [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
-    ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
+    ...listBundledPluginConfigSecretTargetRegistryEntries([
+      ...bundledPlugins,
+      ...listSourceBundledPluginConfigContractRecords(),
+    ]),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
   ];
 }
 
+/** Returns only core-owned secret target registry entries. */
+/** Returns static core secret target registry entries without plugin-derived targets. */
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
+/** Returns the process-cached registry including bundled plugin/channel metadata. */
+/** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
 export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
@@ -483,6 +536,7 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return cachedSecretTargetRegistry;
 }
 
+/** Returns an uncached source-tree registry for docs/snapshot generation. */
 export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return loadSecretTargetRegistryFromPluginMetadata({
     env: {

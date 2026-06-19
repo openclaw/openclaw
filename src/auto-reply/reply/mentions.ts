@@ -1,4 +1,11 @@
+/** Mention matching, stripping, and explicit mention handling for group triggers. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { resolveMentionPatternPolicy } from "../../channels/mention-pattern-policy.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -6,15 +13,10 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-import type { ExplicitMentionSignal } from "./mentions.types.js";
-export type { ExplicitMentionSignal } from "./mentions.types.js";
+import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
+export type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
@@ -127,7 +129,15 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
-export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
+/** Builds mention regexes from config, agent identity, and channel policy. */
+export function buildMentionRegexes(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+  options?: BuildMentionRegexesOptions,
+): RegExp[] {
+  if (!resolveMentionPatternPolicy({ ...options, cfg, agentId }).enabled) {
+    return [];
+  }
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
   return compileMentionPatternsCached({
     patterns,
@@ -137,23 +147,23 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
   });
 }
 
+/** Normalizes text before mention matching. */
 export function normalizeMentionText(text: string): string {
   return normalizeLowercaseStringOrEmpty(
     (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
   );
 }
 
+/** Returns true when text matches one of the configured mention patterns. */
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
   if (mentionRegexes.length === 0) {
     return false;
   }
   const cleaned = normalizeMentionText(text ?? "");
-  if (!cleaned) {
-    return false;
-  }
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
+/** Combines regex mention matching with provider-native explicit mention metadata. */
 export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
@@ -162,22 +172,15 @@ export function matchesMentionWithExplicit(params: {
 }): boolean {
   const cleaned = normalizeMentionText(params.text ?? "");
   const explicit = params.explicit?.isExplicitlyMentioned === true;
-  const explicitAvailable = params.explicit?.canResolveExplicit === true;
-  const hasAnyMention = params.explicit?.hasAnyMention === true;
 
   // Check transcript if text is empty and transcript is provided
   const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
   const textToCheck = cleaned || transcriptCleaned;
 
-  if (hasAnyMention && explicitAvailable) {
-    return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
-  }
-  if (!textToCheck) {
-    return explicit;
-  }
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
+/** Removes structural prompt prefixes before mention stripping. */
 export function stripStructuralPrefixes(text: string): string {
   if (!text) {
     return "";
@@ -187,15 +190,20 @@ export function stripStructuralPrefixes(text: string): string {
   const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
     ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
     : text;
+  const afterEnvelope = afterMarker.replace(/\[[^\]]+\]\s*/g, "");
+  const senderPrefixPattern =
+    afterEnvelope === afterMarker
+      ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm
+      : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
-  return afterMarker
-    .replace(/\[[^\]]+\]\s*/g, "")
-    .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "")
-    .replace(/\\n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
+  if (stripped.startsWith("/")) {
+    return stripped.replace(/[ \t]+/g, " ");
+  }
+  return stripped.replace(/\s+/g, " ");
 }
 
+/** Removes bot mentions from command text before command normalization. */
 export function stripMentions(
   text: string,
   ctx: MsgContext,

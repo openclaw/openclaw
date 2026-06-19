@@ -1,3 +1,4 @@
+// OC Path tests cover jsonc byte fidelity plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { JsoncValue } from "../../jsonc/ast.js";
 import { emitJsonc } from "../../jsonc/emit.js";
@@ -15,8 +16,10 @@ function rt(raw: string): string {
  */
 function assertParseable(raw: string): JsoncValue {
   const result = parseJsonc(raw);
-  expect(result.ast.root).not.toBeNull();
-  return result.ast.root as JsoncValue;
+  if (result.ast.root === null) {
+    throw new Error("expected parseable JSONC root");
+  }
+  return result.ast.root;
 }
 
 /**

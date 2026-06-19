@@ -1,4 +1,5 @@
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+// Discord plugin module implements draft stream behavior.
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChannelMessage,
@@ -6,6 +7,7 @@ import {
   editChannelMessage,
   type RequestClient,
 } from "./internal/discord.js";
+import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
@@ -17,6 +19,7 @@ type DiscordDraftStream = {
   flush: () => Promise<void>;
   messageId: () => string | undefined;
   clear: () => Promise<void>;
+  deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
@@ -32,6 +35,7 @@ export function createDiscordDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  suppressEmbeds?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): DiscordDraftStream {
@@ -40,6 +44,7 @@ export function createDiscordDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const channelId = params.channelId;
   const rest = params.rest;
+  const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
   const resolveReplyToMessageId = () =>
     typeof params.replyToMessageId === "function"
       ? params.replyToMessageId()
@@ -81,7 +86,11 @@ export function createDiscordDraftStream(params: {
       if (streamMessageId !== undefined) {
         // Edit existing message
         await editChannelMessage(rest, channelId, streamMessageId, {
-          body: { content: trimmed, allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS },
+          body: {
+            content: trimmed,
+            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+            ...(flags ? { flags } : {}),
+          },
         });
         return true;
       }
@@ -94,6 +103,7 @@ export function createDiscordDraftStream(params: {
         body: {
           content: trimmed,
           allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+          ...(flags ? { flags } : {}),
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
       });
@@ -138,6 +148,22 @@ export function createDiscordDraftStream(params: {
     lastSentText = "";
     loop.resetPending();
   };
+  const deleteCurrentMessage = async () => {
+    loop.resetPending();
+    await loop.waitForInFlight();
+    const messageId = streamMessageId;
+    streamMessageId = undefined;
+    lastSentText = "";
+    loop.resetThrottleWindow();
+    if (!isValidStreamMessageId(messageId)) {
+      return;
+    }
+    try {
+      await deleteStreamMessage(messageId);
+    } catch (err) {
+      params.warn?.(`discord stream preview cleanup failed: ${formatErrorMessage(err)}`);
+    }
+  };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
@@ -146,6 +172,7 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessageId,
     clear,
+    deleteCurrentMessage,
     discardPending,
     seal,
     stop,

@@ -1,3 +1,4 @@
+// Covers host hook cleanup behavior controlled by plugin config.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -28,8 +29,9 @@ describe("plugin host cleanup config fallback", () => {
         cleanup,
       },
     });
+    const configError = new Error("invalid config");
     mocks.getRuntimeConfig.mockImplementation(() => {
-      throw new Error("invalid config");
+      throw configError;
     });
 
     const result = await runPluginHostCleanup({
@@ -38,17 +40,22 @@ describe("plugin host cleanup config fallback", () => {
       reason: "disable",
     });
 
-    expect(cleanup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "disable",
-      }),
-    );
+    expect(cleanup.mock.calls).toEqual([
+      [
+        {
+          runId: undefined,
+          reason: "disable",
+          sessionKey: undefined,
+        },
+      ],
+    ]);
     expect(result.cleanupCount).toBe(1);
     expect(result.failures).toEqual([
-      expect.objectContaining({
+      {
+        error: configError,
         pluginId: "cleanup-plugin",
         hookId: "session-store",
-      }),
+      },
     ]);
   });
 });

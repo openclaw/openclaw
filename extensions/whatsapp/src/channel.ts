@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -8,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
-import { whatsappApprovalAuth } from "./approval-auth.js";
+import { whatsappApprovalCapability } from "./approval-native.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   describeWhatsAppMessageActions,
@@ -51,7 +52,7 @@ const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
 
-function parseWhatsAppExplicitTarget(raw: string) {
+function resolveWhatsAppTargetInfo(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
   if (!normalized) {
     return null;
@@ -107,6 +108,19 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
       },
       commands: whatsappCommandPolicy,
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) => {
+          const normalized = normalizeWhatsAppTarget(conversationId);
+          return normalized ? { conversationId: normalized } : null;
+        },
+        matchInboundConversation: ({ compiledBinding, conversationId }) => {
+          const normalizedConversationId = normalizeWhatsAppTarget(conversationId);
+          if (normalizedConversationId === compiledBinding.conversationId) {
+            return { conversationId: compiledBinding.conversationId, matchPriority: 2 };
+          }
+          return null;
+        },
+      },
       agentPrompt: {
         reactionGuidance: ({ cfg, accountId }) => {
           const level = resolveWhatsAppAgentReactionGuidance({
@@ -120,8 +134,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveWhatsAppOutboundSessionRoute(params),
-        parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
-        inferTargetChatType: ({ to }) => parseWhatsAppExplicitTarget(to)?.chatType,
+        inferTargetChatType: ({ to }) => resolveWhatsAppTargetInfo(to)?.chatType,
         targetResolver: {
           looksLikeId: looksLikeWhatsAppTargetId,
           hint: "<E.164|group JID|newsletter JID>",
@@ -151,21 +164,35 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) => action === "react",
-        resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
-        handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) =>
+        supportsAction: ({ action }) => action === "react" || action === "upload-file",
+        resolveExecutionMode: ({ action }) =>
+          action === "react" || action === "upload-file" ? "gateway" : "local",
+        handleAction: async ({
+          action,
+          params,
+          cfg,
+          accountId,
+          requesterSenderId,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+          toolContext,
+        }) =>
           await (
             await loadWhatsAppChannelReactAction()
-          ).handleWhatsAppReactAction({
+          ).handleWhatsAppMessageAction({
             action,
             params,
             cfg,
             accountId,
             requesterSenderId,
+            mediaAccess,
+            mediaLocalRoots,
+            mediaReadFile,
             toolContext,
           }),
       },
-      approvalCapability: whatsappApprovalAuth,
+      approvalCapability: whatsappApprovalCapability,
       auth: {
         login: async ({ cfg, accountId, runtime, verbose }) => {
           const resolvedAccountId =
@@ -311,6 +338,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               statusSink: (next: WebChannelStatus) =>
                 ctx.setStatus({ accountId: ctx.accountId, ...next }),
               accountId: account.accountId,
+              channelRuntime: ctx.channelRuntime,
             },
           );
         },

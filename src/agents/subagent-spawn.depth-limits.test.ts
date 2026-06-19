@@ -1,3 +1,5 @@
+// Subagent spawn depth-limit tests cover max depth, per-parent child limits,
+// inherited tool policy, and preflight failures before gateway dispatch.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -120,8 +122,9 @@ describe("subagent spawn depth + child limits", () => {
     const accepted = expectAccepted(result, "run-1");
     expect(accepted.childSessionKey).toMatch(/^agent:main:subagent:/);
 
+    // Child capability flags are stored on the session entry so later control
+    // tools can enforce leaf behavior without recalculating spawn depth.
     const childSession = persistedStore?.[accepted.childSessionKey];
-    expect(childSession).toBeDefined();
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }
@@ -130,6 +133,30 @@ describe("subagent spawn depth + child limits", () => {
     expect(childSession.subagentRole).toBe("leaf");
     expect(childSession.subagentControlScope).toBe("none");
     expect(typeof childSession?.spawnedWorkspaceDir).toBe("string");
+  });
+
+  it("persists inherited tool denies on spawned child sessions", async () => {
+    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read", ""],
+        inheritedToolDenylist: ["bash", "exec", "read", ""],
+      },
+    );
+
+    const accepted = expectAccepted(result, "run-1");
+    const childSession = persistedStore?.[accepted.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
+    expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {

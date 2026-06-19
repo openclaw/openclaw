@@ -1,3 +1,4 @@
+// Covers config validation policy decisions and warning behavior.
 import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -199,6 +200,9 @@ describe("config validation SecretRef policy guards", () => {
             entry.message.includes("webhookTokne"),
         ),
       ).toBe(true);
+      const schemaIssue = requireIssue(result.issues, "channels.discord.threadBindings");
+      expect(schemaIssue.message).toContain("webhookTokne");
+      expect(schemaIssue.message).not.toContain("webhookToken");
     }
   });
 });

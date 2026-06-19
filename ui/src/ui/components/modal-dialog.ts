@@ -1,3 +1,4 @@
+// Control UI component implements the modal dialog element.
 import { LitElement, css, html, nothing } from "lit";
 import { property, query } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
@@ -22,7 +23,7 @@ export class OpenClawModalDialog extends LitElement {
   private previouslyFocused: Element | null = null;
   private opened = false;
 
-  static styles = css`
+  static override styles = css`
     :host {
       position: fixed;
       inset: 0;

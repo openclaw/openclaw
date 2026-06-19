@@ -1,3 +1,5 @@
+// Model pricing cache tests protect provider/model normalization, manifest
+// metadata lookup, fetch preconnect behavior, cache refresh, and logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
@@ -57,8 +59,9 @@ vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
   };
 });
 
+import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
+  resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
@@ -96,7 +99,7 @@ function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSig
 
 describe("model-pricing-cache", () => {
   beforeEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
     pluginManifestRegistryMocks.manifestRegistry = undefined;
     pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
     pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
@@ -104,7 +107,7 @@ describe("model-pricing-cache", () => {
   });
 
   afterEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
     loggingState.rawConsole = null;
     resetLogger();
   });
@@ -117,6 +120,7 @@ describe("model-pricing-cache", () => {
           imageModel: { primary: "google/gemini-3-pro" },
           compaction: { model: "opus" },
           heartbeat: { model: "xai/grok-4" },
+          subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
           models: {
             "openai/gpt-5.4": { alias: "gpt" },
             "anthropic/claude-opus-4-6": { alias: "opus" },
@@ -143,7 +147,6 @@ describe("model-pricing-cache", () => {
         mappings: [{ model: "zai/glm-5" }],
       },
       tools: {
-        subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
         media: {
           models: [{ provider: "google", model: "gemini-2.5-pro" }],
           image: {
@@ -162,20 +165,20 @@ describe("model-pricing-cache", () => {
       modelKey(ref.provider, ref.model),
     );
 
-    expect(refs).toEqual(
-      expect.arrayContaining([
-        "openai/gpt-5.4",
-        "anthropic/claude-sonnet-4-6",
-        "google/gemini-3.1-pro-preview",
-        "anthropic/claude-opus-4-6",
-        "xai/grok-4",
-        "openrouter/anthropic/claude-opus-4-6",
-        "openrouter/auto",
-        "zai/glm-5",
-        "anthropic/claude-haiku-4-5",
-        "google/gemini-2.5-pro",
-      ]),
-    );
+    for (const expectedRef of [
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3.1-pro-preview",
+      "anthropic/claude-opus-4-6",
+      "xai/grok-4",
+      "openrouter/anthropic/claude-opus-4-6",
+      "openrouter/auto",
+      "zai/glm-5",
+      "anthropic/claude-haiku-4-5",
+      "google/gemini-2.5-pro",
+    ]) {
+      expect(refs).toContain(expectedRef);
+    }
     expect(new Set(refs).size).toBe(refs.length);
   });
 
@@ -397,6 +400,256 @@ describe("model-pricing-cache", () => {
     ).toBeUndefined();
   });
 
+  it("records and clears remote pricing source failures for health surfaces", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const failingFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        throw new TypeError("fetch failed");
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl: failingFetch });
+
+    const failedHealth = getGatewayModelPricingHealth();
+    expect(failedHealth.state).toBe("degraded");
+    expect(failedHealth.sources).toHaveLength(1);
+    expect(failedHealth.sources[0]?.source).toBe("openrouter");
+    expect(failedHealth.sources[0]?.state).toBe("degraded");
+    expect(failedHealth.sources[0]?.detail).toContain("OpenRouter pricing fetch failed");
+
+    const successfulFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const body = url.includes("openrouter.ai") ? { data: [] } : {};
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl: successfulFetch });
+
+    expect(getGatewayModelPricingHealth()).toEqual({
+      state: "ok",
+      sources: [],
+    });
+  });
+
+  it("cancels remote pricing error response bodies", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const openRouterResponse = new Response("rate limited", { status: 429 });
+    const cancel = vi.spyOn(openRouterResponse.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return openRouterResponse;
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.detail).toContain("HTTP 429");
+  });
+
+  it("records malformed remote pricing catalog JSON as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response("{not json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.state).toBe("degraded");
+    expect(health.sources[0]?.detail).toContain("OpenRouter pricing response is malformed JSON");
+  });
+
+  it("records malformed pricing content-length headers as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", "Content-Length": "1e3" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.detail).toContain("invalid content-length header: 1e3");
+  });
+
+  it("records and clears scheduled refresh rejections for health surfaces", async () => {
+    vi.useFakeTimers();
+    try {
+      const manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+      let failManifestRead = false;
+      const pluginMetadataSnapshot = {
+        index: { plugins: [] } as never,
+        get manifestRegistry() {
+          if (failManifestRead) {
+            throw new Error("manifest metadata failed");
+          }
+          return manifestRegistry;
+        },
+      };
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "custom/gpt-remote" },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://models.example/v1",
+              api: "openai-completions",
+              models: [{ id: "gpt-remote" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return new Response(JSON.stringify(url.includes("openrouter.ai") ? { data: [] } : {}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+
+      failManifestRead = true;
+      await vi.runOnlyPendingTimersAsync();
+
+      const failedHealth = getGatewayModelPricingHealth();
+      expect(failedHealth.state).toBe("degraded");
+      expect(failedHealth.sources).toHaveLength(1);
+      expect(failedHealth.sources[0]?.source).toBe("refresh");
+      expect(failedHealth.sources[0]?.state).toBe("degraded");
+      expect(failedHealth.sources[0]?.detail).toBe(
+        "pricing refresh failed: Error: manifest metadata failed",
+      );
+
+      failManifestRead = false;
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("seeds pricing from explicit configured model cost without external catalog fetches", async () => {
     const config = {
       agents: {
@@ -442,6 +695,7 @@ describe("model-pricing-cache", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "zai/glm-openrouter-test" } },
         },
         list: [
           {
@@ -449,9 +703,6 @@ describe("model-pricing-cache", () => {
             model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
           },
         ],
-      },
-      tools: {
-        subagents: { model: { primary: "zai/glm-openrouter-test" } },
       },
     } as unknown as OpenClawConfig;
 
@@ -897,7 +1148,7 @@ describe("model-pricing-cache", () => {
               "abort",
               () => {
                 abortedUrls.push(url);
-                reject(signal.reason);
+                reject(toLintErrorObject(signal.reason, "Non-Error rejection"));
               },
               { once: true },
             );
@@ -985,16 +1236,20 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(warnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
+    expect(
+      warnings.some((message) =>
+        message.includes(
           "OpenRouter pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
-        expect.stringContaining(
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes(
           "LiteLLM pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
-      ]),
-    );
+      ),
+    ).toBe(true);
   });
 
   it("treats oversized LiteLLM catalog responses as source failures", async () => {
@@ -1006,6 +1261,7 @@ describe("model-pricing-cache", () => {
       },
     } as unknown as OpenClawConfig;
 
+    const liteLLMCancel = vi.fn(async () => undefined);
     const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("openrouter.ai")) {
@@ -1028,17 +1284,20 @@ describe("model-pricing-cache", () => {
           },
         );
       }
-      return new Response("{}", {
+      const liteLLMResponse = new Response("{}", {
         status: 200,
         headers: {
           "Content-Type": "application/json",
           "Content-Length": "6000000",
         },
       });
+      vi.spyOn(liteLLMResponse.body!, "cancel").mockImplementation(liteLLMCancel);
+      return liteLLMResponse;
     });
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
+    expect(liteLLMCancel).toHaveBeenCalledOnce();
     expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
       input: 0.95,
       output: 4,
@@ -1062,4 +1321,18 @@ function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginM
     manifestPath: "/tmp/plugin/openclaw.plugin.json",
     ...overrides,
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
