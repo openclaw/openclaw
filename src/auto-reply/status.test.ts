@@ -1991,6 +1991,7 @@ describe("buildStatusMessage", () => {
         .join("\n"),
       "utf-8",
     );
+    return logPath;
   }
 
   const baselineTranscriptUsage = {
@@ -2080,6 +2081,53 @@ describe("buildStatusMessage", () => {
             },
           ],
         });
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cost: $0.0063");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("uses cumulative transcript-backed cost when recent transcript tail has no usage", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-transcript-cost-before-tail";
+        const logPath = writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          usage: [
+            {
+              input: 10,
+              output: 20,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 30,
+              cost: { total: 0.0021 },
+            },
+            {
+              input: 5,
+              output: 10,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 15,
+              cost: { total: 0.0042 },
+            },
+          ],
+        });
+        fs.appendFileSync(
+          logPath,
+          `\n${JSON.stringify({
+            type: "message",
+            message: { role: "user", content: "x".repeat(300 * 1024) },
+          })}`,
+          "utf-8",
+        );
 
         const text = buildTranscriptStatusText({
           sessionId,

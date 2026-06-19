@@ -339,7 +339,11 @@ const readUsageFromSessionLog = (
     const cacheWrite = snapshot.cacheWrite ?? 0;
     const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
     const total = promptTokens + output;
-    if (promptTokens === 0 && total === 0) {
+    const costUsd =
+      typeof snapshot.costUsd === "number" && Number.isFinite(snapshot.costUsd)
+        ? snapshot.costUsd
+        : undefined;
+    if (promptTokens === 0 && total === 0 && costUsd === undefined) {
       return undefined;
     }
     const model = snapshot.modelProvider
@@ -347,11 +351,6 @@ const readUsageFromSessionLog = (
         ? `${snapshot.modelProvider}/${snapshot.model}`
         : snapshot.modelProvider
       : snapshot.model;
-    const costUsd =
-      typeof snapshot.costUsd === "number" && Number.isFinite(snapshot.costUsd)
-        ? snapshot.costUsd
-        : undefined;
-
     return {
       input,
       output,
