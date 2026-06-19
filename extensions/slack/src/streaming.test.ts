@@ -150,7 +150,7 @@ describe("stopSlackStream finalize error handling", () => {
     expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("short thread reply");
   });
 
-  it("throws SlackStreamNotDeliveredError for non-Slack stop errors while text is buffered", async () => {
+  it("does not retry ambiguous transport failures while text is buffered", async () => {
     const session = makeSession({
       appendImpl: async () => null,
       stopImpl: async () => {
@@ -159,11 +159,8 @@ describe("stopSlackStream finalize error handling", () => {
     });
     await appendSlackStream({ session, text: "locally buffered reply" });
 
-    const thrown = await stopSlackStream({ session }).catch((err: unknown) => err);
-
-    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
-    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("unknown");
-    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("locally buffered reply");
+    await expect(stopSlackStream({ session })).rejects.toThrow("socket reset");
+    expect(session.pendingText).toBe("locally buffered reply");
   });
 
   it("clears pendingText after an append flush is acknowledged by Slack", async () => {

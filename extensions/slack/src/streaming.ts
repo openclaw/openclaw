@@ -80,9 +80,9 @@ type StopSlackStreamParams = {
 };
 
 /**
- * Thrown when Slack rejects a stream flush/finalize while text remains buffered
- * locally by the Slack SDK. Carries the pending text so the caller can deliver
- * it via the normal Slack reply path.
+ * Thrown when Slack definitively rejects a stream flush/finalize while text
+ * remains buffered locally by the Slack SDK. Carries the pending text so the
+ * caller can deliver it via the normal Slack reply path.
  */
 export class SlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
@@ -234,10 +234,11 @@ export type StopSlackStreamResult = {
  * After calling this the stream message becomes a normal Slack message.
  * Optionally include final text to append before stopping.
  *
- * If Slack's `chat.stopStream` responds with an error while text is still
- * buffered locally, this function throws a {@link SlackStreamNotDeliveredError}
- * carrying that pending text so the caller can deliver it through the normal
- * Slack reply path.
+ * If Slack's `chat.stopStream` responds with a platform rejection while text
+ * is still buffered locally, this function throws a
+ * {@link SlackStreamNotDeliveredError} carrying that pending text so the caller
+ * can deliver it through the normal Slack reply path. Ambiguous transport
+ * failures propagate unchanged because Slack may have committed the request.
  *
  * If Slack responds with a known benign finalize error (see
  * {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) after prior `append` calls already
@@ -288,11 +289,11 @@ export async function stopSlackStream(
     const messageId = stopResponse?.ts ?? stopResponse?.message?.ts;
     return messageId ? { messageId } : {};
   } catch (err) {
-    const code = extractSlackErrorCode(err) ?? "unknown";
-    if (session.pendingText) {
+    const code = extractSlackErrorCode(err);
+    if (session.pendingText && code) {
       // stop() can be the first network call for short replies. If Slack
-      // rejects that finalize for any reason, the user has not seen the
-      // SDK-buffered text yet. Let the caller fall back to chat.postMessage.
+      // definitively rejects that finalize, the user has not seen the
+      // SDK-buffered text. Let the caller fall back to chat.postMessage.
       throw new SlackStreamNotDeliveredError(session.pendingText, code);
     }
     if (isBenignSlackFinalizeError(err)) {
