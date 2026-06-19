@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV } from "../infra/restart-handoff.js";
 import { runStartupIngressClaimSweep } from "./server-startup-ingress-sweep.js";
 
 describe("runStartupIngressClaimSweep", () => {
@@ -36,6 +37,28 @@ describe("runStartupIngressClaimSweep", () => {
     expect(mockSweep).not.toHaveBeenCalled();
     expect(info).toHaveBeenCalledWith(
       "gateway: skipping stale ingress claim sweep during SIGUSR1 in-process restart",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("skips and consumes the sweep marker during spawned restart handoff", async () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+    const mockSweep = vi.fn();
+    const env = {
+      [GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV]: "1",
+    };
+
+    await runStartupIngressClaimSweep({
+      env,
+      log: { info, warn },
+      deps: { recoverAllStaleChannelIngressClaims: mockSweep },
+    });
+
+    expect(mockSweep).not.toHaveBeenCalled();
+    expect(env[GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV]).toBeUndefined();
+    expect(info).toHaveBeenCalledWith(
+      "gateway: skipping stale ingress claim sweep during spawned restart handoff",
     );
     expect(warn).not.toHaveBeenCalled();
   });

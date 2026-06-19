@@ -180,13 +180,16 @@ export async function runGatewayLoop(params: {
       markUpdateRestartSentinelFailure,
       respawnGatewayProcessForUpdate,
       restartGatewayProcessWithFreshPid,
+      withGatewayRestartSkipStartupIngressSweepEnv,
       writeGatewayRestartHandoffSync,
     } = await loadGatewayLifecycleRuntimeModule();
 
     if (isUpdateRestart) {
       const restartTraceHandoff = captureGatewayRestartTraceHandoff();
       const respawn = respawnGatewayProcessForUpdate({
-        env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
+        env: withGatewayRestartSkipStartupIngressSweepEnv(
+          createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
+        ),
       });
       if (respawn.mode === "spawned") {
         const port = params.lockPort;
@@ -265,7 +268,9 @@ export async function runGatewayLoop(params: {
     // Release the lock BEFORE spawning so the child can acquire it immediately.
     const restartTraceHandoff = captureGatewayRestartTraceHandoff();
     const respawn = restartGatewayProcessWithFreshPid({
-      env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
+      env: withGatewayRestartSkipStartupIngressSweepEnv(
+        createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
+      ),
     });
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
       const supervisorMode =

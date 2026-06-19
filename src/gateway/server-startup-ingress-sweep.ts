@@ -1,5 +1,8 @@
 import { recoverAllStaleChannelIngressClaims } from "../channels/message/ingress-queue.js";
-import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
+import {
+  consumeGatewayRestartSkipStartupIngressSweepEnv,
+  readGatewayRestartHandoffSync,
+} from "../infra/restart-handoff.js";
 
 type IngressSweepLogger = {
   info: (message: string) => void;
@@ -25,6 +28,7 @@ export async function runStartupIngressClaimSweep(params: {
   inProcessRestart?: boolean;
   log: IngressSweepLogger;
   deps?: {
+    consumeGatewayRestartSkipStartupIngressSweepEnv?: typeof consumeGatewayRestartSkipStartupIngressSweepEnv;
     recoverAllStaleChannelIngressClaims?: typeof recoverAllStaleChannelIngressClaims;
     readGatewayRestartHandoffSync?: typeof readGatewayRestartHandoffSync;
   };
@@ -38,6 +42,13 @@ export async function runStartupIngressClaimSweep(params: {
   const sweep =
     params.deps?.recoverAllStaleChannelIngressClaims ?? recoverAllStaleChannelIngressClaims;
   const env = params.env ?? process.env;
+  const consumeSkipEnv =
+    params.deps?.consumeGatewayRestartSkipStartupIngressSweepEnv ??
+    consumeGatewayRestartSkipStartupIngressSweepEnv;
+  if (consumeSkipEnv(env)) {
+    params.log.info("gateway: skipping stale ingress claim sweep during spawned restart handoff");
+    return;
+  }
   const readHandoff = params.deps?.readGatewayRestartHandoffSync ?? readGatewayRestartHandoffSync;
   if (readHandoff(env)) {
     params.log.info(

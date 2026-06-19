@@ -30,6 +30,12 @@ const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
   restartKind: "full-process" as const,
   supervisorMode: "external" as const,
 }));
+const withGatewayRestartSkipStartupIngressSweepEnv = vi.fn(
+  (env: NodeJS.ProcessEnv | undefined) => ({
+    ...env,
+    OPENCLAW_GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP: "1",
+  }),
+);
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -140,6 +146,8 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
 }));
 
 vi.mock("../../infra/restart-handoff.js", () => ({
+  withGatewayRestartSkipStartupIngressSweepEnv: (env: NodeJS.ProcessEnv | undefined) =>
+    withGatewayRestartSkipStartupIngressSweepEnv(env),
   writeGatewayRestartHandoffSync: (opts: unknown) => writeGatewayRestartHandoffSync(opts),
 }));
 
@@ -757,7 +765,10 @@ describe("runGatewayLoop", () => {
       waitForActiveTasks.mockResolvedValueOnce({ drained: false });
       waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
 
-      type StartServer = () => Promise<{
+      type StartServer = (params?: {
+        startupStartedAt?: number;
+        inProcessRestart?: boolean;
+      }) => Promise<{
         close: GatewayCloseFn;
       }>;
 
@@ -1369,6 +1380,7 @@ describe("runGatewayLoop", () => {
         const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
         expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS).toMatch(/^\d/u);
         expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS).toMatch(/^\d/u);
+        expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP).toBe("1");
         expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
       });
     } finally {
@@ -1548,6 +1560,8 @@ describe("runGatewayLoop", () => {
       await expect(exited).resolves.toBe(0);
       expect(waitForHealthyChild).toHaveBeenCalledWith(18789, 7777, "127.0.0.1");
       expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+      const [respawnOpts] = respawnGatewayProcessForUpdate.mock.calls[0] ?? [];
+      expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP).toBe("1");
       expect(start).toHaveBeenCalledTimes(1);
       expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
       expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();

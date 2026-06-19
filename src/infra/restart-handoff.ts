@@ -5,12 +5,15 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isTruthyEnvValue } from "./env.js";
 
 // Restart handoff files let a supervisor explain a recent gateway restart after
 // the old process exits. The file is short-lived, bounded, and regular-file only.
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
   "gateway-supervisor-restart-handoff.json";
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
+export const GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV =
+  "OPENCLAW_GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP";
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
 const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
 const GATEWAY_RESTART_HANDOFF_MAX_BYTES = 4096;
@@ -47,6 +50,23 @@ export type GatewayRestartHandoff = {
     lastAt: number;
   };
 };
+
+export function withGatewayRestartSkipStartupIngressSweepEnv(
+  env: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    [GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV]: "1",
+  };
+}
+
+export function consumeGatewayRestartSkipStartupIngressSweepEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const shouldSkip = isTruthyEnvValue(env[GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV]);
+  delete env[GATEWAY_RESTART_SKIP_STARTUP_INGRESS_SWEEP_ENV];
+  return shouldSkip;
+}
 
 function formatShortDuration(ms: number): string {
   const clamped = Math.max(0, Math.floor(ms));

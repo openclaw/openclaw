@@ -24,7 +24,10 @@ export {
   resetGatewayRestartStateForInProcessRestart,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
-export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export {
+  withGatewayRestartSkipStartupIngressSweepEnv,
+  writeGatewayRestartHandoffSync,
+} from "../../infra/restart-handoff.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
