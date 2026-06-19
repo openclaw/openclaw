@@ -8,7 +8,7 @@ import {
 
 const callGateway = vi.hoisted(() => vi.fn());
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
-const isGatewayTransportError = vi.hoisted(() => vi.fn(() => false));
+const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
 const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
