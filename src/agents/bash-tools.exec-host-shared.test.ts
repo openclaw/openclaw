@@ -13,6 +13,7 @@ import {
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
+  buildHeadlessExecApprovalDeniedMessage,
   createExecApprovalPendingState,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
@@ -20,6 +21,7 @@ import {
   resolveExecApprovalUnavailableState,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
+  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
@@ -594,5 +596,107 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Approver DMs were sent");
+  });
+});
+
+describe("shouldResolveExecApprovalUnavailableInline", () => {
+  it("returns true for cron trigger with no-approval-route and null preResolvedDecision", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: "cron",
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for heartbeat trigger with no-approval-route and null preResolvedDecision", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: "heartbeat",
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for heartbeat trigger with non-null preResolvedDecision", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: "heartbeat",
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: "allow-once",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for heartbeat trigger with unavailableReason other than no-approval-route", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: "heartbeat",
+        unavailableReason: "initiating-platform-disabled",
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for manual/default trigger even with no-approval-route", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: "manual",
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when trigger is undefined", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: undefined,
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("buildHeadlessExecApprovalDeniedMessage", () => {
+  const defaultParams = {
+    host: "gateway" as const,
+    security: "full" as const,
+    ask: "always" as const,
+    askFallback: "deny" as const,
+  };
+
+  it("includes Cron runs label for cron trigger", () => {
+    const msg = buildHeadlessExecApprovalDeniedMessage({
+      ...defaultParams,
+      trigger: "cron",
+    });
+    expect(msg).toContain("Cron runs cannot wait for interactive exec approval");
+  });
+
+  it("includes Heartbeat runs label for heartbeat trigger", () => {
+    const msg = buildHeadlessExecApprovalDeniedMessage({
+      ...defaultParams,
+      trigger: "heartbeat",
+    });
+    expect(msg).toContain("Heartbeat runs cannot wait for interactive exec approval");
+  });
+
+  it("falls back to Headless runs label for unrecognized triggers", () => {
+    const msg = buildHeadlessExecApprovalDeniedMessage({
+      ...defaultParams,
+      trigger: "manual",
+    });
+    expect(msg).toContain("Headless runs cannot wait for interactive exec approval");
+  });
+
+  it("falls back to Headless runs label when trigger is undefined", () => {
+    const msg = buildHeadlessExecApprovalDeniedMessage({
+      ...defaultParams,
+    });
+    expect(msg).toContain("Headless runs cannot wait for interactive exec approval");
   });
 });

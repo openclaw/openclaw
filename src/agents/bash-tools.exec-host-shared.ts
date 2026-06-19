@@ -83,7 +83,7 @@ export type ExecApprovalUnavailableReason =
   | "initiating-platform-unsupported";
 
 function isHeadlessExecTrigger(trigger?: string): boolean {
-  return trigger === "cron";
+  return trigger === "cron" || trigger === "heartbeat";
 }
 
 /** Context returned after a default approval request is registered. */
@@ -434,7 +434,12 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   ask: ExecAsk;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
 }): string {
-  const runLabel = params.trigger === "cron" ? "Cron runs" : "Headless runs";
+  const runLabel =
+    params.trigger === "cron"
+      ? "Cron runs"
+      : params.trigger === "heartbeat"
+        ? "Heartbeat runs"
+        : "Headless runs";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
