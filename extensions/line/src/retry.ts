@@ -39,7 +39,7 @@ export function isRetryableError(error: unknown, _attempt: number): boolean {
       typeof rawBody === "string"
         ? rawBody
         : rawBody && typeof rawBody === "object"
-          ? String((rawBody as { message?: string }).message ?? "")
+          ? String((rawBody as Record<string, unknown>).message ?? "")
           : "";
 
     if (status && status >= 500 && status < 600) {
