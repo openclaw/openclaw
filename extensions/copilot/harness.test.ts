@@ -313,6 +313,52 @@ describe("createCopilotAgentHarness", () => {
     started.resolve();
   });
 
+  it("observes startup failures after readiness is already aborted", async () => {
+    const started = createDeferred<void>();
+    const controller = new AbortController();
+    const startupError = new Error("late Copilot startup failure");
+    const catchSpy = vi.spyOn(started.promise, "catch");
+    const client = {
+      start: vi.fn(() => {
+        controller.abort();
+        return started.promise;
+      }),
+      getAuthStatus: vi.fn(),
+    };
+    const handle = {
+      key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/tmp/copilot" },
+      client,
+    } as never;
+    const pool = makePoolMock();
+    vi.mocked(pool.acquire).mockResolvedValueOnce(handle);
+    const harness = createCopilotAgentHarness({ pool });
+    if (!harness.checkReadiness) {
+      throw new Error("expected Copilot readiness probe");
+    }
+    const readiness = harness.checkReadiness({
+      config: {},
+      agentId: "test",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      provider: "github-copilot",
+      modelId: "gpt-5.5",
+      providerAuthAvailable: true,
+      signal: controller.signal,
+    });
+
+    await expect(readiness).resolves.toEqual({
+      ready: false,
+      reason: "Copilot runtime readiness check failed",
+    });
+    expect(catchSpy).toHaveBeenCalledOnce();
+    started.reject(startupError);
+    await flushAsyncWork();
+
+    expect(pool.invalidate).toHaveBeenCalledWith(handle);
+    expect(pool.release).not.toHaveBeenCalled();
+    expect(client.getAuthStatus).not.toHaveBeenCalled();
+  });
+
   it("supports returns false in auto runtime even for github provider", () => {
     const harness = createCopilotAgentHarness();
 

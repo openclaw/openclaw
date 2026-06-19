@@ -256,9 +256,7 @@ async function awaitReadinessStep<T>(
     return await work;
   }
   const handleLateResult = () => {
-    if (onLateResult) {
-      void work.then(onLateResult).catch(() => undefined);
-    }
+    void (onLateResult ? work.then(onLateResult) : work).catch(() => undefined);
   };
   if (signal.aborted) {
     handleLateResult();
