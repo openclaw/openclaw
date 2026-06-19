@@ -474,6 +474,9 @@ export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>
   return await activeLockRunner(() => appendSessionTranscriptMessageLocked(params));
 }
 
+/**
+ * Runs a group of transcript appends through one append queue and write lock.
+ */
 export async function runSessionTranscriptAppendTransaction<T>(
   params: Pick<AppendSessionTranscriptMessageParams, "config" | "transcriptPath">,
   run: (context: SessionTranscriptAppendTransactionContext) => Promise<T> | T,

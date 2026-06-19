@@ -45,10 +45,9 @@ export type SessionTranscriptReadParams = {
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams & {
   /**
-   * @deprecated Prefer the structured `{ agentId, sessionKey, sessionId }`
-   * transcript identity. This file-shaped target is kept only for callers that
-   * already own an active transcript artifact during the pre-SQLite transition
-   * and must be removed before the SQLite storage flip.
+   * @deprecated Prefer `{ agentId, sessionKey, sessionId }`. Pass this only
+   * when adapting code that already receives an active transcript artifact and
+   * needs each helper to operate on that same artifact.
    */
   sessionFile?: string;
 };
@@ -105,7 +104,7 @@ function syntheticSessionKey(identity: SessionTranscriptMemoryHitIdentity): stri
 }
 
 /**
- * Builds the storage-neutral memory hit key for one session transcript.
+ * Builds the memory hit key for one session transcript.
  */
 export function formatSessionTranscriptMemoryHitKey(
   params: SessionTranscriptMemoryHitKeyParams,
@@ -116,7 +115,7 @@ export function formatSessionTranscriptMemoryHitKey(
 }
 
 /**
- * Parses a storage-neutral session transcript memory hit key.
+ * Parses a session transcript memory hit key.
  */
 export function parseSessionTranscriptMemoryHitKey(
   key: string,
@@ -251,7 +250,7 @@ export async function withSessionTranscriptWriteLock<T>(
 }
 
 /**
- * Maps a storage-neutral memory hit key back to visible session store keys.
+ * Maps a session transcript memory hit key back to visible session store keys.
  */
 export function resolveSessionTranscriptMemoryHitKeyToSessionKeys(
   params: ResolveSessionTranscriptMemoryHitKeyParams,
