@@ -444,7 +444,12 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       ? skipWhitespace(text, blockStart + "call".length)
       : blockStart;
     const block = parsePlainTextToolCallBlockAt(text, afterCallLeadIn);
-    const blockEnd = block?.end ?? parseXmlishPlainTextToolCallBlockEndAt(text, afterCallLeadIn);
+    const allowXmlishStandaloneBlock = blockStart === 0 || afterCallLeadIn !== blockStart;
+    const blockEnd =
+      block?.end ??
+      (allowXmlishStandaloneBlock
+        ? parseXmlishPlainTextToolCallBlockEndAt(text, afterCallLeadIn)
+        : null);
     if (blockEnd === null) {
       index += 1;
       continue;
