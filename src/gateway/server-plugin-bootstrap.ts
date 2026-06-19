@@ -111,6 +111,13 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   // Runtime bindings must be installed before loadGatewayPlugins so plugin
   // hooks that inspect gateway/node/subagent helpers see current config.
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
+  // Always propagate subagent override policies from the full auto-enabled
+  // config. The merged resolvedConfig may drop subagent.allowModelOverride /
+  // allowedModels for entries the runtime config does not yet carry, leaving
+  // the plugin runtime authorizer with stale (empty) policies until a config
+  // hot-reload event. The hot-reload path uses autoEnabled.config directly,
+  // so the startup path must match that view.
+  setPluginSubagentOverridePolicies(autoEnabled.config);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
     activationSourceConfig,
