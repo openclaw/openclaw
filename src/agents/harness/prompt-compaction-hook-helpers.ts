@@ -69,6 +69,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         promptBuildResult?.prependContext,
         beforeAgentStartResult?.prependContext,
         params.prompt,
+        promptBuildResult?.appendContext,
+        beforeAgentStartResult?.appendContext,
       ]) ?? params.prompt,
     developerInstructions:
       joinPresentTextSegments([

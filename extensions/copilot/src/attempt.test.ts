@@ -8,6 +8,11 @@ import type {
   AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
@@ -249,6 +254,7 @@ function makeParams(
 }
 
 afterEach(() => {
+  resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
 
@@ -272,6 +278,170 @@ describe("runCopilotAttempt", () => {
     expect(result.assistantTexts).toEqual(["done"]);
     expect(result.messagesSnapshot.length).toBe(2);
     expect(getSdkSessionId(result)).toBe("sess-1");
+  });
+
+  it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
+    const beforePromptBuild = vi.fn(() => ({
+      prependContext: "Use the current repository state.",
+      appendContext: "Finish with the current test status.",
+      appendSystemContext: "Keep the final response concise.",
+    }));
+    const afterToolCall = vi.fn();
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "after_tool_call", handler: afterToolCall },
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+    const createToolBridge = vi.fn(
+      async (input: {
+        onToolCompleted?: (completion: {
+          args: Record<string, unknown>;
+          result: unknown;
+          startedAt: number;
+          toolCallId: string;
+          toolName: string;
+        }) => Promise<void>;
+      }) => {
+        await input.onToolCompleted?.({
+          args: { path: "README.md" },
+          result: { content: [{ text: "read result", type: "text" }] },
+          startedAt: Date.now(),
+          toolCallId: "tool-call-1",
+          toolName: "read",
+        });
+        return { sdkTools: [], sourceTools: [] };
+      },
+    );
+
+    await runCopilotAttempt(makeParams(), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(beforePromptBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "hello" }),
+      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+    );
+    const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+      systemMessage?: { content?: string };
+    };
+    expect(cfg.systemMessage?.content).toContain("Keep the final response concise.");
+    const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as { prompt?: string };
+    expect(messageOptions.prompt).toBe(
+      "Use the current repository state.\n\nhello\n\nFinish with the current test status.",
+    );
+    expect(llmInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        historyMessages: [],
+        model: "gpt-4o",
+        prompt:
+          "Use the current repository state.\n\nhello\n\nFinish with the current test status.",
+        provider: "github-copilot",
+        runId: "run-1",
+      }),
+      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+    );
+    expect(llmOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantTexts: ["done"],
+        model: "gpt-4o",
+        provider: "github-copilot",
+      }),
+      expect.objectContaining({ runId: "run-1" }),
+    );
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({ sessionId: "session-1" }),
+    );
+    expect(afterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { path: "README.md" },
+        toolCallId: "tool-call-1",
+        toolName: "read",
+      }),
+      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+    );
+  });
+
+  it("preserves native Copilot SDK hooks alongside generic lifecycle hooks", async () => {
+    const sdk = makeFakeSdk();
+    const onPreToolUse = vi.fn();
+
+    await runCopilotAttempt(
+      makeParams({
+        hooksConfig: { onPreToolUse },
+      } as never),
+      { pool: makeFakePool(sdk) },
+    );
+
+    const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+      hooks?: { onPreToolUse?: unknown };
+    };
+    expect(cfg.hooks?.onPreToolUse).toEqual(expect.any(Function));
+  });
+
+  it("does not emit llm_output when cancellation happens before the SDK turn starts", async () => {
+    const llmOutput = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
+    );
+    const controller = new AbortController();
+    const sdk = makeFakeSdk();
+
+    const result = await runCopilotAttempt(
+      makeParams({ abortSignal: controller.signal } as never),
+      {
+        onSessionEstablished: () => controller.abort(),
+        pool: makeFakePool(sdk),
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(result.aborted).toBe(true);
+    expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+    expect(llmOutput).not.toHaveBeenCalled();
+  });
+
+  it("waits for agent_end hooks before resolving one-shot attempts", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    let settled = false;
+    const run = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(agentEnd).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({ promptError: undefined });
+    expect(settled).toBe(true);
   });
 
   it("forwards prompt images as SDK blob attachments", async () => {
@@ -747,6 +917,10 @@ describe("runCopilotAttempt", () => {
   it("abort path (signal already aborted)", async () => {
     const controller = new AbortController();
     controller.abort();
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
 
@@ -758,6 +932,10 @@ describe("runCopilotAttempt", () => {
     expect(result.externalAbort).toBe(true);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(pool["acquire"]).toHaveBeenCalledTimes(0);
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false }),
+      expect.objectContaining({ sessionId: "session-1" }),
+    );
   });
 
   it("abort path (signal fires after settled)", async () => {
@@ -920,6 +1098,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("tool bridge failures become prompt errors", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(async () => {
@@ -935,9 +1117,20 @@ describe("runCopilotAttempt", () => {
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
     expect(pool["acquire"]).toHaveBeenCalledTimes(0);
     expect(pool["release"]).toHaveBeenCalledTimes(0);
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "[copilot-attempt] tool-bridge construction failed: bridge failed",
+        success: false,
+      }),
+      expect.objectContaining({ sessionId: "session-1" }),
+    );
   });
 
   it("unsupported providers skip injected tool bridge wiring", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
@@ -952,6 +1145,30 @@ describe("runCopilotAttempt", () => {
     expect(getPromptErrorCode(result)).toBe("model_not_supported");
     expect(createToolBridge).toHaveBeenCalledTimes(0);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false }),
+      expect.objectContaining({ modelId: "claude", modelProviderId: "anthropic" }),
+    );
+  });
+
+  it("reports pool-release failures through agent_end before rejecting", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    pool.release.mockRejectedValueOnce(new Error("release failed"));
+
+    await expect(runCopilotAttempt(makeParams(), { pool })).rejects.toThrow("release failed");
+
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "release failed",
+        success: false,
+      }),
+      expect.objectContaining({ sessionId: "session-1" }),
+    );
   });
 
   it("default permission policy rejects fail-closed", async () => {
@@ -1147,6 +1364,53 @@ describe("runCopilotAttempt", () => {
       expect("systemMessage" in cfg).toBe(false);
     });
 
+    it("keeps raw model probes outside generic prompt hooks", async () => {
+      const beforePromptBuild = vi.fn(() => ({
+        appendContext: "must not reach raw model probes",
+        prependSystemContext: "must not reach raw model probes",
+      }));
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      );
+      const sdk = makeFakeSdk();
+
+      await runCopilotAttempt(
+        makeParams({
+          modelRun: true,
+        } as never),
+        { pool: makeFakePool(sdk) },
+      );
+
+      expect(beforePromptBuild).not.toHaveBeenCalled();
+      const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
+        prompt?: string;
+      };
+      expect(messageOptions.prompt).toBe("hello");
+    });
+
+    it("keeps promptMode none runs outside generic prompt hooks", async () => {
+      const beforePromptBuild = vi.fn(() => ({
+        appendContext: "must not reach raw model probes",
+      }));
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      );
+      const sdk = makeFakeSdk();
+
+      await runCopilotAttempt(
+        makeParams({
+          promptMode: "none",
+        } as never),
+        { pool: makeFakePool(sdk) },
+      );
+
+      expect(beforePromptBuild).not.toHaveBeenCalled();
+      const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
+        prompt?: string;
+      };
+      expect(messageOptions.prompt).toBe("hello");
+    });
+
     it("appends extraSystemPrompt after rendered bootstrap instructions", async () => {
       const rendered = "# Project Context\n## /ws/SOUL.md\n\nSoul voice goes here.";
       workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockResolvedValueOnce({
@@ -1267,6 +1531,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("timeout", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockResolvedValueOnce(undefined);
@@ -1280,6 +1548,13 @@ describe("runCopilotAttempt", () => {
     expect(result.aborted).toBe(false);
     expect(getSdkSessionId(result)).toBe("sess-1");
     expect(sdk.sessions[0]?.abort).toHaveBeenCalledTimes(0);
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "Copilot SDK turn timed out.",
+        success: false,
+      }),
+      expect.anything(),
+    );
   });
 
   it("G1: SDK timeout rejection (Error 'Timeout after Nms waiting for session.idle') sets timedOut, leaves promptError undefined, and does NOT abort the session", async () => {
@@ -2246,6 +2521,10 @@ describe("runCopilotAttempt", () => {
 
     it("fails closed when sandbox is enabled with a cwd override", async () => {
       const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
+      const agentEnd = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+      );
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
       const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
@@ -2266,9 +2545,17 @@ describe("runCopilotAttempt", () => {
       expect(getPromptErrorCode(result)).toBe("sandbox_cwd_override_unsupported");
       expect(createToolBridge).not.toHaveBeenCalled();
       expect(sdk.createSession).not.toHaveBeenCalled();
+      expect(agentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false }),
+        expect.objectContaining({ sessionId: "session-1" }),
+      );
     });
 
     it("fails closed when sandbox resolution fails", async () => {
+      const agentEnd = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+      );
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
           session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
@@ -2292,6 +2579,10 @@ describe("runCopilotAttempt", () => {
       );
       expect(createToolBridge).not.toHaveBeenCalled();
       expect(sdk.createSession).not.toHaveBeenCalled();
+      expect(agentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false }),
+        expect.objectContaining({ sessionId: "session-1" }),
+      );
     });
 
     it("fails closed when creating the sandbox copy workspace fails", async () => {

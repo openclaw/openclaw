@@ -1175,15 +1175,19 @@ describe("convertOpenClawToolToSdkTool", () => {
 
   it("calls prepareArguments and passes the prepared args and toolCallId to execute", async () => {
     const preparedArgs = { value: "prepared" };
+    const onToolCompleted = vi.fn();
     const prepareArguments = vi.fn(() => preparedArgs);
     const sourceTool = makeTool({ prepareArguments });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { onToolCompleted });
 
     await runSdkTool(sdkTool, { value: "raw" }, makeInvocation({ toolCallId: "call-99" }));
 
     expect(prepareArguments).toHaveBeenCalledTimes(1);
     expect(prepareArguments).toHaveBeenCalledWith({ value: "raw" });
     expect(sourceTool.execute).toHaveBeenCalledWith("call-99", preparedArgs, undefined, undefined);
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ args: preparedArgs, toolCallId: "call-99" }),
+    );
   });
 
   it("returns a failure result when prepareArguments throws", async () => {
@@ -1232,6 +1236,29 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
+  it("reports terminal tool results to the harness lifecycle bridge", async () => {
+    const onToolCompleted = vi.fn();
+    const sourceResult = {
+      content: [{ text: "hello", type: "text" }],
+      details: { results: [{ text: "hello" }] },
+    };
+    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
+      onToolCompleted,
+    });
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-9" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: { value: "input" },
+        result: sourceResult,
+        toolCallId: "call-9",
+        toolName: "tool-a",
+      }),
+    );
+  });
+
   it("reports thrown tool failures to the private result observer", async () => {
     const error = new Error("backend unavailable");
     const onAgentToolResult = vi.fn();
@@ -1259,6 +1286,32 @@ describe("convertOpenClawToolToSdkTool", () => {
       },
       isError: true,
     });
+  });
+
+  it("reports terminal tool failures to the harness lifecycle bridge", async () => {
+    const onToolCompleted = vi.fn();
+    const preparedArgs = { value: "prepared" };
+    const sdkTool = convertOpenClawToolToSdkTool(
+      makeTool({
+        prepareArguments: vi.fn(() => preparedArgs),
+        execute: vi.fn(async () => {
+          throw new Error("backend unavailable");
+        }),
+      }),
+      { onToolCompleted },
+    );
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-10" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: preparedArgs,
+        error: "backend unavailable",
+        toolCallId: "call-10",
+        toolName: "tool-a",
+      }),
+    );
   });
 
   it("reports returned OpenClaw error results as observer failures", async () => {

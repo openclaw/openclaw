@@ -169,8 +169,9 @@ The harness reads its config from per-attempt input
 - `infiniteSessionConfig` — optional override for the SDK
   `infiniteSessions` block driven by `harness.compact`. Defaults are safe to
   leave as-is.
-- `hooksConfig` — optional bridge config exposing OpenClaw
-  before/after-message-write hooks to the SDK loop.
+- `hooksConfig` — optional native Copilot SDK `SessionHooks` compatibility
+  config for tool/MCP, user-prompt, session, and error callbacks.
+  It is separate from OpenClaw's portable lifecycle hooks.
 - `permissionPolicy` — optional override for the SDK's
   `onPermissionRequest` handler used for built-in SDK tool kinds
   (`shell`, `write`, `read`, `url`, `mcp`, `memory`, `hook`). Defaults
@@ -180,6 +181,13 @@ The harness reads its config from per-attempt input
   `skipPermission: true` so 100% of tool calls flow through OpenClaw's
   wrapped `execute()`. See [Permissions and ask_user](#permissions-and-ask_user).
 - `enableSessionTelemetry` — optional SDK session telemetry flag.
+
+OpenClaw plugin hooks do not need Copilot-specific attempt configuration. The
+harness runs `before_prompt_build` (and the legacy `before_agent_start`
+compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+standard harness helpers. Bridged OpenClaw tools continue to run
+`before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
+native SDK-only callbacks that have no portable equivalent.
 
 Nothing in the rest of OpenClaw needs to know about these fields. Other
 plugins, channels, and core code only see the standard
