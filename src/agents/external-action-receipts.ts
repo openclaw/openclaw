@@ -22,7 +22,14 @@ export type ExternalActionEvidence = {
 
 export type ExternalActionEvidenceDeclaration = PluginExternalActionEvidenceRegistration;
 
-const SUCCESS_STATUSES = new Set(["accepted", "queued", "accepted/queued", "sent", "delivered"]);
+const SUCCESS_STATUSES = new Set([
+  "accepted",
+  "queued",
+  "accepted/queued",
+  "sent",
+  "delivered",
+  "created",
+]);
 const MESSAGE_TOOL_SMS_CHANNEL = "sms";
 
 function readPath(value: unknown, path: string): unknown {

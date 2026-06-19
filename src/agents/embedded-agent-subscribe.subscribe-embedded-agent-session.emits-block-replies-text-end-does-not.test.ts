@@ -174,6 +174,88 @@ Message ID: 6655442331193344`,
     expect(subscription.assistantTexts.join("\n")).toContain("Message ID: 6655442331193344");
   });
 
+  it("emits verified SMS receipt claims when embedded-agent tool delivery evidence matches", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const deliveryText =
+      "I sent the SMS. Status: accepted/queued. Message ID: SM_proof_redacted_1234";
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "redacted proof body",
+      },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM_proof_redacted_1234",
+        chatId: "+15551234567",
+        receipt: {
+          raw: [
+            {
+              channel: "sms",
+              messageId: "SM_proof_redacted_1234",
+              chatId: "+15551234567",
+              toJid: "+15551234567",
+              meta: {
+                from: "+15557654321",
+                status: "queued",
+              },
+            },
+          ],
+        },
+      },
+    });
+    await Promise.resolve();
+
+    expect(subscription.getExternalActionEvidence()).toEqual([
+      expect.objectContaining({
+        actionFamily: "sms",
+        toolName: "message",
+        providerId: "SM_proof_redacted_1234",
+        status: "queued",
+        recipient: "+15551234567",
+      }),
+    ]);
+
+    emitAssistantTextEnd({ emit, content: deliveryText });
+    await Promise.resolve();
+
+    expectSingleBlockReplyText({
+      onBlockReply,
+      subscription,
+      text: deliveryText,
+    });
+  });
+
+  it("replaces first-person SMS receipt claims when embedded-agent delivery has no evidence", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emitAssistantTextEnd({
+      emit,
+      content: "I sent the SMS. Status: accepted/queued. Message ID: SM_proof_redacted_1234",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireBlockReplyPayload(onBlockReply);
+    expect(payload.text).toBe(
+      "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+    );
+    expect(payload.text).not.toContain("SM_proof_redacted_1234");
+  });
+
   it("replaces unsupported SMS receipt claims before chunked block replies", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createTextEndBlockReplyHarness({

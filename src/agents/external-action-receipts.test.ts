@@ -15,6 +15,15 @@ const smsDeclaration = {
   dryRunPaths: ["dryRun"],
 };
 
+const ticketDeclaration = {
+  actionFamily: "ticket",
+  successStatusPaths: ["receipt.status"],
+  providerIdPaths: ["receipt.id"],
+  recipientPaths: ["receipt.assignee"],
+  bodyPaths: ["receipt.summary"],
+  dryRunPaths: ["receipt.dryRun"],
+};
+
 describe("external action receipts", () => {
   it("validates evidence declarations", () => {
     expect(isValidExternalActionEvidenceDeclaration(smsDeclaration)).toBe(true);
@@ -69,6 +78,29 @@ describe("external action receipts", () => {
       toolName: "dialpad_send_sms",
       providerId: "4797682962735104",
       status: "accepted/queued",
+    });
+  });
+
+  it("honors documented created status for non-SMS external actions", () => {
+    expect(
+      normalizeExternalActionEvidence({
+        declaration: ticketDeclaration,
+        toolName: "support_create_ticket",
+        result: {
+          receipt: {
+            id: "TICKET-123",
+            status: "created",
+            assignee: "support",
+            summary: "Customer asked for follow-up.",
+          },
+        },
+      }),
+    ).toMatchObject({
+      actionFamily: "ticket",
+      toolName: "support_create_ticket",
+      providerId: "TICKET-123",
+      status: "created",
+      recipient: "support",
     });
   });
 
