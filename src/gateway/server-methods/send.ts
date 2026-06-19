@@ -42,7 +42,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
 import {

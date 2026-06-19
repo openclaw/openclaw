@@ -729,8 +729,10 @@ async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
 }
 
 async function readBoundedResponseText(response, maxBytes, label) {
-  const contentLength = Number.parseInt(response.headers?.get?.("content-length") ?? "", 10);
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+  const rawContentLength = response.headers?.get?.("content-length");
+  const contentLength =
+    rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
+  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw Object.assign(new Error(`${label} exceeded ${maxBytes} bytes`), { code: "ETOOBIG" });
   }

@@ -758,6 +758,40 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
+  it("streams non-decimal package_url content-length values through the download cap", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let readStarted = false;
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () => {
+          const body = new ReadableStream({
+            pull(controller) {
+              readStarted = true;
+              controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          });
+          return new Response(body, {
+            headers: { "content-length": "1e3" },
+            status: 200,
+          });
+        },
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 3,
+      }),
+    ).rejects.toThrow("package_url exceeds maximum download size");
+    expect(readStarted).toBe(true);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
   it("reads package source metadata from package artifacts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-"));
     tempDirs.push(dir);

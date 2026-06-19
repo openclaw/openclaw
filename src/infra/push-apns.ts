@@ -506,20 +506,6 @@ export async function registerApnsRegistration(
   });
 }
 
-/** Backward-compatible helper for storing a direct APNs token registration. */
-export async function registerApnsToken(params: {
-  nodeId: string;
-  token: string;
-  topic: string;
-  environment?: unknown;
-  baseDir?: string;
-}): Promise<DirectApnsRegistration> {
-  return (await registerApnsRegistration({
-    ...params,
-    transport: "direct",
-  })) as DirectApnsRegistration;
-}
-
 /** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
@@ -551,23 +537,6 @@ export async function loadApnsRegistrations(
     }
   }
   return registrations;
-}
-
-/** Removes a stored APNs registration by node id. */
-export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
-  const normalizedNodeId = normalizeNodeId(nodeId);
-  if (!normalizedNodeId) {
-    return false;
-  }
-  return await withLock(async () => {
-    const state = await loadRegistrationsState(baseDir);
-    if (!(normalizedNodeId in state.registrationsByNodeId)) {
-      return false;
-    }
-    delete state.registrationsByNodeId[normalizedNodeId];
-    await persistRegistrationsState(state, baseDir);
-    return true;
-  });
 }
 
 function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boolean {

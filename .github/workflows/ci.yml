@@ -744,11 +744,6 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
-          fi
-
           for index in "${!pids[@]}"; do
             name="${names[$index]}"
             log="${logs[$index]}"
@@ -765,6 +760,21 @@ jobs:
             echo "::endgroup::"
             results["$name"]="$result"
           done
+
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            log="${RUNNER_TEMP}/gateway-watch.log"
+            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build"
+            if node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+
+            echo "::group::gateway-watch log"
+            cat "$log"
+            echo "::endgroup::"
+            results["gateway-watch"]="$result"
+          fi
 
           for name in channels core-support-boundary gateway-watch; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"

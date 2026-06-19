@@ -983,8 +983,7 @@ describe("runCopilotAttempt", () => {
     // Per the SDK contract (types.d.ts: `When provided, enables the
     // ask_user tool allowing the agent to ask questions`), omitting the
     // handler hides ask_user from the model entirely. The MVP keeps it
-    // hidden; a follow-up will port the codex user-input-bridge to wire
-    // ask_user to the OpenClaw channel/TUI path.
+    // hidden until a real channel/TUI prompt bridge exists.
     expect("onUserInputRequest" in cfg).toBe(false);
   });
 

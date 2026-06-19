@@ -5,7 +5,7 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =

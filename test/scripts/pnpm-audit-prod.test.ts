@@ -297,6 +297,33 @@ snapshots:
     expect(cancelled).toBe(true);
   });
 
+  it("streams non-decimal bulk advisory content-length values through the body cap", async () => {
+    let readStarted = false;
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        readStarted = true;
+        controller.enqueue(new TextEncoder().encode("12345"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      responseBodyMaxBytes: 4,
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-length": "5junk" },
+        }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(readStarted).toBe(true);
+    expect(cancelled).toBe(true);
+  });
+
   it("fails closed on empty successful bulk advisory response bodies", async () => {
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },

@@ -19,9 +19,6 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import {
-  sanitizeHostInheritedEnvEntry,
-} from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -91,19 +88,6 @@ export function detectCursorKeyMode(raw: string): "application" | "normal" | nul
   return lastSmkx > lastRmkx ? "application" : "normal";
 }
 
-/** Removes dangerous inherited host env vars before non-sandboxed execution. */
-export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
-  const sanitized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
-    if (!sanitizedEntry) {
-      continue;
-    }
-    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
-    sanitized[sanitizedKey] = sanitizedValue;
-  }
-  return sanitized;
-}
 /** Default retained aggregate output cap for exec sessions. */
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
@@ -434,53 +418,6 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
     return 0;
   }
   return Math.floor(value);
-}
-
-/** Emits an exec system event and wakes the routed session when appropriate. */
-export function emitExecSystemEvent(
-  text: string,
-  opts: {
-    sessionKey?: string;
-    contextKey?: string;
-    deliveryContext?: DeliveryContext;
-    /** `session.mainKey` from the runtime config; pass-through of `undefined`
-     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
-    mainKey?: string;
-    /** `session.scope` from the runtime config; needed so global-scope
-     *  agents route cron-run events to the "global" queue. */
-    sessionScope?: "per-sender" | "global";
-    eventRouting?: EventSessionRoutingPolicy;
-  },
-) {
-  const sessionKey = opts.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-  const eventRouting = opts.eventRouting ?? {
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
-  };
-  enqueueSystemEvent(text, {
-    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-    contextKey: opts.contextKey,
-    deliveryContext: opts.deliveryContext,
-  });
-  // Subagent sessions receive exec results via process poll and announce flow;
-  // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        sessionKey,
-        {
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        },
-        eventRouting,
-      ),
-    );
-  }
 }
 
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";

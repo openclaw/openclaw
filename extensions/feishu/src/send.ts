@@ -715,31 +715,6 @@ export async function editMessageFeishu(params: {
   return { messageId, contentType: "post" };
 }
 
-export async function updateCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  card: Record<string, unknown>;
-  accountId?: string;
-}): Promise<void> {
-  const { cfg, messageId, card, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const content = JSON.stringify(card);
-
-  const response = await client.im.message.patch({
-    path: { message_id: messageId },
-    data: { content },
-  });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
-  }
-}
-
 /**
  * Build a Feishu interactive card with markdown content.
  * Cards render markdown properly (code blocks, tables, links, etc.)
