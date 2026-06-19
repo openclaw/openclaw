@@ -137,6 +137,12 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
+    // Explicit ESM output for the "type": "module" package. Without this,
+    // tsdown defaults to CJS for .ts entries, producing module.exports
+    // output that Node.js ignores when loaded via dynamic import() in an
+    // ESM context — causing bundled-plugin public artifact files (e.g.
+    // document-extractor.js) to silently export nothing.
+    format: "esm",
     fixedExtension: false,
     platform: "node",
     sourcemap: OUTPUT_SOURCE_MAPS,
