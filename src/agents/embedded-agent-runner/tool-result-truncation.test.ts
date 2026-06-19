@@ -202,8 +202,8 @@ describe("calculateMaxToolResultChars", () => {
     expect(large).toBeGreaterThan(small);
   });
 
-  it("exports the low-context live cap constant", () => {
-    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(16_000);
+  it("exports the default live cap constant", () => {
+    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(32_000);
   });
 
   it("auto-scales above the low-context cap for very large windows", () => {
@@ -531,7 +531,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     const result = await truncateOversizedToolResultsInSession({
       sessionFile,
       contextWindowTokens: 128_000,
-      maxCharsOverride: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+      maxCharsOverride: 16_000,
     });
 
     expect(result.truncated).toBe(true);

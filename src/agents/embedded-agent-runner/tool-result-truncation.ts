@@ -34,13 +34,14 @@ import {
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 
 /**
- * Low-context default cap for a single live tool result text block.
+ * Default cap for a single live tool result text block.
  *
- * The session runtime already truncates tool results aggressively when serializing old history
- * for compaction summaries. For the live request path we still keep a bounded
- * request-local ceiling so oversized tool output cannot dominate the next turn.
+ * Doubled from 16k to 32k to prevent truncation-corrupted base64 / binary payloads
+ * (e.g. `screen.snapshot` returns ~25k chars of inline PNG) while still bounding
+ * tool output so it cannot dominate the next turn. The session runtime already
+ * truncates old history aggressively during compaction summaries.
  */
-export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
+export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
 const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
 const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
