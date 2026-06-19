@@ -65,7 +65,7 @@ export {
 
 // `evaluatePredicate`, `getPathLayout`, `parseOrdinalSeg`,
 // `parsePredicateSeg`, `parseUnionSeg`, `quoteSeg`, `unquoteSeg`,
-// `repackPath`, `resolvePositionalSeg`, `splitRespectingBrackets`
+// `resolvePositionalSeg`, `splitRespectingBrackets`
 // were exported from earlier prototypes. They're substrate-internal
 // helpers — used by `find.ts`, the per-kind resolvers, and the parser
 // itself, but not part of the upstream-portable public surface.

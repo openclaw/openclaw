@@ -2551,7 +2551,8 @@ function readChatHistoryMessageId(message: unknown): string | undefined {
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
-  sessionFile: string | undefined;
+  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionKey: string;
   agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
@@ -2563,8 +2564,9 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   const messages = await readSessionMessagesAsync(
     {
       agentId: params.agentId,
-      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
       sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       storePath: params.storePath,
     },
     {
@@ -2683,8 +2685,9 @@ async function handleChatHistoryRequest({
       ? await readRecentSessionMessagesAsync(
           {
             agentId: sessionAgentId,
-            sessionFile: entry?.sessionFile,
+            sessionEntry: entry,
             sessionId,
+            sessionKey: canonicalKey,
             storePath,
           },
           {
@@ -2876,8 +2879,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolved = await readSessionMessageByIdAsync(
       {
         agentId: sessionAgentId,
-        sessionFile: entry?.sessionFile,
+        sessionEntry: entry,
         sessionId,
+        sessionKey,
         storePath,
       },
       messageId,
@@ -2890,7 +2894,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const visible = await isChatMessageIdVisibleAfterHistoryFilters({
       sessionId,
       storePath,
-      sessionFile: entry?.sessionFile,
+      sessionEntry: entry,
+      sessionKey,
       agentId: sessionAgentId,
       messageId,
       sessionStartedAt:

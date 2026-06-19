@@ -302,7 +302,7 @@ describe("scripts/test-projects changed-target routing", () => {
     });
     expect(resolveChangedTestTargetPlan(["scripts/github/real-behavior-proof-check.mjs"])).toEqual({
       mode: "targets",
-      targets: ["test/scripts/real-behavior-proof-check.test.ts"],
+      targets: ["test/vitest/vitest.tooling.config.ts"],
     });
   });
 

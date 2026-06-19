@@ -88,8 +88,27 @@ jobs:
           if [[ "$release_package_version" =~ ^(.+)-[0-9]+$ ]]; then
             fallback_package_version="${BASH_REMATCH[1]}"
           fi
-          tag_package_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag" \
-            --jq '.content' | tr -d '\n' | base64 --decode | jq -r '.version // empty')"
+          tag_package_content="$RUNNER_TEMP/tag-package-content.b64"
+          tag_package_read=false
+          for attempt in 1 2 3; do
+            if gh api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag" \
+              --jq '.content' > "$tag_package_content"; then
+              tag_package_read=true
+              break
+            fi
+            if [[ "$attempt" != "3" ]]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          if [[ "$tag_package_read" != "true" ]]; then
+            echo "Stable closeout could not read package.json for $tag from GitHub API." >&2
+            exit 1
+          fi
+          if ! tag_package_json="$(tr -d '\n' < "$tag_package_content" | base64 --decode)"; then
+            echo "Stable closeout package.json content for $tag was not valid base64." >&2
+            exit 1
+          fi
+          tag_package_version="$(jq -r '.version // empty' <<<"$tag_package_json")"
           fallback_correction=false
           evidence_source_tag="$tag"
           if [[ "$release_package_version" != "$fallback_package_version" &&

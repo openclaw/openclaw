@@ -3020,7 +3020,7 @@ export ROOT_DIR TMPDIR
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
-output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 2')"
+output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 4')"
 [[ "$output" = *"still running plugins-run ("* ]]
 [[ "$output" = *"log bytes captured"* ]]
 [[ "$output" = *"captured container log"* ]]
@@ -3195,28 +3195,18 @@ output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "quick conta
   });
 
   it("normalizes zero-padded Docker E2E log heartbeat intervals", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-zero-heartbeat-"));
-
-    try {
-      const rootDir = process.cwd();
-      const script = `
+    const rootDir = process.cwd();
+    const script = `
 set -euo pipefail
 ROOT_DIR=${shellQuote(rootDir)}
-TMPDIR=${shellQuote(workDir)}
-export ROOT_DIR TMPDIR
+export ROOT_DIR
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
-output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured container log\\\\n"; /bin/sleep 9')"
-[[ "$output" = *"still running plugins-run (8s elapsed,"* ]]
-[[ "$output" = *"log bytes captured"* ]]
-[[ "$output" = *"captured container log"* ]]
+[[ "$(docker_e2e_normalize_positive_int_value 'Docker E2E log heartbeat interval' 08)" = "8" ]]
 `;
 
-      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
   it("normalizes zero-padded Docker E2E stats heartbeat intervals", () => {

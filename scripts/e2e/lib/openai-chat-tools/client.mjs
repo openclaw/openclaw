@@ -51,7 +51,7 @@ async function readBoundedResponseText(response, byteLimit, timeoutPromise) {
   const contentLength = response.headers?.get?.("content-length");
   if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > byteLimit) {
+    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > byteLimit) {
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`chat completions response body exceeded ${byteLimit} bytes`);
     }

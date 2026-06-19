@@ -980,7 +980,7 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   const contentLength = response.headers?.get?.("content-length");
   if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > resolvedByteLimit) {
+    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > resolvedByteLimit) {
       await response.body?.cancel?.().catch(() => undefined);
       throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
@@ -1873,12 +1873,14 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
       return null;
     }
+    const rootRow = rootTreeRows.find((row) => row.processId === safePid) ?? null;
     const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
-    const commandMatches = descendants.filter((row) =>
+    const matchesCommandNeedles = (row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
-      ),
-    );
+      );
+    const commandMatches = descendants.filter(matchesCommandNeedles);
+    const rootCommandMatches = rootRow && matchesCommandNeedles(rootRow) ? [rootRow] : [];
     const gatewayTitleMatches = descendants.filter((row) =>
       row.command.toLowerCase().includes("openclaw-gateway"),
     );
@@ -1887,7 +1889,9 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
         ? commandMatches
         : gatewayTitleMatches.length > 0
           ? gatewayTitleMatches
-          : descendants,
+          : descendants.length > 0
+            ? descendants
+            : rootCommandMatches,
     );
     if (!selected) {
       return null;

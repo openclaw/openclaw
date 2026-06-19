@@ -101,8 +101,10 @@ describe("executeChannelApi", () => {
       status: 503,
       path: "/guilds/123/channels",
     });
-    expect(JSON.stringify(result.details)).toContain("channel api unavailable");
-    expect(JSON.stringify(result.details)).not.toContain("tail");
+    const bodyPreview = (result.details as { details?: unknown }).details;
+    expect(typeof bodyPreview).toBe("string");
+    expect(bodyPreview).toContain("channel api unavailable");
+    expect(bodyPreview).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
