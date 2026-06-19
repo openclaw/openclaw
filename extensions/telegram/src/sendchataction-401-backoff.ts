@@ -69,9 +69,23 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
+  // Prefer numeric status fields to avoid false-positives from bare
+  // substring matching (e.g. "5401" contains "401" but is not 401).
+  // openclaw/openclaw#94787
+  const asError = error as Record<string, unknown>;
+  if (
+    asError.status === 401 ||
+    asError.statusCode === 401 ||
+    (typeof asError.status === "string" && asError.status === "401") ||
+    (typeof asError.statusCode === "string" && asError.statusCode === "401") ||
+    (typeof asError.error_code === "number" && asError.error_code === 401) ||
+    (typeof asError.error_code === "string" && asError.error_code === "401")
+  ) {
+    return true;
+  }
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return (
-    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
+    /\b401\b/.test(message) || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
   );
 }
 
