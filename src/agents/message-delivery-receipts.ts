@@ -123,6 +123,49 @@ function dedupeEvidence(records: MessageDeliveryEvidence[]): MessageDeliveryEvid
   return [...byKey.values()];
 }
 
+function collectReceiptCandidateRecords(
+  payload: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const addRecord = (value: unknown): Record<string, unknown> | undefined => {
+    const record = asRecord(value);
+    if (record) {
+      records.push(record);
+    }
+    return record;
+  };
+
+  const root = addRecord(payload);
+  const details = addRecord(root?.details);
+  const nestedPayloads = [
+    root?.result,
+    root?.sendResult,
+    root?.payload,
+    root?.toolResult,
+    details?.result,
+    details?.sendResult,
+    details?.payload,
+    details?.toolResult,
+  ];
+  for (const nestedPayload of nestedPayloads) {
+    addRecord(nestedPayload);
+  }
+
+  return records.flatMap((record) => {
+    const receipt = asRecord(record.receipt);
+    const candidates = [record];
+    candidates.push(...asRecordArray(receipt?.raw));
+    for (const part of asRecordArray(receipt?.parts)) {
+      candidates.push(part);
+      const raw = asRecord(part.raw);
+      if (raw) {
+        candidates.push(raw);
+      }
+    }
+    return candidates;
+  });
+}
+
 export function normalizeMessageToolDeliveryEvidence(params: {
   toolName?: string;
   result: unknown;
@@ -135,7 +178,6 @@ export function normalizeMessageToolDeliveryEvidence(params: {
     [root, asRecord(root.details)]
       .filter((record): record is Record<string, unknown> => Boolean(record))
       .flatMap((payload) => {
-        const receipt = asRecord(payload.receipt);
         const fallbackChannel = normalizeOptionalString(payload.channel);
         const fallbackRecipient = readFirstString(payload, [
           "chatId",
@@ -143,15 +185,7 @@ export function normalizeMessageToolDeliveryEvidence(params: {
           "conversationId",
           "to",
         ]);
-        const candidates = [
-          payload,
-          ...asRecordArray(receipt?.raw),
-          ...asRecordArray(receipt?.parts).flatMap((part) => {
-            const raw = asRecord(part.raw);
-            return raw ? [part, raw] : [part];
-          }),
-        ];
-        return candidates.flatMap((record) => {
+        return collectReceiptCandidateRecords(payload).flatMap((record) => {
           const evidence = normalizeMessageToolSmsReceiptRecord({
             record,
             fallbackChannel,

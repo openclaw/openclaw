@@ -82,6 +82,76 @@ describe("message delivery receipts", () => {
     ]);
   });
 
+  it("normalizes built-in message tool core send result receipts from AgentToolResult details", () => {
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "{}",
+            },
+          ],
+          details: {
+            action: "send",
+            channel: "sms",
+            to: "+15551234567",
+            result: {
+              channel: "sms",
+              messageId: "SM-core-result",
+              toJid: "+15551234567",
+              status: "sent",
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-core-result",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
+  it("normalizes built-in message tool sendResult receipts from AgentToolResult details", () => {
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "{}",
+            },
+          ],
+          details: {
+            action: "send",
+            channel: "sms",
+            to: "+15551234567",
+            sendResult: {
+              channel: "sms",
+              messageId: "SM-send-result",
+              toJid: "+15551234567",
+              status: "queued",
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-send-result",
+        status: "queued",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
   it("rejects failed and non-SMS message receipts", () => {
     expect(
       normalizeMessageToolDeliveryEvidence({
