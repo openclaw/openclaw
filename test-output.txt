@@ -1,0 +1,176 @@
+﻿node.exe : [33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+位於 C:\Program Files\nodejs\pnpm.ps1:16 字元:5
++     & "$basedir/node$exe"  "$basedir/node_modules/corepack/dist/pnpm. ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33m[PLUGIN_TI...r more details.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/optio
+ns/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldo
+wn.rs/options/checks#plugintimings for more details.
+
+
+ RUN  v4.1.8 C:/Users/samso/projects/openclaw-wt-86013
+
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > extracts a simple 2-column table 88ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > extracts multiple tables 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles tables with alignment markers 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > returns empty when no tables present 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles 4-space indented tables 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles 2-space indented tables 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > extracts tables inside list items 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles CRLF line endings in tables 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles mixed LF and CRLF line endings in tables 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles multiple empty lines before table 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractMarkdownTables > handles empty lines between header separator and data rows 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractCodeBlocks > extracts code blocks across language/no-language/multiple variants 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > extractLinks > extracts markdown links 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > strips inline markdown marker variants 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > preserves underscores inside words 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > still strips proper italic _text_ 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > strips italic between underscored words 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > preserves underscores inside non-Latin words 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > strips standalone italic between non-Latin words 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > stripMarkdown > handles complex markdown 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertTableToFlexBubble > replaces empty cells with placeholders 1ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertTableToFlexBubble > strips bold markers and applies weight for fully bold cells 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertTableToFlexBubble > shows no truncation hint for 10 rows or fewer 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertTableToFlexBubble > shows truncation hint for 11 rows 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertTableToFlexBubble > shows truncation hint with correct count for 15 rows 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > creates a code card with language label 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > creates a code card without language 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > truncates very long code 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > does not truncate code exactly at 2000 chars 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > truncates code at 2001 chars with correct count 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > truncates code at 2500 chars with correct count 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > shows language tag when language is provided 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > convertCodeBlockToFlexBubble > shows 'code' as language tag when language is undefined 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > processLineMessage > processes text with code blocks 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > processLineMessage > handles mixed content 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > processLineMessage > handles plain text unchanged 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > hasMarkdownToConvert > detects supported markdown patterns 0ms
+ ??|extension-line| ../../extensions/line/src/markdown-to-line.test.ts > hasMarkdownToConvert > returns false for plain text 0ms
+
+ Test Files  1 passed (1)
+      Tests  38 passed (38)
+   Start at  15:29:02
+   Duration  793ms (transform 572ms, setup 352ms, import 180ms, tests 104ms, environment 0ms)
+

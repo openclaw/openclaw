@@ -297,7 +297,6 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
           cornerRadius: "md",
           margin: "sm",
           maxHeight: "240px",
-          overflow: "scroll",
         } as FlexBox,
       ],
       paddingAll: "lg",
@@ -413,7 +412,7 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   processedText = stripMarkdown(processedText);
 
   return {
-    text: processedText,
+    text: processedText.replace(/\|+/g, ""),
     flexMessages,
   };
 }

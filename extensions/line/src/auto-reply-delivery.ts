@@ -33,6 +33,7 @@ export type LineAutoReplyDeps = {
     latitude: number;
     longitude: number;
   }) => messagingApi.LocationMessage;
+  warn?: (...args: unknown[]) => void;
 } & Pick<
   SendLineReplyChunksParams,
   | "replyMessageLine"
@@ -125,6 +126,11 @@ export async function deliverLineAutoReply(params: {
     : { text: "", flexMessages: [] };
 
   for (const flexMsg of processed.flexMessages) {
+    const flexBytes = new TextEncoder().encode(JSON.stringify(flexMsg.contents)).length;
+    if (flexBytes > 32768) {
+      deps.warn?.(`[LINE] FlexMessage from markdown ${flexBytes} bytes exceeds 32KB, skipping`);
+      continue;
+    }
     richMessages.push(deps.createFlexMessage(flexMsg.altText.slice(0, 400), flexMsg.contents));
   }
 
