@@ -42,6 +42,7 @@ import {
   vectorDimsForModel,
 } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
+import { canonicalizeEmbeddingIdentity, QueryEmbeddingCache } from "./query-embedding-cache.js";
 
 // ============================================================================
 // Types
@@ -365,17 +366,34 @@ class MemoryDB {
 // Embeddings
 // ============================================================================
 
+// The per-instance query-embedding cache lives in ./query-embedding-cache.ts:
+// the query-embedding round-trip dominates the LanceDB vector scan, and a single
+// user turn can embed the same recall query up to three times (memory_recall
+// tool, auto-recall hook, capture/dedup). Each Embeddings impl owns one cache
+// and feeds it an identity-pinned key so a model/provider/dims switch can never
+// return a stale or wrong-dimension vector.
+
 type Embeddings = {
   embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
 };
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
   private clientPromise: Promise<OpenAiEmbeddingClient>;
+  private readonly cache = new QueryEmbeddingCache();
+  // Identity is fixed for this instance's lifetime; encode it in the key anyway
+  // as a defensive guard so a cached vector can never be served under a
+  // different model/dims/endpoint.
+  private readonly identity = canonicalizeEmbeddingIdentity({
+    provider: "openai",
+    model: this.model,
+    dimensions: this.dimensions,
+    baseUrl: this.baseUrl,
+  });
 
   constructor(
     apiKey: string,
     private model: string,
-    baseUrl?: string,
+    private baseUrl?: string,
     private dimensions?: number,
   ) {
     this.clientPromise = loadOpenAiModule().then(
@@ -384,30 +402,41 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    const params: Record<string, unknown> = {
-      model: this.model,
-      input: text,
-    };
-    if (this.dimensions) {
-      params.dimensions = this.dimensions;
-    }
-    ensureGlobalUndiciEnvProxyDispatcher();
-    // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
-    // omitted, then decodes the response. Several compatible providers either
-    // reject encoding_format or always return float arrays, so use the generic
-    // transport and normalize the response ourselves.
-    const response = await (
-      await this.clientPromise
-    ).post<EmbeddingCreateResponse>("/embeddings", {
-      body: params,
-      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+    // timeoutMs governs how long we wait, not the produced vector, so it is not
+    // part of the key — a cache hit short-circuits the request entirely.
+    const key = JSON.stringify([this.identity, text]);
+    return this.cache.getOrCompute(key, async () => {
+      const params: Record<string, unknown> = {
+        model: this.model,
+        input: text,
+      };
+      if (this.dimensions) {
+        params.dimensions = this.dimensions;
+      }
+      ensureGlobalUndiciEnvProxyDispatcher();
+      // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
+      // omitted, then decodes the response. Several compatible providers either
+      // reject encoding_format or always return float arrays, so use the generic
+      // transport and normalize the response ourselves.
+      const response = await (
+        await this.clientPromise
+      ).post<EmbeddingCreateResponse>("/embeddings", {
+        body: params,
+        ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+      });
+      return normalizeEmbeddingVector(response.data?.[0]?.embedding);
     });
-    return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
 }
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
+  private readonly cache = new QueryEmbeddingCache();
+  // Resolved once the provider is created. `cacheKeyData` is the adapter's own
+  // identity (provider/baseUrl/model/outputDimensionality/headers); when an
+  // adapter does not supply it we fall back to the configured provider/model/dims
+  // plus the resolved provider id+model so the key still pins the exact model.
+  private identity: string | undefined;
 
   constructor(
     private api: OpenClawPluginApi,
@@ -456,11 +485,33 @@ class ProviderAdapterEmbeddings implements Embeddings {
     if (!result.provider) {
       throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
     }
+    // Resolve the cache identity once the provider exists. Prefer the adapter's
+    // cacheKeyData (its canonical identity); otherwise fall back to the
+    // configured provider/model/dims plus the resolved provider id+model so the
+    // key still encodes the exact model and can never serve a wrong-dim vector.
+    this.identity = canonicalizeEmbeddingIdentity(
+      result.runtime?.cacheKeyData ?? {
+        provider: providerId,
+        resolvedId: result.provider.id,
+        model: result.provider.model ?? this.embedding.model,
+        dimensions: this.embedding.dimensions,
+      },
+    );
     return result.provider;
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     const provider = await this.getProvider();
+    // identity is populated by createProvider() before getProvider() resolves.
+    const key = JSON.stringify([this.identity ?? "", text]);
+    return this.cache.getOrCompute(key, () => this.embedUncached(provider, text, options));
+  }
+
+  private async embedUncached(
+    provider: MemoryEmbeddingProvider,
+    text: string,
+    options?: { timeoutMs?: number },
+  ): Promise<number[]> {
     if (!options?.timeoutMs) {
       return await provider.embedQuery(text);
     }
@@ -537,6 +588,10 @@ class MemoryRecallEmbeddingError extends Error {
 
 export const testing = {
   runWithTimeout,
+  // Exposed so the embeddings integration tests can drive the real cache wiring
+  // through ProviderAdapterEmbeddings. The cache primitives themselves are unit
+  // tested directly via ./query-embedding-cache.ts.
+  ProviderAdapterEmbeddings,
 } as const;
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {

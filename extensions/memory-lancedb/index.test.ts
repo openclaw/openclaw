@@ -2433,8 +2433,13 @@ describe("memory plugin e2e", () => {
       );
       await harness.agentEnd?.(event, { sessionKey: "session-ended" });
 
-      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(2);
+      // The capture runs again after the session-end cursor eviction (this is
+      // the behavior under test) -> the row is stored twice. The query-embedding
+      // cache is per-instance and identity+text keyed, so the identical capture
+      // text reuses the cached vector and only embeds once; storage still runs
+      // both times, which is what the cursor-eviction assertion guards.
       expect(harness.add).toHaveBeenCalledTimes(2);
+      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(1);
     } finally {
       await cleanupAutoCaptureCursorHarness();
     }
@@ -3935,5 +3940,110 @@ describe("lancedb runtime loader", () => {
     await expect(loader.load()).resolves.toBe(runtimeModule);
 
     expect(importBundled).toHaveBeenCalledTimes(2);
+  });
+});
+
+// The QueryEmbeddingCache / canonicalizeEmbeddingIdentity / isCacheableEmbeddingVector
+// primitives are unit tested in ./query-embedding-cache.test.ts. These tests cover
+// the cache wired into the real ProviderAdapterEmbeddings (production code path).
+describe("query-embedding cache (wired into embeddings)", () => {
+  async function withProviderAdapter(
+    cacheKeyData: Record<string, unknown> | undefined,
+    embedQuery: ReturnType<typeof vi.fn>,
+  ): Promise<{ embed: (text: string) => Promise<number[]> }> {
+    const getMemoryEmbeddingProvider = vi.fn(() => ({
+      id: "adapter",
+      create: vi.fn(async (options: Record<string, unknown>) => ({
+        provider: {
+          id: "adapter",
+          model: options.model,
+          embedQuery,
+          embedBatch: vi.fn(async () => [[0.1]]),
+        },
+        ...(cacheKeyData ? { runtime: { id: "adapter", cacheKeyData } } : {}),
+      })),
+    }));
+    vi.doMock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
+      getMemoryEmbeddingProvider,
+    }));
+    vi.doMock("openclaw/plugin-sdk/memory-host-core", async () => {
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/memory-host-core")>(
+        "openclaw/plugin-sdk/memory-host-core",
+      );
+      return { ...actual, resolveDefaultAgentId: () => "main" };
+    });
+    const mod = await import("./index.js");
+    const cfg = { models: { providers: {} } };
+    const api = {
+      config: cfg,
+      runtime: {
+        config: { current: () => cfg },
+        agent: { resolveAgentDir: () => "/tmp/openclaw-agent" },
+      },
+    };
+    return new mod.testing.ProviderAdapterEmbeddings(
+      api as any,
+      {
+        provider: "adapter",
+        model: "embed-model",
+      } as any,
+    );
+  }
+
+  test("ProviderAdapterEmbeddings caches identical embeds (one provider call)", async () => {
+    vi.resetModules();
+    try {
+      const embedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
+      const embeddings = await withProviderAdapter({ provider: "adapter" }, embedQuery);
+      const a = await embeddings.embed("hello world");
+      const b = await embeddings.embed("hello world");
+      expect(embedQuery).toHaveBeenCalledTimes(1);
+      expect(a).toEqual([0.1, 0.2, 0.3]);
+      expect(b).toEqual(a);
+      // A different query text is a fresh provider call.
+      await embeddings.embed("different query");
+      expect(embedQuery).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
+      vi.doUnmock("openclaw/plugin-sdk/memory-host-core");
+      vi.resetModules();
+    }
+  });
+
+  test("ProviderAdapterEmbeddings never collides across distinct identities", async () => {
+    vi.resetModules();
+    try {
+      const embedA = vi.fn(async () => [1, 1, 1]);
+      const adapterA = await withProviderAdapter(
+        { provider: "adapter", model: "model-a", outputDimensionality: 3 },
+        embedA,
+      );
+      await adapterA.embed("same text");
+      await adapterA.embed("same text");
+      expect(embedA).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
+      vi.doUnmock("openclaw/plugin-sdk/memory-host-core");
+      vi.resetModules();
+    }
+
+    vi.resetModules();
+    try {
+      // A separate instance with a DIFFERENT cacheKeyData (model/dims) must not
+      // reuse the first instance's vector — caches are per-instance and the key
+      // pins model identity, so identical text under a new identity re-embeds.
+      const embedB = vi.fn(async () => [2, 2, 2, 2]);
+      const adapterB = await withProviderAdapter(
+        { provider: "adapter", model: "model-b", outputDimensionality: 4 },
+        embedB,
+      );
+      const result = await adapterB.embed("same text");
+      expect(embedB).toHaveBeenCalledTimes(1);
+      expect(result).toEqual([2, 2, 2, 2]);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
+      vi.doUnmock("openclaw/plugin-sdk/memory-host-core");
+      vi.resetModules();
+    }
   });
 });
