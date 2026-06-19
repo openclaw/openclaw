@@ -637,6 +637,8 @@ describe("maybeRepairLegacyCronStore", () => {
     const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
     expect(job).toEqual(shellPromptJob);
     const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    expect(reloaded.configJobIndexes).toEqual([0]);
+    expect(reloaded.invalidConfigRows).toEqual([]);
     const configJob = requirePersistedJob(reloaded.configJobs, 0);
     expect(configJob).toEqual(
       Object.fromEntries(Object.entries(shellPromptJob).filter(([key]) => key !== "updatedAtMs")),
