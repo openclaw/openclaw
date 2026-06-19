@@ -288,12 +288,12 @@ const readUsageFromSessionLog = (
   storePath?: string,
 ):
   | {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      promptTokens: number;
-      total: number;
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      promptTokens?: number;
+      total?: number;
       totalTokensFresh: boolean;
       costUsd?: number;
       model?: string;
@@ -333,17 +333,22 @@ const readUsageFromSessionLog = (
       return undefined;
     }
 
-    const input = snapshot.inputTokens ?? 0;
-    const output = snapshot.outputTokens ?? 0;
-    const cacheRead = snapshot.cacheRead ?? 0;
-    const cacheWrite = snapshot.cacheWrite ?? 0;
-    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
-    const total = promptTokens + output;
+    const input = snapshot.inputTokens;
+    const output = snapshot.outputTokens;
+    const cacheRead = snapshot.cacheRead;
+    const cacheWrite = snapshot.cacheWrite;
+    const hasTokenUsage = [input, output, cacheRead, cacheWrite, snapshot.totalTokens].some(
+      (value) => typeof value === "number" && Number.isFinite(value),
+    );
+    const promptTokens = hasTokenUsage
+      ? (snapshot.totalTokens ?? (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0))
+      : undefined;
+    const total = typeof promptTokens === "number" ? promptTokens + (output ?? 0) : undefined;
     const costUsd =
       typeof snapshot.costUsd === "number" && Number.isFinite(snapshot.costUsd)
         ? snapshot.costUsd
         : undefined;
-    if (promptTokens === 0 && total === 0 && costUsd === undefined) {
+    if (!hasTokenUsage && costUsd === undefined) {
       return undefined;
     }
     const model = snapshot.modelProvider
@@ -352,12 +357,12 @@ const readUsageFromSessionLog = (
         : snapshot.modelProvider
       : snapshot.model;
     return {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      promptTokens,
-      total,
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+      ...(promptTokens !== undefined ? { promptTokens } : {}),
+      ...(total !== undefined ? { total } : {}),
       totalTokensFresh: snapshot.totalTokensFresh === true,
       ...(costUsd !== undefined ? { costUsd } : {}),
       model,
@@ -640,7 +645,10 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  let transcriptCostUsd: number | undefined;
+  let statusCostUsd =
+    typeof entry?.estimatedCostUsd === "number" && Number.isFinite(entry.estimatedCostUsd)
+      ? entry.estimatedCostUsd
+      : undefined;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   // Undefined freshness is legacy, not stale: keep persisted totals for /status,
   // but let a fresh transcript prompt snapshot replace them when available.
@@ -695,20 +703,26 @@ export function buildStatusMessage(args: StatusArgs): string {
           contextLookupModel = logUsage.model;
         }
       }
-      if (!inputTokens || inputTokens === 0) {
+      if ((!inputTokens || inputTokens === 0) && typeof logUsage.input === "number") {
         inputTokens = logUsage.input;
       }
-      if (!outputTokens || outputTokens === 0) {
+      if ((!outputTokens || outputTokens === 0) && typeof logUsage.output === "number") {
         outputTokens = logUsage.output;
       }
-      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+      if (
+        (typeof cacheRead !== "number" || cacheRead <= 0) &&
+        typeof logUsage.cacheRead === "number"
+      ) {
         cacheRead = logUsage.cacheRead;
       }
-      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+      if (
+        (typeof cacheWrite !== "number" || cacheWrite <= 0) &&
+        typeof logUsage.cacheWrite === "number"
+      ) {
         cacheWrite = logUsage.cacheWrite;
       }
       if (typeof logUsage.costUsd === "number" && Number.isFinite(logUsage.costUsd)) {
-        transcriptCostUsd = logUsage.costUsd;
+        statusCostUsd = logUsage.costUsd;
       }
     }
   }
@@ -1047,11 +1061,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       })
     : undefined;
   const costLabel =
-    transcriptCostUsd !== undefined
-      ? formatUsd(transcriptCostUsd)
-      : hasUsage
-        ? formatUsd(cost)
-        : undefined;
+    statusCostUsd !== undefined ? formatUsd(statusCostUsd) : hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";

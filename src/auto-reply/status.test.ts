@@ -2013,7 +2013,11 @@ describe("buildStatusMessage", () => {
     });
   }
 
-  function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
+  function buildTranscriptStatusText(params: {
+    sessionId: string;
+    sessionKey: string;
+    estimatedCostUsd?: number;
+  }) {
     return buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-6",
@@ -2024,6 +2028,9 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 3,
         contextTokens: 32_000,
+        ...(params.estimatedCostUsd !== undefined
+          ? { estimatedCostUsd: params.estimatedCostUsd }
+          : {}),
       },
       sessionKey: params.sessionKey,
       sessionScope: "per-sender",
@@ -2093,7 +2100,7 @@ describe("buildStatusMessage", () => {
     );
   });
 
-  it("uses cumulative transcript-backed cost when recent transcript tail has no usage", async () => {
+  it("uses persisted cost without zero-token counters when recent transcript tail has no usage", async () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-transcript-cost-before-tail";
@@ -2132,9 +2139,11 @@ describe("buildStatusMessage", () => {
         const text = buildTranscriptStatusText({
           sessionId,
           sessionKey: "agent:main:main",
+          estimatedCostUsd: 0.0063,
         });
 
         expect(normalizeTestText(text)).toContain("Cost: $0.0063");
+        expect(normalizeTestText(text)).not.toContain("Tokens: 0 in / 0 out");
       },
       { prefix: "openclaw-status-" },
     );
