@@ -678,6 +678,20 @@ export function recomputeNextRunsForMaintenance(
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
   const deferralIds = state.pendingCatchupDeferralJobIds ?? new Set<string>();
+  // Drop deferral markers for jobs that no longer exist in the store or
+  // are disabled — they won't fire, so no deferral is needed.
+  if (state.store && deferralIds.size > 0) {
+    const relevantDeferralIds = new Set(
+      state.store.jobs
+        .filter((job) => isJobEnabled(job))
+        .map((job) => job.id),
+    );
+    for (const jobId of deferralIds) {
+      if (!relevantDeferralIds.has(jobId)) {
+        deferralIds.delete(jobId);
+      }
+    }
+  }
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
