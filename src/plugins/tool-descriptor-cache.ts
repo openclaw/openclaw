@@ -160,19 +160,27 @@ function hasValidAvailabilityGroupShape(
   expr: ToolAvailabilityExpression,
 ): boolean {
   if ("allOf" in expr) {
-    if (!Array.isArray(expr.allOf)) return false;
+    if (!Array.isArray(expr.allOf)) {
+      return false;
+    }
     return expr.allOf.every((entry) => {
       // Plugin-authored data is untyped — primitives, null, and arrays
       // are not group expressions; skip them.  The evaluator will
       // diagnose them as malformed expressions later.
-      if (entry === null || typeof entry !== "object") return true;
+      if (entry === null || typeof entry !== "object") {
+        return true;
+      }
       return hasValidAvailabilityGroupShape(entry as ToolAvailabilityExpression);
     });
   }
   if ("anyOf" in expr) {
-    if (!Array.isArray(expr.anyOf)) return false;
+    if (!Array.isArray(expr.anyOf)) {
+      return false;
+    }
     return expr.anyOf.every((entry) => {
-      if (entry === null || typeof entry !== "object") return true;
+      if (entry === null || typeof entry !== "object") {
+        return true;
+      }
       return hasValidAvailabilityGroupShape(entry as ToolAvailabilityExpression);
     });
   }
