@@ -2639,17 +2639,19 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses reasoning payload delivery to Discord", async () => {
+  it("delivers reasoning payload to Discord when /reasoning on sends them", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalled();
+    const params = firstMockArg(deliverDiscordReply, "deliverDiscordReply");
+    expect(params.replies[0]).toHaveProperty("isReasoning", true);
   });
 
-  it("suppresses reasoning-tagged final payload delivery to Discord", async () => {
+  it("delivers reasoning-tagged final payload to Discord", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
-        text: "Reasoning:\nthis should stay internal",
+        text: "Reasoning:\nthis should be shown",
         isReasoning: true,
       });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2661,8 +2663,9 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalled();
+    const params = firstMockArg(deliverDiscordReply, "deliverDiscordReply");
+    expect(params.replies[0]).toHaveProperty("isReasoning", true);
   });
 
   it("delivers non-reasoning block payloads to Discord", async () => {
