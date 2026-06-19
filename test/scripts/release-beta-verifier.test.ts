@@ -1,11 +1,17 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchStatusWithRetry,
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
   runNpmViewWithRetry,
 } from "../../scripts/lib/release-beta-verifier.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("parseReleaseVerifyBetaArgs", () => {
   it("defaults beta verification to the matching tag and repo", () => {
@@ -149,6 +155,46 @@ describe("runNpmViewWithRetry", () => {
     expect(calls).toHaveLength(3);
     expect(calls.every((args) => args.at(-1) === "--prefer-online")).toBe(true);
     expect(delays).toEqual([1000, 2000]);
+  });
+});
+
+describe("fetchStatusWithRetry", () => {
+  it("cancels retryable and returned GET response bodies", async () => {
+    vi.useFakeTimers();
+    const canceled: string[] = [];
+    const responses = [
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled.push("retry");
+          },
+        }),
+        { status: 500 },
+      ),
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled.push("final");
+          },
+        }),
+        { status: 200 },
+      ),
+    ];
+    const fetchImpl = vi.fn(async () => {
+      const response = responses.shift();
+      if (!response) {
+        throw new Error("unexpected fetch call");
+      }
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const status = fetchStatusWithRetry("https://clawhub.test/api/v1/package", "GET");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(status).resolves.toBe(200);
+    expect(canceled).toEqual(["retry", "final"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 
