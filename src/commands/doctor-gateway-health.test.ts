@@ -7,9 +7,13 @@ import {
 } from "./gateway-health-auth-diagnostic.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
-const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
-const isGatewayTransportError = vi.hoisted(() => vi.fn(() => false));
-const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
+const isGatewayCredentialsRequiredError = vi.hoisted(() =>
+  vi.fn<(value: unknown) => boolean>(() => false),
+);
+const isGatewayTransportError = vi.hoisted(() => vi.fn<(value: unknown) => boolean>(() => false));
+const isGatewaySecretRefUnavailableError = vi.hoisted(() =>
+  vi.fn<(value: unknown) => boolean>(() => false),
+);
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";

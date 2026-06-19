@@ -1861,8 +1861,8 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
-          // Native attempts start the heartbeat only after their own timeout
-          // watchdog is armed, keeping preflight inside the requested deadline.
+          // Attempts start the heartbeat only after their own timeout watchdog
+          // is armed, keeping preflight inside the requested deadline.
           let progressInterval: ReturnType<typeof setInterval> | undefined;
           const stopLaneProgressHeartbeat = () => {
             if (progressInterval) {
@@ -1884,8 +1884,8 @@ async function runEmbeddedAgentInternal(
               once: true,
             });
           };
-          // Timeout recovery can continue after an attempt returns, but a native
-          // transport that ignores its timeout releases the lane after one grace.
+          // Timeout recovery can continue after an attempt returns, but a
+          // harness transport that ignores its timeout releases the lane after one grace.
           let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
           const clearAttemptTimeoutRelease = () => {
             if (timeoutReleaseTimer) {
@@ -2006,16 +2006,12 @@ async function runEmbeddedAgentInternal(
             runId: params.runId,
             lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
-            onAttemptTimeoutArmed: pluginHarnessOwnsTransport
-              ? undefined
-              : startLaneProgressHeartbeat,
-            onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-            onAttemptAbort: pluginHarnessOwnsTransport
-              ? undefined
-              : () => {
-                  stopLaneProgressHeartbeat();
-                  laneTaskAbortController.abort();
-                },
+            onAttemptTimeoutArmed: startLaneProgressHeartbeat,
+            onAttemptTimeout: armAttemptTimeoutRelease,
+            onAttemptAbort: () => {
+              stopLaneProgressHeartbeat();
+              laneTaskAbortController.abort();
+            },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,

@@ -1,5 +1,5 @@
 // Coverage for replay-safe Codex app-server recovery retries.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -242,6 +242,66 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("releases the same-session lane when a Codex app-server timeout ignores cancellation", async () => {
+    vi.useFakeTimers();
+    let settleIgnoredAttempt: ((value: EmbeddedRunAttemptResult) => void) | undefined;
+    let resolveFirstAttemptStarted: (() => void) | undefined;
+    const firstAttemptStarted = new Promise<void>((resolve) => {
+      resolveFirstAttemptStarted = resolve;
+    });
+    try {
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+        const { onAttemptTimeoutArmed, onAttemptTimeout } = attemptParams as {
+          onAttemptTimeoutArmed?: () => void;
+          onAttemptTimeout?: (reason: Error) => void;
+        };
+        onAttemptTimeoutArmed?.();
+        resolveFirstAttemptStarted?.();
+        onAttemptTimeout?.(
+          new Error("codex app-server turn idle timed out waiting for turn/completed"),
+        );
+        return await new Promise((resolve) => {
+          settleIgnoredAttempt = resolve;
+        });
+      });
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt());
+
+      const firstRun = runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-timeout-lane-release-first",
+        timeoutMs: 48 * 60 * 60 * 1000,
+      });
+      void firstRun.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(0);
+      await firstAttemptStarted;
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+
+      const secondRun = runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-timeout-lane-release-second",
+      });
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2);
+
+      await expect(firstRun).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+      await expect(secondRun).resolves.toMatchObject({ meta: { aborted: false } });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]).toMatchObject({
+        runId: "run-codex-timeout-lane-release-second",
+      });
+    } finally {
+      settleIgnoredAttempt?.(successAttempt());
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {
