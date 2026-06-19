@@ -65,8 +65,8 @@ describe("buildTelegramMessageContext typing", () => {
     let resolveSendChatAction!: () => void;
     const sendChatAction = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
-          resolveSendChatAction = resolve;
+        new Promise<undefined>((resolve) => {
+          resolveSendChatAction = () => resolve(undefined);
         }),
     );
     const sendChatActionHandler = createSendChatActionHandler(sendChatAction);
