@@ -760,7 +760,7 @@ describe("mcp loopback server", () => {
         ],
       };
     });
-    const { runtime } = await startLoopbackServerForTest();
+    await startLoopbackServerForTest();
     const firstYield = vi.fn();
     const secondYield = vi.fn();
     const sendYield = async (
