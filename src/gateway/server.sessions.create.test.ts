@@ -90,7 +90,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(header.id).toBe(created.payload?.sessionId);
 });
 
-test("sessions.create inherits parent runtime model selection when model is omitted", async () => {
+test("sessions.create inherits parent runtime behavior settings but skips model override when model is omitted", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: {
@@ -134,12 +134,14 @@ test("sessions.create inherits parent runtime model selection when model is omit
 
   expect(created.ok).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  expect(created.payload?.entry?.providerOverride).toBe("codex");
-  expect(created.payload?.entry?.modelOverride).toBe("gpt-5.5");
-  expect(created.payload?.entry?.modelOverrideSource).toBe("user");
+  // modelOverride/providerOverride/modelProvider/model NOT inherited — child uses config default
+  expect(created.payload?.entry?.providerOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverride).toBeUndefined();
+  expect(created.payload?.entry?.modelOverrideSource).toBeUndefined();
+  expect(created.payload?.entry?.modelProvider).toBeUndefined();
+  expect(created.payload?.entry?.model).toBeUndefined();
+  // runtime behavior settings STILL inherited
   expect(created.payload?.entry?.agentRuntimeOverride).toBe("codex");
-  expect(created.payload?.entry?.modelProvider).toBe("codex");
-  expect(created.payload?.entry?.model).toBe("gpt-5.5");
   expect(created.payload?.entry?.contextTokens).toBe(272000);
   expect(created.payload?.entry?.thinkingLevel).toBe("off");
   expect(created.payload?.entry?.traceLevel).toBe("debug");
@@ -155,8 +157,8 @@ test("sessions.create inherits parent runtime model selection when model is omit
     }
   >;
   const key = created.payload?.key as string;
-  expect(rawStore[key]?.providerOverride).toBe("codex");
-  expect(rawStore[key]?.modelOverride).toBe("gpt-5.5");
+  expect(rawStore[key]?.providerOverride).toBeUndefined();
+  expect(rawStore[key]?.modelOverride).toBeUndefined();
   expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
 });
 
@@ -422,8 +424,8 @@ test("sessions.create loads selected global parent from the requested agent stor
     expect(created.ok).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:work:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("global");
-    expect(created.payload?.entry?.providerOverride).toBe("openai");
-    expect(created.payload?.entry?.modelOverride).toBe("work-model");
+    expect(created.payload?.entry?.providerOverride).toBeUndefined();
+    expect(created.payload?.entry?.modelOverride).toBeUndefined();
     expect(created.payload?.entry?.thinkingLevel).toBe("high");
 
     const commandNewEvent = (
@@ -540,6 +542,43 @@ test("sessions.create sends selected global initial tasks to the requested agent
   testState.sessionConfig = undefined;
   testState.agentsConfig = undefined;
   ws.close();
+});
+
+test("sessions.create skips inherited modelOverride from parent for child dashboard sessions", async () => {
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent", {
+        providerOverride: "codex",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: string;
+      parentSessionKey?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    label: "Fresh Chat",
+    model: "openai/gpt-test-a",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  // modelOverride from parent NOT inherited — child uses explicitly passed model
+  expect(created.payload?.entry?.providerOverride).toBe("openai");
+  expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+  expect(created.payload?.entry?.modelOverrideSource).toBeUndefined();
 });
 
 test("sessions.create rejects unknown parentSessionKey", async () => {

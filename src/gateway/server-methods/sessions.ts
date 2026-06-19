@@ -165,6 +165,7 @@ function filterSessionStoreToConfiguredAgents(
   );
 }
 
+/** Inline overrides that child sessions inherit from the parent. */
 function inheritSessionRuntimeSelection(
   parentEntry: SessionEntry | undefined,
 ): Partial<SessionEntry> {
@@ -172,16 +173,9 @@ function inheritSessionRuntimeSelection(
     return {};
   }
   return {
-    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
-    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
-    ...(parentEntry.modelOverrideSource
-      ? { modelOverrideSource: parentEntry.modelOverrideSource }
-      : {}),
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
-    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
-    ...(parentEntry.model ? { model: parentEntry.model } : {}),
     ...(typeof parentEntry.contextTokens === "number"
       ? { contextTokens: parentEntry.contextTokens }
       : {}),
