@@ -472,10 +472,14 @@ export async function noteMemorySearchHealth(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
-    // When the probe was intentionally skipped (non-deep doctor run), the
-    // gateway returns checked: false / skipped: true — this means the probe
-    // was not performed, not that embeddings are unavailable. Suppress the
-    // false-positive warning, matching the isKeyOptionalMemoryProvider path.
+    // When the probe was intentionally skipped (skipped: true / checked: false
+    // due to the probe:false path through probeGatewayMemoryStatus → gateway
+    // doctor.memory.status), we have no embedding status information — do not
+    // warn. A skipped probe means readiness was never checked; it does not
+    // mean local embeddings are unavailable.
+    // NOTE: a transport timeout also sets checked: false, but skipped stays
+    // false/absent — a timeout is a real diagnostic signal and should fall
+    // through to the warning below.
     if (opts?.gatewayMemoryProbe?.skipped) {
       return;
     }

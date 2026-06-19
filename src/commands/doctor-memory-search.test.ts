@@ -238,6 +238,25 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn when local provider probe was skipped (checked: false, skipped: true)", async () => {
+    // Simulates `openclaw doctor` without --deep: the gateway returns
+    // { checked: false, ready: false, skipped: true } because the probe was
+    // intentionally not performed (probe: false path). This must NOT emit a
+    // false-positive warning — a skipped probe means readiness was never
+    // checked, not that local embeddings are unavailable.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("warns when local provider readiness probe is inconclusive", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
