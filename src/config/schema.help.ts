@@ -692,6 +692,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable metrics signal export to the configured OpenTelemetry collector endpoint. Keep enabled for runtime health dashboards, and disable only if metric volume must be minimized.",
   "diagnostics.otel.logs":
     "Enable log signal export through OpenTelemetry in addition to local logging sinks. Use this when centralized log correlation is required across services and agents.",
+  "diagnostics.otel.logsExporter":
+    'Log export sink for diagnostics.otel.logs. Use "otlp" for the configured OTLP logs endpoint, "stdout" for one JSON record per stdout line in container log pipelines, and "both" when both sinks are required.',
   "diagnostics.otel.sampleRate":
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
@@ -1230,8 +1232,6 @@ export const FIELD_HELP: Record<string, string> = {
     'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128\u2013512 tokens) while keeping non-weight VRAM bounded. Lower to 1024\u20132048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum \u2014 not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40\u202f960 tokens can push VRAM from ~8.8\u202fGB to ~32\u202fGB).',
   "agents.defaults.memorySearch.fallback":
     'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
-  "agents.defaults.memorySearch.store.path":
-    "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":
     "Enables the sqlite-vec extension used for vector similarity queries in memory search (default: true). Keep this enabled for normal semantic recall; disable only for debugging or fallback-only operation.",
   "agents.defaults.memorySearch.store.vector.extensionPath":

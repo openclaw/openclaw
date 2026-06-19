@@ -1896,11 +1896,19 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps shared test helpers cheap by default when no precise target exists", () => {
-    expect(
-      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/poll.ts",
-      ]),
-    ).toStrictEqual([]);
+    let args: string[] | null = null;
+    withTinyGitRepo(
+      {
+        "test/helpers/unmapped-helper.ts": "export const unmapped = true;\n",
+      },
+      (cwd) => {
+        args = resolveChangedTargetArgs(["--changed", "origin/main"], cwd, () => [
+          "test/helpers/unmapped-helper.ts",
+        ]);
+      },
+    );
+
+    expect(args).toStrictEqual([]);
   });
 
   it("routes imported shared test helpers through affected tests", () => {
@@ -1922,14 +1930,22 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
-    expect(
-      resolveChangedTargetArgs(
-        ["--changed", "origin/main"],
-        process.cwd(),
-        () => ["test/helpers/poll.ts"],
-        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
-      ),
-    ).toBeNull();
+    let args: string[] | null = [];
+    withTinyGitRepo(
+      {
+        "test/helpers/unmapped-helper.ts": "export const unmapped = true;\n",
+      },
+      (cwd) => {
+        args = resolveChangedTargetArgs(
+          ["--changed", "origin/main"],
+          cwd,
+          () => ["test/helpers/unmapped-helper.ts"],
+          { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+        );
+      },
+    );
+
+    expect(args).toBeNull();
   });
 
   it("routes channel contract helper edits through the tests that import them", () => {

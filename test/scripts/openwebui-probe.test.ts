@@ -1,5 +1,6 @@
 // Openwebui Probe tests cover openwebui probe script behavior.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
@@ -184,6 +185,16 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("passes Open WebUI request timeouts into bounded body reads", () => {
+    const script = readFileSync(probePath, "utf8");
+
+    expect(script).toContain("run(controller.signal, timeoutPromise)");
+    expect(script).toMatch(
+      /readBoundedResponseTextWithLimit\(\s*response,\s*label,\s*responseBodyMaxBytes,\s*timeoutPromise,/u,
+    );
+    expect(script.match(/async \(signal, timeoutPromise\)/gu)).toHaveLength(3);
   });
 
   it("bounds sign-in error response bodies", async () => {

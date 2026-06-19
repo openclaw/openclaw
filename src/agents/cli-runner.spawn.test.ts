@@ -24,6 +24,7 @@ import {
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
@@ -272,7 +273,6 @@ async function withTempExecApprovalsFile(
   file: Record<string, unknown>,
   run: () => Promise<void>,
 ): Promise<void> {
-  const originalHome = process.env.HOME;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
   await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
   await fs.writeFile(
@@ -280,31 +280,18 @@ async function withTempExecApprovalsFile(
     `${JSON.stringify(file)}\n`,
     "utf-8",
   );
-  process.env.HOME = home;
   try {
-    await run();
+    await withEnvAsync({ HOME: home }, run);
   } finally {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
     await fs.rm(home, { recursive: true, force: true });
   }
 }
 
 async function withTempOpenClawHome(run: (home: string) => Promise<void>): Promise<void> {
-  const originalOpenClawHome = process.env.OPENCLAW_HOME;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-home-"));
-  process.env.OPENCLAW_HOME = home;
   try {
-    await run(home);
+    await withEnvAsync({ OPENCLAW_HOME: home }, async () => run(home));
   } finally {
-    if (originalOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
     await fs.rm(home, { recursive: true, force: true });
   }
 }

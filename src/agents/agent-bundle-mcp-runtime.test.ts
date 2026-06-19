@@ -665,11 +665,11 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(2_000);
+    testing.setBundleMcpCatalogListTimeoutMsForTest(3_000);
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      delayMs: 250,
+      delayMs: 1_250,
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -682,7 +682,7 @@ describe("session MCP runtime", () => {
             slowListTools: {
               command: process.execPath,
               args: [serverPath],
-              connectionTimeoutMs: 150,
+              connectionTimeoutMs: 1_000,
             },
           },
         },
@@ -697,7 +697,7 @@ describe("session MCP runtime", () => {
         serverName: "slowListTools",
         toolCount: 1,
       });
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 250");
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 1250");
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

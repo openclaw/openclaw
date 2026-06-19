@@ -405,7 +405,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
 ]);
-const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
@@ -724,6 +723,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
+  ["scripts/setup-auth-system.sh", ["test/scripts/test-projects.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/docker-e2e.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
@@ -2330,9 +2330,6 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
   if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
     return [siblingTest];
-  }
-  if (BROAD_ONLY_TEST_HELPERS.has(changedPath)) {
-    return null;
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
     return changedPath.startsWith("ui/src/") ? [changedPath] : null;

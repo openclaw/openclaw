@@ -6,6 +6,7 @@ import { probeGatewayUrl, probeLocalCommand } from "./probes.js";
 describe("crestodian probes", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("bounds noisy local command probe output", async () => {
@@ -53,5 +54,27 @@ describe("crestodian probes", () => {
     ).resolves.toMatchObject({ reachable: true });
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("cancels gateway health response bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: false,
+            statusText: "Service Unavailable",
+            body: { cancel },
+          }) as unknown as Response,
+      ),
+    );
+
+    await expect(probeGatewayUrl("ws://127.0.0.1:1234")).resolves.toEqual({
+      reachable: false,
+      url: "ws://127.0.0.1:1234",
+      error: "Service Unavailable",
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });

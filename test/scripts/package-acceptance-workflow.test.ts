@@ -791,7 +791,7 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
     );
     expect(workflow).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
@@ -895,6 +895,9 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1",
     );
     expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
+    );
+    expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
     );
     expect(workflow).toContain(
@@ -996,7 +999,10 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_CLI_BACKEND_DOCKER_RUN_TIMEOUT:-2700s",
     );
     expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
-      'timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:-180}s"',
+      'CLI_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS 180)"',
+    );
+    expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
+      'timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}s"',
     );
     expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
       'echo "timeout command not found; cannot bound live CLI backend setup after ${timeout_value}"',
@@ -1005,10 +1011,13 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s",
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      "OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180",
+      'ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS 180)"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      'timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"',
+      'timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}s"',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      '-e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
@@ -1023,10 +1032,13 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      "OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180",
+      'CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS 180)"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      'timeout_value="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180}s"',
+      'timeout_value="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:?missing live Codex harness setup timeout seconds}s"',
+    );
+    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
+      '-e OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$CODEX_HARNESS_SETUP_TIMEOUT_SECONDS"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'echo "timeout command not found; cannot bound live Codex harness setup after ${timeout_value}"',

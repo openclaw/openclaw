@@ -85,10 +85,21 @@ jobs:
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
-          UBUNTU_WSL_ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz
         run: |
           $ErrorActionPreference = "Continue"
           $ok = $false
+          $restartRequired = $false
+
+          function Resolve-UbuntuWslRootfsUrl {
+            $osArch = ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLowerInvariant()
+            switch ($osArch) {
+              "x64" { $wslArch = "amd64" }
+              "arm64" { $wslArch = "arm64" }
+              default { throw "Unsupported Windows architecture for Ubuntu WSL rootfs: $osArch" }
+            }
+            Write-Host "ubuntu_wsl_rootfs_arch=$wslArch"
+            "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz"
+          }
 
           function Invoke-WslText {
             param([string[]] $Arguments)
@@ -117,9 +128,15 @@ jobs:
             Write-Host "wsl.exe=$($wsl.Source)"
             if ($env:ENABLE_WSL2_FEATURES -eq "true") {
               Write-Host "enable_wsl2_features=true"
-              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform", "Microsoft-Hyper-V-All")) {
+              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform")) {
                 dism.exe /online /enable-feature /featurename:$feature /all /norestart
                 Write-Host "enable_feature_${feature}_exit=$LASTEXITCODE"
+                if ($LASTEXITCODE -eq 3010) {
+                  $restartRequired = $true
+                }
+              }
+              if ($restartRequired) {
+                Write-Warning "wsl2_restart_required=true; Windows optional feature changes require a runner reboot before WSL2 can be imported."
               }
             }
 
@@ -132,12 +149,13 @@ jobs:
             Write-Host "wsl_list_exit=$($list.Code)"
 
             $distros = @(Get-WslDistros)
-            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true") {
+            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true" -and -not $restartRequired) {
               Write-Host "import_ubuntu_wsl2=true"
               $wslRoot = "C:\wsl\UbuntuProbe"
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
+              $rootfsUrl = Resolve-UbuntuWslRootfsUrl
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
-              Invoke-WebRequest -Uri $env:UBUNTU_WSL_ROOTFS_URL -OutFile $rootfs -UseBasicParsing
+              Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfs -UseBasicParsing
               $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
               Write-Host $import.Text
               Write-Host "wsl_import_exit=$($import.Code)"
@@ -145,12 +163,16 @@ jobs:
               Write-Host $list.Text
               Write-Host "wsl_list_after_import_exit=$($list.Code)"
               $distros = @(Get-WslDistros)
+            } elseif ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true" -and $restartRequired) {
+              Write-Warning "import_ubuntu_wsl2=skipped_restart_required"
             }
 
             if ($distros.Count -gt 0) {
               $distro = $distros[0]
               Write-Host "wsl_probe_distro=$distro"
               $exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
+            } elseif ($restartRequired) {
+              $exec = [pscustomobject]@{ Code = 1; Text = "wsl_exec_skipped=restart_required" }
             } else {
               $exec = Invoke-WslText -Arguments @("--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
             }
@@ -163,11 +185,15 @@ jobs:
 
           if ($ok) {
             "wsl2_ok=true" >> $env:GITHUB_OUTPUT
+            "wsl2_restart_required=false" >> $env:GITHUB_OUTPUT
             "OPENCLAW_WSL2_PROBE_OK=true" >> $env:GITHUB_ENV
+            "OPENCLAW_WSL2_RESTART_REQUIRED=false" >> $env:GITHUB_ENV
             Write-Host "wsl2_ok=true"
           } else {
             "wsl2_ok=false" >> $env:GITHUB_OUTPUT
+            "wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
             "OPENCLAW_WSL2_PROBE_OK=false" >> $env:GITHUB_ENV
+            "OPENCLAW_WSL2_RESTART_REQUIRED=$($restartRequired.ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
             Write-Warning "wsl2_ok=false"
           }
 

@@ -296,7 +296,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let authTestFailed = false;
   let authTestError: string | undefined;
   try {
-    const auth = await app.client.auth.test({ token: botToken });
+    const auth = await app.client.auth.test();
     botUserId = auth.user_id ?? "";
     botId = (auth as { bot_id?: string }).bot_id ?? "";
     teamId = auth.team_id ?? "";

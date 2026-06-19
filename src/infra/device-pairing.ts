@@ -1229,17 +1229,3 @@ export async function revokeDeviceToken(params: {
     return { ok: true, entry };
   });
 }
-
-/** Delete a paired device record without touching unrelated pending requests. */
-export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const normalizedId = normalizeDeviceId(deviceId);
-    if (!state.pairedByDeviceId[normalizedId]) {
-      return false;
-    }
-    delete state.pairedByDeviceId[normalizedId];
-    await persistState(state, baseDir, "paired");
-    return true;
-  });
-}
