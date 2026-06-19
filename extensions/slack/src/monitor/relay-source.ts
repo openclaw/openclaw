@@ -1,5 +1,6 @@
 // Slack plugin module implements relay-backed inbound event transport.
 import { Buffer } from "node:buffer";
+import { isIP } from "node:net";
 import {
   computeBackoff,
   sleepWithAbort,
@@ -232,11 +233,27 @@ function buildRelayWebSocketUrl(config: SlackRelaySourceConfig): string {
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error(`Slack relay URL must use http(s) or ws(s): ${config.url}`);
   }
+  if (url.protocol === "ws:" && !isLocalRelayHost(url.hostname)) {
+    throw new Error(
+      `Slack relay URL uses plaintext ws:// for non-local host "${url.host}". ` +
+        "Use wss:// for remote relay URLs; ws:// is only allowed for localhost, 127.0.0.1, or [::1].",
+    );
+  }
   if (!url.pathname || url.pathname === "/") {
     throw new Error(`Slack relay URL must include its websocket path: ${config.url}`);
   }
   url.searchParams.set("gateway_id", config.gatewayId);
   return url.toString();
+}
+
+function isLocalRelayHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  const host =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  if (host === "localhost" || host === "::1") {
+    return true;
+  }
+  return isIP(host) === 4 && host.startsWith("127.");
 }
 
 function parseRelayFrame(data: RawData): unknown {
