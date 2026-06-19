@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { resolveLaunchAgentHomeDir } from "../daemon/paths.js";
 import { resolveRestartSentinelPath } from "./restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
@@ -384,7 +385,10 @@ function resolveGatewayServiceRecovery(
     const label =
       env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
     const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-    const home = env.HOME?.trim() || os.homedir();
+    const home = resolveLaunchAgentHomeDir({
+      ...env,
+      HOME: env.HOME?.trim() || os.homedir(),
+    });
     return {
       kind: "launchd",
       uid,
