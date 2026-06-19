@@ -261,6 +261,18 @@ function shouldListConfiguredProviderModel(params: {
   return params.providerConfig.api !== undefined || params.model.api !== undefined;
 }
 
+function configuredWildcardProviders(cfg: OpenClawConfig): Set<string> {
+  const providers = new Set<string>();
+  for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+    const normalizedKey = key.trim().toLowerCase();
+    if (!normalizedKey.endsWith("/*")) {
+      continue;
+    }
+    providers.add(normalizedKey.slice(0, -2));
+  }
+  return providers;
+}
+
 function findConfiguredProviderModel(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -379,6 +391,13 @@ export async function appendAuthenticatedCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
+  const wildcardProviders =
+    params.context.cfg.models?.mode === "replace"
+      ? configuredWildcardProviders(params.context.cfg)
+      : undefined;
+  if (wildcardProviders?.size === 0) {
+    return;
+  }
   const { loadModelCatalog } = await loadModelCatalogModule();
   const catalog = await loadModelCatalog({
     config: params.context.cfg,
@@ -387,6 +406,9 @@ export async function appendAuthenticatedCatalogRows(params: {
   });
   for (const entry of catalog) {
     if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
+      continue;
+    }
+    if (wildcardProviders && !wildcardProviders.has(normalizeProviderId(entry.provider))) {
       continue;
     }
     const key = modelKey(entry.provider, entry.id);

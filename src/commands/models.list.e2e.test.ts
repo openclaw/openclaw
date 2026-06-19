@@ -632,6 +632,129 @@ describe("models list/status", () => {
     expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
   });
 
+  it("models list replace mode skips auth-backed built-in catalogs without provider wildcards", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "deepseek/deepseek-v4-pro",
+          models: {
+            "deepseek/deepseek-v4-pro": {},
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          deepseek: {
+            api: "openai-responses",
+            baseUrl: "https://api.deepseek.test/v1",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "DeepSeek V4 Pro",
+                input: ["text"],
+                contextWindow: 128000,
+              },
+            ],
+          },
+          xai: {
+            api: "openai-responses",
+            baseUrl: "https://api.xai.test/v1",
+            models: [
+              {
+                id: "grok-4.3",
+                name: "Grok 4.3",
+                input: ["text"],
+                contextWindow: 128000,
+              },
+            ],
+          },
+        },
+      },
+    });
+    loadModelCatalog.mockResolvedValue([
+      OPENAI_MODEL,
+      {
+        provider: "groq",
+        id: "llama-4",
+        name: "Llama 4",
+        input: ["text"],
+        baseUrl: "https://api.groq.com/openai/v1",
+        contextWindow: 128000,
+      },
+    ]);
+    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+      ["openai", "groq", "deepseek", "xai"].includes(provider)
+        ? ([{ id: `${provider}-profile` }] as Array<Record<string, unknown>>)
+        : [],
+    );
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models.map((model: { key: string }) => model.key)).toEqual([
+      "deepseek/deepseek-v4-pro",
+      "xai/grok-4.3",
+    ]);
+  });
+
+  it("models list replace mode scopes auth-backed catalogs to provider wildcards", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "deepseek/deepseek-v4-pro",
+          models: {
+            "deepseek/*": {},
+            "xai/grok-4.3": {},
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          xai: {
+            api: "openai-responses",
+            baseUrl: "https://api.xai.test/v1",
+            models: [
+              {
+                id: "grok-4.3",
+                name: "Grok 4.3",
+                input: ["text"],
+                contextWindow: 128000,
+              },
+            ],
+          },
+        },
+      },
+    });
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "deepseek",
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        input: ["text"],
+        baseUrl: "https://api.deepseek.test/v1",
+        contextWindow: 128000,
+      },
+      OPENAI_MODEL,
+    ]);
+    listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+      ["openai", "deepseek", "xai"].includes(provider)
+        ? ([{ id: `${provider}-profile` }] as Array<Record<string, unknown>>)
+        : [],
+    );
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models.map((model: { key: string }) => model.key)).toEqual([
+      "deepseek/deepseek-v4-pro",
+      "xai/grok-4.3",
+    ]);
+  });
+
   it("models list fails fast when configured registry lookup is unavailable", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     enableGoogleAntigravityAuthProfile();
