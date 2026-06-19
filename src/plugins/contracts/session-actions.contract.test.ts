@@ -53,6 +53,27 @@ async function callPluginSessionActionForTest(params: {
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
 
+async function callPluginUiDescriptorsForTest(
+  body: Record<string, unknown> = {},
+): Promise<HookResponse> {
+  let response: HookResponse | undefined;
+  const respond: RespondFn = (ok, payload, error) => {
+    response = { ok, payload, error };
+  };
+  await pluginHostHookHandlers["plugins.uiDescriptors"]({
+    req: { id: "test", type: "req", method: "plugins.uiDescriptors", params: body },
+    params: body,
+    client: {
+      connId: "test-client",
+      connect: { scopes: [READ_SCOPE] },
+    } as GatewayClient,
+    isWebchatConnect: () => false,
+    respond,
+    context: {} as never,
+  });
+  return response ?? { ok: false, error: new Error("handler did not respond") };
+}
+
 async function callRegisteredSessionActionForTest(params: {
   pluginId: string;
   actionId: string;
@@ -114,6 +135,17 @@ function requireHookError(response: HookResponse): { code?: unknown; message?: u
   return error;
 }
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
 function requireObservedEvent(
   observed: unknown[],
   index: number,
@@ -149,6 +181,49 @@ describe("plugin session actions", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetAgentEventsForTest();
+  });
+
+  it("skips unreadable control UI descriptor rows while preserving healthy rows", async () => {
+    const unreadableRegistration: Record<string, unknown> = {
+      pluginId: "broken-control-ui",
+      pluginName: "Broken Control UI",
+      source: "/plugins/broken-control-ui/index.js",
+    };
+    Object.defineProperty(unreadableRegistration, "descriptor", {
+      get() {
+        throw new Error("control UI descriptor getter exploded");
+      },
+    });
+
+    const registry = createEmptyPluginRegistry();
+    registry.controlUiDescriptors = [
+      unreadableRegistration as never,
+      {
+        pluginId: "healthy-control-ui",
+        pluginName: "Healthy Control UI",
+        source: "/plugins/healthy-control-ui/index.js",
+        descriptor: {
+          id: "healthy.panel",
+          surface: "session",
+          label: "Healthy panel",
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const response = await callPluginUiDescriptorsForTest();
+
+    expect(response.ok).toBe(true);
+    const payload = expectRecordFields(response.payload, { ok: true });
+    expect(payload.descriptors).toEqual([
+      {
+        id: "healthy.panel",
+        surface: "session",
+        label: "Healthy panel",
+        pluginId: "healthy-control-ui",
+        pluginName: "Healthy Control UI",
+      },
+    ]);
   });
 
   it("initializes and registers typed session actions", () => {
