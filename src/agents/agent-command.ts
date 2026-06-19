@@ -2243,7 +2243,7 @@ async function agentCommandInternal(
               compactionError instanceof Error
                 ? compactionError.message
                 : String(compactionError);
-            logger.warn(
+            log.warn(
               `post-turn compaction failed but turn continues: ${errorMsg}`,
             );
           }

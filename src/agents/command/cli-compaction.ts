@@ -570,7 +570,6 @@ export async function runCliTurnCompactionLifecycle(params: {
   let useContextEngineCompaction = true;
   let nativeFallbackToContextEngine = false;
   let nativeFallbackNeedsBindingClear = false;
-  let nativeCompactionFailureReason: string | undefined;
   let resolvedContextEngine: ContextEngine | undefined;
   let autoCompactionGuardApplied = false;
   const authProfileId = params.sessionEntry?.authProfileOverride?.trim() || undefined;
@@ -626,7 +625,6 @@ export async function runCliTurnCompactionLifecycle(params: {
       // post-turn optimization — the assistant reply has already been generated
       // and persisted. Treat the failure as a warning rather than a fatal error
       // so the turn remains successful and the reply is still delivered.
-      nativeCompactionFailureReason = nativeOutcome.failureReason;
       log.warn(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
           nativeOutcome.failureReason ?? "compaction did not reduce context"

@@ -529,7 +529,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
   });
 
-  it("surfaces nonrecoverable native harness CLI compaction failures", async () => {
+  it("logs warning for nonrecoverable native harness CLI compaction failures without aborting turn", async () => {
     const sessionKey = "agent:main:codex-native-failure";
     const sessionId = "session-codex-native-failure";
     const sessionFile = path.join(tmpDir, "session-codex-native-failure.jsonl");
@@ -578,24 +578,24 @@ describe("runCliTurnCompactionLifecycle", () => {
       recordCliCompactionInStore,
     });
 
-    await expect(
-      runCliTurnCompactionLifecycle({
-        cfg: {} as OpenClawConfig,
-        sessionId,
-        sessionKey,
-        sessionEntry,
-        sessionStore,
-        storePath,
-        sessionAgentId: "main",
-        workspaceDir: tmpDir,
-        agentDir: tmpDir,
-        provider: "codex",
-        model: "gpt-5.5",
-      }),
-    ).rejects.toThrow(
-      "CLI native harness compaction failed for codex/gpt-5.5: timed out waiting for codex app-server compaction",
-    );
+    // After the fix, compaction failure is downgraded from a fatal error to a
+    // warning. The function should return without throwing so the turn continues.
+    const result = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
 
+    // The function returned without throwing — the turn is preserved.
+    expect(result).toBeDefined();
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
@@ -689,7 +689,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(result?.compactionCount).toBe(1);
   });
 
-  it("does not fall back when native harness compaction returns no result", async () => {
+  it("logs warning when native harness compaction returns no result without aborting turn", async () => {
     const sessionKey = "agent:main:codex-native-empty";
     const sessionId = "session-codex-native-empty";
     const sessionFile = path.join(tmpDir, "session-codex-native-empty.jsonl");
@@ -730,23 +730,24 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveLiveToolResultMaxChars: () => 20_000,
     });
 
-    await expect(
-      runCliTurnCompactionLifecycle({
-        cfg: {} as OpenClawConfig,
-        sessionId,
-        sessionKey,
-        sessionEntry,
-        sessionStore,
-        storePath,
-        sessionAgentId: "main",
-        workspaceDir: tmpDir,
-        agentDir: tmpDir,
-        provider: "codex",
-        model: "gpt-5.5",
-      }),
-    ).rejects.toThrow(
-      "CLI native harness compaction failed for codex/gpt-5.5: native harness compaction did not reduce context",
-    );
+    // After the fix, compaction failure is downgraded from a fatal error to a
+    // warning. The function should return without throwing so the turn continues.
+    const result = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    // The function returned without throwing — the turn is preserved.
+    expect(result).toBeDefined();
     expect(compactCalls).toHaveLength(0);
   });
 
@@ -1328,7 +1329,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(calls).toEqual(["ensure", "resolve"]);
   });
 
-  it("bounds a hung CLI context-engine compaction and leaves resume state intact", async () => {
+  it("logs warning for hung CLI context-engine compaction without aborting turn", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli-timeout";
     const sessionFile = path.join(tmpDir, "session-timeout.jsonl");
@@ -1398,13 +1399,14 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "opus",
     });
 
-    const rejection = expect(pending).rejects.toThrow(
-      "CLI transcript compaction failed for claude-cli/opus: Compaction timed out",
-    );
+    // After the fix, timeout compaction failure is downgraded from fatal error to
+    // warning. The function should resolve (not reject) so the turn continues.
     await vi.advanceTimersByTimeAsync(1_000);
-    await rejection;
+    const result = await pending;
     vi.useRealTimers();
 
+    // The function returned without throwing — the turn is preserved.
+    expect(result).toBeDefined();
     expect(compactCalls).toHaveLength(1);
     expect(compactCalls[0]?.abortSignal).toBeInstanceOf(AbortSignal);
     expect(compactCalls[0]?.abortSignal?.aborted).toBe(true);
