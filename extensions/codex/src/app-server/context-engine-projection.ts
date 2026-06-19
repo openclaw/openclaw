@@ -140,7 +140,8 @@ export function fitCodexProjectedContextForTurnStart(params: {
   const afterContext = params.promptText.slice(range.end);
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
   const fittedContext = truncateOlderContext(context, contextBudget);
-  return `${beforeContext}${fittedContext}${afterContext}`;
+  const result = `${beforeContext}${fittedContext}${afterContext}`;
+  return result.length <= maxChars ? result : result.slice(0, maxChars);
 }
 
 function normalizeProjectedContextRange(
