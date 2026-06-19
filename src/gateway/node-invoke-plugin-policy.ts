@@ -101,10 +101,15 @@ function createApprovalRuntime(params: {
           },
         );
       } else {
-        // Use admin-only fallback to avoid leaking approval requests across
-        // agent boundaries in multi-agent setups. See issue #94768.
-        const adminConnIds = params.context.getAdminClientConnIds?.();
-        if (adminConnIds && adminConnIds.size > 0) {
+        // Collect admin client conn ids manually since there's no dedicated helper.
+        const adminConnIds = new Set<string>();
+        for (const client of params.context.clients) {
+          const scopes = Array.isArray(client.connect?.scopes) ? client.connect.scopes : [];
+          if (scopes.includes("operator.admin")) {
+            adminConnIds.add(client.connId);
+          }
+        }
+        if (adminConnIds.size > 0) {
           params.context.broadcastToConnIds(
             "plugin.approval.requested",
             requestEvent,
