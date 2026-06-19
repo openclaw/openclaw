@@ -17,7 +17,7 @@ agent reads, plans, calls tools, or waits for approval, and then turns that draf
 into the final answer when the channel can do that safely.
 
 ```text
-Shelling...
+Thinking...
 📖 from docs/concepts/progress-drafts.md
 🔎 Web Search: for "discord edit message"
 🛠️ Bash: run tests
@@ -98,26 +98,26 @@ The default label is `auto`, which chooses from OpenClaw's built-in
 single-word label pool:
 
 ```text
+Thinking
 Working
-Shelling
-Scuttling
-Clawing
-Pinching
-Molting
-Bubbling
-Tiding
-Reefing
-Cracking
-Sifting
-Brining
-Nautiling
-Krilling
-Barnacling
-Lobstering
-Tidepooling
-Pearling
-Snapping
-Surfacing
+Reading
+Checking
+Running
+Searching
+Fetching
+Processing
+Analyzing
+Reviewing
+Building
+Testing
+Compiling
+Resolving
+Planning
+Summarizing
+Preparing
+Gathering
+Investigating
+Finalizing
 ```
 
 Use a fixed label:
