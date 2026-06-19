@@ -640,6 +640,45 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("falls back to skill.name for old snapshots missing skillKey (upgrade path #94146)", () => {
+    // Old session snapshots created before the skillKey field was added will
+    // have skillKey: undefined. The fallback skillKey ?? skill.name ensures
+    // config lookup still works when skillKey === skill.name (the default).
+    const snapshot: SkillSnapshot = {
+      prompt: "",
+      skills: [
+        {
+          name: "UpgradeSkill",
+          // skillKey intentionally omitted — simulates pre-#94146 snapshot
+          primaryEnv: "UPGRADE_ENV",
+          requiredEnv: ["UPGRADE_ENV"],
+        },
+      ],
+    };
+
+    withClearedEnv(["UPGRADE_ENV"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        config: {
+          skills: {
+            entries: {
+              // Config keyed by skill.name (the default when skillKey is not
+              // explicitly set in metadata). This is the common case.
+              UpgradeSkill: { apiKey: "upgrade-val" }, // pragma: allowlist secret
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.UPGRADE_ENV).toBe("upgrade-val");
+      } finally {
+        restore();
+        expect(process.env.UPGRADE_ENV).toBeUndefined();
+      }
+    });
+  });
+
   it("prefers the active runtime snapshot over raw SecretRef skill config", () => {
     const skillName = "env-skill";
     const entries = envSkillEntries(skillName, {
