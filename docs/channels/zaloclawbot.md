@@ -6,7 +6,9 @@ read_when:
 title: "Zalo ClawBot"
 ---
 
-OpenClaw's official Zalo personal channel plugin, supporting zero-config login authorization via Zalo Mini App QR code scanning.
+OpenClaw connects to Zalo ClawBot through the catalog-listed external
+`@zalo-platforms/openclaw-zaloclawbot` plugin. Login uses a Zalo Mini App QR
+code.
 
 ## Compatibility
 
@@ -30,17 +32,9 @@ openclaw onboard
 
 The wizard installs the plugin from the official catalog (integrity-verified), renders the login QR right in the terminal, and finishes the channel once you scan it with the Zalo app. No extra commands are needed.
 
-## Quick Install
-
-To add the channel to an already-onboarded gateway, run the one-shot installer (installs, enables, restarts, and launches the QR login):
-
-```bash
-npx -y @zalo-platforms/openclaw-zaloclawbot-cli install
-```
-
 ## Manual Installation
 
-If the quick installer script does not fit your environment, follow these steps manually:
+To add the channel to an already-onboarded gateway, follow these steps:
 
 ### 1. Install the plugin
 
@@ -78,7 +72,8 @@ Unlike the standard developer Zalo channel which requires you to register your o
 
 1. **Secure Onboarding:** The QR code resolves to a secure Zalo Mini App that binds a newly-provisioned, private bot under a shared official OA directly to your Zalo User ID.
 2. **Owner-Bound Privacy:** By design, the bot is restricted to communicating _only_ with its owner. Messages from other users are dropped at the platform level, making the connection private and secure.
-3. **Ban-Safe:** Because the connection utilizes the official Zalo Bot Platform APIs, it is officially sanctioned and does not carry the account suspension risks associated with unofficial browser/web-spoof libraries.
+3. **Official API path:** The plugin uses Zalo Bot Platform APIs instead of
+   browser or web-session automation.
 
 ## Under the Hood
 
@@ -87,6 +82,10 @@ The Zalo ClawBot plugin communicates with Zalo APIs via a persistent long-pollin
 - Long-poll connections utilize the `getUpdates` endpoint.
 - Webhooks are disabled by default for local desktop/terminal gateway runs.
 - Messages are processed client-side and mapped directly to your local agent runtime.
+
+The external plugin manages bot credentials under the OpenClaw state directory.
+Treat that directory as sensitive and include it in the same access-control and
+backup policy as the rest of your OpenClaw state.
 
 ---
 
