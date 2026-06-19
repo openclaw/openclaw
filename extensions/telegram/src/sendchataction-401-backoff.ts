@@ -65,7 +65,7 @@ const BACKOFF_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 
-function is401Error(error: unknown): boolean {
+export function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
