@@ -24,6 +24,29 @@ describe("queryCacheKey", () => {
     expect(queryCacheKey("provider=openai;model=text-embedding-3-small", "other")).not.toBe(key);
     expect(queryCacheKey("provider=ollama;model=nomic-embed-text", secret)).not.toBe(key);
   });
+
+  test("inFlightKey derived from queryCacheKey also contains no plaintext", () => {
+    // The Embeddings classes build inFlightKey as JSON.stringify([key, policy]) where
+    // key = queryCacheKey(...). Verify the full construction retains no user text.
+    // This closes the residual security-boundary risk: even in-flight pending entries
+    // are keyed only by hashes, not by raw recall/store/capture text.
+    const sensitiveText = "What is my salary and home address?";
+    const identity = "provider=openai;model=text-embedding-3-small";
+    const settledKey = queryCacheKey(identity, sensitiveText);
+
+    // Simulate the inFlightKey construction used in both Embeddings implementations.
+    const timedInFlightKey = JSON.stringify([settledKey, "timeout:15000"]);
+    const untimedInFlightKey = JSON.stringify([settledKey, "untimed"]);
+
+    expect(timedInFlightKey).not.toContain(sensitiveText);
+    expect(timedInFlightKey).not.toContain("salary");
+    expect(timedInFlightKey).not.toContain("address");
+    expect(untimedInFlightKey).not.toContain(sensitiveText);
+    // Both contain the SHA-256 digest (still identifiable as a hash).
+    expect(timedInFlightKey).toMatch(/[0-9a-f]{64}/);
+    // Timed and untimed keys for the same text are distinct (different policy suffix).
+    expect(timedInFlightKey).not.toBe(untimedInFlightKey);
+  });
 });
 
 describe("QueryEmbeddingCache", () => {
@@ -118,6 +141,58 @@ describe("QueryEmbeddingCache", () => {
     expect(compute).toHaveBeenCalledTimes(1);
     expect(a).toEqual([1, 2]);
     expect(b).toEqual([1, 2]);
+  });
+
+  test("concurrent distinct-key flood stays within maxEntries bound", async () => {
+    const maxEntries = 4;
+    const cache = new QueryEmbeddingCache({ maxEntries });
+
+    // Launch many distinct keys concurrently: more than the cache capacity.
+    // After all settle, the cache must not retain more than maxEntries vectors.
+    const keyCount = 12;
+    const computes = Array.from({ length: keyCount }, (_, i) => vi.fn(async () => [i + 1, 0, 0]));
+    await Promise.all(computes.map((compute, i) => cache.getOrCompute(`key-${i}`, compute)));
+
+    // The cache is bounded: at most maxEntries entries can be resident after
+    // all promises settle. Verify by requesting the last `maxEntries` keys —
+    // they must be served from cache (compute not called again), while earlier
+    // keys were evicted and would recompute (we don't assert which specific
+    // keys survive since settle order is implementation-defined, but we assert
+    // total distinct resident entries ≤ maxEntries).
+    let cacheHits = 0;
+    for (let i = 0; i < keyCount; i++) {
+      const callsBefore = computes[i]!.mock.calls.length;
+      await cache.getOrCompute(`key-${i}`, computes[i]!);
+      if (computes[i]!.mock.calls.length === callsBefore) {
+        cacheHits += 1;
+      }
+    }
+    // The number of keys still resident (cache hits) must not exceed the bound.
+    expect(cacheHits).toBeLessThanOrEqual(maxEntries);
+  });
+
+  test("a fresh instance starts empty and does not share state with prior instances", async () => {
+    // Two independent QueryEmbeddingCache instances must never share vectors.
+    // This is the per-instance isolation invariant: a reconfigure that builds a
+    // fresh embeddings object gets a clean cache.
+    const computeA = vi.fn(async () => [1, 2, 3]);
+    const computeB = vi.fn(async () => [4, 5, 6]);
+
+    const cacheA = new QueryEmbeddingCache();
+    const cacheB = new QueryEmbeddingCache();
+
+    // Warm cacheA with "hello".
+    await cacheA.getOrCompute("hello", computeA);
+    expect(computeA).toHaveBeenCalledTimes(1);
+
+    // cacheB is independent: a lookup for "hello" in cacheB must NOT find
+    // cacheA's entry and must call its own compute.
+    await cacheB.getOrCompute("hello", computeB);
+    expect(computeB).toHaveBeenCalledTimes(1);
+
+    // cacheA still serves its own entry without recomputing.
+    await cacheA.getOrCompute("hello", computeA);
+    expect(computeA).toHaveBeenCalledTimes(1); // still 1, served from cacheA's LRU
   });
 
   test("does not share timeout-bound in-flight work with untimed callers", async () => {
