@@ -119,7 +119,7 @@ export async function startSshPortForward(opts: {
 
   let localPort = opts.localPortPreferred;
   try {
-    await ensurePortAvailable(localPort);
+    await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       localPort = await pickEphemeralPort();
