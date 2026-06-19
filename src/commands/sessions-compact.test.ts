@@ -80,6 +80,16 @@ describe("sessionsCompactCommand", () => {
     expect(joinedArgs(runtime.error)).toContain("summarize interrupted");
   });
 
+  it("exits non-zero when the gateway response omits explicit success", async () => {
+    callGatewayCli.mockResolvedValue({ key: "agent:main:main", compacted: false });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(joinedArgs(runtime.error)).toContain("Compaction failed");
+  });
+
   it("exits non-zero and surfaces the error when the RPC throws", async () => {
     callGatewayCli.mockRejectedValue(new Error("gateway unreachable"));
     const runtime = createRuntime();

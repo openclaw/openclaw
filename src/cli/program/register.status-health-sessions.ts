@@ -411,6 +411,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             allAgents?: boolean;
             active?: string;
             limit?: string;
+            verbose?: boolean;
           }
         | undefined;
       const unsupportedParentOptions = [
@@ -418,6 +419,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         parentOpts?.allAgents ? "--all-agents" : undefined,
         parentOpts?.active !== undefined ? "--active" : undefined,
         parentOpts?.limit !== undefined ? "--limit" : undefined,
+        parentOpts?.verbose ? "--verbose" : undefined,
       ].filter((flag): flag is string => flag !== undefined);
       if (unsupportedParentOptions.length > 0) {
         const plural = unsupportedParentOptions.length > 1 ? "options" : "option";

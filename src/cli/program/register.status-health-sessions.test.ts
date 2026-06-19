@@ -332,9 +332,18 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("rejects other unsupported inherited parent list options for compact", async () => {
-    await runCli(["sessions", "--all-agents", "--limit", "25", "compact", "agent:work:main"]);
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "--limit",
+      "25",
+      "--verbose",
+      "compact",
+      "agent:work:main",
+    ]);
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--verbose"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(sessionsCompactCommand).not.toHaveBeenCalled();
   });

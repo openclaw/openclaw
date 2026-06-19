@@ -30,6 +30,26 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
 
 type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
 
+function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
+  const header = JSON.stringify({
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
+  const entries = Array.from({ length: Math.max(0, totalLines - 1) }, (_, index) =>
+    JSON.stringify({
+      type: "message",
+      id: `entry-${index}`,
+      parentId: index === 0 ? null : `entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`,
+      message: { role: "user", content: `line-${index}`, timestamp: index },
+    }),
+  );
+  return [header, ...entries];
+}
+
 function compactionCheckpointEntry(
   fixture: CheckpointFixture,
   options: {
@@ -609,9 +629,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
 test("sessions.compact maxLines truncates the transcript on disk and archives the original to .bak", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
-  const originalLines = Array.from({ length: 500 }, (_, index) =>
-    JSON.stringify({ role: "user", content: `line-${index}` }),
-  );
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
   await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
 
@@ -628,10 +646,15 @@ test("sessions.compact maxLines truncates the transcript on disk and archives th
   expect(compacted.payload?.compacted).toBe(true);
   expect(compacted.payload?.kept).toBe(50);
 
-  // Active transcript truncated in place on disk: 500 -> 50 lines, newest kept.
+  // Active transcript stays reopenable: header + 49 newest entries.
   const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
   expect(truncated).toHaveLength(50);
-  expect(truncated.at(-1)).toBe(JSON.stringify({ role: "user", content: "line-499" }));
+  expect(JSON.parse(truncated[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+  expect(JSON.parse(truncated[1] ?? "{}")).toMatchObject({ id: "entry-450", parentId: null });
+  expect(JSON.parse(truncated.at(-1) ?? "{}")).toMatchObject({
+    id: "entry-498",
+    message: { content: "line-498" },
+  });
 
   // Original 500 lines preserved verbatim in the .bak archive.
   const archivedPath = compacted.payload?.archived;
@@ -640,7 +663,7 @@ test("sessions.compact maxLines truncates the transcript on disk and archives th
   }
   const archived = (await fs.readFile(archivedPath, "utf-8")).trim().split("\n");
   expect(archived).toHaveLength(500);
-  expect(archived.at(0)).toBe(JSON.stringify({ role: "user", content: "line-0" }));
+  expect(JSON.parse(archived[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
 
   // No active run present, so the interrupt guard short-circuits without aborting.
   expect(embeddedRunMock.abortCalls).toEqual([]);
@@ -652,9 +675,7 @@ test("sessions.compact maxLines truncates the transcript on disk and archives th
 test("sessions.compact maxLines interrupts an active run before truncating, matching the LLM compact path", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
-  const originalLines = Array.from({ length: 500 }, (_, index) =>
-    JSON.stringify({ role: "user", content: `line-${index}` }),
-  );
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
   await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
 
@@ -689,9 +710,7 @@ test("sessions.compact maxLines interrupts an active run before truncating, matc
 test("sessions.compact maxLines does not interrupt an active run when truncation is a no-op", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
-  const originalLines = Array.from({ length: 10 }, (_, index) =>
-    JSON.stringify({ role: "user", content: `line-${index}` }),
-  );
+  const originalLines = buildSessionTranscriptLines("sess-main", 10);
   await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
 

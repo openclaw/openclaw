@@ -99,10 +99,9 @@ export async function sessionsCompactCommand(
     return;
   }
 
-  // An explicit ok:false means the gateway accepted the request but the
-  // compaction itself did not complete (for example an interrupted summarize
-  // run). Surface it as a failure instead of letting the process exit 0.
-  const failed = result?.ok === false;
+  // Success is explicit. A malformed or version-skewed payload must not turn
+  // into the same exit-0 message as a genuine no-op compaction.
+  const failed = result?.ok !== true;
 
   if (opts.json) {
     writeRuntimeJson(runtime, result);
