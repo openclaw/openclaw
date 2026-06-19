@@ -42,6 +42,22 @@ import Testing
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
+    @Test func drawerDimmingLayerDoesNotStealSidebarTouches() throws {
+        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let drawerContent = try Self.extract(
+            source,
+            from: "private func sidebarDrawerContent(sidebarWidth: CGFloat) -> some View",
+            to: "private var sidebarDetailShell: some View")
+
+        #expect(drawerContent.contains("HStack(spacing: 0)"))
+        #expect(drawerContent.contains("Color.clear"))
+        #expect(drawerContent.contains(".frame(width: sidebarWidth)"))
+        #expect(drawerContent.contains(".allowsHitTesting(false)"))
+        #expect(drawerContent.contains("Color.black.opacity(0.28)"))
+        #expect(drawerContent.contains(".zIndex(0)"))
+        #expect(drawerContent.contains(".zIndex(1)"))
+    }
+
     @Test func sidebarSelectionResetsEmbeddedSettingsNavigationPath() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let sidebarDetail = try Self.extract(

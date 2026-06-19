@@ -221,13 +221,19 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if self.isSidebarVisible {
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        self.hideSidebar()
-                    }
-                    .transition(.opacity)
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarWidth)
+                        .allowsHitTesting(false)
+                    Color.black.opacity(0.28)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            self.hideSidebar()
+                        }
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .zIndex(0)
 
                 self.sidebarColumn
                     .frame(width: sidebarWidth, alignment: .topLeading)
@@ -237,6 +243,7 @@ struct RootTabs: View {
                     }
                     .shadow(color: .black.opacity(0.26), radius: 18, x: 8, y: 0)
                     .transition(.move(edge: .leading).combined(with: .opacity))
+                    .zIndex(1)
             }
         }
     }
@@ -381,7 +388,10 @@ struct RootTabs: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .truncationMode(.tail)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(destination == self.selectedSidebarDestination ? OpenClawBrand.accent : .primary)
