@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -404,14 +405,10 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
           taskLabel,
         });
       }
-      if (promptError) {
-        throw new Error(promptError);
-      }
-      if (completedTurn?.status === "failed") {
-        throw new Error(
-          completedTurn.error?.message ?? `codex app-server ${taskLabel} turn failed`,
-        );
-      }
+      // Collect text from items and deltas FIRST, before error checks.
+      // A turn may be marked as "failed" due to post-turn CLI compaction
+      // failure even after the assistant reply has already been received
+      // via item/agentMessage/delta and item/completed notifications (#94688).
       const items = collectCompletedItems(completedTurn?.items, completedItems);
       const itemText = collectAssistantTextFromItems(items);
       const deltaText = assistantItemOrder
@@ -420,6 +417,28 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
         .join("\n\n")
         .trim();
       const text = (itemText || deltaText).trim();
+
+      if (promptError) {
+        throw new Error(promptError);
+      }
+      if (completedTurn?.status === "failed") {
+        if (text) {
+          // Post-turn compaction/summarization failed, but the assistant
+          // reply was already collected successfully. Deliver the recovered
+          // text instead of discarding the whole turn.
+          embeddedAgentLog.warn(
+            `codex app-server ${taskLabel} turn failed but assistant text was already collected`,
+            {
+              turnError: completedTurn.error?.message ?? "unknown",
+              textLength: text.length,
+            },
+          );
+          return { text, items };
+        }
+        throw new Error(
+          completedTurn.error?.message ?? `codex app-server ${taskLabel} turn failed`,
+        );
+      }
       if (!text) {
         throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
       }
