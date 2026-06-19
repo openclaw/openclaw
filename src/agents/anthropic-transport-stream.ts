@@ -59,7 +59,7 @@ import {
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
-const CLAUDE_CODE_VERSION = "2.1.75";
+const CLAUDE_CODE_VERSION = "2.1.177";
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
