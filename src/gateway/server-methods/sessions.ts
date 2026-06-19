@@ -830,8 +830,9 @@ async function handleSessionSend(params: {
   const messageSeq =
     (await readSessionMessageCountAsync({
       agentId: requestedAgentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     })) + 1;
   let sendAcked = false;
@@ -1173,8 +1174,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const items = readSessionPreviewItemsFromTranscript(
           {
             agentId: target.agentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
             storePath: target.storePath,
           },
           limit,
@@ -1532,8 +1534,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messageSeq = initialMessage
       ? (await readSessionMessageCountAsync({
           agentId: target.agentId,
-          sessionFile: createdEntry.sessionFile,
+          sessionEntry: createdEntry,
           sessionId: createdEntry.sessionId,
+          sessionKey: target.canonicalKey,
           storePath: target.storePath,
         })) + 1
       : undefined;
@@ -2398,8 +2401,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
-        sessionFile: entry.sessionFile,
+        sessionEntry: entry,
         sessionId: entry.sessionId,
+        sessionKey: key,
         storePath,
       },
       {

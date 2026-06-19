@@ -117,25 +117,15 @@ export type SessionAccessScope = {
   storePath?: string;
 };
 
-export type SessionTranscriptReadScope = Omit<SessionAccessScope, "sessionKey"> & {
+export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
   /** Explicit transcript file path; bypasses store lookup when already known. */
   sessionFile?: string;
   /** Runtime session id used to derive a transcript file when no explicit file is provided. */
   sessionId: string;
-  /** Optional key for read callers that can resolve via the session entry. */
+  /** Required when resolving through session metadata; optional for explicit transcript artifacts. */
   sessionKey?: string;
   /** Channel thread suffix used when deriving topic transcript paths. */
   threadId?: string | number;
-};
-
-export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
-  /**
-   * Identifies the owning entry when the transcript target must be resolved
-   * (and possibly persisted) through the session store. May be omitted only
-   * when an explicit sessionFile binds the operation to a concrete artifact;
-   * such writes never read or update entry metadata.
-   */
-  sessionKey?: string;
 };
 
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
@@ -143,6 +133,21 @@ export type SessionTranscriptRuntimeScope = SessionAccessScope & {
   sessionFile?: string;
   sessionId: string;
   threadId?: string | number;
+};
+
+export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
+  /** Canonical key when the caller has a session-store identity for this read. */
+  sessionKey?: string;
+  /** Entry already loaded by hot callers; avoids rereading the session store. */
+  sessionEntry?: Pick<SessionEntry, "sessionFile"> & Partial<Pick<SessionEntry, "sessionId">>;
+};
+
+export type SessionTranscriptReadTarget = Omit<
+  SessionTranscriptRuntimeTarget,
+  "agentId" | "sessionKey"
+> & {
+  agentId?: string;
+  sessionKey?: string;
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
@@ -846,7 +851,7 @@ export async function persistSessionRolloverLifecycle(params: {
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */
 export async function loadTranscriptEvents(
-  scope: SessionTranscriptReadScope,
+  scope: SessionTranscriptAccessScope,
 ): Promise<TranscriptEvent[]> {
   const transcript = await resolveTranscriptReadAccess(scope);
   const events: TranscriptEvent[] = [];
@@ -1479,6 +1484,82 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
   };
 }
 
+/**
+ * Resolves the current file-backed target for read-only transcript callers.
+ * Unlike writer/runtime resolution, this does not persist missing sessionFile
+ * metadata; reader projections must not mutate session metadata.
+ */
+export function resolveSessionTranscriptReadTarget(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptReadTarget {
+  const explicitSessionFile = scope.sessionFile?.trim();
+  if (explicitSessionFile) {
+    return {
+      sessionFile: explicitSessionFile,
+      sessionId: scope.sessionId,
+      ...(scope.agentId ? { agentId: scope.agentId } : {}),
+      ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+    };
+  }
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const storePath = resolveConcreteReadStorePath(scope.storePath);
+  const resolvedStoreEntry =
+    scope.sessionEntry || !scope.sessionKey
+      ? undefined
+      : storePath
+        ? resolveSessionStoreEntry({
+            store: loadSessionStore(storePath, { skipCache: true }),
+            sessionKey: scope.sessionKey,
+          })
+        : undefined;
+  const sessionEntry =
+    scope.sessionEntry ??
+    resolvedStoreEntry?.existing ??
+    (scope.sessionKey ? loadSessionEntry({ ...scope, sessionKey: scope.sessionKey }) : undefined);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  const matchingSessionEntry =
+    sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
+      ? sessionEntry
+      : undefined;
+  const threadId =
+    scope.threadId ?? (sessionKey ? parseSessionThreadInfo(sessionKey).threadId : undefined);
+  const sessionFile = matchingSessionEntry?.sessionFile
+    ? resolveSessionFilePath(
+        scope.sessionId,
+        matchingSessionEntry,
+        resolveSessionFilePathOptions({
+          agentId,
+          ...(storePath ? { storePath } : {}),
+        }),
+      )
+    : storePath
+      ? resolveSessionTranscriptPathInDir(
+          // File-backed readers derive beside sessions.json only for the JSON-store
+          // deprecation window; the SQLite flip resolves from canonical metadata.
+          scope.sessionId,
+          path.dirname(path.resolve(storePath)),
+          threadId,
+        )
+      : resolveSessionTranscriptPath(scope.sessionId, agentId, threadId);
+  return {
+    agentId,
+    sessionFile,
+    sessionId: scope.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+  };
+}
+
+function resolveConcreteReadStorePath(storePath: string | undefined): string | undefined {
+  const trimmed = storePath?.trim();
+  if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   const now = Date.now();
   return {
@@ -1555,7 +1636,7 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
   });
 }
 
-async function resolveTranscriptReadAccess(scope: SessionTranscriptReadScope): Promise<{
+async function resolveTranscriptReadAccess(scope: SessionTranscriptAccessScope): Promise<{
   sessionFile: string;
 }> {
   if (scope.sessionFile?.trim()) {
