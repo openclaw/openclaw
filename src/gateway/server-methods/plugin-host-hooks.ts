@@ -13,6 +13,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import type { PluginControlUiDescriptorRegistryRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
@@ -26,6 +27,38 @@ const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
 function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
   return errors.map((error) => error.text).join("; ");
+}
+
+function listPluginControlUiDescriptors(): Record<string, unknown>[] {
+  let registrations: PluginControlUiDescriptorRegistryRegistration[];
+  try {
+    const candidate = getActivePluginRegistry()?.controlUiDescriptors;
+    registrations = Array.isArray(candidate) ? candidate : [];
+  } catch {
+    registrations = [];
+  }
+
+  const descriptors: Record<string, unknown>[] = [];
+  for (const entry of registrations) {
+    try {
+      const descriptor = entry.descriptor;
+      const pluginId = normalizeOptionalString(entry.pluginId);
+      const pluginName = normalizeOptionalString(entry.pluginName);
+      if (!isRecord(descriptor) || !pluginId) {
+        continue;
+      }
+      descriptors.push(
+        Object.assign(
+          {},
+          descriptor,
+          pluginName ? { pluginId, pluginName } : { pluginId },
+        ) as Record<string, unknown>,
+      );
+    } catch {
+      continue;
+    }
+  }
+  return descriptors;
 }
 
 /** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
@@ -54,12 +87,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
-      Object.assign({}, entry.descriptor, {
-        pluginId: entry.pluginId,
-        pluginName: entry.pluginName,
-      }),
-    );
+    const descriptors = listPluginControlUiDescriptors();
     respond(true, { ok: true, descriptors }, undefined);
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
