@@ -57,6 +57,7 @@ import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { parseTelegramTarget } from "./targets.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
@@ -412,12 +413,18 @@ export function createTelegramBotCore(
   // GroupConfig returns the direct config for a positive chat id, so its
   // `enabled: false` is caught here), and a DM policy later set to `disabled`.
   channelOutbound?.registerEchoAdmission(account.accountId, async (cfgForAdmission, target) => {
-    const raw = target.to
-      .replace(/^(telegram|tg):/i, "")
-      .replace(/^group:/i, "")
-      .trim();
-    const chatId = /^-?\d+$/.test(raw) ? Number(raw) : raw;
-    const threadNum = target.threadId == null ? undefined : Number(target.threadId);
+    // Parse with the canonical Telegram target parser so a topic/thread encoded in
+    // the target string (e.g. "telegram:-100...:topic:42") is resolved BEFORE the
+    // admission check — otherwise a topic-scoped echo target is gated against the
+    // group config instead of its own topic's enablement. Falls back to the explicit
+    // threadId when the string carries none.
+    const parsedTarget = parseTelegramTarget(target.to);
+    const chatId = /^-?\d+$/.test(parsedTarget.chatId)
+      ? Number(parsedTarget.chatId)
+      : parsedTarget.chatId;
+    const threadNum =
+      parsedTarget.messageThreadId ??
+      (target.threadId == null ? undefined : Number(target.threadId));
     const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
       chatId,
       threadNum != null && Number.isFinite(threadNum) ? threadNum : undefined,
