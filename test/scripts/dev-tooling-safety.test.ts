@@ -372,20 +372,17 @@ describe("script-specific dev tooling hardening", () => {
 
   it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
-    let readStarted = false;
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream({
-        pull() {
-          readStarted = true;
-          return new Promise(() => {});
-        },
-        cancel() {
-          canceled = true;
-        },
+    const body = {
+      cancel: vi.fn(() => Promise.resolve()),
+      getReader: vi.fn(() => {
+        throw new Error("reader should not be acquired");
       }),
-      { headers: { "content-length": "9007199254740993" } },
-    );
+    };
+    const response = {
+      ok: true,
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body,
+    } as unknown as Response;
 
     await expect(
       realtimeSmokeTesting.requestOpenAIRealtimeSdpAnswer("client-secret", "v=0", {
@@ -393,8 +390,8 @@ describe("script-specific dev tooling hardening", () => {
         fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
       }),
     ).rejects.toThrow(`OpenAI Realtime SDP answer response body exceeded ${maxBytes} bytes`);
-    expect(readStarted).toBe(false);
-    expect(canceled).toBe(true);
+    expect(body.getReader).not.toHaveBeenCalled();
+    expect(body.cancel).toHaveBeenCalledTimes(1);
   });
 
   it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
