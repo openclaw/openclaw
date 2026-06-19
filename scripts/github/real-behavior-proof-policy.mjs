@@ -293,7 +293,7 @@ export function extractEvidenceSections(body = "") {
   return extractMarkdownSections(/^#{2,6}\s+evidence\b[^\n]*$/im, body);
 }
 
-export function hasAuthoredPullRequestSection(body = "", heading) {
+export function hasAuthoredPullRequestSection(heading, body = "") {
   const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegex(heading)}\\b[^\\n]*$`, "im");
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
 }
@@ -438,11 +438,11 @@ export function evaluatePullRequestContext({ pullRequest } = {}) {
 
   const body = pullRequest?.body ?? "";
   const latestLegacyProof = extractLegacyProofSections(body).at(-1) ?? "";
-  const hasAuthoredProblem = hasAuthoredPullRequestSection(body, "What Problem This Solves");
+  const hasAuthoredProblem = hasAuthoredPullRequestSection("What Problem This Solves", body);
   const hasLegacyProblem = !isMissingValue(
     extractFieldValue(latestLegacyProof, legacyProofFields.problem),
   );
-  const hasAuthoredEvidence = hasAuthoredPullRequestSection(body, "Evidence");
+  const hasAuthoredEvidence = hasAuthoredPullRequestSection("Evidence", body);
   const hasLegacyEvidence = !isMissingValue(
     extractFieldValue(latestLegacyProof, legacyProofFields.evidence),
   );

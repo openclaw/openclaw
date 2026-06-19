@@ -346,8 +346,8 @@ function hasMostlyBlankTemplate(body) {
   return (
     (hasLegacyTemplateIntro && legacyEmptyFields >= 3 && emptyClosingRef) ||
     (hasNewTemplateIntro &&
-      !hasAuthoredPullRequestSection(body, "What Problem This Solves") &&
-      !hasAuthoredPullRequestSection(body, "Evidence"))
+      !hasAuthoredPullRequestSection("What Problem This Solves", body) &&
+      !hasAuthoredPullRequestSection("Evidence", body))
   );
 }
 
@@ -376,7 +376,7 @@ function hasConcreteBehaviorContext(body, text) {
   if (hasLinkedReference(text)) {
     return true;
   }
-  if (hasAuthoredPullRequestSection(body, "What Problem This Solves")) {
+  if (hasAuthoredPullRequestSection("What Problem This Solves", body)) {
     return true;
   }
   if (
