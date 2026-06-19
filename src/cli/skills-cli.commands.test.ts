@@ -72,6 +72,7 @@ const mocks = vi.hoisted(() => {
     return skillStatusReportFixture;
   });
   return {
+    callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn(() => ({})),
     resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
@@ -102,6 +103,7 @@ const mocks = vi.hoisted(() => {
 });
 
 const {
+  callGatewayMock,
   loadConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
@@ -167,6 +169,10 @@ function expectStatusWorkspaceCall(workspaceDir: string): void {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -250,6 +256,7 @@ describe("skills cli commands", () => {
     runtimeLogs.length = 0;
     runtimeStdout.length = 0;
     runtimeErrors.length = 0;
+    callGatewayMock.mockReset();
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
@@ -268,6 +275,7 @@ describe("skills cli commands", () => {
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
 
+    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
@@ -397,6 +405,48 @@ describe("skills cli commands", () => {
         line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
       ),
     ).toBe(true);
+  });
+
+  it("passes owner-qualified ClawHub skill refs through to the installer", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "@demo-owner/calendar"]);
+
+    const installArgs = mockFirstObjectArg(installSkillFromClawHubMock);
+    expectObjectFields(installArgs, {
+      workspaceDir: "/tmp/workspace",
+      slug: "@demo-owner/calendar",
+      force: false,
+    });
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) =>
+        line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
+      ),
+    ).toBe(true);
+  });
+
+  it("documents owner-qualified ClawHub install refs in command help", () => {
+    const skillsCommand = createProgram().commands.find((command) => command.name() === "skills");
+    const installCommand = skillsCommand?.commands.find((command) => command.name() === "install");
+    const output: string[] = [];
+
+    installCommand?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    installCommand?.outputHelp();
+    const help = output.join("");
+
+    expect(help).toContain("<skill-ref>");
+    expect(help).toContain("@owner/slug");
+    expect(help).toContain("openclaw skills install @owner/weather");
+    expect(help).not.toContain("openclaw skills install weather");
   });
 
   it("installs a skill from a git source into the active workspace", async () => {
@@ -836,6 +886,34 @@ describe("skills cli commands", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("passes owner-qualified installed verification targets to ClawHub verification", async () => {
+    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://private.example.com/clawhub",
+      version: "1.2.3",
+      tag: undefined,
+      resolution: {
+        source: "installed",
+        selector: "installed-version",
+        registry: "https://private.example.com/clawhub",
+        skillDir: "/tmp/workspace/skills/weather",
+        installedVersion: "1.2.3",
+      },
+    });
+
+    await runCommand(["skills", "verify", "weather"]);
+
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.2.3",
+      tag: undefined,
+      baseUrl: "https://private.example.com/clawhub",
+    });
+  });
+
   it("passes explicit verify selectors and shared workspace options to the resolver", async () => {
     await runCommand(["skills", "verify", "agentreceipt", "--version", "2.0.0", "--global"]);
 
@@ -1123,6 +1201,60 @@ describe("skills cli commands", () => {
     });
 
     expectStatusWorkspaceCall("/tmp/workspace-writer");
+  });
+
+  it("uses gateway skills.status for read-only status commands when reachable", async () => {
+    routeWorkspaceByAgent();
+    const gatewayReport = {
+      ...skillStatusReportFixture,
+      agentId: "writer",
+      workspaceDir: "/gateway/workspace-writer",
+      skills: [
+        {
+          ...skillStatusReportFixture.skills[0],
+          name: "apple-notes",
+          description: "Notes helpers",
+          eligible: true,
+          modelVisible: true,
+          commandVisible: true,
+          requirements: {
+            bins: ["memo"],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: ["darwin"],
+          },
+          missing: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+        },
+      ],
+    };
+    callGatewayMock.mockResolvedValue(gatewayReport);
+
+    await runCommand(["skills", "check", "--agent", "writer", "--json"]);
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      config: {},
+      method: "skills.status",
+      params: { agentId: "writer" },
+      timeoutMs: 1_500,
+      clientName: "cli",
+      mode: "cli",
+    });
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+    const output = JSON.parse(runtimeStdout.at(-1) ?? "{}") as {
+      workspaceDir?: string;
+      eligible?: string[];
+      missingRequirements?: Array<{ name: string }>;
+    };
+    expect(output.workspaceDir).toBe("/gateway/workspace-writer");
+    expect(output.eligible).toEqual(["apple-notes"]);
+    expect(output.missingRequirements).toEqual([]);
   });
 
   it.each([

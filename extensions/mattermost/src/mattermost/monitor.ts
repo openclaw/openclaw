@@ -295,20 +295,6 @@ export function canFinalizeMattermostPreviewInPlace(params: {
   );
 }
 
-export function shouldClearMattermostDraftPreview(params: {
-  finalizedViaPreviewPost: boolean;
-  finalReplyDelivered: boolean;
-}): boolean {
-  return params.finalReplyDelivered && !params.finalizedViaPreviewPost;
-}
-
-export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
-  finalCount: number;
-  canFinalizeInPlace: boolean;
-}): boolean {
-  return params.finalCount === 1 && params.canFinalizeInPlace;
-}
-
 type MattermostDraftPreviewState = {
   finalizedViaPreviewPost: boolean;
 };

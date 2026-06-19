@@ -818,38 +818,3 @@ export function recordToolCallOutcome(
   }
   return recordedOutcome;
 }
-
-/**
- * Get current tool call statistics for a session (for debugging/monitoring).
- */
-export function getToolCallStats(state: SessionState): {
-  totalCalls: number;
-  uniquePatterns: number;
-  mostFrequent: { toolName: string; count: number } | null;
-} {
-  const history = state.toolCallHistory ?? [];
-  const patterns = new Map<string, { toolName: string; count: number }>();
-
-  for (const call of history) {
-    const key = call.argsHash;
-    const existing = patterns.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      patterns.set(key, { toolName: call.toolName, count: 1 });
-    }
-  }
-
-  let mostFrequent: { toolName: string; count: number } | null = null;
-  for (const pattern of patterns.values()) {
-    if (!mostFrequent || pattern.count > mostFrequent.count) {
-      mostFrequent = pattern;
-    }
-  }
-
-  return {
-    totalCalls: history.length,
-    uniquePatterns: patterns.size,
-    mostFrequent,
-  };
-}

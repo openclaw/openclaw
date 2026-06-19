@@ -1192,14 +1192,11 @@ export const SignalAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level SignalConfigSchema instead.
-export const SignalAccountSchema = SignalAccountSchemaBase;
-
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   apiMode: z.enum(["auto", "native", "container"]).optional(),
-  accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
+  // Account-level schemas skip allowFrom validation because accounts inherit
+  // allowFrom from the parent channel config at runtime.
+  accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
@@ -1472,13 +1469,10 @@ export const IMessageAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level IMessageConfigSchema instead.
-export const IMessageAccountSchema = IMessageAccountSchemaBase;
-
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
-  accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),
+  // Account-level schemas skip allowFrom validation because accounts inherit
+  // allowFrom from the parent channel config at runtime.
+  accounts: z.record(z.string(), IMessageAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({

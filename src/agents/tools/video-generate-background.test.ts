@@ -22,7 +22,7 @@ const {
   createVideoGenerationTaskRun,
   failVideoGenerationTaskRun,
   recordVideoGenerationTaskProgress,
-  wakeVideoGenerationTaskCompletion,
+  videoGenerationTaskLifecycle,
 } = await import("./video-generate-background.js");
 const { withMediaGenerationTaskKeepalive } = await import("./media-generate-background-shared.js");
 
@@ -165,7 +165,7 @@ describe("video generate background helpers", () => {
       path: "direct",
     });
 
-    await wakeVideoGenerationTaskCompletion({
+    await videoGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",
@@ -184,7 +184,7 @@ describe("video generate background helpers", () => {
       path: "direct",
     });
 
-    await wakeVideoGenerationTaskCompletion({
+    await videoGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         directSend: true,
         runId: "tool:video_generate:abc",
@@ -215,7 +215,7 @@ describe("video generate background helpers", () => {
       error: "completion agent did not deliver generated media",
     });
 
-    await wakeVideoGenerationTaskCompletion({
+    await videoGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",
@@ -249,7 +249,7 @@ describe("video generate background helpers", () => {
       path: "steered",
     });
 
-    await wakeVideoGenerationTaskCompletion({
+    await videoGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",

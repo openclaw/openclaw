@@ -105,8 +105,6 @@ const allowedFixturePaths = new Set([
 ]);
 
 const allowedCurrentLegacyWriteViolations = [
-  "extensions/matrix/src/matrix/client/storage.ts:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId: metadata.deviceId ?? null, currentTokenStateClaimed: true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
-  "extensions/matrix/src/matrix/client/storage.ts:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId, currentTokenStateClaimed: metadata.currentTokenStateClaimed === true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
   "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
 ];
 
@@ -220,8 +218,18 @@ function isSourceFile(filePath) {
 }
 
 function isGeneratedAssetSourceFile(filePath) {
-  return /(?:^|\/)extensions\/[^/]+\/assets\/[^/]+\.[cm]?js$/u.test(
-    filePath.replaceAll(path.sep, "/"),
+  const normalized = filePath.replaceAll(path.sep, "/");
+  return (
+    /(?:^|\/)extensions\/[^/]+\/(?:assets|dist)\/.+\.[cm]?js$/u.test(normalized) ||
+    /(?:^|\/)packages\/[^/]+\/dist\/.+\.[cm]?js$/u.test(normalized)
+  );
+}
+
+function isGeneratedAssetSourcePath(filePath) {
+  return (
+    /(?:^|\/)extensions\/[^/]+\/(?:assets|dist)(?:\/|$)/u.test(
+      filePath.replaceAll(path.sep, "/"),
+    ) || /(?:^|\/)packages\/[^/]+\/dist(?:\/|$)/u.test(filePath.replaceAll(path.sep, "/"))
   );
 }
 
@@ -255,6 +263,9 @@ async function collectSourceFiles(targetPath) {
       continue;
     }
     const entryPath = path.join(targetPath, entry.name);
+    if (isGeneratedAssetSourcePath(entryPath)) {
+      continue;
+    }
     if (entry.isDirectory()) {
       files.push(...(await collectSourceFiles(entryPath)));
       continue;

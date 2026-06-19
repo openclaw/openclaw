@@ -8,6 +8,17 @@ type CreateFeishuWSClient = typeof import("./client.js").createFeishuWSClient;
 type ClearClientCache = typeof import("./client.js").clearClientCache;
 type SetFeishuClientRuntimeForTest = typeof import("./client.js").setFeishuClientRuntimeForTest;
 
+const requestInterceptorState = vi.hoisted(() => {
+  let registered: ((req: unknown) => unknown) | undefined;
+  return {
+    get registered() {
+      return registered;
+    },
+    use: vi.fn((fn: (req: unknown) => unknown) => {
+      registered = fn;
+    }),
+  };
+});
 const clientCtorMock = vi.hoisted(() =>
   vi.fn(function clientCtor() {
     return { connected: true };
@@ -23,16 +34,31 @@ const proxyAgentCtorMock = vi.hoisted(() =>
     return { proxied: true };
   }),
 );
-const mockBaseHttpInstance = vi.hoisted(() => ({
-  request: vi.fn().mockResolvedValue({}),
-  get: vi.fn().mockResolvedValue({}),
-  post: vi.fn().mockResolvedValue({}),
-  put: vi.fn().mockResolvedValue({}),
-  patch: vi.fn().mockResolvedValue({}),
-  delete: vi.fn().mockResolvedValue({}),
-  head: vi.fn().mockResolvedValue({}),
-  options: vi.fn().mockResolvedValue({}),
-}));
+const mockBaseHttpInstance = vi.hoisted(() => {
+  const requestInterceptors = { use: requestInterceptorState.use };
+  Object.defineProperty(requestInterceptors, "handlers", {
+    configurable: true,
+    get() {
+      throw new Error("Do not read axios private interceptor handlers");
+    },
+    set() {
+      throw new Error("Do not write axios private interceptor handlers");
+    },
+  });
+  return {
+    request: vi.fn().mockResolvedValue({}),
+    get: vi.fn().mockResolvedValue({}),
+    post: vi.fn().mockResolvedValue({}),
+    put: vi.fn().mockResolvedValue({}),
+    patch: vi.fn().mockResolvedValue({}),
+    delete: vi.fn().mockResolvedValue({}),
+    head: vi.fn().mockResolvedValue({}),
+    options: vi.fn().mockResolvedValue({}),
+    interceptors: {
+      request: requestInterceptors,
+    },
+  };
+});
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
 const registerFeishuDocToolsMock = vi.hoisted(() => vi.fn());
@@ -52,6 +78,7 @@ let setFeishuClientRuntimeForTest: SetFeishuClientRuntimeForTest;
 let FEISHU_HTTP_TIMEOUT_MS: number;
 let FEISHU_HTTP_TIMEOUT_MAX_MS: number;
 let FEISHU_HTTP_TIMEOUT_ENV_VAR: string;
+let FEISHU_USER_AGENT: string;
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 let priorFeishuTimeoutEnv: string | undefined;
@@ -179,6 +206,7 @@ beforeAll(async () => {
     FEISHU_HTTP_TIMEOUT_MS,
     FEISHU_HTTP_TIMEOUT_MAX_MS,
     FEISHU_HTTP_TIMEOUT_ENV_VAR,
+    FEISHU_USER_AGENT,
   } = await import("./client.js"));
 });
 
@@ -238,6 +266,26 @@ afterAll(() => {
   vi.doUnmock("@larksuiteoapi/node-sdk");
   vi.doUnmock("@openclaw/proxyline");
   vi.resetModules();
+});
+
+describe("Feishu default User-Agent interceptor", () => {
+  it("registers through the public interceptor API and overrides the SDK User-Agent", () => {
+    expect(requestInterceptorState.registered).toBeTypeOf("function");
+
+    const req = { headers: { "User-Agent": "oapi-node-sdk/1.0.0" } };
+    expect(requestInterceptorState.registered?.(req)).toBe(req);
+
+    expect(req.headers["User-Agent"]).toBe(FEISHU_USER_AGENT);
+  });
+
+  it("sets the User-Agent on AxiosHeaders-like request headers", () => {
+    const headers = { set: vi.fn() };
+    const req = { headers };
+
+    expect(requestInterceptorState.registered?.(req)).toBe(req);
+
+    expect(headers.set).toHaveBeenCalledWith("User-Agent", FEISHU_USER_AGENT);
+  });
 });
 
 describe("createFeishuClient HTTP timeout", () => {

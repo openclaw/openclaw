@@ -54,6 +54,51 @@ class FakeTransport implements OpenClawTransport {
   }
 }
 
+class DelayedConnectTransport extends FakeTransport {
+  connectCalls = 0;
+  private finishConnectCurrent: (() => void) | null = null;
+
+  async connect(): Promise<void> {
+    this.connectCalls += 1;
+    await new Promise<void>((resolve) => {
+      this.finishConnectCurrent = resolve;
+    });
+  }
+
+  finishConnect(): void {
+    const finish = this.finishConnectCurrent;
+    if (!finish) {
+      throw new Error("expected pending connect");
+    }
+    this.finishConnectCurrent = null;
+    finish();
+  }
+}
+
+class ClosingEventPumpTransport extends FakeTransport {
+  onFirstEventPoll?: () => void;
+
+  override events(): AsyncIterable<GatewayEvent> {
+    return {
+      [Symbol.asyncIterator]: (): AsyncIterator<GatewayEvent> => {
+        let firstPoll = true;
+        return {
+          next: async (): Promise<IteratorResult<GatewayEvent>> => {
+            if (firstPoll) {
+              firstPoll = false;
+              this.onFirstEventPoll?.();
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+              });
+            }
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    };
+  }
+}
+
 class EventsOnlyTransport implements OpenClawTransport {
   constructor(private readonly eventSource: AsyncIterable<GatewayEvent>) {}
 
@@ -629,6 +674,42 @@ describe("OpenClaw SDK", () => {
       { method: "environments.list", params: {}, options: undefined },
       { method: "environments.status", params: { environmentId: "gateway" }, options: undefined },
     ]);
+  });
+
+  it("keeps close terminal when it races a pending connect", async () => {
+    const transport = new DelayedConnectTransport({
+      "agents.list": { agents: [] },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const connect = oc.connect();
+    const close = oc.close();
+    transport.finishConnect();
+
+    await expect(connect).rejects.toThrow("OpenClaw SDK client is closed");
+    await close;
+    await expect(oc.agents.list()).rejects.toThrow("OpenClaw SDK client is closed");
+    await expect(oc.events()[Symbol.asyncIterator]().next()).rejects.toThrow(
+      "OpenClaw SDK client is closed",
+    );
+    expect(() => oc.rawEvents()).toThrow("OpenClaw SDK client is closed");
+    expect(transport.connectCalls).toBe(1);
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("does not request after close races event pump startup", async () => {
+    const transport = new ClosingEventPumpTransport({
+      "agents.list": { agents: [] },
+    });
+    const oc = new OpenClaw({ transport });
+    let closePromise: Promise<void> | undefined;
+    transport.onFirstEventPoll = () => {
+      closePromise = oc.close();
+    };
+
+    await expect(oc.agents.list()).rejects.toThrow("OpenClaw SDK client is closed");
+    await closePromise;
+    expect(transport.calls).toEqual([]);
   });
 
   it("cancels runs and checks model auth status through current Gateway methods", async () => {

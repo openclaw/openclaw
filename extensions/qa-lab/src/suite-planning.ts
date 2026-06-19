@@ -144,12 +144,21 @@ function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
   let forwardHostHome = false;
+  let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
+    if (scenario.gatewayRuntime?.preserveDebugArtifacts === true) {
+      preserveDebugArtifacts = true;
+    }
   }
-  return forwardHostHome ? { forwardHostHome: true } : undefined;
+  return forwardHostHome || preserveDebugArtifacts
+    ? {
+        ...(forwardHostHome ? { forwardHostHome: true } : {}),
+        ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
+      }
+    : undefined;
 }
 
 function shouldUseIsolatedQaSuiteScenarioWorkers(params: {

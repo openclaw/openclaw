@@ -548,6 +548,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let action: String
     public let params: [String: AnyCodable]
     public let accountid: String?
+    public let requesteraccountid: String?
     public let requestersenderid: String?
     public let senderisowner: Bool?
     public let sessionkey: String?
@@ -562,6 +563,7 @@ public struct MessageActionParams: Codable, Sendable {
         action: String,
         params: [String: AnyCodable],
         accountid: String?,
+        requesteraccountid: String? = nil,
         requestersenderid: String?,
         senderisowner: Bool?,
         sessionkey: String?,
@@ -575,6 +577,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.action = action
         self.params = params
         self.accountid = accountid
+        self.requesteraccountid = requesteraccountid
         self.requestersenderid = requestersenderid
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
@@ -590,6 +593,7 @@ public struct MessageActionParams: Codable, Sendable {
         case action
         case params
         case accountid = "accountId"
+        case requesteraccountid = "requesterAccountId"
         case requestersenderid = "requesterSenderId"
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
@@ -6579,6 +6583,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let security: AnyCodable?
     public let ask: AnyCodable?
     public let warningtext: AnyCodable?
+    public let unavailabledecisions: [String]?
     public let commandspans: [[String: AnyCodable]]?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
@@ -6604,6 +6609,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         security: AnyCodable?,
         ask: AnyCodable?,
         warningtext: AnyCodable?,
+        unavailabledecisions: [String]?,
         commandspans: [[String: AnyCodable]]?,
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable?,
@@ -6628,6 +6634,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.security = security
         self.ask = ask
         self.warningtext = warningtext
+        self.unavailabledecisions = unavailabledecisions
         self.commandspans = commandspans
         self.agentid = agentid
         self.resolvedpath = resolvedpath
@@ -6654,6 +6661,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case security
         case ask
         case warningtext = "warningText"
+        case unavailabledecisions = "unavailableDecisions"
         case commandspans = "commandSpans"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"

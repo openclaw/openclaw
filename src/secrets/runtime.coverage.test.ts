@@ -1,4 +1,5 @@
 /** Coverage tests for secrets runtime collector breadth and target surfaces. */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
@@ -310,6 +311,18 @@ function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string)
     entry.id === "tools.web.fetch.firecrawl.apiKey"
     ? "FIRECRAWL_API_KEY"
     : fallbackEnvId;
+}
+
+function toCoverageEnvRefId(prefix: string, id: string): string {
+  const normalized = id
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const name = normalized || "TARGET";
+  const hash = createHash("sha256").update(id).digest("hex").slice(0, 12).toUpperCase();
+  const maxNameLength = 128 - prefix.length - hash.length - 2;
+  return `${prefix}_${name.slice(0, Math.max(1, maxNameLength))}_${hash}`;
 }
 
 function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
@@ -756,7 +769,7 @@ async function expectOpenClawCoverageBatchResolved(
   const config = {} as OpenClawConfig;
   const env: Record<string, string> = {};
   for (const [index, entry] of batch.entries()) {
-    const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
+    const envId = toCoverageEnvRefId("OPENCLAW_SECRET_TARGET", entry.id);
     const runtimeEnvId = resolveCoverageEnvId(entry, envId);
     const expectedValue = `resolved-${entry.id}`;
     const wildcardToken = resolveCoverageWildcardToken(index);
@@ -857,7 +870,7 @@ describe("secrets runtime target coverage", () => {
           profiles: {},
         };
         for (const [index, entry] of batch.entries()) {
-          const envId = `OPENCLAW_AUTH_SECRET_TARGET_${entry.id}`;
+          const envId = toCoverageEnvRefId("OPENCLAW_AUTH_SECRET_TARGET", entry.id);
           env[envId] = `resolved-${entry.id}`;
           applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
         }

@@ -454,6 +454,45 @@ describe("model-pricing-cache", () => {
     });
   });
 
+  it("cancels remote pricing error response bodies", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const openRouterResponse = new Response("rate limited", { status: 429 });
+    const cancel = vi.spyOn(openRouterResponse.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return openRouterResponse;
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.detail).toContain("HTTP 429");
+  });
+
   it("records malformed remote pricing catalog JSON as source failures", async () => {
     const config = {
       agents: {
@@ -1222,6 +1261,7 @@ describe("model-pricing-cache", () => {
       },
     } as unknown as OpenClawConfig;
 
+    const liteLLMCancel = vi.fn(async () => undefined);
     const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("openrouter.ai")) {
@@ -1244,17 +1284,20 @@ describe("model-pricing-cache", () => {
           },
         );
       }
-      return new Response("{}", {
+      const liteLLMResponse = new Response("{}", {
         status: 200,
         headers: {
           "Content-Type": "application/json",
           "Content-Length": "6000000",
         },
       });
+      vi.spyOn(liteLLMResponse.body!, "cancel").mockImplementation(liteLLMCancel);
+      return liteLLMResponse;
     });
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
+    expect(liteLLMCancel).toHaveBeenCalledOnce();
     expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
       input: 0.95,
       output: 4,

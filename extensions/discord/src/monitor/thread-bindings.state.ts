@@ -11,8 +11,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import {
-  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS,
   type PersistedThreadBindingRecord,
   type ThreadBindingManager,
@@ -571,13 +569,6 @@ export function resolveBindingIdsForSession(params: {
     out.push(bindingKey);
   }
   return out;
-}
-
-export function resolveDefaultThreadBindingDurations() {
-  return {
-    defaultIdleTimeoutMs: DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-    defaultMaxAgeMs: DEFAULT_THREAD_BINDING_MAX_AGE_MS,
-  };
 }
 
 export function resetThreadBindingsForTests() {

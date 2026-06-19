@@ -1,7 +1,6 @@
 // Whatsapp tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildWhatsAppApprovalReactionHint,
   clearWhatsAppApprovalReactionTargetsForTest,
   extractWhatsAppApprovalPromptBinding,
   maybeResolveWhatsAppApprovalReaction,
@@ -27,18 +26,6 @@ describe("WhatsApp approval reactions", () => {
     resolverMocks.resolveWhatsAppApproval.mockResolvedValue(undefined);
     resolverMocks.isApprovalNotFoundError.mockReset();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
-  });
-
-  it("renders thumbs-only reaction choices for allowed decisions", () => {
-    expect(buildWhatsAppApprovalReactionHint(["allow-once", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
-    );
-  });
-
-  it("exposes allow-always as a reaction choice when allowed", () => {
-    expect(buildWhatsAppApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
-    );
   });
 
   it("registers reaction state when only allow-always is available", async () => {

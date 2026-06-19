@@ -1,6 +1,10 @@
 // Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -69,6 +73,10 @@ type ResolveSkillsWorkspaceOptions = {
   cwd?: string;
 };
 
+type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+
+const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -95,12 +103,37 @@ function resolveAgentOption(
   return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
 }
 
+async function loadGatewaySkillsStatusReport(
+  resolved: ResolvedSkillsWorkspace,
+): Promise<SkillStatusReport | null> {
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillStatusReport>({
+      config: resolved.config,
+      method: "skills.status",
+      params: { agentId: resolved.agentId },
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
-  const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
+  const resolved = resolveSkillsWorkspace(options);
+  const gatewayReport = await loadGatewaySkillsStatusReport(resolved);
+  if (gatewayReport) {
+    return gatewayReport;
+  }
   const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
+  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    config: resolved.config,
+    agentId: resolved.agentId,
+  });
 }
 
 async function runSkillsAction(
@@ -287,7 +320,10 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("install")
     .description("Install a skill from ClawHub, git, or a local directory")
-    .argument("<slug>", "ClawHub skill slug, git:<repo>, or local skill directory")
+    .argument(
+      "<skill-ref>",
+      "ClawHub skill ref (@owner/slug), git:<repo>, or local skill directory",
+    )
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
     .option(
@@ -298,6 +334,7 @@ export function registerSkillsCli(program: Command) {
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
+    .addHelpText("after", "\nExamples:\n  openclaw skills install @owner/weather\n")
     .action(
       async (
         slug: string,
@@ -480,6 +517,7 @@ export function registerSkillsCli(program: Command) {
           } else {
             const verification = await fetchClawHubSkillVerification({
               slug: target.slug,
+              ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,

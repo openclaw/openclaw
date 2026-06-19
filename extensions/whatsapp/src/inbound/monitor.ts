@@ -866,18 +866,7 @@ export async function attachWebInboxToSocket(
     }
   };
 
-  const maybeMarkReadReceiptAfterCompletedDelivery = async (
-    inbound: NormalizedInboundMessage,
-    target: WhatsAppReadReceiptTarget | undefined,
-  ) => {
-    if (inbound.access.isSelfChat) {
-      maybeLogSkippedSelfChatReadReceipt(inbound, target);
-      return;
-    }
-    await maybeMarkInboundAsRead(target);
-  };
-
-  const maybeMarkReadReceiptForSkippedAppend = async (
+  const maybeMarkNonSelfChatReadReceipt = async (
     inbound: NormalizedInboundMessage,
     target: WhatsAppReadReceiptTarget | undefined,
   ) => {
@@ -942,7 +931,7 @@ export async function attachWebInboxToSocket(
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
 
     if (!stored && shouldSkipStaleAppend(msg, upsertType)) {
-      await maybeMarkReadReceiptForSkippedAppend(inbound, readReceipt);
+      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
       return;
     }
 
@@ -969,7 +958,7 @@ export async function attachWebInboxToSocket(
           },
         );
         if (accepted.kind === "completed") {
-          await maybeMarkReadReceiptAfterCompletedDelivery(
+          await maybeMarkNonSelfChatReadReceipt(
             inbound,
             accepted.record.metadata?.readReceipt ?? deliveryReadReceipt,
           );
@@ -994,7 +983,7 @@ export async function attachWebInboxToSocket(
     const enriched = await enrichInboundMessage(msg);
     if (!enriched) {
       await completeUndeliverableDurableInbound(durableId, durableMetadata);
-      await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
+      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       return;
     }
 
@@ -1003,7 +992,7 @@ export async function attachWebInboxToSocket(
     if (dedupeClaim !== "claimed") {
       if (dedupeClaim === "duplicate") {
         await completeUndeliverableDurableInbound(durableId, durableMetadata);
-        await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
+        await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       }
       return;
     }
