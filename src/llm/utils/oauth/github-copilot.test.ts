@@ -166,4 +166,18 @@ describe("GitHub Copilot OAuth model policy", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("cancels model enablement response bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, body: { cancel } }) as unknown as Response),
+    );
+
+    await expect(
+      testing.enableGitHubCopilotModel("copilot-token", "claude-sonnet-4.6"),
+    ).resolves.toBe(true);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 });
