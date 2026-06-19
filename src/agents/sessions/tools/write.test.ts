@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { createWriteTool, createWriteToolDefinition, type WriteOperations } from "./write.js";
 
 describe("write tool", () => {
   let tmpDir = "";
@@ -22,11 +22,15 @@ describe("write tool", () => {
     return path.join(tmpDir, name);
   }
 
-  function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
+  function createRecoverableOperations(
+    writeFile: WriteOperations["writeFile"],
+    appendFile: WriteOperations["appendFile"] = (absolutePath, content) =>
+      fs.appendFile(absolutePath, content, "utf-8"),
+  ): WriteOperations {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
-      appendFile: (absolutePath, content) => fs.appendFile(absolutePath, content, "utf-8"),
+      appendFile,
       readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async (absolutePath) => {
         try {
@@ -111,10 +115,44 @@ describe("write tool", () => {
     expect(result.content[0]?.type).toBe("text");
   });
 
+  it("advertises append mode in shared write prompt metadata", () => {
+    const definition = createWriteToolDefinition(tmpDir);
+
+    expect(definition.description).toContain("appends when append is true");
+    expect(definition.promptSnippet).toContain("append");
+    expect((definition.promptGuidelines ?? []).join("\n")).toContain("append: true");
+  });
+
   it("appends content when append mode is enabled", async () => {
     const filePath = await createTempPath("append.txt");
     await fs.writeFile(filePath, "alpha\n", "utf-8");
     const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"beta\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("recovers timeout-like post-append errors when readback preserves existing content", async () => {
+    const filePath = await createTempPath("append-timeout.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf-8");
+          throw new Error("node invoke timed out");
+        },
+      ),
+    });
 
     const result = await tool.execute(
       "call-1",

@@ -97,6 +97,7 @@ type WriteToolFileStat = {
 type WriteToolPrecheck = {
   state: "different" | "same" | "unknown";
   beforeStat?: WriteToolFileStat | null;
+  beforeContent?: string;
 };
 
 const WRITE_PRECHECK_READ_LIMIT_BYTES = 1024 * 1024;
@@ -306,7 +307,11 @@ async function readOriginalWriteState(
     const originalText = Buffer.isBuffer(originalContent)
       ? originalContent.toString("utf8")
       : originalContent;
-    return { state: originalText === content ? "same" : "different", beforeStat: stat };
+    return {
+      state: originalText === content ? "same" : "different",
+      beforeStat: stat,
+      beforeContent: originalText,
+    };
   } catch {
     return { state: "unknown", beforeStat: stat };
   }
@@ -345,6 +350,7 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
 
 async function recoverSuccessfulWrite(params: {
   absolutePath: string;
+  append: boolean;
   content: string;
   error: unknown;
   ops: WriteOperations;
@@ -361,7 +367,24 @@ async function recoverSuccessfulWrite(params: {
     params.precheck.state === "different" ||
     (params.precheck.state === "unknown" &&
       (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (currentContent !== params.content || !changed) {
+  if (!changed || typeof currentContent !== "string") {
+    return null;
+  }
+  if (params.append) {
+    if (!isRecoveredAppendContent(currentContent, params.content, params.precheck)) {
+      return null;
+    }
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Successfully appended ${params.content.length} bytes to ${params.path}`,
+        },
+      ],
+      details: undefined,
+    };
+  }
+  if (currentContent !== params.content) {
     return null;
   }
   return {
@@ -375,6 +398,27 @@ async function recoverSuccessfulWrite(params: {
   };
 }
 
+function isRecoveredAppendContent(
+  currentContent: string,
+  appendedContent: string,
+  precheck: WriteToolPrecheck,
+): boolean {
+  if (precheck.beforeContent !== undefined) {
+    return currentContent === `${precheck.beforeContent}${appendedContent}`;
+  }
+  if (precheck.beforeStat === null) {
+    return currentContent === appendedContent;
+  }
+  if (!precheck.beforeStat || precheck.beforeStat.type !== "file") {
+    return false;
+  }
+  return (
+    currentContent.endsWith(appendedContent) &&
+    Buffer.byteLength(currentContent, "utf8") ===
+      precheck.beforeStat.size + Buffer.byteLength(appendedContent, "utf8")
+  );
+}
+
 export function createWriteToolDefinition(
   cwd: string,
   options?: WriteToolOptions,
@@ -384,9 +428,11 @@ export function createWriteToolDefinition(
     name: "write",
     label: "write",
     description:
-      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
-    promptSnippet: "Create or overwrite files",
-    promptGuidelines: ["Use write only for new files or complete rewrites."],
+      "Write content to a file. Creates the file if it doesn't exist, overwrites by default, or appends when append is true. Automatically creates parent directories.",
+    promptSnippet: "Create, overwrite, or append to files",
+    promptGuidelines: [
+      "Use write for new files or complete rewrites; set append: true when preserving existing content and adding to the end of a file.",
+    ],
     parameters: writeSchema,
     async execute(
       toolCallId,
@@ -432,6 +478,7 @@ export function createWriteToolDefinition(
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,
+            append,
             content,
             error,
             ops,
