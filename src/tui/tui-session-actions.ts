@@ -11,6 +11,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
+import { shouldDisplayToolExecution } from "./components/tool-execution.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
@@ -506,7 +507,17 @@ export function createSessionActions(context: SessionActionContext) {
           }
           const toolCallId = asString(message.toolCallId, "");
           const toolName = asString(message.toolName, "tool");
-          const component = chatLog.startTool(toolCallId, toolName, {});
+          const toolArgs =
+            typeof message.args === "object" && message.args
+              ? message.args
+              : typeof message.arguments === "object" && message.arguments
+                ? message.arguments
+                : {};
+          const isToolError = Boolean(message.isError);
+          if (!shouldDisplayToolExecution(toolName, toolArgs, false, isToolError)) {
+            continue;
+          }
+          const component = chatLog.startTool(toolCallId, toolName, toolArgs);
           component.setResult(
             {
               content: Array.isArray(message.content)
@@ -517,7 +528,7 @@ export function createSessionActions(context: SessionActionContext) {
                   ? (message.details as Record<string, unknown>)
                   : undefined,
             },
-            { isError: Boolean(message.isError) },
+            { isError: isToolError },
           );
         }
       }
