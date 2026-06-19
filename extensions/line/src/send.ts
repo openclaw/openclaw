@@ -4,7 +4,7 @@ import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
@@ -186,7 +186,7 @@ function logLineHttpError(err: unknown, context: string): void {
     const code = status ?? statusCode;
     const text = statusText ?? statusMessage ?? "";
     const summary = code ? `${code} ${text}`.trim() : "unknown status";
-    logVerbose(`line: ${context} failed (${summary}): ${body}`);
+    warn(`line: ${context} failed (${summary}): ${body}`);
   }
 }
 
