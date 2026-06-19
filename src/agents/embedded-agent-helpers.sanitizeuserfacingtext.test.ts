@@ -1106,3 +1106,48 @@ describe("isMessagingToolDuplicate", () => {
     expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);
   });
 });
+
+describe("sanitizeUserFacingText – relevant-memory tag stripping", () => {
+  it("strips <relevant_memories> blocks from outbound text", () => {
+    const input = "Hello! <relevant_memories>Internal context</relevant_memories> How are you?";
+    expect(sanitizeUserFacingText(input)).toBe("Hello!  How are you?");
+  });
+
+  it("strips self-closing relevant_memories tags and trailing unclosed content", () => {
+    // Self-closing <relevant_memories/> has the / after the name, so the regex
+    // treats it as an opening tag. Everything after it is consumed until a close.
+    const input = "Before <relevant_memories/> After";
+    const result = sanitizeUserFacingText(input);
+    expect(result).not.toContain("After");
+    expect(result).toContain("Before");
+  });
+
+  it("strips multi-line relevant_memories blocks", () => {
+    const input = `User asked about X.
+<relevant_memories>
+- Fact 1
+- Fact 2
+</relevant_memories>
+Here is the answer.`;
+    expect(sanitizeUserFacingText(input)).toContain("User asked about X.");
+    expect(sanitizeUserFacingText(input)).toContain("Here is the answer.");
+    expect(sanitizeUserFacingText(input)).not.toContain("Fact 1");
+    expect(sanitizeUserFacingText(input)).not.toContain("relevant_memories");
+  });
+
+  it("preserves relevant_memories inside code fences", () => {
+    const input = "Example:\n```\n<relevant_memories>tag in code</relevant_memories>\n```\nDone.";
+    const result = sanitizeUserFacingText(input);
+    expect(result).toContain("<relevant_memories>tag in code</relevant_memories>");
+  });
+
+  it("passes through text without relevant_memories tags unchanged", () => {
+    const input = "Normal text without any special tags.";
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("handles empty relevant_memories block", () => {
+    const input = "Before<relevant_memories></relevant_memories>After";
+    expect(sanitizeUserFacingText(input)).toBe("BeforeAfter");
+  });
+});

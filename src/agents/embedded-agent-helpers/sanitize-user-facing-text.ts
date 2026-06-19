@@ -23,6 +23,7 @@ import {
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
+import { stripRelevantMemoriesTags } from "../../shared/text/relevant-memories-strip.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -430,7 +431,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  const stripped = stripRelevantMemoriesTags(stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw))));
   const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
     stripFunctionCallsXmlPayloads: true,
   });
