@@ -39,7 +39,7 @@ import {
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
-import { buildInlineKeyboard } from "../send.js";
+import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -67,6 +67,9 @@ type DeliveryProgress = ReplyThreadDeliveryProgress & {
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+  reaction?: {
+    emoji?: unknown;
+  };
 };
 
 type TelegramReplyQuoteForSend = {
@@ -823,7 +826,16 @@ export async function deliverReplies(params: {
     if (reply && resolvedReplyText !== (reply.text ?? "")) {
       reply = { ...reply, text: resolvedReplyText };
     }
-    if (!resolvedReplyText && !hasMedia) {
+    const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
+    const reactionEmoji =
+      typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
+    const reactionTargetId =
+      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    if (
+      !resolvedReplyText &&
+      !hasMedia &&
+      !(reactionEmoji && typeof reactionTargetId === "number")
+    ) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -882,7 +894,6 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
-      const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const replyMarkup = buildInlineKeyboard(
         resolveTelegramInlineButtons({
           buttons: telegramData?.buttons,
@@ -891,7 +902,22 @@ export async function deliverReplies(params: {
         }),
       );
       let firstDeliveredMessageId: number | undefined;
-      if (mediaList.length === 0) {
+      if (reactionEmoji && typeof replyToId === "number") {
+        const reactionResult = await reactMessageTelegram(params.chatId, replyToId, reactionEmoji, {
+          cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
+          token: params.token,
+          accountId: params.accountId,
+          api: params.bot.api,
+          verbose: false,
+        });
+        if (reactionResult.ok) {
+          progress.hasDelivered = true;
+          progress.deliveredCount += 1;
+        } else {
+          params.runtime.error?.(danger(reactionResult.warning));
+        }
+      }
+      if (mediaList.length === 0 && resolvedReplyText) {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
           chatId: params.chatId,
@@ -912,7 +938,7 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
         });
-      } else {
+      } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
           reply,
           mediaList,
