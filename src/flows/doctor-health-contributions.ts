@@ -1317,7 +1317,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Sandbox",
       healthChecks: {
         id: "core/doctor/sandbox/registry-files",
-        description: "Legacy sandbox registry files are represented in sharded registry storage.",
+        description: "Legacy sandbox registry files are represented in SQLite registry storage.",
         async detect() {
           const {
             detectLegacySandboxRegistryFileIssues,

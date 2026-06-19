@@ -396,7 +396,7 @@ export function legacySandboxRegistryInspectionToHealthFinding(
     message: `Legacy sandbox registry file detected.
 ${formatLegacyRegistryInspectionLine(file)}`,
     path: file.registryPath,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate it to sharded registry files.`,
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate valid entries to SQLite.`,
   };
 }
 
