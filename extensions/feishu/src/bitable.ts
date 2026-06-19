@@ -530,10 +530,14 @@ const CreateRecordSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
-    description:
-      "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
-  }),
+  fields: Type.Object(
+    {},
+    {
+      additionalProperties: true,
+      description:
+        "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
+    },
+  ),
 });
 
 const CreateAppSchema = Type.Object({
@@ -560,9 +564,14 @@ const CreateFieldSchema = Type.Object({
     minimum: 1,
   }),
   property: Type.Optional(
-    Type.Record(Type.String(), Type.Any(), {
-      description: "Field-specific properties (e.g., options for SingleSelect, format for Number)",
-    }),
+    Type.Object(
+      {},
+      {
+        additionalProperties: true,
+        description:
+          "Field-specific properties (e.g., options for SingleSelect, format for Number)",
+      },
+    ),
   ),
 });
 
@@ -572,9 +581,13 @@ const UpdateRecordSchema = Type.Object({
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
-    description: "Field values to update (same format as create_record)",
-  }),
+  fields: Type.Object(
+    {},
+    {
+      additionalProperties: true,
+      description: "Field values to update (same format as create_record)",
+    },
+  ),
 });
 
 // ============ Tool Registration ============
