@@ -29,7 +29,7 @@ export function resolveHistoryFamilySessionIds(
   const withoutCurrent = (entry?.usageFamilySessionIds ?? []).filter(
     (sessionId) => sessionId !== currentSessionId,
   );
-  return uniqueStrings([currentSessionId, ...withoutCurrent]);
+  return uniqueStrings([...withoutCurrent, currentSessionId]);
 }
 
 export function resolveFirstExistingTranscriptCandidate(params: {
@@ -78,8 +78,8 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
     : [currentSessionId];
   const targets: SessionTranscriptReadTarget[] = [];
   const seenFiles = new Set<string>();
-  const pushTarget = (target: SessionTranscriptReadTarget): boolean => {
-    if (targets.length >= MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS) {
+  const pushTarget = (target: SessionTranscriptReadTarget, limit: number): boolean => {
+    if (targets.length >= limit) {
       return false;
     }
     const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
@@ -90,12 +90,17 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
       seenFiles.add(resolved);
     }
     targets.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
-    return targets.length < MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS;
+    return targets.length < limit;
   };
-  const finalizeTargets = (): SessionTranscriptReadTarget[] =>
-    params.includeFamily ? orderFamilyReadTargetsForOutput(targets, currentSessionId) : targets;
 
   for (const familySessionId of sessionIds) {
+    const targetLimit =
+      params.includeFamily && familySessionId !== currentSessionId
+        ? MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS - 2
+        : MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS;
+    if (targets.length >= targetLimit && familySessionId !== currentSessionId) {
+      continue;
+    }
     const archivedFiles = params.includeFamily
       ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
           familySessionId,
@@ -123,40 +128,37 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
             },
           );
 
-    if (activeFile && familySessionId === currentSessionId) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: activeFile,
-          applySessionStartedAtFilter: true,
-          isCurrentActive: true,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
+    const archiveTargetLimit =
+      params.includeFamily && familySessionId === currentSessionId && activeFile
+        ? Math.max(0, targetLimit - 1)
+        : targetLimit;
     for (const file of archivedFiles) {
       if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: file,
-          applySessionStartedAtFilter: false,
-        })
+        !pushTarget(
+          {
+            sessionId: familySessionId,
+            sessionFile: file,
+            applySessionStartedAtFilter: false,
+          },
+          archiveTargetLimit,
+        )
       ) {
-        return finalizeTargets();
+        break;
       }
     }
-    if (activeFile && familySessionId !== currentSessionId) {
-      if (
-        !pushTarget({
+    if (activeFile) {
+      pushTarget(
+        {
           sessionId: familySessionId,
           sessionFile: activeFile,
-          applySessionStartedAtFilter: false,
-        })
-      ) {
-        return finalizeTargets();
-      }
+          applySessionStartedAtFilter: familySessionId === currentSessionId,
+          ...(familySessionId === currentSessionId ? { isCurrentActive: true } : {}),
+        },
+        targetLimit,
+      );
     }
   }
-  return finalizeTargets();
+  return params.includeFamily
+    ? orderFamilyReadTargetsForOutput(targets, currentSessionId)
+    : targets;
 }
