@@ -1266,7 +1266,6 @@ function imageExtensionForMimeType(mimeType: string): string {
       return "gif";
     case "image/avif":
       return "avif";
-    case "image/png":
     default:
       return "png";
   }

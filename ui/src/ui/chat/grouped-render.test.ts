@@ -1660,9 +1660,8 @@ describe("grouped chat rendering", () => {
     );
 
     const fullObjectUrl = "blob:managed-full-image";
-    const createObjectUrlMock = URL.createObjectURL as ReturnType<typeof vi.fn>;
-    createObjectUrlMock.mockReturnValue(fullObjectUrl);
-    const revokeObjectUrlMock = URL.revokeObjectURL as ReturnType<typeof vi.fn>;
+    const createObjectUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue(fullObjectUrl);
+    const revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL");
     const timeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation(((cb: TimerHandler) => {
       if (typeof cb === "function") {
         cb();
@@ -1677,8 +1676,10 @@ describe("grouped chat rendering", () => {
       await vi.waitFor(() => {
         expect(openSpy).toHaveBeenCalledWith(fullObjectUrl, "_blank", "noopener,noreferrer");
       });
-      expect(revokeObjectUrlMock).toHaveBeenCalledWith(fullObjectUrl);
+      expect(revokeObjectUrlSpy).toHaveBeenCalledWith(fullObjectUrl);
     } finally {
+      createObjectUrlSpy.mockRestore();
+      revokeObjectUrlSpy.mockRestore();
       timeoutSpy.mockRestore();
       openSpy.mockRestore();
     }
