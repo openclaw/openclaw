@@ -441,6 +441,31 @@ describe("runCopilotAttempt", () => {
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
 
+  it("bounds successful background compaction when the SDK omits completion", async () => {
+    vi.useFakeTimers();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const attempt = runCopilotAttempt(makeParams(), { pool });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(180_000);
+    const result = await attempt;
+
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeUndefined();
+    expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+    expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
+    expect(pool.release).toHaveBeenCalledTimes(1);
+  });
+
   it("defers and cancels compaction when the caller aborts after a turn result", async () => {
     const controller = new AbortController();
     const onDeferredCompaction = vi.fn();

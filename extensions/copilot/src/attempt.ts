@@ -783,7 +783,11 @@ export async function runCopilotAttempt(
     settled = true;
     const compactionCompletionOutcome =
       waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted
-        ? await awaitCompactionCompletionOrAbort(bridge!, params.abortSignal)
+        ? await awaitCompactionCompletionBeforeDeadline({
+            abortSignal: params.abortSignal,
+            bridge: bridge!,
+            timeoutMs: resolveCompactionTimeoutMs(input.config),
+          })
         : undefined;
     const deferCompactionCleanup =
       bridge?.isCompacting() &&
@@ -791,12 +795,13 @@ export async function runCopilotAttempt(
       handle &&
       (timedOut ||
         compactionCompletionOutcome === "aborted" ||
+        compactionCompletionOutcome === "deadline" ||
         params.abortSignal?.aborted === true);
     if (deferCompactionCleanup && bridge && session && handle) {
       timedOutDuringCompaction ||= timedOut;
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
-      if (params.abortSignal?.aborted) {
+      if (params.abortSignal?.aborted || compactionCompletionOutcome === "deadline") {
         abortCleanup();
       } else {
         params.abortSignal?.addEventListener("abort", abortCleanup, { once: true });
