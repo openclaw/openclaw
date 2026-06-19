@@ -166,6 +166,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
   });
 
+  it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
+    let canceled = false;
+    const abortController = new AbortController();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("partial"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+    );
+
+    const text = readBoundedCrossOsResponseText(response, 1024, {
+      signal: abortController.signal,
+    });
+
+    await delay(0);
+    abortController.abort(new Error("cross-os body timed out"));
+
+    await expect(text).rejects.toThrow("cross-os body timed out");
+    expect(canceled).toBe(true);
+  });
+
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
@@ -1387,6 +1412,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
+    expect(await canConnectToLoopbackPort(0)).toBe(false);
+    expect(await canConnectToLoopbackPort(65536)).toBe(false);
+    expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
+
     const server = createNetServer();
     await new Promise((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);

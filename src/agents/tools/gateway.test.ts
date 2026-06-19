@@ -1,7 +1,7 @@
 // Gateway call helper tests pin URL override, token, and RPC scope behavior for
 // agent tools that route through the local gateway client.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CallGatewayScopedOptions } from "../../gateway/call.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { callGatewayTool, readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
@@ -46,13 +46,13 @@ vi.mock("../../infra/device-identity.js", () => ({
   },
 }));
 
-function capturedGatewayCall(): CallGatewayScopedOptions {
+function capturedGatewayCall(): CallGatewayOptions {
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   const call = mocks.callGateway.mock.calls[0];
   if (!call) {
     throw new Error("expected callGateway to be called");
   }
-  return call[0] as CallGatewayScopedOptions;
+  return call[0] as CallGatewayOptions;
 }
 
 describe("gateway tool defaults", () => {

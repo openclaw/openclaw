@@ -3,6 +3,7 @@
 // Probes gateway state for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { readBoundedResponseText } from "../../../lib/bounded-response.mjs";
 
 const args = process.argv.slice(2);
 
@@ -104,38 +105,29 @@ function matchesDegradedReadyExpectation(body) {
   );
 }
 
-async function readBoundedResponseText(response, byteLimit) {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
-  const chunks = [];
-  let totalBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    totalBytes += value.byteLength;
-    if (totalBytes > byteLimit) {
-      await reader.cancel();
-      throw new Error(`${url} probe body exceeded ${byteLimit} bytes`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
-}
-
 async function fetchProbeText() {
   const elapsedMs = Date.now() - startedAt;
   const remainingMs = Math.max(1, timeoutMs - elapsedMs);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(attemptTimeoutMs, remainingMs));
+  const attemptDeadlineMs = Math.min(attemptTimeoutMs, remainingMs);
+  let timer;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${url} probe attempt timed out after ${attemptDeadlineMs}ms`));
+      controller.abort();
+    }, attemptDeadlineMs);
+  });
   try {
-    const response = await fetch(url, { method: "GET", signal: controller.signal });
+    const response = await Promise.race([
+      fetch(url, { method: "GET", signal: controller.signal }),
+      timeoutPromise,
+    ]);
     return {
       response,
-      text: await readBoundedResponseText(response, maxBodyBytes),
+      text: await readBoundedResponseText(response, `${url} probe`, maxBodyBytes, {
+        formatTooLargeMessage: (_label, bytes) => `${url} probe body exceeded ${bytes} bytes`,
+        timeoutPromise,
+      }),
     };
   } finally {
     clearTimeout(timer);

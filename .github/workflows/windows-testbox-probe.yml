@@ -85,11 +85,21 @@ jobs:
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
-          UBUNTU_WSL_ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz
         run: |
           $ErrorActionPreference = "Continue"
           $ok = $false
           $restartRequired = $false
+
+          function Resolve-UbuntuWslRootfsUrl {
+            $osArch = ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLowerInvariant()
+            switch ($osArch) {
+              "x64" { $wslArch = "amd64" }
+              "arm64" { $wslArch = "arm64" }
+              default { throw "Unsupported Windows architecture for Ubuntu WSL rootfs: $osArch" }
+            }
+            Write-Host "ubuntu_wsl_rootfs_arch=$wslArch"
+            "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz"
+          }
 
           function Invoke-WslText {
             param([string[]] $Arguments)
@@ -143,8 +153,9 @@ jobs:
               Write-Host "import_ubuntu_wsl2=true"
               $wslRoot = "C:\wsl\UbuntuProbe"
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
+              $rootfsUrl = Resolve-UbuntuWslRootfsUrl
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
-              Invoke-WebRequest -Uri $env:UBUNTU_WSL_ROOTFS_URL -OutFile $rootfs -UseBasicParsing
+              Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfs -UseBasicParsing
               $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
               Write-Host $import.Text
               Write-Host "wsl_import_exit=$($import.Code)"
