@@ -38,4 +38,12 @@ describe("cron quick create", () => {
     expect(patch.deliveryMode).toBe("announce");
     expect(patch.wakeMode).toBe("now");
   });
+
+  it("targets isolated session for silent preset so the job is created (#95073)", () => {
+    const patch = draftToCronFormPatch(createDraft({ deliveryPreset: "silent" }));
+
+    expect(patch.sessionTarget).toBe("isolated");
+    expect(patch.deliveryMode).toBe("none");
+    expect(patch.wakeMode).toBe("now");
+  });
 });
