@@ -215,6 +215,22 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("allows stdio transport on command-bearing MCP servers", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            demo: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-memory"],
+              transport: "stdio",
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("validates MCP OAuth client metadata URLs against the SDK contract", () => {
     expect(() =>
       OpenClawSchema.parse({
