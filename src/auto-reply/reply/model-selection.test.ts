@@ -1205,7 +1205,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
     expect(state.resetModelOverride).toBe(true);
-    expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
+    expect(state.resetStaleOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
   });
 
   it("preserves auto-failover overrides that still carry origin metadata on normal turns", async () => {
@@ -1275,7 +1275,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-5.5");
     expect(state.resetModelOverride).toBe(true);
-    expect(state.resetModelOverrideRef).toBe("openai/gpt-5.5");
+    expect(state.resetStaleOverrideRef).toBe("openai/gpt-5.5");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
@@ -1504,7 +1504,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe(defaultModel);
     expect(state.resetModelOverride).toBe(true);
-    expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
+    expect(state.resetStaleOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
@@ -1706,6 +1706,120 @@ describe("createModelSelectionState auto-failover overrides", () => {
     // Parent session entry is not modified by the child's selection logic.
     expect(sessionStore[parentKey]?.providerOverride).toBe("openrouter");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("does not produce a misleading rejection message when a stale auto override matches a configured allowlist model (#94713)", async () => {
+    // Regression: a stale auto override (modelOverrideSource="auto" without
+    // origin metadata) that matches the primary model must not produce a
+    // "not allowed" rejection when the model IS configured in
+    // agents.defaults.models.  The old code used a single branch for
+    // "stale OR not-allowed" and always set resetModelOverrideRef, which
+    // fed into an error message that told the user the model was forbidden.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", input: ["text"] as const },
+              { id: "gpt-5.4", name: "GPT-5.4", input: ["text"] as const },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:dashboard:c1";
+    // Simulate a child session entry that received an auto-fallback model
+    // override matching the configured primary.
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    // The auto override is stale, but the model IS in agents.defaults.models.
+    // We clear the stale override but must NOT emit a rejection message that
+    // says the model is "not allowed".
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBeUndefined();
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+  });
+
+  it("resets model override with rejectedRef when model is absent from allowlist", async () => {
+    // Complementary case: the stale override model is genuinely absent from
+    // agents.defaults.models.  resetModelOverrideRef must be set so the
+    // user-facing message names the forbidden model.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", name: "GPT-5.5", input: ["text"] as const }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:dashboard:c2";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openai/gpt-5.4");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
   });
 });
 

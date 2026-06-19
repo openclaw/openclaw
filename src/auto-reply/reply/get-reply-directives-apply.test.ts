@@ -21,4 +21,13 @@ describe("formatModelOverrideResetEvent", () => {
       }),
     ).toBe("Model override not allowed for this agent; reverted to github-copilot/gpt-4o.");
   });
+
+  it("describes stale auto override reset without claiming the model is disallowed (#94713)", () => {
+    expect(
+      formatModelOverrideResetEvent({
+        staleRef: "openai/gpt-5.5",
+        initialModelLabel: "openai/gpt-5.5",
+      }),
+    ).toBe("Previous auto-selected model openai/gpt-5.5 reset to default (openai/gpt-5.5).");
+  });
 });

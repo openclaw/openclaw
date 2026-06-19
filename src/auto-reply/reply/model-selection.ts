@@ -53,6 +53,7 @@ type ModelSelectionState = {
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
+  resetStaleOverrideRef?: string;
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
@@ -75,6 +76,7 @@ export function createFastTestModelSelectionState(params: {
     allowedModelCatalog: [],
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
+    resetStaleOverrideRef: undefined,
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
@@ -192,6 +194,7 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
+  let resetStaleOverrideRef: string | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
@@ -301,7 +304,15 @@ export async function createModelSelectionState(params: {
       }
       resetModelOverride = updated;
       if (updated) {
-        resetModelOverrideRef = key;
+        // Only set the rejected model ref when the model is genuinely absent from
+        // the allowlist.  Stale auto overrides (cleared by lifecycle, not policy)
+        // use a separate key so the user-facing message does not misleadingly claim
+        // the model is forbidden when it is in fact allowed (#94713).
+        if (!visibilityPolicy.allowsKey(key)) {
+          resetModelOverrideRef = key;
+        } else {
+          resetStaleOverrideRef = key;
+        }
       }
     }
   }
@@ -592,7 +603,8 @@ export async function createModelSelectionState(params: {
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
-    resetModelOverrideRef,
+    resetModelOverrideRef: resetModelOverrideRef,
+    resetStaleOverrideRef: resetStaleOverrideRef,
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,

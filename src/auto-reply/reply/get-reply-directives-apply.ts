@@ -67,10 +67,14 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
 
 export function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
+  staleRef?: string;
   initialModelLabel: string;
 }): string {
   if (params.rejectedRef) {
     return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
+  }
+  if (params.staleRef) {
+    return `Previous auto-selected model ${params.staleRef} reset to default (${params.initialModelLabel}).`;
   }
   return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
 }
@@ -193,6 +197,7 @@ export async function applyInlineDirectiveOverrides(params: {
     enqueueSystemEvent(
       formatModelOverrideResetEvent({
         rejectedRef: modelState.resetModelOverrideRef,
+        staleRef: modelState.resetStaleOverrideRef,
         initialModelLabel,
       }),
       {
