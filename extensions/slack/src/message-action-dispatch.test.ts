@@ -558,10 +558,32 @@ describe("handleSlackMessageAction", () => {
         action: "member-info",
         cfg: {},
         params: {},
-        accountId: "default",
-        requesterAccountId: "default",
+        accountId: "OPS",
+        requesterAccountId: "ops",
         requesterSenderId: "U123",
         toolContext: { currentChannelProvider: " Slack " },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+    );
+  });
+
+  it("defaults member-info userId through the configured default Slack account", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: { channels: { slack: { defaultAccount: "ops", accounts: { ops: {} } } } },
+        params: {},
+        requesterAccountId: "OPS",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
       } as never,
       invoke: invoke as never,
     });
