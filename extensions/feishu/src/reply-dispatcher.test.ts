@@ -1565,6 +1565,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("omits replyToMessageId from streaming.start() in DM chats (skipReplyToInMessages)", async () => {
+    // In DM chats, skipReplyToInMessages=true means sendReplyToMessageId=undefined.
+    // The streaming card start() should receive undefined replyToMessageId,
+    // so resolveStreamingCardSendMode returns "create" (no Reply-to label in DM).
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_dm_msg",
+      skipReplyToInMessages: true,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expectStreamingStartOptions(0, {
+      replyToMessageId: undefined,
+      header: { title: "agent", template: "blue" },
+      note: "Agent: agent",
+    });
+  });
+
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
