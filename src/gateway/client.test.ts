@@ -86,6 +86,13 @@ class MockWebSocket {
     }
   }
 
+  setPeerFingerprint(fingerprint256: string): void {
+    Object.defineProperty(this, "_socket", {
+      configurable: true,
+      value: { getPeerCertificate: () => ({ fingerprint256 }) },
+    });
+  }
+
   on(event: "open", handler: WsEventHandlers["open"]): void;
   on(event: "message", handler: WsEventHandlers["message"]): void;
   on(event: "close", handler: WsEventHandlers["close"]): void;
@@ -777,7 +784,7 @@ describe("GatewayClient close handling", () => {
 
     client.start();
     const ws = getLatestWs();
-    ws._socket = { getPeerCertificate: () => ({ fingerprint256: "different" }) };
+    ws.setPeerFingerprint("different");
     ws.emitOpen();
 
     expect(onConnectError).toHaveBeenCalledWith(
