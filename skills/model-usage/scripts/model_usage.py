@@ -88,7 +88,7 @@ def parse_daily_entries(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
 def parse_date(value: str) -> Optional[date]:
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
-    except Exception:
+    except ValueError:
         return None
 
 

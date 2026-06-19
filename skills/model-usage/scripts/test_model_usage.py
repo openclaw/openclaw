@@ -7,7 +7,7 @@ import argparse
 from datetime import date, timedelta
 from unittest import TestCase, main
 
-from model_usage import filter_by_days, positive_int
+from model_usage import filter_by_days, parse_date, positive_int
 
 
 class TestModelUsage(TestCase):
@@ -34,6 +34,15 @@ class TestModelUsage(TestCase):
         self.assertEqual(len(filtered), 2)
         self.assertEqual(filtered[0]["date"], (today - timedelta(days=1)).strftime("%Y-%m-%d"))
         self.assertEqual(filtered[1]["date"], today.strftime("%Y-%m-%d"))
+
+    def test_parse_date_accepts_iso_format(self):
+        self.assertEqual(parse_date("2026-06-19"), date(2026, 6, 19))
+
+    def test_parse_date_returns_none_for_malformed_value(self):
+        self.assertIsNone(parse_date("not-a-date"))
+
+    def test_parse_date_returns_none_for_empty_string(self):
+        self.assertIsNone(parse_date(""))
 
 
 if __name__ == "__main__":
