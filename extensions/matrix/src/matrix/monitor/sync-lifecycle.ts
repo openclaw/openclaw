@@ -17,18 +17,6 @@ function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Erro
   return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }
 
-function isMatrixMissingKeyDecryptionError(error: Error): boolean {
-  const message = `${error.name} ${error.message}`.toLowerCase();
-  const decryptingEncryptedEvent =
-    message.includes("error decrypting event") && message.includes("m.room.encrypted");
-  const decryptionFailure =
-    message.includes("decryptionerror") || message.includes("megolm_unknown_inbound_session_id");
-  const missingKey =
-    message.includes("has not sent us the keys") ||
-    message.includes("megolm_unknown_inbound_session_id");
-  return decryptingEncryptedEvent && decryptionFailure && missingKey;
-}
-
 export function createMatrixMonitorSyncLifecycle(params: {
   client: MatrixClient;
   statusController: MatrixMonitorStatusController;
@@ -70,7 +58,7 @@ export function createMatrixMonitorSyncLifecycle(params: {
   };
 
   const onUnexpectedError = (error: Error) => {
-    if (params.isStopping?.() || isMatrixMissingKeyDecryptionError(error)) {
+    if (params.isStopping?.()) {
       return;
     }
     params.statusController.noteUnexpectedError(error);

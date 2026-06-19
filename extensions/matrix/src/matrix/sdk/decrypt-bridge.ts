@@ -75,7 +75,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   private readonly decryptedMessageDedupe = new Map<string, number>();
   private readonly decryptRetries = new Map<string, MatrixDecryptRetryState>();
   private readonly failedDecryptionsNotified = new Set<string>();
-  private readonly exhaustedDecryptRetries = new Set<string>();
+  private readonly exhaustedDecryptRetries = new Map<string, MatrixDecryptRetryState>();
   private activeRetryRuns = 0;
   private readonly retryIdleResolvers = new Set<() => void>();
   private cryptoRetrySignalsBound = false;
@@ -123,7 +123,22 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
   }
 
-  retryPendingNow(reason: string): void {
+  retryPendingNow(reason: string, options?: { includeExhausted?: boolean }): void {
+    if (options?.includeExhausted) {
+      for (const [retryKey, state] of this.exhaustedDecryptRetries) {
+        if (this.decryptRetries.has(retryKey)) {
+          continue;
+        }
+        this.exhaustedDecryptRetries.delete(retryKey);
+        this.decryptRetries.set(retryKey, {
+          ...state,
+          attempts: 0,
+          inFlight: false,
+          timer: null,
+        });
+      }
+    }
+
     const pending = Array.from(this.decryptRetries.entries());
     if (pending.length === 0) {
       return;
@@ -148,7 +163,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     this.cryptoRetrySignalsBound = true;
 
     const trigger = (reason: string): void => {
-      this.retryPendingNow(reason);
+      this.retryPendingNow(reason, { includeExhausted: true });
     };
 
     crypto.on(CryptoEvent.KeyBackupDecryptionKeyCached, () => {
@@ -277,7 +292,14 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         clearTimeout(retry.timer);
       }
       this.decryptRetries.delete(retryKey);
-      this.exhaustedDecryptRetries.add(retryKey);
+      this.exhaustedDecryptRetries.set(retryKey, {
+        event: params.event,
+        roomId: params.roomId,
+        eventId: params.eventId,
+        attempts: attempts - 1,
+        inFlight: false,
+        timer: null,
+      });
       LogService.debug(
         "MatrixClientLite",
         `Giving up decryption retry for ${params.eventId} in ${params.roomId} after ${attempts - 1} attempts`,
