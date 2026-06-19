@@ -443,4 +443,31 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(calledOpts.sourceReplyDeliveryMode).toBeUndefined();
     });
   });
+
+  it("suppresses raw text reply in message_tool_only mode when heartbeat_respond not used", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      // Model produces raw text without calling heartbeat_respond
+      replySpy.mockResolvedValue({ text: "All tasks complete." });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      // Raw text must not leak to the channel in message_tool_only mode
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(result.status).toBe("ran");
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "ok-empty",
+        channel: "telegram",
+      });
+    });
+  });
 });

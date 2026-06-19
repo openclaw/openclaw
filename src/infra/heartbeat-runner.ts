@@ -1878,7 +1878,13 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+    // In message_tool_only mode, raw model output produced without the heartbeat
+    // response tool must not leak to the channel. Suppress it as if empty.
+    const suppressRawReply = usesHeartbeatResponseTool && !heartbeatToolResponse;
+    if (
+      !heartbeatToolResponse &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload) || suppressRawReply)
+    ) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
