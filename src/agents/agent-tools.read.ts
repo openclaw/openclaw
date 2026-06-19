@@ -37,13 +37,7 @@ import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import {
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-  withFileMutationQueue,
-} from "./sessions/index.js";
-import { resolveToCwd } from "./sessions/tools/path-utils.js";
+import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -858,7 +852,7 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
     operations: ops,
   }) as unknown as AnyAgentTool;
   const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
-  return wrapToolWriteWithAppend(validated, { appendFile: ops.appendFile, root: params.root });
+  return wrapToolWriteWithAppend(validated);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -874,7 +868,7 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   const ops = createHostWriteOperations(root, options);
   const base = createWriteTool(root, { operations: ops }) as unknown as AnyAgentTool;
   const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
-  return wrapToolWriteWithAppend(validated, { appendFile: ops.appendFile, root });
+  return wrapToolWriteWithAppend(validated);
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
@@ -940,49 +934,6 @@ function createSandboxReadOperations(params: SandboxToolParams) {
       return mime && mime.startsWith("image/") ? mime : undefined;
     },
   } as const;
-}
-
-function createAbortError(): Error {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  return err;
-}
-
-function throwAbortError(): never {
-  throw createAbortError();
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throwAbortError();
-  }
-}
-
-async function appendFileWithAbort(
-  signal: AbortSignal | undefined,
-  append: () => Promise<void>,
-): Promise<void> {
-  if (signal?.aborted) {
-    throwAbortError();
-  }
-
-  let aborted = false;
-  const onAbort = () => {
-    aborted = true;
-  };
-  signal?.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    await append();
-  } catch (error: unknown) {
-    if (aborted || signal?.aborted) {
-      throwAbortError();
-    }
-    throw error instanceof Error ? error : new Error(String(error));
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
-  }
-
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {
@@ -1133,10 +1084,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-export function wrapToolWriteWithAppend(
-  tool: AnyAgentTool,
-  ops: { appendFile: (absolutePath: string, content: string) => Promise<void>; root: string },
-): AnyAgentTool {
+export function wrapToolWriteWithAppend(tool: AnyAgentTool): AnyAgentTool {
   return {
     ...tool,
     parameters: Type.Object({
@@ -1157,29 +1105,15 @@ export function wrapToolWriteWithAppend(
           "Invalid append parameter: expected boolean when provided. Supply correct parameters before retrying.",
         );
       }
-      const doAppend = record?.append === true;
-      if (!doAppend) {
-        return tool.execute(toolCallId, args, signal, onUpdate);
+      let normalizedArgs = args;
+      if (record && record.append === true && typeof record.path === "string") {
+        const normalizedPath = stripMalformedXmlArgValueSuffix(record.path);
+        if (!normalizedPath.trim()) {
+          throw malformedXmlArgValuePathError("path");
+        }
+        normalizedArgs = { ...record, path: normalizedPath };
       }
-      // Delegate validation of required params to the underlying tool when append is missing.
-      const filePath = typeof record?.path === "string" ? record.path : undefined;
-      const content = typeof record?.content === "string" ? record.content : undefined;
-      if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
-        return tool.execute(toolCallId, args, signal, onUpdate);
-      }
-      const normalizedPath = stripMalformedXmlArgValueSuffix(filePath);
-      if (!normalizedPath.trim()) {
-        throw malformedXmlArgValuePathError("path");
-      }
-      const resolved = resolveToCwd(normalizedPath, ops.root);
-      await withFileMutationQueue(resolved, async () => {
-        throwIfAborted(signal);
-        await appendFileWithAbort(signal, () => ops.appendFile(resolved, content));
-      });
-      return {
-        content: [{ type: "text", text: `Appended to ${normalizedPath}.` }],
-        details: { path: normalizedPath, append: true },
-      };
+      return tool.execute(toolCallId, normalizedArgs, signal, onUpdate);
     },
   };
 }

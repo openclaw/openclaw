@@ -436,7 +436,7 @@ export function createWriteToolDefinition(
     parameters: writeSchema,
     async execute(
       toolCallId,
-      { path, content, append = false }: { path: string; content: string; append?: boolean },
+      input: { path: string; content: string; append?: unknown },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -444,6 +444,13 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
+      const { path, content } = input;
+      if (input.append !== undefined && typeof input.append !== "boolean") {
+        throw new Error(
+          "Invalid append parameter: expected boolean when provided. Supply correct parameters before retrying.",
+        );
+      }
+      const append = input.append === true;
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {

@@ -141,6 +141,22 @@ describe("write tool", () => {
     });
   });
 
+  it.each(["false", 1])("rejects malformed append values before branching", async (append) => {
+    const filePath = await createTempPath(`append-invalid-${String(append)}.txt`);
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        { path: filePath, content: "beta\n", append } as never,
+        undefined,
+      ),
+    ).rejects.toThrow(/append parameter.*boolean/);
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\n");
+  });
+
   it("recovers timeout-like post-append errors when readback preserves existing content", async () => {
     const filePath = await createTempPath("append-timeout.txt");
     await fs.writeFile(filePath, "alpha\n", "utf-8");
