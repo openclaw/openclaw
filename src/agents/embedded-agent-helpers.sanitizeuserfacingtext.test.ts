@@ -514,6 +514,33 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
   });
 
+  it("preserves ordinary replies that begin with the priority-marker phrase", () => {
+    // A genuine reply that explains the marker must not be erased just because
+    // its first line starts with "Current message priority:". Only copied
+    // scaffolding — the phrase alongside a bracketed scaffold marker — is
+    // stripped. (#78177)
+    const prose = "Current message priority: high means the sender flagged the message as urgent.";
+    expect(sanitizeUserFacingText(prose)).toBe(prose);
+
+    const multiLine = [
+      "Current message priority: high",
+      "is how that runtime header is labeled, in case you were asking.",
+    ].join("\n");
+    expect(sanitizeUserFacingText(multiLine)).toBe(multiLine);
+  });
+
+  it("still strips a priority-marker line when it heads a copied scaffold block", () => {
+    const input = [
+      "Current message priority: high",
+      "[Current message - respond to this]",
+      "[Telegram 2026-05-05T20:20:00Z] Danny: ping",
+      "",
+      "Pong.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Pong.");
+  });
+
   it("suppresses standalone no-output placeholders without stripping inline mentions", () => {
     expect(sanitizeUserFacingText("(no output)")).toBe("");
     expect(sanitizeUserFacingText("Before\n(no output)\nAfter")).toBe("Before\nAfter");

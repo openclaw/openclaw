@@ -393,9 +393,10 @@ function stripPlaceholderLines(text: string): string {
  * "[Chat messages since your last reply - for context]" / "[Current message -
  * respond to this]" / "Current message priority:" prompt headers and their
  * indented payload) that can leak into a final reply when the model echoes its
- * own input. Only standalone blocks whose first line is one of these markers
- * are removed, so ordinary inline prose that happens to mention the phrase is
- * preserved. (#78177)
+ * own input. Only standalone blocks led by a bracketed marker (or a
+ * "Current message priority:" line that sits alongside one) are removed, so
+ * ordinary prose that merely mentions or starts with the phrase is preserved.
+ * (#78177)
  */
 function stripCopiedCurrentMessageScaffolding(text: string): string {
   const blocks = text.split(/(\n[ \t]*\n)/);
@@ -410,10 +411,21 @@ function stripCopiedCurrentMessageScaffolding(text: string): string {
     }
 
     const firstLine = block.split(/\r?\n/, 1)[0] ?? "";
+    // The bracketed "[Chat messages …]" / "[Current message - respond to this]"
+    // headers are unambiguous copied scaffolding. A plain-text "Current message
+    // priority:" line is not — it can legitimately begin a reply that explains
+    // the marker — so only treat it as scaffolding when the block also carries
+    // one of the bracketed markers, as real copied blocks always do. (#78177)
+    const blockHasBracketedScaffoldMarker = block
+      .split(/\r?\n/)
+      .some(
+        (line) =>
+          HISTORY_CONTEXT_MARKER_LINE_RE.test(line) || CURRENT_MESSAGE_MARKER_LINE_RE.test(line),
+      );
     const shouldDrop =
       HISTORY_CONTEXT_MARKER_LINE_RE.test(firstLine) ||
-      CURRENT_MESSAGE_PRIORITY_LINE_RE.test(firstLine) ||
-      CURRENT_MESSAGE_MARKER_LINE_RE.test(firstLine);
+      CURRENT_MESSAGE_MARKER_LINE_RE.test(firstLine) ||
+      (CURRENT_MESSAGE_PRIORITY_LINE_RE.test(firstLine) && blockHasBracketedScaffoldMarker);
     if (shouldDrop) {
       changed = true;
       if (/^\n[ \t]*\n$/.test(blocks[index + 1] ?? "")) {
