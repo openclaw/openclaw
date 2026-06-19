@@ -25,6 +25,8 @@ function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
 }
 
 describe("qa scenario catalog", () => {
+  const dottedCoverageIdPattern = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;
+
   it("keeps repo-backed scenarios YAML-only", () => {
     expect(listScenarioMarkdownPaths()).toStrictEqual([]);
   });
@@ -55,11 +57,13 @@ describe("qa scenario catalog", () => {
         .toSorted(),
     ).toStrictEqual(
       [
+        "channel-message-flows",
         "control-ui-chat-flow-playwright",
         "gateway-smoke",
         "package-openclaw-for-docker",
         "plugin-lifecycle-probe",
         "qa-otel-smoke",
+        "ux-matrix-evidence-dashboard",
       ].toSorted(),
     );
     expect(
@@ -72,6 +76,17 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
         .map((scenario) => scenario.id),
     ).toStrictEqual([]);
+    expect(
+      pack.scenarios.every(
+        (scenario) =>
+          (scenario.coverage?.primary ?? []).every((coverageId) =>
+            dottedCoverageIdPattern.test(coverageId),
+          ) &&
+          (scenario.coverage?.secondary ?? []).every((coverageId) =>
+            dottedCoverageIdPattern.test(coverageId),
+          ),
+      ),
+    ).toBe(true);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
@@ -134,12 +149,15 @@ describe("qa scenario catalog", () => {
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+    const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+    expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
   });
 
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
+    const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
@@ -148,6 +166,14 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
+    expect(uxMatrix.execution.kind).toBe("script");
+    if (uxMatrix.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${uxMatrix.execution.kind}`);
+    }
+    expect(uxMatrix.execution.path).toBe("scripts/qa/ux-matrix-evidence-producer.ts");
+    expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
+    expect(uxMatrix.execution.config).toBeUndefined();
+    expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {

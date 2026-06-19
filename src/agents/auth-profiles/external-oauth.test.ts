@@ -5,11 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
-import {
-  testing,
-  overlayExternalAuthProfiles,
-  shouldPersistExternalAuthProfile,
-} from "./external-auth.js";
+import { testing, overlayExternalAuthProfiles } from "./external-auth.js";
 import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -132,61 +128,6 @@ describe("auth external oauth helpers", () => {
 
     expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
     expect(overlaid.profiles["openai:work"]).toEqual(store.profiles["openai:work"]);
-  });
-
-  it("omits exact runtime-only overlays from persisted store writes", () => {
-    const credential = createCredential();
-    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
-      {
-        profileId: "openai:default",
-        credential,
-      },
-    ]);
-
-    const shouldPersist = shouldPersistExternalAuthProfile({
-      store: createStore({ "openai:default": credential }),
-      profileId: "openai:default",
-      credential,
-    });
-
-    expect(shouldPersist).toBe(false);
-  });
-
-  it("keeps persisted copies when the external overlay is marked persisted", () => {
-    const credential = createCredential();
-    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
-      {
-        profileId: "openai:default",
-        credential,
-        persistence: "persisted",
-      },
-    ]);
-
-    const shouldPersist = shouldPersistExternalAuthProfile({
-      store: createStore({ "openai:default": credential }),
-      profileId: "openai:default",
-      credential,
-    });
-
-    expect(shouldPersist).toBe(true);
-  });
-
-  it("keeps stale local copies when runtime overlay no longer matches", () => {
-    const credential = createCredential();
-    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
-      {
-        profileId: "openai:default",
-        credential: createCredential({ access: "fresh-access-token" }),
-      },
-    ]);
-
-    const shouldPersist = shouldPersistExternalAuthProfile({
-      store: createStore({ "openai:default": credential }),
-      profileId: "openai:default",
-      credential,
-    });
-
-    expect(shouldPersist).toBe(true);
   });
 
   it("keeps Codex CLI OAuth from replacing stored inline token material", () => {

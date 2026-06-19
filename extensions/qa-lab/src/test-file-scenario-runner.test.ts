@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
@@ -688,5 +688,66 @@ describe("qa test file scenario runner", () => {
     const artifactPath = evidence.entries[0]?.execution?.artifacts[0]?.path;
     expect(artifactPath).toBe(path.normalize(externalArtifact));
     expect(artifactPath?.includes("..")).toBe(false);
+  });
+
+  it("runs the UX Matrix script producer and imports its evidence bundle", async () => {
+    const repoRoot = process.cwd();
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-script-"));
+    tempRoots.push(outputDir);
+    const scenario = readQaScenarioById("ux-matrix-evidence-dashboard");
+
+    expect(scenario.execution.kind).toBe("script");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [scenario],
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.executionKind).toBe("script");
+    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+    expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
+      "ux-matrix.qa-lab.producer-artifact-fixture",
+      "ux-matrix.control-ui.screenshot-artifact",
+      "ux-matrix.cli.entrypoint-help",
+    ]);
+    expect(
+      evidence.entries.flatMap((entry) => entry.coverage.map((coverage) => coverage.id)),
+    ).toEqual(
+      expect.arrayContaining([
+        "qa.artifact-safety",
+        "tools.evidence",
+        "workspace.artifacts",
+        "ui.control",
+        "gateway.control-ui-hosting",
+        "cli.entrypoint",
+        "cli.status-snapshots",
+      ]),
+    );
+    const artifactKinds = evidence.entries.flatMap(
+      (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
+    );
+    expect(artifactKinds).toEqual(expect.arrayContaining(["html", "log"]));
+    const fixtureEntry = evidence.entries.find(
+      (entry) => entry.test.id === "ux-matrix.qa-lab.producer-artifact-fixture",
+    );
+    expect(fixtureEntry?.execution?.artifacts.map((artifact) => artifact.path)).toContain(
+      path.join(
+        outputDir,
+        "ux-matrix-evidence-dashboard",
+        "surfaces",
+        "qa-lab",
+        "stages",
+        "producer-artifact-fixture",
+        "producer-artifact-fixture.html",
+      ),
+    );
   });
 });

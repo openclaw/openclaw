@@ -191,39 +191,9 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function loadWebPushSubscription(
-  subscriptionId: string,
-  baseDir?: string,
-): Promise<WebPushSubscription | null> {
-  const state = await loadState(baseDir);
-  for (const sub of Object.values(state.subscriptionsByEndpointHash)) {
-    if (sub.subscriptionId === subscriptionId) {
-      return sub;
-    }
-  }
-  return null;
-}
-
 export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
-}
-
-export async function clearWebPushSubscription(
-  subscriptionId: string,
-  baseDir?: string,
-): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    for (const [hash, sub] of Object.entries(state.subscriptionsByEndpointHash)) {
-      if (sub.subscriptionId === subscriptionId) {
-        delete state.subscriptionsByEndpointHash[hash];
-        await persistState(state, baseDir);
-        return true;
-      }
-    }
-    return false;
-  });
 }
 
 export async function clearWebPushSubscriptionByEndpoint(

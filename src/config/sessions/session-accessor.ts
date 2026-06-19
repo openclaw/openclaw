@@ -22,8 +22,16 @@ import {
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "./paths.js";
+import {
+  cleanupPluginHostSessionStore as cleanupFilePluginHostSessionStore,
+  clearPluginOwnedSessionState,
+  type PluginHostSessionCleanupStoreParams,
+} from "./plugin-host-cleanup.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type {
+  ResolvedSessionMaintenanceConfig,
+  SessionMaintenanceWarning,
+} from "./store-maintenance.js";
 import {
   getSessionEntry,
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
@@ -69,6 +77,7 @@ import {
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { writeJsonlLines } from "./transcript-jsonl.js";
+import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
   type OwnedSessionTranscriptPublishedEntry,
@@ -269,7 +278,33 @@ export type SessionEntryUpdateOptions = {
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
   takeCacheOwnership?: boolean;
+  /** Throw when best-effort store recovery cannot confirm the requested write. */
+  requireWriteSuccess?: boolean;
 };
+
+export type SessionLifecycleTranscriptInfo = {
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+};
+
+export type SessionLifecycleRolloverResult = {
+  previousSessionTranscript: SessionLifecycleTranscriptInfo;
+  sessionEntry: SessionEntry;
+};
+
+type SessionEntryRetirement = {
+  entry: SessionEntry;
+  key: string;
+};
+
+let sessionArchiveRuntimePromise: Promise<
+  typeof import("../../gateway/session-archive.runtime.js")
+> | null = null;
+
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
+}
 
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
@@ -285,6 +320,27 @@ export type SessionEntryPatchOptions = {
 export type SessionEntryPatchContext = {
   /** Present when the patched entry already existed before fallback synthesis. */
   existingEntry?: SessionEntry;
+};
+
+export type RestartRecoveryLifecycleEntry = {
+  /** Exact persisted key for the restart recovery candidate row. */
+  sessionKey: string;
+  /** Detached entry snapshot; mutating it does not persist unless returned as a replacement. */
+  entry: SessionEntry;
+};
+
+export type RestartRecoveryLifecycleReplacement = {
+  /** Exact persisted key to replace. Missing keys are ignored. */
+  sessionKey: string;
+  /** Full replacement row to persist for this restart recovery lifecycle step. */
+  entry: SessionEntry;
+};
+
+export type RestartRecoveryLifecycleUpdate<T> = {
+  /** Caller-owned result returned after replacements are persisted. */
+  result: T;
+  /** Exact rows to replace inside the storage transaction. */
+  replacements?: Iterable<RestartRecoveryLifecycleReplacement>;
 };
 
 export type SessionEntryCreateWithTranscriptContext = {
@@ -357,6 +413,8 @@ export type DeleteSessionEntryLifecycleParams = {
   /** Canonical key plus aliases that identify the logical entry. */
   target: SessionLifecycleStoreTarget;
 };
+
+export { clearPluginOwnedSessionState };
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
@@ -569,6 +627,7 @@ export async function updateSessionEntry(
     sessionKey: scope.sessionKey,
     skipMaintenance: options.skipMaintenance,
     takeCacheOwnership: options.takeCacheOwnership,
+    requireWriteSuccess: options.requireWriteSuccess,
     update,
   });
 }
@@ -588,6 +647,46 @@ export async function applySessionPatchProjection<
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
   return await applyFileSessionEntryPatchProjection(params);
+}
+
+/**
+ * Applies restart-recovery lifecycle replacements without exposing the backing
+ * store shape. The file backend runs selection and replacement under one writer
+ * lock; the SQLite backend can map the same callback to a transaction.
+ */
+export async function applyRestartRecoveryLifecycle<T>(params: {
+  storePath: string;
+  update: (
+    entries: RestartRecoveryLifecycleEntry[],
+  ) => Promise<RestartRecoveryLifecycleUpdate<T>> | RestartRecoveryLifecycleUpdate<T>;
+  requireWriteSuccess?: boolean;
+  skipMaintenance?: boolean;
+}): Promise<T> {
+  const writerResult = await updateSessionStore(
+    params.storePath,
+    async (store) => {
+      const entries = Object.entries(store).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry: structuredClone(entry),
+      }));
+      const operation = await params.update(entries);
+      let changed = false;
+      for (const replacement of operation.replacements ?? []) {
+        if (!Object.hasOwn(store, replacement.sessionKey)) {
+          continue;
+        }
+        store[replacement.sessionKey] = structuredClone(replacement.entry);
+        changed = true;
+      }
+      return { changed, result: operation.result };
+    },
+    {
+      requireWriteSuccess: params.requireWriteSuccess,
+      skipMaintenance: params.skipMaintenance ?? true,
+      skipSaveWhenResult: (result) => !result.changed,
+    },
+  );
+  return writerResult.result;
 }
 
 /** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */
@@ -639,6 +738,110 @@ export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
 ): Promise<SessionEntryLifecycleMutationResult> {
   return await purgeFileDeletedAgentSessionEntries(params);
+}
+
+/**
+ * Clears plugin host-owned state inside one resolved session store.
+ * This is an internal transaction-sized boundary for the storage backend, not
+ * a Plugin SDK API.
+ */
+export async function cleanupPluginHostSessionStore(
+  params: PluginHostSessionCleanupStoreParams,
+): Promise<number> {
+  return await cleanupFilePluginHostSessionStore(params);
+}
+
+/**
+ * Persists a runner-driven reset rotation together with transcript replay and
+ * optional cleanup. File storage performs these steps sequentially; database
+ * backends implement this operation as one lifecycle transaction.
+ */
+export async function persistSessionResetLifecycle(params: {
+  agentId?: string;
+  cleanupPreviousTranscript?: boolean;
+  nextEntry: SessionEntry;
+  nextSessionFile: string;
+  previousEntry: SessionEntry;
+  previousSessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<{ replayedMessages: number }> {
+  let persistError: Error | undefined;
+  try {
+    await updateSessionStore(params.storePath, (store) => {
+      store[params.sessionKey] = params.nextEntry;
+    });
+  } catch (err) {
+    persistError = err instanceof Error ? err : new Error(String(err));
+  }
+
+  const replayedMessages = await replayRecentUserAssistantMessages({
+    sourceTranscript: params.previousEntry.sessionFile,
+    targetTranscript: params.nextSessionFile,
+    newSessionId: params.nextEntry.sessionId,
+  });
+
+  if (params.cleanupPreviousTranscript && params.previousSessionId) {
+    cleanupPreviousResetTranscripts({
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+      previousEntry: params.previousEntry,
+      previousSessionId: params.previousSessionId,
+      storePath: params.storePath,
+    });
+  }
+
+  if (persistError) {
+    throw persistError;
+  }
+  return { replayedMessages };
+}
+
+/**
+ * Persists a reply session rollover and returns stable previous-transcript
+ * data for lifecycle hooks. Non-storage runtime cleanup remains with callers.
+ */
+export async function persistSessionRolloverLifecycle(params: {
+  activeSessionKey: string;
+  agentId: string;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  onArchiveError?: (error: unknown, sourcePath: string) => void;
+  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
+  previousEntry?: SessionEntry;
+  retiredEntry?: SessionEntryRetirement;
+  sessionEntry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): Promise<SessionLifecycleRolloverResult> {
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      store[params.sessionKey] = {
+        ...store[params.sessionKey],
+        ...params.sessionEntry,
+      };
+      if (params.retiredEntry) {
+        store[params.retiredEntry.key] = params.retiredEntry.entry;
+      }
+      return store[params.sessionKey] ?? params.sessionEntry;
+    },
+    {
+      activeSessionKey: params.activeSessionKey,
+      maintenanceConfig: params.maintenanceConfig,
+      onWarn: params.onMaintenanceWarning,
+    },
+  );
+
+  const previousSessionTranscript = await archivePreviousSessionTranscript({
+    agentId: params.agentId,
+    onArchiveError: params.onArchiveError,
+    previousEntry: params.previousEntry,
+    storePath: params.storePath,
+  });
+
+  return {
+    previousSessionTranscript,
+    sessionEntry: params.sessionEntry,
+  };
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */
@@ -1283,6 +1486,62 @@ function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry 
     updatedAt: patch.updatedAt ?? now,
     ...patch,
   };
+}
+
+function cleanupPreviousResetTranscripts(params: {
+  agentId: string;
+  previousEntry: SessionEntry;
+  previousSessionId: string;
+  storePath: string;
+}): void {
+  const transcriptCandidates = new Set<string>();
+  const resolved = resolveSessionFilePath(
+    params.previousSessionId,
+    params.previousEntry,
+    resolveSessionFilePathOptions({
+      agentId: params.agentId,
+      storePath: params.storePath,
+    }),
+  );
+  if (resolved) {
+    transcriptCandidates.add(resolved);
+  }
+  transcriptCandidates.add(resolveSessionTranscriptPath(params.previousSessionId, params.agentId));
+  for (const candidate of transcriptCandidates) {
+    try {
+      fs.unlinkSync(candidate);
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+}
+
+async function archivePreviousSessionTranscript(params: {
+  agentId: string;
+  onArchiveError?: (error: unknown, sourcePath: string) => void;
+  previousEntry?: SessionEntry;
+  storePath: string;
+}): Promise<SessionLifecycleTranscriptInfo> {
+  if (!params.previousEntry?.sessionId) {
+    return {};
+  }
+  const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
+    await loadSessionArchiveRuntime();
+  const archivedTranscripts = archiveSessionTranscriptsDetailed({
+    sessionId: params.previousEntry.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.previousEntry.sessionFile,
+    agentId: params.agentId,
+    reason: "reset",
+    onArchiveError: params.onArchiveError,
+  });
+  return resolveStableSessionEndTranscript({
+    sessionId: params.previousEntry.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.previousEntry.sessionFile,
+    agentId: params.agentId,
+    archivedTranscripts,
+  });
 }
 
 function resolveAccessStorePath(scope: SessionAccessScope): string {

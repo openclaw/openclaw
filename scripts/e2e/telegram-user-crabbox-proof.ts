@@ -227,10 +227,24 @@ function trimToValue(value: string | undefined) {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+const positiveIntegerPattern = /^[1-9]\d*$/u;
+
 function parsePositiveInteger(value: string, label: string) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const trimmed = value.trim();
+  if (!positiveIntegerPattern.test(trimmed)) {
     throw new Error(`${label} must be a positive integer.`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseTcpPort(value: string, label: string) {
+  const parsed = parsePositiveInteger(value, label);
+  if (parsed > 65_535) {
+    throw new Error(`${label} must be a TCP port from 1 to 65535.`);
   }
   return parsed;
 }
@@ -314,7 +328,7 @@ function parseArgs(argvInput: string[]): Options {
       }
       opts.expect.push(readValue());
     } else if (arg === "--gateway-port") {
-      opts.gatewayPort = parsePositiveInteger(readValue(), "--gateway-port");
+      opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
       opts.leaseId = readValue();
     } else if (arg === "--idle-timeout") {
@@ -322,7 +336,7 @@ function parseArgs(argvInput: string[]): Options {
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
     } else if (arg === "--mock-port") {
-      opts.mockPort = parsePositiveInteger(readValue(), "--mock-port");
+      opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
       opts.mockResponseText = fs.readFileSync(resolveRepoPath(process.cwd(), readValue()), "utf8");
     } else if (arg === "--message-id") {

@@ -1,5 +1,7 @@
 {
   "id": "gmi",
+  "name": "GMI Cloud",
+  "description": "OpenClaw GMI Cloud provider plugin.",
   "activation": {
     "onStartup": false
   },

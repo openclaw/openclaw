@@ -12,6 +12,10 @@ import {
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), init);
+}
+
 describe("release candidate checklist", () => {
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
@@ -201,16 +205,15 @@ describe("release candidate checklist", () => {
         digest: `sha256:${"b".repeat(64)}`,
       },
     ];
-    const fetchImpl = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    const fetchImpl = vi.fn(async () => {
+      return jsonResponse({
         tag_name: "v0.6.3",
         draft: false,
         prerelease: false,
         html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
         assets,
-      }),
-    }));
+      });
+    });
 
     await expect(
       validateWindowsSourceRelease("v0.6.3", {
@@ -262,9 +265,8 @@ describe("release candidate checklist", () => {
       "asset OpenClawCompanion-Setup-x64.exe is missing its SHA-256 digest",
     ],
   ])("rejects an invalid stable Windows source release", async (override, message) => {
-    const fetchImpl = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    const fetchImpl = vi.fn(async () => {
+      return jsonResponse({
         tag_name: "v0.6.3",
         draft: false,
         prerelease: false,
@@ -280,8 +282,8 @@ describe("release candidate checklist", () => {
           },
         ],
         ...override,
-      }),
-    }));
+      });
+    });
 
     await expect(
       validateWindowsSourceRelease("v0.6.3", {
@@ -357,10 +359,7 @@ describe("release candidate checklist", () => {
         Authorization: "Bearer test-token",
         "X-GitHub-Api-Version": "2022-11-28",
       });
-      return {
-        ok: true,
-        json: async () => ({ workflow_runs: [] }),
-      };
+      return jsonResponse({ workflow_runs: [] });
     });
 
     await expect(
@@ -376,6 +375,42 @@ describe("release candidate checklist", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("bounds GitHub API error bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response("x".repeat(65), {
+        headers: { "content-length": "65" },
+        status: 500,
+      });
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        maxBodyBytes: 64,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(
+      "GitHub API repos/openclaw/openclaw/actions/runs response body exceeded 64 bytes",
+    );
+  });
+
+  it("keeps GitHub API timeouts active while reading response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+      });
+    });
+
+    await expect(
+      githubApi("repos/openclaw/openclaw/actions/runs", {
+        fetchImpl,
+        timeoutMs: 25,
+        token: "test-token",
+      }),
+    ).rejects.toThrow("GitHub API repos/openclaw/openclaw/actions/runs timed out after 25ms");
   });
 
   it("includes the GitHub API path when a request times out", async () => {
