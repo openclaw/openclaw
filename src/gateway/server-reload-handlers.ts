@@ -59,6 +59,17 @@ import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
+// When an in-process restart (SIGUSR1) fires while a deferred channel reload
+// is waiting for active work to drain, the restart supersedes the reload.
+// This flag lets the restart path cancel the deferred reload before both
+// code paths race to start the same channel.
+let pendingChannelReloadAborted = false;
+
+/** Signal any in-progress deferred channel reload to abort immediately. */
+export function abortPendingChannelReloads(): void {
+  pendingChannelReloadAborted = true;
+}
+
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
@@ -208,6 +219,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
 };
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
+  pendingChannelReloadAborted = false;
+
   const getActiveCounts = () => {
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
@@ -300,6 +313,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
+      if (pendingChannelReloadAborted) {
+        params.logReload.info("deferred channel reload aborted; in-process restart supersedes it");
+        return;
+      }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
         timer.unref?.();
