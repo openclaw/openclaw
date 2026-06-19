@@ -602,20 +602,47 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
     const storePath = await makeTempStorePath();
-    const shellPromptJob = createCurrentCronJob({
-      id: "shell-prompt-job",
-      name: "Shell prompt job",
-      schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
-      sessionTarget: "isolated",
-      payload: {
-        kind: "agentTurn",
-        message:
-          "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
-        toolsAllow: ["*"],
-      },
-      delivery: { mode: "announce" },
-    });
-    await writeCurrentCronStore(storePath, [shellPromptJob]);
+    const shellPromptJobs: Array<Record<string, unknown>> = [
+      createCurrentCronJob({
+        id: "shell-prompt-job-1",
+        name: "Shell prompt job 1",
+        schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
+          toolsAllow: ["*"],
+        },
+        delivery: { mode: "announce" },
+      }),
+      createCurrentCronJob({
+        id: "shell-prompt-job-2",
+        name: "Shell prompt job 2",
+        schedule: { kind: "cron", expr: "15 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Run node scripts/check_mail.js and summarize any new messages.",
+          toolsAllow: ["bash"],
+        },
+        delivery: { mode: "announce" },
+      }),
+      createCurrentCronJob({
+        id: "shell-prompt-job-3",
+        name: "Shell prompt job 3",
+        schedule: { kind: "cron", expr: "45 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Execute ./scripts/check_mail.sh and report changed mailbox counts.",
+          toolsAllow: ["shell"],
+        },
+        delivery: { mode: "announce" },
+      }),
+    ];
+    const shellPromptJob = requirePersistedJob(shellPromptJobs, 0);
+    await writeCurrentCronStore(storePath, shellPromptJobs);
 
     const prompter = makePrompter(true);
     await maybeRepairLegacyCronStore({
@@ -627,18 +654,23 @@ describe("maybeRepairLegacyCronStore", () => {
     // The advisory is informational only: doctor --fix cannot rewrite a working
     // isolated agentTurn job, so the misleading repair note must stay absent.
     expectNoNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("3 isolated cron jobs", "Cron");
     expectNoteContaining("drives shell/process tools from the agent prompt", "Cron");
     expectNoteContaining("informational only", "Cron");
-    expectNoteContaining("Shell prompt job", "Cron");
+    expectNoteContaining("Shell prompt job 1", "Cron");
+    expectNoteContaining("Shell prompt job 2", "Cron");
+    expectNoteContaining("Shell prompt job 3", "Cron");
     expectNoNoteContaining("openclaw doctor --fix", "Cron");
     expectNoNoteContaining("jobs.json", "Cron");
     expect(prompter.confirm).not.toHaveBeenCalled();
 
-    // No churn: the advisory does not rewrite the still-working job.
-    const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    // No churn: the advisory does not rewrite the still-working jobs.
+    const persistedJobs = await readPersistedJobs(storePath);
+    expect(persistedJobs).toEqual(shellPromptJobs);
+    const job = requirePersistedJob(persistedJobs, 0);
     expect(job).toEqual(shellPromptJob);
     const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
-    expect(reloaded.configJobIndexes).toEqual([0]);
+    expect(reloaded.configJobIndexes).toEqual([0, 1, 2]);
     expect(reloaded.invalidConfigRows).toEqual([]);
     const configJob = requirePersistedJob(reloaded.configJobs, 0);
     expect(configJob).toEqual(
