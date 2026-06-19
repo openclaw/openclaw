@@ -566,6 +566,21 @@ function getMessageContent(payload: unknown): Array<Record<string, any>> {
   return Array.isArray(content) ? (content as Array<Record<string, any>>) : [];
 }
 
+function expectManagedPngImageBlock(block: unknown): void {
+  expect(block).toMatchObject({
+    type: "image",
+    mimeType: "image/png",
+    width: 1,
+    height: 1,
+  });
+  expect((block as { url?: unknown }).url).toEqual(
+    expect.stringMatching(/^\/api\/chat\/media\/outgoing\/main\/[^/]+\/full$/),
+  );
+  expect((block as { openUrl?: unknown }).openUrl).toEqual(
+    expect.stringMatching(/^\/api\/chat\/media\/outgoing\/main\/[^/]+\/full$/),
+  );
+}
+
 function mockCallAt(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
   index: number,
@@ -3198,7 +3213,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       type: "text",
       text: "Scan this QR code with the OpenClaw iOS app:",
     });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+    expectManagedPngImageBlock(content[1]);
     expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
   });
 
@@ -3301,17 +3316,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       timestamp: Date.now(),
       stopReason: "stop",
     };
-    SessionManager.open(mockState.transcriptPath).appendMessage(rawAssistantMessage);
+    const sessionManager = SessionManager.open(mockState.transcriptPath);
+    sessionManager.appendMessage(rawAssistantMessage);
     mockState.triggerAgentRunStart = true;
     mockState.finalPayload = {
       text: rawText,
+      // The live Codex path can preserve the raw MEDIA line as a plain path while
+      // the normalized reply payload carries an equivalent file URL. The bridge
+      // should still recognize and replace the raw directive turn.
       mediaUrl: `file://${mediaUrl}`,
       trustedLocalMedia: true,
     };
+    const respond = vi.fn();
+    const context = createChatContext();
 
     await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
+      context,
+      respond,
       idempotencyKey: "idem-agent-media-spaced-replace",
       expectBroadcast: false,
       waitFor: "dedupe",
@@ -5235,8 +5256,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+    expectManagedPngImageBlock(content[0]);
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
@@ -5256,8 +5276,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+    expectManagedPngImageBlock(content[0]);
   });
 
   it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
@@ -5277,8 +5296,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+    expectManagedPngImageBlock(content[0]);
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&

@@ -119,13 +119,14 @@ openclaw_resolve_node_download_version() {
   prefix="v${prefix}"
   [[ "$prefix" == *. ]] || prefix="${prefix}."
   curl -fsSL https://nodejs.org/dist/index.json |
-    OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
-prefix = os.environ["OPENCLAW_NODE_PREFIX"]
-for item in json.load(sys.stdin):
-    version = item.get("version", "")
-    if version.startswith(prefix):
-        print(version)
-        break
+    OPENCLAW_NODE_PREFIX="$prefix" node -e '
+const fs = require("node:fs");
+const prefix = process.env.OPENCLAW_NODE_PREFIX;
+const versions = JSON.parse(fs.readFileSync(0, "utf8"));
+const match = versions.find((item) => String(item.version || "").startsWith(prefix));
+if (match) {
+  process.stdout.write(match.version + "\n");
+}
 '
 }
 

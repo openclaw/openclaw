@@ -4219,19 +4219,24 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!persistedContentForAppend?.length && !resolvedTranscriptPath) {
           return;
         }
-        const appended = await appendAssistantTranscriptMessage({
-          sessionKey,
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
+        let appended: TranscriptAppendResult;
+        try {
+          appended = await appendAssistantTranscriptMessage({
+            sessionKey,
+            message: transcriptReply,
+            ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
+            sessionId,
+            storePath: latestStorePath,
+            sessionFile: latestEntry?.sessionFile,
+            agentId,
+            createIfMissing: true,
+            idempotencyKey: `${clientRunId}:assistant-media`,
+            ttsSupplement: ttsSupplementMarker,
+            cfg,
+          });
+        } catch (err) {
+          appended = { ok: false, error: formatForLog(err) };
+        }
         if (appended.ok) {
           if (appended.messageId && assistantContent?.length) {
             await attachManagedOutgoingImagesToMessage({
