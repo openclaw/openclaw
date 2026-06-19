@@ -974,6 +974,31 @@ describe("sendMessageTelegram", () => {
     expect(botApi.sendMessage.mock.calls[0]?.[1]).not.toMatch(/^n\/products\/monitem-iot/);
   });
 
+  it("falls back to readable plain text for HTML when rich parsing fails", async () => {
+    const html =
+      'Intro <a href="https://example.com/path?x=1&amp;y=2">Example &amp; Link</a> <b>done</b>';
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: can't parse entities"),
+    );
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 47, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", html, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { html },
+    });
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Intro Example & Link (https://example.com/path?x=1&y=2) done",
+      undefined,
+    );
+  });
+
   it("keeps markdown media syntax on the text-only rich path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
 

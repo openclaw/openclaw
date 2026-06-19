@@ -4,6 +4,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
+import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
@@ -22,6 +23,7 @@ import type { TelegramThreadSpec } from "./helpers.js";
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -30,6 +32,14 @@ function isTelegramQuoteParamError(err: unknown): boolean {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramHtmlParseError(err: unknown): boolean {
+  return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
+function optionalParams<T extends Record<string, unknown>>(params: T): T | undefined {
+  return Object.keys(params).length > 0 ? params : undefined;
 }
 
 function createTelegramDeliverySendRetry() {
@@ -118,25 +128,57 @@ export async function sendTelegramText(
   const richMessage = buildTelegramRichMessage(text, textMode, {
     skipEntityDetection: opts?.linkPreview === false,
   });
+  const plainText =
+    textMode === "html"
+      ? telegramHtmlToPlainTextFallback(renderTelegramHtmlText(text, { textMode }))
+      : text;
   const richRawApi = getTelegramRichRawApi(bot.api);
 
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const res = await sendTelegramWithThreadFallback({
-    operation: "sendRichMessage",
-    runtime,
-    thread: opts?.thread,
-    requestParams: richParams,
-    removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-    send: (effectiveParams) =>
-      richRawApi.sendRichMessage({
-        chat_id: chatId,
-        rich_message: richMessage,
-        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-        ...effectiveParams,
-      }),
-  });
-  runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+  let res: Awaited<ReturnType<Bot["api"]["sendMessage"]>>;
+  try {
+    res = await sendTelegramWithThreadFallback({
+      operation: "sendRichMessage",
+      runtime,
+      thread: opts?.thread,
+      requestParams: richParams,
+      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+      send: (effectiveParams) =>
+        richRawApi.sendRichMessage({
+          chat_id: chatId,
+          rich_message: richMessage,
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...effectiveParams,
+        }),
+    });
+    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+  } catch (err) {
+    if (!isTelegramHtmlParseError(err)) {
+      throw err;
+    }
+    runtime.log?.(
+      `telegram sendRichMessage failed with HTML parse error; retrying plain text: ${formatErrorMessage(
+        err,
+      )}`,
+    );
+    res = await sendTelegramWithThreadFallback({
+      operation: "sendMessage",
+      runtime,
+      thread: opts?.thread,
+      requestParams: baseParams,
+      send: (effectiveParams) =>
+        bot.api.sendMessage(
+          chatId,
+          plainText,
+          optionalParams({
+            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+        ),
+    });
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+  }
   return res.message_id;
 }

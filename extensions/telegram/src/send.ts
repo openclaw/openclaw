@@ -635,6 +635,8 @@ export async function sendMessageTelegram(
 
   const optionalParams = <T extends Record<string, unknown>>(params: T): T | undefined =>
     Object.keys(params).length > 0 ? params : undefined;
+  const buildPlainFallbackText = (value: string) =>
+    textMode === "html" ? telegramHtmlToPlainTextFallback(renderHtmlText(value)) : value;
 
   const sendTelegramTextChunk = async (
     chunk: TelegramTextChunk,
@@ -659,7 +661,12 @@ export async function sendMessageTelegram(
         ),
       requestPlain: (retryLabel) =>
         requestWithChatNotFound(
-          () => api.sendMessage(chatId, chunk.text, optionalParams(plainParams)),
+          () =>
+            api.sendMessage(
+              chatId,
+              buildPlainFallbackText(chunk.text),
+              optionalParams(plainParams),
+            ),
           retryLabel,
         ),
     });

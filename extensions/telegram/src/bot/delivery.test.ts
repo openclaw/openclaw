@@ -390,6 +390,35 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("retries ordinary direct replies as plain text when rich parsing fails near opening links", async () => {
+    const runtime = createRuntime();
+    const markdown = [
+      "Вот что я бы ему рекомендовал, если задача именно понять, есть ли превышения.",
+      "",
+      "**Рекомендация клиенту**",
+      "",
+      "Если нужен вариант: **[Narda AMS-8061](https://www.narda-sts.com/en/products/emf-monitors/ams-8061/)** или **[Wavecontrol MonitEM-IoT](https://wavecontrol.cn/en/products/monitem-iot/)**.",
+    ].join("\n");
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 7, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: markdown }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(sendMessage, 0, 1)).toBe(markdown);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { parse_mode: "HTML" });
+    expect(mockCallArg(sendMessage, 1, 1)).toBe(markdown);
+    expect(mockCallArg(sendMessage, 1, 2)).toBeUndefined();
+    expect(firstSendText(sendMessage)).toMatch(/^Вот что я бы ему рекомендовал/);
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
