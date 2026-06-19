@@ -30,6 +30,65 @@ function requireRecordProperty(
 }
 
 describe("google-shared convertTools", () => {
+  it("skips unreadable and runtime-invalid tools while preserving healthy siblings", () => {
+    const unreadable = { name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+    const dynamicSchema = {
+      name: "dynamic_schema",
+      description: "dynamic",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { $dynamicRef: "#target" },
+        },
+      },
+    };
+    const healthy = {
+      name: "healthy",
+      description: "Healthy tool",
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string" } },
+        required: ["action"],
+      },
+    };
+
+    const converted = convertTools([unreadable, dynamicSchema, healthy] as unknown as Tool[]);
+
+    expect(converted).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "healthy",
+            description: "Healthy tool",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { action: { type: "string" } },
+              required: ["action"],
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("omits the Google tools payload when every tool is quarantined", () => {
+    const unreadable = { name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    expect(convertTools([unreadable] as unknown as Tool[])).toBeUndefined();
+  });
+
   it("preserves parameters when type is missing", () => {
     const tools = [
       {

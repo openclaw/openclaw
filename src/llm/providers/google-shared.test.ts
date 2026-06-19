@@ -1,7 +1,7 @@
 // Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, Model } from "../types.js";
+import type { AssistantMessage, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
@@ -145,5 +145,50 @@ describe("buildGoogleGenerateContentParams", () => {
     );
 
     expect(params.config?.stopSequences).toEqual(["STOP"]);
+  });
+
+  it("omits tool config when every tool is quarantined", () => {
+    const unreadable = { name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    const params = buildGoogleGenerateContentParams(
+      model,
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [unreadable as unknown as Tool],
+      },
+      { toolChoice: "any" },
+    );
+
+    expect(params.config).not.toHaveProperty("tools");
+    expect(params.config).not.toHaveProperty("toolConfig");
+  });
+
+  it("omits tools and tool config when the tool list length is unreadable", () => {
+    const tools = new Proxy([] as unknown as Tool[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length getter exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const params = buildGoogleGenerateContentParams(
+      model,
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools,
+      },
+      { toolChoice: "any" },
+    );
+
+    expect(params.config).not.toHaveProperty("tools");
+    expect(params.config).not.toHaveProperty("toolConfig");
   });
 });
