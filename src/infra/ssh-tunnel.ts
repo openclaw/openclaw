@@ -119,7 +119,10 @@ export async function startSshPortForward(opts: {
 
   let localPort = opts.localPortPreferred;
   try {
-    await ensurePortAvailable(localPort);
+    // #94596: Probe 127.0.0.1 so the preflight matches the IPv4-only
+    // interface this tunnel actually binds (pickEphemeralPort, canConnectLocal,
+    // and the ssh -L forward are all pinned to 127.0.0.1).
+    await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       localPort = await pickEphemeralPort();
