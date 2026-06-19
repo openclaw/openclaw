@@ -22,6 +22,10 @@ export function splitShellArgs(raw: string): string[] | null {
     }
   };
 
+  // Detect if the input looks like a Windows absolute path to avoid
+  // misinterpreting backslashes as escape characters.
+  const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(raw.trim());
+
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i];
     if (escaped) {
@@ -29,7 +33,7 @@ export function splitShellArgs(raw: string): string[] | null {
       escaped = false;
       continue;
     }
-    if (!inSingle && !inDouble && ch === "\\") {
+    if (!inSingle && !inDouble && ch === "\\" && !isWindowsAbsolutePath) {
       escaped = true;
       continue;
     }
