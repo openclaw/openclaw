@@ -191,6 +191,8 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "kimi-k2.7-code",
   "kimi-k2-thinking",
   "kimi-k2-thinking-turbo",
+  "minimax-m3",
+  "minimax-m2.7",
   "mimo-v2-pro",
   "mimo-v2-omni",
   "mimo-v2.5",
