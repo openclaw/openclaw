@@ -643,9 +643,14 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(configJob).toEqual(
       Object.fromEntries(Object.entries(shellPromptJob).filter(([key]) => key !== "updatedAtMs")),
     );
-    expect(reloaded.configJobRuntimeEntries[0]).toMatchObject({
+    expect(reloaded.configJobRuntimeEntries[0]).toEqual({
       updatedAtMs: shellPromptJob.updatedAtMs,
       state: {},
+      scheduleIdentity: JSON.stringify({
+        version: 1,
+        enabled: shellPromptJob.enabled,
+        schedule: shellPromptJob.schedule,
+      }),
     });
     const payload = requireRecord(job.payload, "cron payload");
     expect(payload.kind).toBe("agentTurn");
