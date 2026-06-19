@@ -207,7 +207,20 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
+  // Align maxWidth with clack's content width (columns - 6) so that
+  // copy-sensitive tokens (paths, URLs) preserved by wrapNoteMessage are not
+  // re-broken by clack's hard-wrap inside the bordered box.
+  const contentWidth = columns - 6;
+  const wrapped = wrapNoteMessage(message, { columns, maxWidth: contentWidth });
+  // Pad each line to contentWidth so clack's wrap-ansi sees no overflow.
+  const padded = wrapped
+    .split("\n")
+    .map((line) => {
+      const w = visibleWidth(line);
+      return w < contentWidth ? line + " ".repeat(contentWidth - w) : line;
+    })
+    .join("\n");
+  clackNote(padded, stylePromptTitle(title), {
     output: createNoteOutput(columns),
     format: (line) => line,
   });
