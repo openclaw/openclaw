@@ -936,6 +936,7 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+    expect(/alias/i.test(compactionModel)).toBe(true);
 
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);

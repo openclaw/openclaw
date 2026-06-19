@@ -468,6 +468,29 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:default");
   });
 
+  it("preserves auth when an omitted provider uses the effective default", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-mini": {
+                alias: "summary",
+              },
+            },
+            compaction: { model: "summary" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    expect(result.authProfileId).toBe("openai:default");
+  });
+
   it("prefers literal configured model ids over alias collisions (#90340)", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {

@@ -117,9 +117,7 @@ export function resolveEmbeddedCompactionTarget(params: {
     // When switching provider via override, drop the primary auth profile to
     // avoid sending the wrong credentials.
     const authProfileId =
-      overrideProvider !== (params.provider ?? "")?.trim()
-        ? undefined
-        : (params.authProfileId ?? undefined);
+      overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
       provider: overrideProvider,
       ...resolveTargetProviders(overrideProvider, authProfileId),
@@ -127,7 +125,6 @@ export function resolveEmbeddedCompactionTarget(params: {
       authProfileId,
     };
   }
-  const defaultProvider = provider?.trim() || params.defaultProvider?.trim() || DEFAULT_PROVIDER;
   const config = params.config ?? {};
   const currentProvider = provider?.trim();
   if (
@@ -152,9 +149,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   });
   if (inferredLiteralProvider) {
     const authProfileId =
-      inferredLiteralProvider !== (params.provider ?? "")?.trim()
-        ? undefined
-        : (params.authProfileId ?? undefined);
+      inferredLiteralProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
       provider: inferredLiteralProvider,
       ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
@@ -162,27 +157,24 @@ export function resolveEmbeddedCompactionTarget(params: {
       authProfileId,
     };
   }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: config,
-    defaultProvider,
-  });
+  const defaultProvider = provider || DEFAULT_PROVIDER;
   const aliasResolution = resolveModelRefFromString({
     cfg: config,
     raw: override,
     defaultProvider,
-    aliasIndex,
+    aliasIndex: buildModelAliasIndex({
+      cfg: config,
+      defaultProvider,
+    }),
   });
   if (aliasResolution?.alias) {
     const resolvedProvider = aliasResolution.ref.provider;
-    const resolvedModel = aliasResolution.ref.model;
     const authProfileId =
-      resolvedProvider !== (params.provider ?? "")?.trim()
-        ? undefined
-        : (params.authProfileId ?? undefined);
+      resolvedProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
       provider: resolvedProvider,
       ...resolveTargetProviders(resolvedProvider, authProfileId),
-      model: resolvedModel,
+      model: aliasResolution.ref.model,
       authProfileId,
     };
   }
