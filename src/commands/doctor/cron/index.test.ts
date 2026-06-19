@@ -628,6 +628,7 @@ describe("maybeRepairLegacyCronStore", () => {
     // isolated agentTurn job, so the misleading repair note must stay absent.
     expectNoNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining("drives shell/process tools from the agent prompt", "Cron");
+    expectNoteContaining("informational only", "Cron");
     expectNoteContaining("Shell prompt job", "Cron");
     expectNoNoteContaining("openclaw doctor --fix", "Cron");
     expectNoNoteContaining("jobs.json", "Cron");
