@@ -179,8 +179,7 @@ The harness reads its config from per-attempt input
   registered with `overridesBuiltInTool: true` and
   `skipPermission: true` so 100% of tool calls flow through OpenClaw's
   wrapped `execute()`. See [Permissions and ask_user](#permissions-and-ask_user).
-- `enableSessionTelemetry` — opt-in OpenTelemetry routing via
-  `telemetry-bridge.ts`.
+- `enableSessionTelemetry` — optional SDK session telemetry flag.
 
 Nothing in the rest of OpenClaw needs to know about these fields. Other
 plugins, channels, and core code only see the standard
@@ -267,9 +266,7 @@ real Copilot CLI or touch the host fs.
   decisions from the initial prompt rather than asking clarifying
   questions mid-turn. A follow-up will port the codex pattern at
   `extensions/codex/src/app-server/user-input-bridge.ts` to route SDK
-  `UserInputRequest`s through the OpenClaw channel/TUI prompt path; the
-  dormant scaffolding in `extensions/copilot/src/user-input-bridge.ts`
-  is the surface that follow-up will wire.
+  `UserInputRequest`s through the OpenClaw channel/TUI prompt path.
 
 ## Permissions and ask_user
 

@@ -9,6 +9,8 @@ import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
+  fetchClawHubSkillDetail,
+  fetchClawHubSkillInstallResolution,
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
@@ -316,6 +318,65 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.get("q")).toBe("calendar");
   });
 
+  it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillDetail({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              skill: {
+                slug: "weather",
+                displayName: "Weather",
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ skill: { slug: "weather" } });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather");
+    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
+  it("sends owner-qualified skill install resolution lookups as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillInstallResolution({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              slug: "weather",
+              installKind: "archive",
+              archive: {
+                version: "1.0.0",
+                downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true, slug: "weather" });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather/install");
+    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+  });
+
   it("fetches skill verification reports and lets version take precedence over tag", async () => {
     let requestedUrl = "";
     const envelope = {
@@ -358,6 +419,43 @@ describe("clawhub helpers", () => {
     expect(url.pathname).toBe("/api/v1/skills/agentreceipt/verify");
     expect(url.searchParams.get("version")).toBe("1.2.3");
     expect(url.searchParams.has("tag")).toBe(false);
+  });
+
+  it("sends owner-qualified skill verification lookups as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        version: "1.0.0",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              schema: "clawhub.skill.verify.v1",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              skill: {},
+              publisher: {},
+              version: {},
+              card: {},
+              artifact: {},
+              provenance: {},
+              security: {},
+              signature: {},
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toMatchObject({ schema: "clawhub.skill.verify.v1" });
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/weather/verify");
+    expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+    expect(url.searchParams.get("version")).toBe("1.0.0");
   });
 
   it("posts bulk skill security verdict requests", async () => {
@@ -855,6 +953,32 @@ describe("clawhub helpers", () => {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
       await expectPathMissing(archiveDir);
+    }
+  });
+
+  it("sends owner-qualified skill archive downloads as slug plus ownerHandle", async () => {
+    let requestedUrl = "";
+    const archive = await downloadClawHubSkillArchive({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.0.0",
+      fetchImpl: async (input) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        return new Response(new Uint8Array([7, 8, 9]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        });
+      },
+    });
+
+    try {
+      const url = new URL(requestedUrl);
+      expect(url.pathname).toBe("/api/v1/download");
+      expect(url.searchParams.get("slug")).toBe("weather");
+      expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
+      expect(url.searchParams.get("version")).toBe("1.0.0");
+    } finally {
+      await archive.cleanup();
     }
   });
 

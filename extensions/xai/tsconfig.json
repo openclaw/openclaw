@@ -15,6 +15,9 @@
       "openclaw/plugin-sdk/reply-payload-testing": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/reply-payload-testing.d.ts"
       ],
+      "openclaw/plugin-sdk/sqlite-runtime-testing": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-runtime-testing.d.ts"
+      ],
       "openclaw/plugin-sdk/ssrf-runtime-internal": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/ssrf-runtime-internal.d.ts"
       ],

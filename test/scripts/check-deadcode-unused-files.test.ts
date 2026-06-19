@@ -1,6 +1,7 @@
 // Check Deadcode Unused Files tests cover check deadcode unused files script behavior.
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +26,43 @@ function finishFakeProcess(
 ): void {
   child.emit("exit", status, signal);
   child.emit("close", status, signal);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timeout waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`process still alive: ${pid}`);
 }
 
 describe("check-deadcode-unused-files", () => {
@@ -243,6 +281,9 @@ src/a.ts: src/a.ts
     const kills: Array<NodeJS.Signals | number | undefined> = [];
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
       if (Math.abs(pid) === child.pid) {
+        if (signal === 0) {
+          throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        }
         kills.push(signal);
         finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
         return true;
@@ -274,6 +315,57 @@ src/a.ts: src/a.ts
     }
   });
 
+  it.skipIf(process.platform === "win32")(
+    "waits for timed-out Knip process groups after the wrapper exits",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-timeout-"));
+      const childPidPath = path.join(root, "child.pid");
+      let childPid = 0;
+
+      try {
+        const childScript = [
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const fs = require('node:fs');",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+
+        const resultPromise = runKnipUnusedFiles({
+          env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+          killGraceMs: 50,
+          spawnCommand(_command: string, _args: string[], options: unknown) {
+            return spawn(process.execPath, ["-e", parentScript], {
+              ...(options as Parameters<typeof spawn>[2]),
+              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+            });
+          },
+          timeoutMs: 100,
+          writeStatus: () => {},
+        });
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        await expect(resultPromise).resolves.toMatchObject({
+          errorCode: "ETIMEDOUT",
+        });
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps output delivered after process exit but before stdio close", async () => {
     const child = new FakeKnipProcess();
     const resultPromise = runKnipUnusedFiles({
@@ -300,6 +392,9 @@ src/a.ts: src/a.ts
     const originalKill = process.kill.bind(process);
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
       if (Math.abs(pid) === child.pid) {
+        if (signal === 0) {
+          throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        }
         finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
         return true;
       }

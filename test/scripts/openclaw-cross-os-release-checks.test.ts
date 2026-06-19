@@ -1387,6 +1387,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
+    expect(await canConnectToLoopbackPort(0)).toBe(false);
+    expect(await canConnectToLoopbackPort(65536)).toBe(false);
+    expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
+
     const server = createNetServer();
     await new Promise((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
