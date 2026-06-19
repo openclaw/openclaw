@@ -522,7 +522,6 @@ function mergeStaticCatalogInlineModel(
 }
 
 function hasConfiguredFallbackSurface(params: {
-  provider?: string;
   providerConfig: InlineProviderConfig | undefined;
   configuredModel: ReturnType<typeof findConfiguredProviderModel>;
   modelId: string;
@@ -532,18 +531,6 @@ function hasConfiguredFallbackSurface(params: {
   }
   if (params.configuredModel) {
     return true;
-  }
-  // xAI's catalog explicitly excludes multi-agent model ids (they require a
-  // different upstream API surface than the standard API-key provider path).
-  // If the provider rejected this model via its dynamic resolution, do not
-  // synthesize a configured-provider fallback that will silently 400.
-  // See: https://docs.openclaw.ai/providers/xai
-  if (
-    params.provider &&
-    normalizeProviderId(params.provider) === "xai" &&
-    params.modelId.toLowerCase().includes("multi-agent")
-  ) {
-    return false;
   }
   const baseUrl = params.providerConfig?.baseUrl?.trim();
   return Boolean(baseUrl);
@@ -1258,7 +1245,7 @@ function resolveConfiguredFallbackModel(params: {
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
-  if (!hasConfiguredFallbackSurface({ provider, providerConfig, configuredModel, modelId })) {
+  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }
   const staticCatalogModel = resolveBundledStaticCatalogModel({
