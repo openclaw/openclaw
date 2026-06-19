@@ -196,4 +196,43 @@ describe("planAllModelListSources", () => {
     expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
+
+  it("returns registry-only plan in replace mode without loading built-in catalogs", async () => {
+    const { planAllModelListSources } = await import("./list.source-plan.js");
+
+    const plan = await planAllModelListSources({
+      all: true,
+      cfg: { models: { mode: "replace" } },
+      dependencies: mocks,
+    });
+
+    expect(plan.kind).toBe("registry");
+    expect(plan.requiresInitialRegistry).toBe(true);
+    expect(plan.manifestCatalogRows).toEqual([]);
+    expect(plan.providerIndexCatalogRows).toEqual([]);
+    // Built-in catalog loaders should never be called in replace mode.
+    expect(mocks.loadStaticManifestCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.loadSupplementalManifestCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.loadProviderIndexCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.hasProviderRuntimeCatalogForFilter).not.toHaveBeenCalled();
+    expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
+  });
+
+  it("returns registry-only plan in replace mode even with provider filter", async () => {
+    const { planAllModelListSources } = await import("./list.source-plan.js");
+
+    const plan = await planAllModelListSources({
+      all: true,
+      providerFilter: "openai",
+      cfg: { models: { mode: "replace" } },
+      dependencies: mocks,
+    });
+
+    expect(plan.kind).toBe("registry");
+    expect(plan.requiresInitialRegistry).toBe(true);
+    expect(plan.manifestCatalogRows).toEqual([]);
+    expect(plan.providerIndexCatalogRows).toEqual([]);
+    expect(mocks.loadStaticManifestCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.hasProviderRuntimeCatalogForFilter).not.toHaveBeenCalled();
+  });
 });

@@ -133,41 +133,47 @@ export async function appendAllModelRowSources(
     seenKeys,
   });
 
-  if (params.sourcePlan.manifestCatalogRows.length > 0) {
-    await appendManifestCatalogRows({
-      rows: params.rows,
-      context: { ...params.context, skipRuntimeModelSuppression: true },
-      seenKeys,
-      manifestRows: params.sourcePlan.manifestCatalogRows,
-    });
-  }
+  // In "replace" mode, only user-configured providers appear in the list.
+  // Skip appending all built-in catalog sources (manifest, provider-index,
+  // provider-runtime, supplement) to avoid showing providers the user
+  // explicitly excluded. (Mirrors the model-picker's replace-mode shortcut.)
+  if (params.context.cfg.models?.mode !== "replace") {
+    if (params.sourcePlan.manifestCatalogRows.length > 0) {
+      await appendManifestCatalogRows({
+        rows: params.rows,
+        context: { ...params.context, skipRuntimeModelSuppression: true },
+        seenKeys,
+        manifestRows: params.sourcePlan.manifestCatalogRows,
+      });
+    }
 
-  if (params.sourcePlan.providerIndexCatalogRows.length > 0) {
-    await appendModelCatalogRows({
-      rows: params.rows,
-      context: { ...params.context, skipRuntimeModelSuppression: true },
-      seenKeys,
-      catalogRows: params.sourcePlan.providerIndexCatalogRows,
-    });
-  }
+    if (params.sourcePlan.providerIndexCatalogRows.length > 0) {
+      await appendModelCatalogRows({
+        rows: params.rows,
+        context: { ...params.context, skipRuntimeModelSuppression: true },
+        seenKeys,
+        catalogRows: params.sourcePlan.providerIndexCatalogRows,
+      });
+    }
 
-  if (params.modelRegistry && params.context.filter.provider) {
-    await appendCatalogSupplementRows({
+    if (params.modelRegistry && params.context.filter.provider) {
+      await appendCatalogSupplementRows({
+        rows: params.rows,
+        modelRegistry: params.modelRegistry,
+        context: params.context,
+        seenKeys,
+      });
+    }
+    if (params.modelRegistry) {
+      return { requiresRegistryFallback: false };
+    }
+
+    await appendProviderCatalogRows({
       rows: params.rows,
-      modelRegistry: params.modelRegistry,
       context: params.context,
       seenKeys,
     });
   }
-  if (params.modelRegistry) {
-    return { requiresRegistryFallback: false };
-  }
-
-  await appendProviderCatalogRows({
-    rows: params.rows,
-    context: params.context,
-    seenKeys,
-  });
   return { requiresRegistryFallback: false };
 }
 
@@ -185,9 +191,14 @@ export async function appendConfiguredModelRowSources(params: {
     context: params.context,
     seenKeys,
   });
-  await appendAuthenticatedCatalogRows({
-    rows: params.rows,
-    context: params.context,
-    seenKeys,
-  });
+  // In "replace" mode, only user-configured providers appear in the list.
+  // Skip appending built-in catalog rows to avoid showing providers the user
+  // explicitly excluded. (Mirrors the model-picker's replace-mode shortcut.)
+  if (params.context.cfg.models?.mode !== "replace") {
+    await appendAuthenticatedCatalogRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+    });
+  }
 }

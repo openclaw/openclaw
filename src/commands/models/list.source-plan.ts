@@ -80,6 +80,14 @@ export async function planAllModelListSources(params: {
     return createRegistryModelListSourcePlan();
   }
 
+  // In "replace" mode, the model list should only show user-configured
+  // providers. Use a registry-only plan so the row-sources layer can filter
+  // by configured providers, without loading built-in manifest/provider-index
+  // catalogs. (Mirrors the model-picker's replace-mode shortcut.)
+  if (params.cfg.models?.mode === "replace") {
+    return createRegistryModelListSourcePlan();
+  }
+
   const manifestCatalog = await import("./list.manifest-catalog.js");
   const loadStaticManifestCatalogRowsForList =
     params.dependencies?.loadStaticManifestCatalogRowsForList ??
