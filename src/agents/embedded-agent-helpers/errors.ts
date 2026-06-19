@@ -36,6 +36,7 @@ import {
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
+import { formatSensitiveImageRejectionErrorCopy } from "./image-rejection-error.js";
 import {
   classifyProviderPluginError,
   classifyProviderSpecificError,
@@ -1562,8 +1563,21 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
 ): string {
+  // Check the raw provider error first for sensitive-image rejection. This is intentionally
+  // checked BEFORE isRawAssistantErrorPassthrough, which would otherwise classify the
+  // "LLM error api_error: ..." prefix as a passthrough and drop the rich error into the
+  // GENERIC_ASSISTANT_ERROR_TEXT fallback, hiding the actionable context from the user.
+  const rawErrorForSensitiveImageCheck = msg.errorMessage?.trim();
+  if (rawErrorForSensitiveImageCheck) {
+    const sensitiveImageCopy = formatSensitiveImageRejectionErrorCopy(
+      rawErrorForSensitiveImageCheck,
+    );
+    if (sensitiveImageCopy) {
+      return sensitiveImageCopy;
+    }
+  }
   const friendlyError = formatAssistantErrorText(msg, opts);
-  const rawError = msg.errorMessage?.trim();
+  const rawError = rawErrorForSensitiveImageCheck;
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
   const rawProviderSchemaError =

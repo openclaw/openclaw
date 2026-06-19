@@ -33,6 +33,7 @@ import {
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
+import { formatSensitiveImageRejectionErrorCopy } from "./image-rejection-error.js";
 
 /** Format the billing failure copy with optional provider/model context. */
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
@@ -442,6 +443,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
     if (diskSpaceCopy) {
       return diskSpaceCopy;
+    }
+
+    const sensitiveImageCopy = formatSensitiveImageRejectionErrorCopy(trimmed);
+    if (sensitiveImageCopy) {
+      return sensitiveImageCopy;
     }
 
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {

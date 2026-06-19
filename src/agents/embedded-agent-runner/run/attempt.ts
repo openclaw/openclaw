@@ -339,6 +339,7 @@ import {
   isPrimaryBootstrapRun,
   remapInjectedContextFilesToWorkspace,
 } from "./attempt.bootstrap-context.js";
+import { recoverRecentSensitiveImageRejection } from "./image-rejection-recovery.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import {
@@ -678,6 +679,17 @@ function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boo
   }
   const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
   return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+}
+
+function getAssistantTerminalErrorMessage(message: AgentMessage | undefined): string | null {
+  if (!message || message.role !== "assistant") {
+    return null;
+  }
+  const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
+  if (record.stopReason !== "error" || typeof record.errorMessage !== "string") {
+    return null;
+  }
+  return record.errorMessage;
 }
 
 function removeTrailingMidTurnPrecheckAssistantError(params: {
@@ -4892,7 +4904,31 @@ export async function runEmbeddedAttempt(
             }),
           });
 
+          const recoverSensitiveImageRejection = (rawError: string): boolean => {
+            try {
+              const imageRecovery = recoverRecentSensitiveImageRejection({
+                sessionManager: activeSessionManager,
+                rawError,
+                sessionFile: params.sessionFile,
+                sessionKey: params.sessionKey,
+                agentId: sessionAgentId,
+                runId: params.runId,
+                sessionId: params.sessionId,
+              });
+              if (imageRecovery.recovered) {
+                activeSession.agent.state.messages =
+                  activeSessionManager.buildSessionContext().messages;
+              }
+              return imageRecovery.recovered;
+            } catch (recoveryErr) {
+              log.warn(`failed to recover provider-rejected image history: ${String(recoveryErr)}`);
+              return false;
+            }
+          };
+
           if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
+            const rawPromptError = formatErrorMessage(promptError);
+            recoverSensitiveImageRejection(rawPromptError);
             try {
               activeSessionManager.appendCustomEntry("openclaw:prompt-error", {
                 timestamp: Date.now(),
@@ -4901,10 +4937,16 @@ export async function runEmbeddedAttempt(
                 provider: params.provider,
                 model: params.modelId,
                 api: params.model.api,
-                error: formatErrorMessage(promptError),
+                error: rawPromptError,
               });
             } catch (entryErr) {
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+            }
+          } else if (!promptError && !compactionOccurredThisAttempt) {
+            const terminalAssistantError =
+              getAssistantTerminalErrorMessage(currentAttemptAssistant);
+            if (terminalAssistantError) {
+              recoverSensitiveImageRejection(terminalAssistantError);
             }
           }
         });
