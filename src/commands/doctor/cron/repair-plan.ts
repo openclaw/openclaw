@@ -25,8 +25,10 @@ export function formatUnresolvedShellPromptAdvisory(names: string[]): string | n
   if (names.length === 0) {
     return null;
   }
+  const verb = names.length === 1 ? "drives" : "drive";
+  const keepVerb = names.length === 1 ? "keeps" : "keep";
   return [
-    `${pluralize(names.length, "isolated cron job")} drives shell/process tools from the agent prompt and keeps running as-is${formatJobNameList(names)}.`,
+    `${pluralize(names.length, "isolated cron job")} ${verb} shell/process tools from the agent prompt and ${keepVerb} running as-is${formatJobNameList(names)}.`,
     "- This is a supported shape, not a legacy store row, so the doctor fix path cannot convert it and the finding is informational only.",
     '- For a deterministic run, recreate the job as a command cron job (`openclaw cron add ... --command "<shell>"`).',
   ].join("\n");

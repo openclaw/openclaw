@@ -654,8 +654,10 @@ describe("maybeRepairLegacyCronStore", () => {
     // The advisory is informational only: doctor --fix cannot rewrite a working
     // isolated agentTurn job, so the misleading repair note must stay absent.
     expectNoNoteContaining("Cron store issues detected", "Cron");
-    expectNoteContaining("3 isolated cron jobs", "Cron");
-    expectNoteContaining("drives shell/process tools from the agent prompt", "Cron");
+    expectNoteContaining(
+      "3 isolated cron jobs drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
+      "Cron",
+    );
     expectNoteContaining("informational only", "Cron");
     expectNoteContaining("Shell prompt job 1", "Cron");
     expectNoteContaining("Shell prompt job 2", "Cron");
