@@ -1387,4 +1387,67 @@ describe("registerFeishuDriveTools", () => {
       "block_id is only supported for docx comments",
     );
   });
+
+  it("list with all:true paginates through multiple pages", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { files: [{ token: "t1", name: "F1" }], has_more: true, next_page_token: "c2" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { files: [{ token: "t2", name: "F2" }], has_more: true, next_page_token: "c3" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { files: [{ token: "t3", name: "F3" }], has_more: false },
+      });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: { channels: { feishu: { enabled: true, appId: "a", appSecret: "s", tools: { drive: true } } } },
+        registerTool,
+      }),
+    );
+    const tool = firstToolFactory(registerTool)({ agentAccountId: undefined });
+    const result = await tool.execute("call-list-all", {
+      action: "list",
+      folder_token: "root",
+      all: true,
+    });
+    expect(driveFileList).toHaveBeenCalledTimes(3);
+    const files = (result.details as { files?: Array<{ name: string }> }).files ?? [];
+    expect(files.some((f) => f.name === "F1")).toBe(true);
+    expect(files.some((f) => f.name === "F2")).toBe(true);
+    expect(files.some((f) => f.name === "F3")).toBe(true);
+  });
+
+  it("list without all:true does not paginate when has_more is true", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: { files: [{ token: "t1", name: "Single" }], has_more: true, next_page_token: "c2" },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: { channels: { feishu: { enabled: true, appId: "a", appSecret: "s", tools: { drive: true } } } },
+        registerTool,
+      }),
+    );
+    const tool = firstToolFactory(registerTool)({ agentAccountId: undefined });
+    const result = await tool.execute("call-list-once", {
+      action: "list",
+      folder_token: "root",
+    });
+    expect(driveFileList).toHaveBeenCalledTimes(1);
+    const files2 = (result.details as { files?: Array<{ name: string }> }).files ?? [];
+    expect(files2.some((f) => f.name === "Single")).toBe(true);
+  });
 });
