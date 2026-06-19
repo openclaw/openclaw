@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
-  detectExternalActionReceiptClaim,
-  detectExternalActionReceiptClaims,
-} from "./external-action-receipt-claims.js";
+  detectMessageDeliveryReceiptClaim,
+  detectMessageDeliveryReceiptClaims,
+} from "./message-delivery-receipt-claims.js";
 
-describe("external action receipt claims", () => {
+describe("message delivery receipt claims", () => {
   it("detects the incident-style SMS receipt", () => {
     expect(
-      detectExternalActionReceiptClaim(`Sent to Jiva. To: +13522815065
+      detectMessageDeliveryReceiptClaim(`Sent to Jiva. To: +13522815065
 From: Sales +14155201316
 Status: accepted/queued
 Message ID: 6655442331193344`),
     ).toMatchObject({
-      actionFamily: "sms",
+      channel: "sms",
       recipient: "+13522815065",
       status: "accepted/queued",
       providerId: "6655442331193344",
@@ -20,64 +20,66 @@ Message ID: 6655442331193344`),
   });
 
   it("detects short SMS message-id receipts", () => {
-    expect(detectExternalActionReceiptClaim("SMS sent, message ID 4797682962735104")).toMatchObject(
-      {
-        actionFamily: "sms",
-        providerId: "4797682962735104",
-      },
-    );
+    expect(
+      detectMessageDeliveryReceiptClaim("SMS sent, message ID 4797682962735104"),
+    ).toMatchObject({
+      channel: "sms",
+      providerId: "4797682962735104",
+    });
   });
 
   it("detects accepted/queued SMS receipt starts", () => {
     expect(
-      detectExternalActionReceiptClaim("SMS was accepted/queued. Message ID: 4797682962735104"),
+      detectMessageDeliveryReceiptClaim("SMS was accepted/queued. Message ID: 4797682962735104"),
     ).toMatchObject({
-      actionFamily: "sms",
+      channel: "sms",
       providerId: "4797682962735104",
     });
   });
 
   it("detects first-person SMS receipts with status and message id", () => {
     expect(
-      detectExternalActionReceiptClaim(
+      detectMessageDeliveryReceiptClaim(
         "I sent the SMS. Status: accepted/queued. Message ID: 4797682962735104",
       ),
     ).toMatchObject({
-      actionFamily: "sms",
+      channel: "sms",
       status: "accepted/queued",
       providerId: "4797682962735104",
     });
   });
 
   it("detects sent-to phone receipts without a colon", () => {
-    expect(detectExternalActionReceiptClaim("SMS sent to +15550009999")).toMatchObject({
-      actionFamily: "sms",
+    expect(detectMessageDeliveryReceiptClaim("SMS sent to +15550009999")).toMatchObject({
+      channel: "sms",
       recipient: "+15550009999",
     });
   });
 
   it("ignores generic non-SMS message confirmations", () => {
-    expect(detectExternalActionReceiptClaim("The Telegram message was sent.")).toBeNull();
+    expect(detectMessageDeliveryReceiptClaim("The Telegram message was sent.")).toBeNull();
   });
 
   it("ignores drafts and explicit uncertainty", () => {
     expect(
-      detectExternalActionReceiptClaim("Here is the draft to send: thanks for your time."),
+      detectMessageDeliveryReceiptClaim("Here is the draft to send: thanks for your time."),
     ).toBeNull();
     expect(
-      detectExternalActionReceiptClaim("I do not see evidence that it was sent. Check Dialpad."),
+      detectMessageDeliveryReceiptClaim("I do not see evidence that it was sent. Check Dialpad."),
     ).toBeNull();
   });
 
   it("ignores quoted diagnostic receipt text", () => {
     expect(
-      detectExternalActionReceiptClaim("> Sent to Jiva. Status: accepted/queued. Message ID: fake"),
+      detectMessageDeliveryReceiptClaim(
+        "> Sent to Jiva. Status: accepted/queued. Message ID: fake",
+      ),
     ).toBeNull();
   });
 
   it("detects every SMS receipt claim in a response", () => {
     expect(
-      detectExternalActionReceiptClaims(`Sent to Jiva. To: +13522815065
+      detectMessageDeliveryReceiptClaims(`Sent to Jiva. To: +13522815065
 Status: accepted/queued
 Message ID: 4797682962735104
 
@@ -98,7 +100,7 @@ Message ID: 9999`),
 
   it("ignores explanatory SMS field documentation", () => {
     expect(
-      detectExternalActionReceiptClaim(
+      detectMessageDeliveryReceiptClaim(
         "For SMS, Status: accepted/queued and Message ID: 4797682962735104 mean the provider queued it.",
       ),
     ).toBeNull();
@@ -106,7 +108,7 @@ Message ID: 9999`),
 
   it("ignores non-SMS sent-to receipts", () => {
     expect(
-      detectExternalActionReceiptClaim(`Sent to Bob. To: bob@example.com
+      detectMessageDeliveryReceiptClaim(`Sent to Bob. To: bob@example.com
 Status: sent
 Message ID: abcd1234`),
     ).toBeNull();

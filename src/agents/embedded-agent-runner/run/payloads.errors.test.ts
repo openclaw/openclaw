@@ -165,9 +165,9 @@ Status: accepted/queued
 Message ID: 4797682962735104`;
     const payloads = buildPayloads({
       assistantTexts: [text],
-      externalActionEvidence: [
+      messageDeliveryEvidence: [
         {
-          actionFamily: "sms",
+          channel: "sms",
           providerId: "4797682962735104",
           status: "accepted/queued",
           recipient: "+13522815065",

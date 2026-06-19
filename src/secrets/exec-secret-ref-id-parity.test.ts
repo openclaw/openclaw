@@ -24,6 +24,8 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 describe("exec SecretRef id parity", () => {
   const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
+  const validEnvSecretRefIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
+  const invalidEnvSecretRefIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
 
   function configAcceptsExecRef(id: string): boolean {
     const result = validateConfigObjectRaw({
@@ -73,10 +75,42 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+  function planAcceptsRef(ref: { source: "env" | "file" | "exec"; provider: string; id: string }) {
+    return isSecretsApplyPlan({
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-03-10T00:00:00.000Z",
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          providerId: TALK_TEST_PROVIDER_ID,
+          ref,
+        },
+      ],
+    });
+  }
+
+  for (const id of [...validEnvSecretRefIds, ...invalidEnvSecretRefIds]) {
+    it(`keeps plan/gateway/plugin parity for env id "${id}"`, () => {
+      const expected = validEnvSecretRefIds.includes(id);
+      expect(planAcceptsRef({ source: "env", provider: "default", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "env", provider: "default", id })).toBe(
+        expected,
+      );
+      expect(
+        pluginSdkSecretInput.safeParse({ source: "env", provider: "default", id }).success,
+      ).toBe(expected);
+    });
+  }
+
   for (const id of [...VALID_FILE_SECRET_REF_IDS, ...INVALID_FILE_SECRET_REF_IDS]) {
     it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
       const expected = isValidFileSecretRefId(id);
       expect(configAcceptsFileRef(id)).toBe(expected);
+      expect(planAcceptsRef({ source: "file", provider: "default", id })).toBe(expected);
       expect(validateGatewaySecretRef.Check({ source: "file", provider: "default", id })).toBe(
         expected,
       );
@@ -85,6 +119,14 @@ describe("exec SecretRef id parity", () => {
       ).toBe(expected);
     });
   }
+
+  it("rejects invalid provider aliases across plan/gateway/plugin refs", () => {
+    const ref = { source: "env" as const, provider: "Default", id: "OPENAI_API_KEY" };
+
+    expect(planAcceptsRef(ref)).toBe(false);
+    expect(validateGatewaySecretRef.Check(ref)).toBe(false);
+    expect(pluginSdkSecretInput.safeParse(ref).success).toBe(false);
+  });
 
   for (const id of [...VALID_EXEC_SECRET_REF_IDS, ...INVALID_EXEC_SECRET_REF_IDS]) {
     it(`keeps config/plan/gateway/plugin parity for exec id "${id}"`, () => {

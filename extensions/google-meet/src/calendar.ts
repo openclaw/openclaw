@@ -191,10 +191,8 @@ async function fetchGoogleCalendarEvents(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Calendar events.list",
         scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
       });

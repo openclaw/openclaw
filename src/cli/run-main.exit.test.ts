@@ -39,7 +39,7 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
-const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
@@ -216,7 +216,7 @@ vi.mock("../plugins/memory-state.js", () => ({
 }));
 
 vi.mock("../agents/harness/registry.js", () => ({
-  listAgentHarnessIds: listAgentHarnessIdsMock,
+  listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
 
@@ -354,7 +354,7 @@ describe("runCli exit behavior", () => {
       sourceConfig: { gateway: { mode: "local" } },
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
-    listAgentHarnessIdsMock.mockReturnValue([]);
+    listRegisteredAgentHarnessesMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
@@ -398,7 +398,7 @@ describe("runCli exit behavior", () => {
   });
 
   it("disposes registered harnesses after full CLI command completion", async () => {
-    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+    listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "codex" } }]);
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
@@ -2142,6 +2142,41 @@ describe("runCli exit behavior", () => {
       'No built-in command or plugin CLI metadata owns "foo"',
     );
 
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("suggests close known commands for unowned command roots before proxy startup", async () => {
+    await expect(runCli(["node", "openclaw", "upate"])).rejects.toThrow(
+      "Did you mean this?\n  openclaw update",
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps suggestions out of plugin-policy diagnostics", async () => {
+    resolveManifestCommandAliasOwnerMock.mockReturnValueOnce({
+      pluginId: "codex",
+      kind: "runtime-slash",
+      cliCommand: "plugins",
+    });
+
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", "codex"]);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("runtime slash command");
+    expect((error as Error).message).toContain("/codex");
+    expect((error as Error).message).not.toContain("Did you mean this?");
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();

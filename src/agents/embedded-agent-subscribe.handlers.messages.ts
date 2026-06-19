@@ -40,7 +40,7 @@ import {
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
-import { guardExternalActionReceiptText } from "./external-action-receipt-guard.js";
+import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
@@ -178,9 +178,9 @@ function guardChunkedBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext): boole
   if (!bufferedText) {
     return true;
   }
-  const receiptGuard = guardExternalActionReceiptText({
+  const receiptGuard = guardMessageDeliveryReceiptText({
     text: bufferedText,
-    evidence: ctx.state.externalActionEvidence,
+    evidence: ctx.state.messageDeliveryEvidence,
   });
   if (!receiptGuard.allowed) {
     ctx.blockChunker?.reset();

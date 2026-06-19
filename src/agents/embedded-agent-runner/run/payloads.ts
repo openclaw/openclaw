@@ -41,8 +41,8 @@ import {
   extractAssistantThinking,
   extractAssistantVisibleText,
 } from "../../embedded-agent-utils.js";
-import { guardExternalActionReceiptText } from "../../external-action-receipt-guard.js";
-import type { ExternalActionEvidence } from "../../external-action-receipts.js";
+import { guardMessageDeliveryReceiptText } from "../../message-delivery-receipt-guard.js";
+import type { MessageDeliveryEvidence } from "../../message-delivery-receipts.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -247,7 +247,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
-  externalActionEvidence?: readonly ExternalActionEvidence[];
+  messageDeliveryEvidence?: readonly MessageDeliveryEvidence[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
@@ -519,9 +519,9 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    const receiptGuard = guardExternalActionReceiptText({
+    const receiptGuard = guardMessageDeliveryReceiptText({
       text: cleanedText || text,
-      evidence: params.externalActionEvidence,
+      evidence: params.messageDeliveryEvidence,
     });
     if (!receiptGuard.allowed) {
       replyItems.push({

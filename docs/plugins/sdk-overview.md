@@ -159,56 +159,6 @@ surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
 that higher-priority lane. Legacy string guidance and unscoped structured
 guidance remain available to non-Codex prompt surfaces for compatibility.
 
-#### External action evidence for tool receipts
-
-Tools that perform externally visible side effects can declare how the host
-should recognize proof of a successful action in the tool result. This is for
-receipt-style confirmations, such as a provider status and id for a sent
-message, payment, ticket, or other action that happened outside the model
-runtime.
-
-Register this metadata with `api.registerToolMetadata(...)`:
-
-```typescript
-api.registerToolMetadata({
-  toolName: "send_ticket",
-  displayName: "Send ticket",
-  externalActionEvidence: {
-    actionFamily: "ticket",
-    successStatusPaths: ["receipt.status"],
-    providerIdPaths: ["receipt.id"],
-    recipientPaths: ["receipt.recipient"],
-    bodyPaths: ["receipt.summary"],
-    dryRunPaths: ["receipt.dryRun"],
-  },
-});
-```
-
-The path lists are dot paths into the JSON-compatible tool result. At least one
-success-status path or provider-id path is required. When a successful tool call
-finishes, the host reads these fields and stores current-run evidence that later
-agent text can be checked against before it claims the external action
-succeeded.
-
-Use this only for facts the tool result actually proves:
-
-- `actionFamily` names the kind of side effect, such as `sms`, `email`,
-  `calendar`, `ticket`, or `payment`.
-- `successStatusPaths` point to provider or application statuses such as
-  `queued`, `accepted`, `sent`, `delivered`, or `created`.
-- `providerIdPaths` point to provider-issued ids or durable application ids.
-- `senderPaths`, `recipientPaths`, and `bodyPaths` help the host match an agent
-  claim to the specific action.
-- `dryRunPaths` marks evidence that came from a dry run. Dry-run evidence must
-  not support a real-delivery claim.
-
-Do not use this metadata to infer that a side effect happened from intent,
-arguments, logs, or model text. It is a narrow host contract for successful tool
-results that already contain receipt data. If a tool cannot return durable
-receipt fields, leave `externalActionEvidence` unset and phrase any agent
-response as a request, attempt, or queued internal workflow rather than a
-confirmed external result.
-
 ### Infrastructure
 
 | Method                                         | What it registers                       |

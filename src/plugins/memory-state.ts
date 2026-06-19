@@ -348,5 +348,3 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
 }
-
-export const resetMemoryPluginState = clearMemoryPluginState;

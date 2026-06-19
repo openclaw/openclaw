@@ -216,7 +216,6 @@ export type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginJsonValue,
-  PluginExternalActionEvidenceRegistration,
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
   PluginNextTurnInjectionRecord,

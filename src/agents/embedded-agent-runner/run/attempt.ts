@@ -65,7 +65,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -224,7 +224,6 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
-import { normalizeToolName } from "../../tool-policy.js";
 import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
@@ -2362,23 +2361,6 @@ export async function runEmbeddedAttempt(
           return name ? [name] : [];
         }),
       );
-      const toolPluginIdsByName = new Map<string, string>();
-      const toolPluginMetadataKeysByName = new Map<string, string>();
-      for (const tool of uncompactedEffectiveTools) {
-        const name = (tool.name ?? "").trim();
-        if (!name) {
-          continue;
-        }
-        const pluginMeta = getPluginToolMeta(tool);
-        if (!pluginMeta?.pluginId) {
-          continue;
-        }
-        const metadataKey = buildPluginToolMetadataKey(pluginMeta.pluginId, name);
-        toolPluginIdsByName.set(name, pluginMeta.pluginId);
-        toolPluginIdsByName.set(normalizeToolName(name), pluginMeta.pluginId);
-        toolPluginMetadataKeysByName.set(name, metadataKey);
-        toolPluginMetadataKeysByName.set(normalizeToolName(name), metadataKey);
-      }
       const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
@@ -3632,8 +3614,6 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
-          toolPluginIdsByName,
-          toolPluginMetadataKeysByName,
           replaySafeToolNames,
           internalEvents: params.internalEvents,
         }),
@@ -3643,7 +3623,7 @@ export async function runEmbeddedAttempt(
         assistantTexts,
         getLastAssistantTextMessageIndex,
         toolMetas,
-        getExternalActionEvidence,
+        getMessageDeliveryEvidence,
         getAcceptedSessionSpawns,
         runToolLifecycle,
         unsubscribe,
@@ -3681,21 +3661,10 @@ export async function runEmbeddedAttempt(
               params.runId,
             );
           }
-          const pluginMeta = getPluginToolMeta(
-            toolParams.tool as Parameters<typeof getPluginToolMeta>[0],
-          );
-          const pluginToolName = (toolParams.tool.name ?? toolParams.toolName).trim();
           const result = await runToolLifecycle({
             toolName: toolParams.toolName,
             toolCallId: toolParams.toolCallId,
             args: toolParams.input,
-            pluginId: pluginMeta?.pluginId,
-            pluginMetadataKey: pluginMeta?.pluginId
-              ? buildPluginToolMetadataKey(
-                  pluginMeta.pluginId,
-                  pluginToolName || toolParams.toolName,
-                )
-              : undefined,
             replaySafe: replaySafeTools.has(toolParams.tool as never),
             execute: async () =>
               await toolParams.tool.execute(
@@ -5641,7 +5610,7 @@ export async function runEmbeddedAttempt(
         assistantTexts,
         lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
         toolMetas: toolMetasNormalized,
-        externalActionEvidence: getExternalActionEvidence(),
+        messageDeliveryEvidence: getMessageDeliveryEvidence(),
         acceptedSessionSpawns,
         lastAssistant,
         currentAttemptAssistant,

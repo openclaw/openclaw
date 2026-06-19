@@ -19,7 +19,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
-import type { ExternalActionEvidence } from "../../external-action-receipts.js";
+import type { MessageDeliveryEvidence } from "../../message-delivery-receipts.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -190,7 +190,7 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
-  externalActionEvidence?: ExternalActionEvidence[];
+  messageDeliveryEvidence?: MessageDeliveryEvidence[];
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;

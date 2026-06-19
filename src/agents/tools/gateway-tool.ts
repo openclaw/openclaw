@@ -80,9 +80,6 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
-export const ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST = ALLOWED_GATEWAY_CONFIG_PATHS;
-
-/** @internal Exposed for regression tests only; do not import from runtime code. */
 export function assertGatewayConfigMutationAllowedForTest(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;

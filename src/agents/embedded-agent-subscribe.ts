@@ -54,8 +54,8 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
-import { guardExternalActionReceiptText } from "./external-action-receipt-guard.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -170,7 +170,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const state: EmbeddedAgentSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
-    externalActionEvidence: [],
+    messageDeliveryEvidence: [],
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
@@ -272,9 +272,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const guardAssistantStreamData = (
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
   ): EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"] => {
-    const receiptGuard = guardExternalActionReceiptText({
+    const receiptGuard = guardMessageDeliveryReceiptText({
       text: data.text,
-      evidence: state.externalActionEvidence,
+      evidence: state.messageDeliveryEvidence,
     });
     if (receiptGuard.allowed) {
       return data;
@@ -335,9 +335,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (payload.isReasoning || !payload.text) {
       return payload;
     }
-    const receiptGuard = guardExternalActionReceiptText({
+    const receiptGuard = guardMessageDeliveryReceiptText({
       text: payload.text,
-      evidence: state.externalActionEvidence,
+      evidence: state.messageDeliveryEvidence,
     });
     if (receiptGuard.allowed) {
       return payload;
@@ -1392,14 +1392,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
-    getExternalActionEvidence: () => state.externalActionEvidence.slice(),
+    getMessageDeliveryEvidence: () => state.messageDeliveryEvidence.slice(),
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     runToolLifecycle: async <T>(toolParams: {
       toolName: string;
       toolCallId: string;
       args: unknown;
-      pluginId?: string;
-      pluginMetadataKey?: string;
       replaySafe?: boolean;
       execute: () => Promise<T>;
     }): Promise<T> => {
@@ -1408,8 +1406,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
-        pluginId: toolParams.pluginId,
-        pluginMetadataKey: toolParams.pluginMetadataKey,
         replaySafe: toolParams.replaySafe,
       } as never);
       try {

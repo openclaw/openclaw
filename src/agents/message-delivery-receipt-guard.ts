@@ -1,12 +1,12 @@
 import {
-  detectExternalActionReceiptClaims,
-  type ExternalActionReceiptClaim,
-} from "./external-action-receipt-claims.js";
-import type { ExternalActionEvidence } from "./external-action-receipts.js";
+  detectMessageDeliveryReceiptClaims,
+  type MessageDeliveryReceiptClaim,
+} from "./message-delivery-receipt-claims.js";
+import type { MessageDeliveryEvidence } from "./message-delivery-receipts.js";
 
-export type ExternalActionReceiptGuardResult =
+export type MessageDeliveryReceiptGuardResult =
   | { allowed: true }
-  | { allowed: false; replacementText: string; claim: ExternalActionReceiptClaim };
+  | { allowed: false; replacementText: string; claim: MessageDeliveryReceiptClaim };
 
 function normalizePhoneComparable(value: string | undefined): string | undefined {
   return value?.replace(/\D+/gu, "") || undefined;
@@ -44,10 +44,10 @@ function statusComparablesMatch(left: string | undefined, right: string | undefi
 }
 
 function evidenceMatchesClaim(
-  evidence: ExternalActionEvidence,
-  claim: ExternalActionReceiptClaim,
+  evidence: MessageDeliveryEvidence,
+  claim: MessageDeliveryReceiptClaim,
 ): boolean {
-  if (evidence.dryRun || evidence.actionFamily.toLowerCase() !== claim.actionFamily) {
+  if (evidence.channel !== claim.channel) {
     return false;
   }
   let matchedClaimDiscriminator = false;
@@ -74,11 +74,11 @@ function evidenceMatchesClaim(
   return matchedClaimDiscriminator && Boolean(evidence.providerId || evidence.status);
 }
 
-export function guardExternalActionReceiptText(params: {
+export function guardMessageDeliveryReceiptText(params: {
   text: string;
-  evidence?: readonly ExternalActionEvidence[];
-}): ExternalActionReceiptGuardResult {
-  const claims = detectExternalActionReceiptClaims(params.text);
+  evidence?: readonly MessageDeliveryEvidence[];
+}): MessageDeliveryReceiptGuardResult {
+  const claims = detectMessageDeliveryReceiptClaims(params.text);
   if (claims.length === 0) {
     return { allowed: true };
   }

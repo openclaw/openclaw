@@ -1,6 +1,7 @@
 /** Shared SecretRef grammar and validation helpers for config, schema, SDK, and gateway parity. */
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
+  isValidEnvSecretRefId,
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
@@ -130,6 +131,20 @@ export function validateExecSecretRefId(value: string): ExecSecretRefIdValidatio
 /** Boolean convenience wrapper for callers that only need accept/reject behavior. */
 export function isValidExecSecretRefId(value: string): boolean {
   return validateExecSecretRefId(value).ok;
+}
+
+/** Validates a complete SecretRef against the shared provider/source/id grammar. */
+export function isValidSecretRef(ref: SecretRef): boolean {
+  if (!isValidSecretProviderAlias(ref.provider)) {
+    return false;
+  }
+  if (ref.source === "env") {
+    return isValidEnvSecretRefId(ref.id);
+  }
+  if (ref.source === "file") {
+    return isValidFileSecretRefId(ref.id);
+  }
+  return isValidExecSecretRefId(ref.id);
 }
 
 /** Formats the user-facing validation message for rejected exec secret ref ids. */

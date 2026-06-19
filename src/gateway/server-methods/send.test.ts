@@ -1534,10 +1534,11 @@ describe("gateway send mirroring", () => {
       actions: {
         describeMessageTool: () => ({ actions: ["react"] }),
         supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ params, requesterSenderId, toolContext }) =>
+        handleAction: async ({ params, requesterAccountId, requesterSenderId, toolContext }) =>
           jsonResult({
             ok: true,
             messageId: params.messageId,
+            requesterAccountId,
             requesterSenderId,
             currentMessageId: toolContext?.currentMessageId,
             currentMessagingTarget: toolContext?.currentMessagingTarget,
@@ -1564,6 +1565,7 @@ describe("gateway send mirroring", () => {
       jsonResult({
         ok: true,
         messageId: "wamid.1",
+        requesterAccountId: "default",
         requesterSenderId: "trusted-user",
         currentMessageId: "wamid.1",
         currentMessagingTarget: "user:15551234567",
@@ -1583,6 +1585,7 @@ describe("gateway send mirroring", () => {
         messageId: "wamid.1",
         emoji: "✅",
       },
+      requesterAccountId: "default",
       requesterSenderId: "trusted-user",
       inboundTurnKind: "room_event",
       toolContext: {
@@ -1603,6 +1606,7 @@ describe("gateway send mirroring", () => {
       {
         ok: true,
         messageId: "wamid.1",
+        requesterAccountId: "default",
         requesterSenderId: "trusted-user",
         currentMessageId: "wamid.1",
         currentMessagingTarget: "user:15551234567",
@@ -1616,7 +1620,10 @@ describe("gateway send mirroring", () => {
       { channel: "whatsapp" },
     );
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({ inboundEventKind: "room_event" }),
+      expect.objectContaining({
+        inboundEventKind: "room_event",
+        requesterAccountId: "default",
+      }),
     );
   });
 

@@ -55,6 +55,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.traces": "OpenTelemetry Traces Enabled",
   "diagnostics.otel.metrics": "OpenTelemetry Metrics Enabled",
   "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",
+  "diagnostics.otel.logsExporter": "OpenTelemetry Logs Exporter",
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
   "diagnostics.otel.captureContent": "OpenTelemetry Content Capture",

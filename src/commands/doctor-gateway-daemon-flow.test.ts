@@ -138,6 +138,7 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 vi.mock("./health-format.js", () => ({
+  formatGatewayClosedDiagnostic: vi.fn(() => undefined),
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 

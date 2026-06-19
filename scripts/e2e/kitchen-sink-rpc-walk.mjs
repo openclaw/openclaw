@@ -892,14 +892,10 @@ export async function fetchJson(url, options = {}) {
     let removeExternalAbort = () => {};
     const abortPromise = externalSignal
       ? new Promise((_, reject) => {
-          const abortError = () =>
-            externalSignal.reason instanceof Error
-              ? externalSignal.reason
-              : new Error("fetch aborted");
           const onAbort = () => {
-            const error = abortError();
+            const error = getExternalAbortReason(externalSignal);
             controller.abort(error);
-            reject(new Error(error.message, { cause: error }));
+            reject(createExternalAbortError(externalSignal));
           };
           if (externalSignal.aborted) {
             onAbort();
@@ -922,10 +918,12 @@ export async function fetchJson(url, options = {}) {
         timeoutPromise,
         ...(abortPromise ? [abortPromise] : []),
       ]);
+      const bodyAbortPromise = abortPromise
+        ? Promise.race([timeoutPromise, abortPromise])
+        : timeoutPromise;
       const text = await Promise.race([
-        readBoundedResponseText(response, maxBodyBytes, timeoutPromise),
-        timeoutPromise,
-        ...(abortPromise ? [abortPromise] : []),
+        readBoundedResponseText(response, maxBodyBytes, bodyAbortPromise),
+        bodyAbortPromise,
       ]);
       let body = null;
       try {
@@ -939,7 +937,7 @@ export async function fetchJson(url, options = {}) {
       if (attempt >= attempts || !isRetryableTransientNetworkError(error)) {
         throw error;
       }
-      await delay(options.retryDelayMs ?? 250);
+      await delayWithAbort(options.retryDelayMs ?? 250, externalSignal);
     } finally {
       removeExternalAbort();
       if (timeout) {
@@ -948,6 +946,33 @@ export async function fetchJson(url, options = {}) {
     }
   }
   throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
+}
+
+function getExternalAbortReason(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new Error("fetch aborted");
+}
+
+function createExternalAbortError(signal) {
+  const reason = getExternalAbortReason(signal);
+  return new Error(reason.message, { cause: reason });
+}
+
+async function delayWithAbort(delayMs, signal) {
+  if (!signal) {
+    await delay(delayMs);
+    return;
+  }
+  if (signal.aborted) {
+    throw createExternalAbortError(signal);
+  }
+  try {
+    await delay(delayMs, undefined, { signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw createExternalAbortError(signal);
+    }
+    throw error;
+  }
 }
 
 export async function readBoundedResponseText(response, byteLimit, timeoutPromise) {

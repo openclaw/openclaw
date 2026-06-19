@@ -11,6 +11,7 @@ export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard 
 export const dependencyChangedLabel = "dependencies-changed";
 export const allowDependenciesCommand = "/allow-dependencies-change";
 export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
+export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 
 const maxListedFiles = 25;
@@ -489,10 +490,31 @@ function githubErrorBodyTooLarge(maxBytes) {
   return new Error(`GitHub error response body exceeded ${maxBytes} bytes`);
 }
 
-export async function readBoundedGitHubErrorText(response, maxBytes = GITHUB_ERROR_BODY_MAX_BYTES) {
+function githubResponseBodyTooLarge(maxBytes) {
+  return new Error(`GitHub response body exceeded ${maxBytes} bytes`);
+}
+
+export async function readBoundedGitHubErrorText(
+  response,
+  maxBytes = GITHUB_ERROR_BODY_MAX_BYTES,
+  options = {},
+) {
   return await readBoundedResponseText(response, "GitHub error", maxBytes, {
     createTooLargeError: () => githubErrorBodyTooLarge(maxBytes),
+    ...options,
   });
+}
+
+export async function readBoundedGitHubJson(
+  response,
+  maxBytes = GITHUB_RESPONSE_BODY_MAX_BYTES,
+  options = {},
+) {
+  const text = await readBoundedResponseText(response, "GitHub", maxBytes, {
+    createTooLargeError: () => githubResponseBodyTooLarge(maxBytes),
+    ...options,
+  });
+  return JSON.parse(text);
 }
 
 function timeoutError(path, method, timeoutMs) {
@@ -513,6 +535,7 @@ function combineAbortSignals(signals) {
 export function githubApi(token, options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? GITHUB_API_REQUEST_TIMEOUT_MS;
+  const responseMaxBodyBytes = options.responseMaxBodyBytes ?? GITHUB_RESPONSE_BODY_MAX_BYTES;
   const baseHeaders = {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${token}`,
@@ -542,7 +565,10 @@ export function githubApi(token, options = {}) {
       if (!response.ok) {
         let errorText;
         try {
-          errorText = await readBoundedGitHubErrorText(response);
+          errorText = await readBoundedGitHubErrorText(response, GITHUB_ERROR_BODY_MAX_BYTES, {
+            signal: timeoutController.signal,
+            timeoutPromise,
+          });
         } catch (bodyError) {
           errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
         }
@@ -550,7 +576,10 @@ export function githubApi(token, options = {}) {
         error.status = response.status;
         throw error;
       }
-      return response.json();
+      return await readBoundedGitHubJson(response, responseMaxBodyBytes, {
+        signal: timeoutController.signal,
+        timeoutPromise,
+      });
     })();
     operationPromise.catch(() => {});
     try {

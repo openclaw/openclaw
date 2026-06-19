@@ -11,7 +11,7 @@ export function createBaseToolHandlerState() {
     replayState: createEmbeddedRunReplayState(),
     toolMetaById: new Map<string, unknown>(),
     toolMetas: [] as Array<{ toolName?: string; meta?: string; asyncStarted?: boolean }>,
-    externalActionEvidence: [],
+    messageDeliveryEvidence: [],
     acceptedSessionSpawns: [],
     toolSummaryById: new Set<string>(),
     itemActiveIds: new Set<string>(),

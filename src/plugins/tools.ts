@@ -1019,15 +1019,22 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {
-    return;
+    return undefined;
   }
-  ensureStandaloneRuntimePluginRegistryLoaded({
+  const registry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "channel",
     requiredPluginIds: loadState.onlyPluginIds,
     loadOptions: loadState.loadOptions,
+  });
+  if (registryHasScopedPluginTools(registry, loadState.onlyPluginIds)) {
+    return registry;
+  }
+  return resolvePluginToolRegistry({
+    loadOptions: loadState.loadOptions,
+    onlyPluginIds: loadState.onlyPluginIds,
   });
 }
 
@@ -1040,6 +1047,7 @@ export function resolvePluginTools(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
+  runtimeRegistry?: PluginRegistry;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
@@ -1093,10 +1101,15 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
-  let registry = resolvePluginToolRegistry({
-    loadOptions,
-    onlyPluginIds: runtimePluginIds,
-  });
+  let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
+    ? params.runtimeRegistry
+    : undefined;
+  if (!registry) {
+    registry = resolvePluginToolRegistry({
+      loadOptions,
+      onlyPluginIds: runtimePluginIds,
+    });
+  }
   if (!registry) {
     // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
     // are not pinned to any active channel/surface registry until explicitly loaded.

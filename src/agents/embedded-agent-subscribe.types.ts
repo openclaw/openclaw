@@ -116,10 +116,6 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
-  /** Concrete plugin owner ids keyed by exact and normalized tool names for this run. */
-  toolPluginIdsByName?: ReadonlyMap<string, string>;
-  /** Plugin tool metadata keys keyed by exact and normalized tool names for this run. */
-  toolPluginMetadataKeysByName?: ReadonlyMap<string, string>;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
   /**

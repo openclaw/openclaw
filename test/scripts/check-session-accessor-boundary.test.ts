@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  allowedSessionStoreRuntimeFileBackedCompatExports,
+  collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
   findSessionLifecycleCleanupBoundaryViolations,
+  findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
   migratedSessionLifecycleCleanupFiles,
@@ -121,6 +124,55 @@ describe("session accessor boundary guard", () => {
         "src/infra/heartbeat-runner.ts",
       ]),
     );
+  });
+
+  it("ratchets only explicit file-backed SDK session compatibility exports", () => {
+    expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
+      new Set([
+        "loadSessionStore",
+        "readLatestAssistantTextFromSessionTranscript",
+        "resolveAndPersistSessionFile",
+        "resolveSessionFilePath",
+        "resolveSessionStoreEntry",
+        "saveSessionStore",
+        "updateSessionStore",
+      ]),
+    );
+  });
+
+  it("collects file-backed SDK session compatibility exports", () => {
+    expect(
+      collectSessionStoreRuntimeFileBackedCompatExports(`
+        export const loadSessionStore = loadSessionStoreImpl;
+        export { resolveSessionFilePath } from "../config/sessions/paths.js";
+        export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+      `),
+    ).toEqual(
+      new Map([
+        ["loadSessionStore", { line: 2, sourceName: "loadSessionStore" }],
+        ["resolveSessionFilePath", { line: 3, sourceName: "resolveSessionFilePath" }],
+        ["saveSessionStore", { line: 4, sourceName: "saveSessionStore" }],
+        ["updateSessionStore", { line: 4, sourceName: "updateSessionStore" }],
+      ]),
+    );
+  });
+
+  it("flags unratcheted file-backed SDK session compatibility exports", () => {
+    expect(
+      findSessionStoreRuntimeFileBackedCompatExportViolations(`
+        export { readSessionEntries } from "../config/sessions/store-load.js";
+        export { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'exports unratcheted file-backed SDK session helper "readSessionEntries"',
+      },
+      {
+        line: 3,
+        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+      },
+    ]);
   });
 
   it("flags legacy reader imports", () => {

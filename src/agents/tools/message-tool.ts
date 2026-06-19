@@ -1406,6 +1406,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           action,
           params: actionParams,
           defaultAccountId: accountId ?? undefined,
+          requesterAccountId: agentAccountId,
           requesterSenderId: options?.requesterSenderId,
           senderIsOwner: options?.senderIsOwner,
           gateway,

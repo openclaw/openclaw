@@ -1001,6 +1001,42 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it("cancels oversized Codex OAuth image response streams", async () => {
+    mockCodexAuthOnly();
+    let canceled = false;
+    let chunkSent = false;
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunkSent) {
+          return;
+        }
+        chunkSent = true;
+        controller.enqueue(new Uint8Array(64 * 1024 * 1024 + 1));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(stream),
+      release,
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an oversized Codex lighthouse",
+        cfg: {},
+        authStore: createCodexOAuthAuthStore(),
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation response exceeded size limit");
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {

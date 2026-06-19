@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-export type ExternalActionReceiptClaim = {
-  actionFamily: "sms";
+export type MessageDeliveryReceiptClaim = {
+  channel: "sms";
   recipient?: string;
   sender?: string;
   providerId?: string;
@@ -25,7 +25,7 @@ function isQuotedCandidateStart(text: string, start: number): boolean {
   return /^\s*(?:>|["'])/u.test(text.slice(lineStart, start));
 }
 
-function detectSingleExternalActionReceiptClaim(text: string): ExternalActionReceiptClaim | null {
+function detectSingleMessageDeliveryReceiptClaim(text: string): MessageDeliveryReceiptClaim | null {
   const trimmed = text.trim();
   if (!trimmed || !SMS_PREFILTER_RE.test(trimmed)) {
     return null;
@@ -52,7 +52,7 @@ function detectSingleExternalActionReceiptClaim(text: string): ExternalActionRec
     return null;
   }
   return {
-    actionFamily: "sms",
+    channel: "sms",
     ...(recipient ? { recipient } : {}),
     ...(sender ? { sender } : {}),
     ...(providerId ? { providerId } : {}),
@@ -60,7 +60,7 @@ function detectSingleExternalActionReceiptClaim(text: string): ExternalActionRec
   };
 }
 
-export function detectExternalActionReceiptClaims(text: string): ExternalActionReceiptClaim[] {
+export function detectMessageDeliveryReceiptClaims(text: string): MessageDeliveryReceiptClaim[] {
   const trimmed = text.trim();
   if (!trimmed || !SMS_PREFILTER_RE.test(trimmed)) {
     return [];
@@ -71,13 +71,13 @@ export function detectExternalActionReceiptClaims(text: string): ExternalActionR
   if (starts.length === 0) {
     return [];
   }
-  const claims: ExternalActionReceiptClaim[] = [];
+  const claims: MessageDeliveryReceiptClaim[] = [];
   for (const [position, start] of starts.entries()) {
     if (isQuotedCandidateStart(trimmed, start)) {
       continue;
     }
     const end = starts[position + 1] ?? trimmed.length;
-    const claim = detectSingleExternalActionReceiptClaim(trimmed.slice(start, end));
+    const claim = detectSingleMessageDeliveryReceiptClaim(trimmed.slice(start, end));
     if (claim) {
       claims.push(claim);
     }
@@ -85,6 +85,8 @@ export function detectExternalActionReceiptClaims(text: string): ExternalActionR
   return claims;
 }
 
-export function detectExternalActionReceiptClaim(text: string): ExternalActionReceiptClaim | null {
-  return detectExternalActionReceiptClaims(text)[0] ?? null;
+export function detectMessageDeliveryReceiptClaim(
+  text: string,
+): MessageDeliveryReceiptClaim | null {
+  return detectMessageDeliveryReceiptClaims(text)[0] ?? null;
 }

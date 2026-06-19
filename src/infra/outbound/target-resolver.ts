@@ -188,6 +188,11 @@ function detectTargetKind(
     return "group";
   }
 
+  const chatTypes = plugin?.capabilities?.chatTypes ?? [];
+  if (chatTypes.length > 0 && chatTypes.every((chatType) => chatType === "direct")) {
+    return "user";
+  }
+
   return "group";
 }
 

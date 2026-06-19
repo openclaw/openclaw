@@ -226,9 +226,9 @@ Message ID: 6655442331193344`,
     });
     await Promise.resolve();
 
-    expect(subscription.getExternalActionEvidence()).toEqual([
+    expect(subscription.getMessageDeliveryEvidence()).toEqual([
       expect.objectContaining({
-        actionFamily: "sms",
+        channel: "sms",
         toolName: "message",
         providerId: "SM_proof_redacted_1234",
         status: "queued",

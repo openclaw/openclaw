@@ -1,10 +1,7 @@
 // Skill filter tests cover active skill selection for isolated cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
   dispatchCronDeliveryMock,
@@ -24,8 +21,6 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const makeSkillJob = makeIsolatedAgentTurnJob;
-const makeSkillParams = makeIsolatedAgentTurnParams;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -60,7 +55,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   async function runSkillFilterCase(overrides?: Record<string, unknown>) {
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams(overrides));
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
     expect(result.status).toBe("ok");
     return result;
   }
@@ -233,8 +228,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
-          job: makeSkillJob({
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
             payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
           }),
         }),
@@ -254,7 +249,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
+        makeIsolatedAgentParamsFixture({
           cfg: {
             agents: {
               defaults: {
@@ -263,7 +258,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
               },
             },
           },
-          job: makeSkillJob({
+          job: makeIsolatedAgentJobFixture({
             payload: {
               kind: "agentTurn",
               message: "test",
@@ -287,8 +282,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeSkillParams({
-          job: makeSkillJob({
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
             payload: { kind: "agentTurn", message: "test", model: "openai/" },
           }),
         }),
@@ -327,7 +322,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       mockCliFallbackInvocation();
 
       const runPromise = runCronIsolatedAgentTurn(
-        makeSkillParams({ abortSignal: abortController.signal }),
+        makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
       );
       await cliStarted;
       abortController.abort("cron: job execution timed out");
@@ -364,7 +359,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         isNewSession: true,
       });
 
-      await runCronIsolatedAgentTurn(makeSkillParams());
+      await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
       // Fresh session: cliSessionId must be undefined, not the stored value.
@@ -395,7 +390,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         isNewSession: false,
       });
 
-      await runCronIsolatedAgentTurn(makeSkillParams());
+      await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
       expect(runCliAgentMock).toHaveBeenCalledOnce();
       // Continuation: cliSessionId should be passed through for session resume.

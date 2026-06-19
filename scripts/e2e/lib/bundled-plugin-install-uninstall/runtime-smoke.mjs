@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
 const RUNTIME_PORT_BASE_ENV = "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE";
@@ -31,6 +32,7 @@ const RPC_READY_TIMEOUT_MS = readPositiveIntEnv(
 );
 const COMMAND_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS", 120000);
 const HTTP_PROBE_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS", 5000);
+const HTTP_PROBE_BODY_MAX_BYTES = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = readPositiveIntEnv(
   "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS",
   10000,
@@ -693,18 +695,37 @@ export async function waitForReady(params) {
 async function fetchHttpProbeStatus(port, pathName, options = {}) {
   const { parseJson = false, timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
   const controller = new AbortController();
-  const clearProbeTimer = timeoutMs
-    ? setTimeout(() => {
-        controller.abort();
-      }, timeoutMs)
+  const timeoutError = Object.assign(
+    new Error(`${pathName} probe timed out after ${timeoutMs}ms`),
+    {
+      code: "ETIMEDOUT",
+    },
+  );
+  let clearProbeTimer;
+  const timeoutPromise = timeoutMs
+    ? new Promise((_, reject) => {
+        clearProbeTimer = setTimeout(() => {
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, timeoutMs);
+        clearProbeTimer.unref?.();
+      })
     : undefined;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
-      signal: controller.signal,
-    });
+    const res = await Promise.race([
+      fetch(`http://127.0.0.1:${port}${pathName}`, {
+        signal: controller.signal,
+      }),
+      ...(timeoutPromise ? [timeoutPromise] : []),
+    ]);
     const status = { ok: res.ok, status: res.status, body: undefined, bodyText: undefined };
     if (parseJson) {
-      const text = await res.text();
+      const text = await readBoundedResponseText(
+        res,
+        `${pathName} probe`,
+        HTTP_PROBE_BODY_MAX_BYTES,
+        timeoutPromise,
+      );
       status.bodyText = text;
       if (text.trim()) {
         try {
