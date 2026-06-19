@@ -2,10 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Changes
-
 ## 2026.6.9
 
 ### Highlights
