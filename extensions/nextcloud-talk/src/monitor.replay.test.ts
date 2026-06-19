@@ -182,6 +182,23 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
 });
 
 describe("createNextcloudTalkWebhookServer payload validation", () => {
+  function createSignedWebhookRequest(payload: unknown) {
+    const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    return {
+      body,
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+    };
+  }
+
   it("rejects malformed webhook payloads after signature verification", async () => {
     const payload = {
       type: "Create",
@@ -195,11 +212,7 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
       },
       target: { type: "Collection", id: "", name: "Room 1" },
     };
-    const body = JSON.stringify(payload);
-    const { random, signature } = generateNextcloudTalkSignature({
-      body,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-    });
+    const { body, headers } = createSignedWebhookRequest(payload);
     const harness = await startWebhookServer({
       path: "/nextcloud-invalid-payload",
       onMessage: vi.fn(),
@@ -207,17 +220,81 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
     const response = await fetch(harness.webhookUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-nextcloud-talk-random": random,
-        "x-nextcloud-talk-signature": signature,
-        "x-nextcloud-talk-backend": "https://nextcloud.example",
-      },
+      headers,
       body,
     });
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid payload format" });
+  });
+
+  it("rejects malformed JSON after signature verification", async () => {
+    const { body, headers } = createSignedWebhookRequest("{");
+    const harness = await startWebhookServer({
+      path: "/nextcloud-malformed-json",
+      onMessage: vi.fn(),
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid payload format" });
+  });
+
+  it("returns 200 for non-message events (file shares, cards, etc.)", async () => {
+    const fileSharePayload = {
+      type: "Create",
+      actor: { type: "Person", id: "alice", name: "Alice" },
+      object: {
+        type: "Document",
+        id: "file-42",
+        name: "report.pdf",
+        content: "",
+        mediaType: "application/pdf",
+      },
+      target: { type: "Collection", id: "room-1", name: "Room 1" },
+    };
+    const { body, headers } = createSignedWebhookRequest(fileSharePayload);
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-non-message-event",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 for setup ping payloads with non-Note object type", async () => {
+    const setupPayload = {
+      type: "Create",
+      object: { type: "Application", id: "bot-setup", name: "setup" },
+    };
+    const { body, headers } = createSignedWebhookRequest(setupPayload);
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-setup-ping",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
   });
 });
 
