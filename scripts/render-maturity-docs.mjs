@@ -326,6 +326,42 @@ function countStatuses(entries) {
   return counts;
 }
 
+function numberText(value) {
+  return Number.isFinite(value) ? String(value) : "";
+}
+
+function countText(counts) {
+  if (!counts || typeof counts !== "object") {
+    return "";
+  }
+  return `${counts.fulfilled ?? 0}/${counts.total ?? 0} (${numberText(counts.fulfillmentPercent)}%)`;
+}
+
+function readScorecard(payload, filePath) {
+  const scorecard = payload?.scorecard;
+  if (scorecard === undefined) {
+    return undefined;
+  }
+  assertObject(scorecard, `${filePath}.scorecard`);
+  assertObject(scorecard.run, `${filePath}.scorecard.run`);
+  assertObject(scorecard.categories, `${filePath}.scorecard.categories`);
+  assertObject(scorecard.features, `${filePath}.scorecard.features`);
+  assertArray(scorecard.categoryReports, `${filePath}.scorecard.categoryReports`);
+  for (const [index, category] of scorecard.categoryReports.entries()) {
+    assertObject(category, `${filePath}.scorecard.categoryReports[${index}]`);
+    assertString(category.id, `${filePath}.scorecard.categoryReports[${index}].id`);
+    assertString(category.surfaceId, `${filePath}.scorecard.categoryReports[${index}].surfaceId`);
+    assertString(category.name, `${filePath}.scorecard.categoryReports[${index}].name`);
+    assertString(category.status, `${filePath}.scorecard.categoryReports[${index}].status`);
+    assertObject(category.features, `${filePath}.scorecard.categoryReports[${index}].features`);
+    assertArray(
+      category.missingCoverageIds,
+      `${filePath}.scorecard.categoryReports[${index}].missingCoverageIds`,
+    );
+  }
+  return scorecard;
+}
+
 function readEvidenceSummaries(evidenceDir) {
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -337,7 +373,7 @@ function readEvidenceSummaries(evidenceDir) {
       evidenceMode: payload.evidenceMode ?? "",
       entryCount: entries.length,
       statuses: countStatuses(entries),
-      scorecard: payload.scorecard,
+      scorecard: readScorecard(payload, filePath),
     };
   });
 }
@@ -354,17 +390,15 @@ function renderEvidenceSection(evidenceSummaries) {
   }
 
   lines.push(
+    "These rows come from the deterministic `scorecard` field in each `qa-evidence.json` artifact. Subjective maturity scores still come from `docs/maturity-scores.yaml`.",
+    "",
     "| Evidence file | Profile | Mode | Generated | Entries | Result counts | Category fulfillment | Feature fulfillment |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const item of evidenceSummaries) {
     const scorecard = item.scorecard;
-    const categoryFulfillment = scorecard?.categories
-      ? `${scorecard.categories.fulfilled}/${scorecard.categories.total} (${scorecard.categories.fulfillmentPercent}%)`
-      : "";
-    const featureFulfillment = scorecard?.features
-      ? `${scorecard.features.fulfilled}/${scorecard.features.total} (${scorecard.features.fulfillmentPercent}%)`
-      : "";
+    const categoryFulfillment = countText(scorecard?.categories);
+    const featureFulfillment = countText(scorecard?.features);
     const statusText = `pass ${item.statuses.pass}, fail ${item.statuses.fail}, blocked ${item.statuses.blocked}, skipped ${item.statuses.skipped}`;
     lines.push(
       `| ${yamlCode(item.path)} | ${markdownEscape(item.profile)} | ${markdownEscape(item.evidenceMode)} | ${markdownEscape(item.generatedAt)} | ${item.entryCount} | ${markdownEscape(statusText)} | ${markdownEscape(categoryFulfillment)} | ${markdownEscape(featureFulfillment)} |`,
@@ -377,17 +411,15 @@ function renderEvidenceSection(evidenceSummaries) {
   );
   if (categoryRows.length > 0) {
     lines.push(
-      "### Evidence category status",
+      "### Deterministic QA scorecard",
       "",
-      "| Profile | Category | Surface | Status | Features | Missing coverage IDs |",
-      "| --- | --- | --- | --- | --- | --- |",
+      "| Profile | Surface | Category | QA status | Features | Secondary-only | Missing coverage IDs |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
     );
     for (const { item, category } of categoryRows) {
-      const features = category.features
-        ? `${category.features.fulfilled}/${category.features.total} (${category.features.fulfillmentPercent}%)`
-        : "";
+      const features = countText(category.features);
       lines.push(
-        `| ${markdownEscape(item.profile)} | ${yamlCode(category.id)} | ${yamlCode(category.surfaceId)} | ${markdownEscape(category.status)} | ${markdownEscape(features)} | ${markdownEscape((category.missingCoverageIds ?? []).join(", "))} |`,
+        `| ${markdownEscape(item.profile)} | ${yamlCode(category.surfaceId)} | ${yamlCode(category.id)} ${markdownEscape(category.name)} | ${markdownEscape(category.status)} | ${markdownEscape(features)} | ${category.features.secondaryOnly ?? 0} | ${markdownEscape((category.missingCoverageIds ?? []).join(", "))} |`,
       );
     }
     lines.push("");

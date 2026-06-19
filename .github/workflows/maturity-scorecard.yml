@@ -53,7 +53,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -105,7 +105,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload maturity docs artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maturity-scorecard-docs-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/maturity-docs/
