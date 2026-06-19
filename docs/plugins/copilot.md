@@ -185,8 +185,9 @@ The harness reads its config from per-attempt input
 OpenClaw plugin hooks do not need Copilot-specific attempt configuration. The
 harness runs `before_prompt_build` (and the legacy `before_agent_start`
 compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
-standard harness helpers. Bridged OpenClaw tools continue to run
-`before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
+standard harness helpers. Successful SDK compactions also run
+`before_compaction` and `after_compaction`. Bridged OpenClaw tools continue to
+run `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
 native SDK-only callbacks that have no portable equivalent.
 
 Nothing in the rest of OpenClaw needs to know about these fields. Other

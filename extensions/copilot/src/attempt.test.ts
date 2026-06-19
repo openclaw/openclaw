@@ -376,6 +376,44 @@ describe("runCopilotAttempt", () => {
     );
   });
 
+  it("runs generic compaction hooks for successful Copilot SDK compactions", async () => {
+    const beforeCompaction = vi.fn();
+    const afterCompaction = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_compaction", handler: beforeCompaction },
+        { hookName: "after_compaction", handler: afterCompaction },
+      ]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          session.emit("session.compaction_complete", { success: true });
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+
+    await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    expect(beforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageCount: 1,
+        sessionFile: "session.json",
+      }),
+      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+    );
+    expect(afterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactedCount: -1,
+        messageCount: 1,
+        sessionFile: "session.json",
+      }),
+      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+    );
+  });
+
   it("preserves native Copilot SDK hooks alongside generic lifecycle hooks", async () => {
     const sdk = makeFakeSdk();
     const onPreToolUse = vi.fn();
@@ -1555,6 +1593,22 @@ describe("runCopilotAttempt", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("marks a timeout during active SDK compaction", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.timedOutDuringCompaction).toBe(true);
   });
 
   it("G1: SDK timeout rejection (Error 'Timeout after Nms waiting for session.idle') sets timedOut, leaves promptError undefined, and does NOT abort the session", async () => {

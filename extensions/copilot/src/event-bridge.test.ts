@@ -15,6 +15,8 @@ const REGISTERED_EVENT_TYPES = [
   "assistant.usage",
   "tool.execution_start",
   "tool.execution_complete",
+  "session.compaction_start",
+  "session.compaction_complete",
   "session.error",
   "abort",
 ] as const;
@@ -603,6 +605,36 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().completedCount).toBe(1);
     expect(bridge.snapshot().toolMetas).toEqual([]);
+  });
+
+  it("serializes compaction callbacks and clears active compaction state on completion", async () => {
+    const session = createFakeSession();
+    const calls: string[] = [];
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onCompactionStart: () => {
+        calls.push("start");
+      },
+      onCompactionComplete: ({ success }) => {
+        calls.push(`complete:${success}`);
+      },
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    await bridge.awaitCompactionChain();
+
+    expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
+    expect(bridge.isCompacting()).toBe(false);
   });
 
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {

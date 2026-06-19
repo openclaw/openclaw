@@ -22,8 +22,8 @@ import {
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
-  awaitAgentHarnessAgentEndHook,
-  runAgentHarnessAgentEndHook,
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
@@ -368,7 +368,7 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
 }
 
-type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 
 function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
   return !params.messageChannel && !params.messageProvider;
@@ -379,10 +379,10 @@ async function runCodexAgentEndHook(
   hookParams: CodexAgentEndHookParams,
 ): Promise<void> {
   if (shouldAwaitCodexAgentEndHook(params)) {
-    await awaitAgentHarnessAgentEndHook(hookParams);
+    await awaitAgentEndSideEffects(hookParams);
     return;
   }
-  runAgentHarnessAgentEndHook(hookParams);
+  runAgentEndSideEffects(hookParams);
 }
 
 export async function runCodexAppServerAttempt(

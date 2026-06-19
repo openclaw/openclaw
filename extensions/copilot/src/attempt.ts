@@ -17,8 +17,10 @@ import {
   resolveSessionAgentIds,
   resolveUserPath,
   runAgentHarnessAfterToolCallHook,
-  awaitAgentHarnessAgentEndHook,
-  runAgentHarnessAgentEndHook,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -58,7 +60,7 @@ const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
-type CopilotAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 export type CopilotSessionConfig = Pick<
   SessionConfig,
   | "availableTools"
@@ -143,10 +145,10 @@ async function runCopilotAgentEndHook(
   hookParams: CopilotAgentEndHookParams,
 ): Promise<void> {
   if (!params.messageChannel && !params.messageProvider) {
-    await awaitAgentHarnessAgentEndHook(hookParams);
+    await awaitAgentEndSideEffects(hookParams);
     return;
   }
-  runAgentHarnessAgentEndHook(hookParams);
+  runAgentEndSideEffects(hookParams);
 }
 
 async function finalizeCopilotAttempt(
@@ -554,6 +556,29 @@ export async function runCopilotAttempt(
     }
     bridge = attachEventBridge(session, {
       onAssistantDelta: input.onAssistantDelta,
+      onCompactionStart: () => {
+        const sessionFile = readString(input.sessionFile);
+        if (!sessionFile) {
+          return;
+        }
+        return runAgentHarnessBeforeCompactionHook({
+          sessionFile,
+          messages,
+          ctx: hookContext,
+        });
+      },
+      onCompactionComplete: ({ success }) => {
+        const sessionFile = readString(input.sessionFile);
+        if (!success || !sessionFile) {
+          return;
+        }
+        return runAgentHarnessAfterCompactionHook({
+          sessionFile,
+          messages,
+          compactedCount: -1,
+          ctx: hookContext,
+        });
+      },
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted,
     });
@@ -589,6 +614,7 @@ export async function runCopilotAttempt(
       });
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
+      await bridge.awaitCompactionChain();
       if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
@@ -628,6 +654,7 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
+    await bridge?.awaitCompactionChain();
     bridge?.detach();
     params.abortSignal?.removeEventListener("abort", onAbort);
 
@@ -772,6 +799,7 @@ export async function runCopilotAttempt(
     sdkSessionId,
     sessionIdUsed,
     timedOut,
+    timedOutDuringCompaction: timedOut && bridge?.isCompacting() === true,
     toolMetas: snap ? [...snap.toolMetas] : [],
     usage: snap?.usage,
     yieldDetected,
@@ -827,6 +855,7 @@ function createResult(
     sdkSessionId?: string;
     sessionIdUsed?: string;
     timedOut?: boolean;
+    timedOutDuringCompaction?: boolean;
     toolMetas?: Array<{ meta?: string; toolName: string }>;
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
@@ -869,7 +898,7 @@ function createResult(
     sessionFileUsed: readString(params.sessionFile),
     sessionIdUsed: state.sessionIdUsed ?? readString(params.sessionId) ?? "copilot-session",
     timedOut,
-    timedOutDuringCompaction: false,
+    timedOutDuringCompaction: state.timedOutDuringCompaction === true,
     toolMetas,
     yieldDetected: state.yieldDetected === true,
   };

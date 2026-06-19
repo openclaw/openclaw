@@ -36,6 +36,8 @@ export interface SessionLike {
 
 export interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
+  onCompactionComplete?: (payload: { success: boolean }) => void | Promise<void>;
+  onCompactionStart?: () => void | Promise<void>;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
 }
@@ -57,7 +59,9 @@ export interface BuildAssistantMessageArgs {
 
 export interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
+  awaitCompactionChain(): Promise<void>;
   awaitDeltaChain(): Promise<void>;
+  isCompacting(): boolean;
   snapshot(): EventBridgeSnapshot;
   buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
   finalizeAssistantTexts(): string[];
@@ -82,8 +86,10 @@ export function attachEventBridge(
   const toolNamesByCallId = new Map<string, string>();
   let startedCount = 0;
   let completedCount = 0;
+  let activeCompactionCount = 0;
   let deltaQueue = Promise.resolve();
   let deltaChain = Promise.resolve();
+  let compactionChain = Promise.resolve();
   let firstDeltaError: unknown;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
@@ -164,6 +170,18 @@ export function attachEventBridge(
     }
   });
 
+  registerListener(session, unsubscribeFns, "session.compaction_start", () => {
+    activeCompactionCount += 1;
+    enqueueCompactionCallback(options.onCompactionStart);
+  });
+
+  registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
+    activeCompactionCount = Math.max(0, activeCompactionCount - 1);
+    enqueueCompactionCallback(() =>
+      options.onCompactionComplete?.({ success: event.data.success }),
+    );
+  });
+
   registerListener(session, unsubscribeFns, "session.error", (event) => {
     if (!options.isAborted()) {
       streamError = createPromptError(
@@ -190,8 +208,14 @@ export function attachEventBridge(
       lastAssistantEvent = result;
       return true;
     },
+    awaitCompactionChain() {
+      return compactionChain;
+    },
     awaitDeltaChain() {
       return deltaChain;
+    },
+    isCompacting() {
+      return activeCompactionCount > 0;
     },
     snapshot() {
       return {
@@ -233,6 +257,14 @@ export function attachEventBridge(
       unsubscribeFns.length = 0;
     },
   };
+
+  function enqueueCompactionCallback(callback: (() => void | Promise<void>) | undefined): void {
+    if (!callback) {
+      return;
+    }
+    const queued = compactionChain.then(callback, callback);
+    compactionChain = queued.catch(() => undefined);
+  }
 }
 
 function buildAssistantMessage(params: {
