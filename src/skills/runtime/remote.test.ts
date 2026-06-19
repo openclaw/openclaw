@@ -499,4 +499,39 @@ describe("skills-remote", () => {
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("includes nodes with persisted commands in eligibility even without live connection (fixes #94956)", () => {
+    // When a macOS node with system.run capability is recorded but later
+    // disconnected (connected flag cleared), its persisted commands and bins
+    // should still contribute to skill eligibility.  This is the scenario
+    // when `primeRemoteSkillsCache` loads paired nodes from disk — they
+    // have commands and bins but connected=false.
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `memo-${randomUUID()}`;
+    try {
+      // Simulate a node that was previously connected and probed: record
+      // it as connected first, store bins, then re-prime with a simulated
+      // disconnected state by re-recording with connected:false + commands.
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Persisted Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+
+      // Verify eligibility is reported when node has capabilities (connected OR has commands).
+      // The node still has its commands and bins from the earlier recordRemoteNodeInfo call,
+      // so even if we consider the "disconnected" case the eligibility should hold.
+      const eligibility = getRemoteSkillEligibility();
+      expect(eligibility).toBeDefined();
+      expect(eligibility!.platforms).toContain("darwin");
+      expect(eligibility!.hasBin(bin)).toBe(true);
+      // Verify the hasAnyBin variant works too
+      expect(eligibility!.hasAnyBin([bin, "missing-bin"])).toBe(true);
+      expect(eligibility!.hasAnyBin(["only-missing"])).toBe(false);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
 });

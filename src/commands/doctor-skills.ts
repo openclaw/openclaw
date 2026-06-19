@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { canExecRequestNode } from "../agents/exec-defaults.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
@@ -12,6 +13,7 @@ import {
   type GhConfigDiscoveryInput,
   type GhConfigDiscoveryResult,
 } from "../skills/lifecycle/gh-config-discovery.js";
+import { primeRemoteSkillsCache, getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   collectUnavailableAgentSkills,
@@ -110,9 +112,17 @@ export async function maybeRepairSkillReadiness(params: {
 }): Promise<OpenClawConfig> {
   const agentId = resolveDefaultAgentId(params.cfg);
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+  // Include remote macOS node eligibility so skills requiring darwin or
+  // macOS-only binaries are correctly reported.  Fixes #94956.
+  await primeRemoteSkillsCache();
   const report = buildWorkspaceSkillStatus(workspaceDir, {
     config: params.cfg,
     agentId,
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({ cfg: params.cfg, agentId }),
+      }),
+    },
   });
   const githubHint = describeGhConfigDirHint(report.skills);
   if (githubHint.length > 0) {

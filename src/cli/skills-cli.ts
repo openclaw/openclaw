@@ -99,7 +99,22 @@ async function loadSkillsStatusReport(
 ): Promise<SkillStatusReport> {
   const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
   const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
+  // Include remote macOS node eligibility so skills requiring darwin or
+  // macOS-only binaries (e.g. apple-notes / memo) are correctly reported
+  // as eligible when a paired Mac node has the required capabilities.
+  // Fixes #94956.
+  const [{ getRemoteSkillEligibility, primeRemoteSkillsCache }, { canExecRequestNode }] =
+    await Promise.all([
+      import("../skills/runtime/remote.js"),
+      import("../agents/exec-defaults.js"),
+    ]);
+  await primeRemoteSkillsCache();
+  const eligibility = {
+    remote: getRemoteSkillEligibility({
+      advertiseExecNode: canExecRequestNode({ cfg: config, agentId }),
+    }),
+  };
+  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId, eligibility });
 }
 
 async function runSkillsAction(

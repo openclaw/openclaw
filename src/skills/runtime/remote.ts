@@ -451,9 +451,12 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
 export function getRemoteSkillEligibility(options?: {
   advertiseExecNode?: boolean;
 }): SkillEligibilityContext["remote"] | undefined {
+  // Include nodes with persisted capabilities (e.g. from primeRemoteSkillsCache)
+  // even when not currently connected, so CLI tools like `skills check` can
+  // report accurate eligibility.  Fixes #94956.
   const macNodes = [...remoteNodes.values()].filter(
     (node) =>
-      node.connected &&
+      (node.connected || (node.commands?.length ?? 0) > 0) &&
       isMacPlatform(node.platform, node.deviceFamily) &&
       supportsSystemRun(node.commands),
   );
