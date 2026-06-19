@@ -152,6 +152,54 @@ describe("message delivery receipts", () => {
     ]);
   });
 
+  it("normalizes existing deliveryStatus success envelopes from AgentToolResult details", () => {
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          details: {
+            channel: "sms",
+            messageId: "SM-delivery-status",
+            chatId: "+15551234567",
+            deliveryStatus: "sent",
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-delivery-status",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
+  it("normalizes existing bare ok message-id envelopes as sent evidence", () => {
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          details: {
+            channel: "sms",
+            messageId: "SM-ok-status",
+            chatId: "+15551234567",
+            status: "ok",
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-ok-status",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
   it("rejects failed and non-SMS message receipts", () => {
     expect(
       normalizeMessageToolDeliveryEvidence({

@@ -13,7 +13,14 @@ export type MessageDeliveryEvidence = {
   recipient?: string;
 };
 
-const SUCCESS_STATUSES = new Set(["accepted", "queued", "accepted/queued", "sent", "delivered"]);
+const SUCCESS_STATUSES = new Map([
+  ["accepted", "accepted"],
+  ["queued", "queued"],
+  ["accepted/queued", "accepted/queued"],
+  ["sent", "sent"],
+  ["delivered", "delivered"],
+  ["ok", "sent"],
+]);
 const MESSAGE_TOOL_SMS_CHANNEL = "sms";
 
 function readPath(value: unknown, path: string): unknown {
@@ -57,7 +64,7 @@ function asRecordArray(value: unknown): Record<string, unknown>[] {
 
 function normalizeSuccessStatus(value: unknown): string | undefined {
   const status = normalizeOptionalString(value)?.toLowerCase();
-  return status && SUCCESS_STATUSES.has(status) ? status : undefined;
+  return status ? SUCCESS_STATUSES.get(status) : undefined;
 }
 
 function normalizeMessageToolSmsReceiptRecord(params: {
@@ -78,7 +85,8 @@ function normalizeMessageToolSmsReceiptRecord(params: {
   const providerId =
     normalizeStringifiedOptionalString(params.record.messageId) ??
     normalizeStringifiedOptionalString(params.record.platformMessageId);
-  const rawStatus = meta?.status ?? params.record.status;
+  const rawStatus =
+    params.record.deliveryStatus ?? meta?.deliveryStatus ?? meta?.status ?? params.record.status;
   const status = normalizeSuccessStatus(rawStatus);
   if (normalizeOptionalString(rawStatus) && !status) {
     return null;
