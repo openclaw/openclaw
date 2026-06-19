@@ -155,7 +155,7 @@ describe("registerWorkboardCli", () => {
 
   it("hides archived cards by default in list output", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const active = await store.create({ title: "Active card" });
+    const _active = await store.create({ title: "Active card" });
     const archived = await store.create({ title: "Archived card" });
     await store.archive(archived.id, true);
     const program = createProgram(store);
@@ -170,7 +170,7 @@ describe("registerWorkboardCli", () => {
 
   it("includes archived cards with --include-archived flag", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const active = await store.create({ title: "Active card" });
+    const _active = await store.create({ title: "Active card" });
     const archived = await store.create({ title: "Archived card" });
     await store.archive(archived.id, true);
     const program = createProgram(store);
@@ -185,7 +185,7 @@ describe("registerWorkboardCli", () => {
 
   it("hides archived cards in JSON output by default", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const active = await store.create({ title: "Active card" });
+    const _active = await store.create({ title: "Active card" });
     const archived = await store.create({ title: "Archived card" });
     await store.archive(archived.id, true);
     const program = createProgram(store);
