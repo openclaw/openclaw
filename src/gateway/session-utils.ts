@@ -1300,6 +1300,9 @@ function listDirectSessionAccountDisplayNameCandidates(params: {
   appendAccountIdCandidate(candidates, seen, params.entry?.origin?.accountId);
   appendAccountIdCandidate(candidates, seen, params.entry?.lastAccountId);
   appendAccountIdCandidate(candidates, seen, params.parsed.accountId);
+  if (params.parsed.agentId !== DEFAULT_AGENT_ID) {
+    appendAccountIdCandidate(candidates, seen, params.parsed.agentId);
+  }
   appendAccountIdCandidate(
     candidates,
     seen,

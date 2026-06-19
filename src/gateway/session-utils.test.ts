@@ -875,6 +875,34 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("Work Feishu");
   });
 
+  test("buildGatewaySessionRow displayName uses non-default agent account before configured default account", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: { name: "Main Bot" },
+            quote: { name: "Quote Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:quote:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:quote:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Quote Assistant");
+  });
+
   test("buildGatewaySessionRow displayName uses default account before agent id", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
