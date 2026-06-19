@@ -339,6 +339,7 @@ import {
   isPrimaryBootstrapRun,
   remapInjectedContextFilesToWorkspace,
 } from "./attempt.bootstrap-context.js";
+import { recoverRecentSensitiveImageRejection } from "./image-rejection-recovery.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import {
@@ -4891,6 +4892,24 @@ export async function runEmbeddedAttempt(
           });
 
           if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
+            const rawPromptError = formatErrorMessage(promptError);
+            try {
+              const imageRecovery = recoverRecentSensitiveImageRejection({
+                sessionManager: activeSessionManager,
+                rawError: rawPromptError,
+                sessionFile: params.sessionFile,
+                sessionKey: params.sessionKey,
+                agentId: sessionAgentId,
+                runId: params.runId,
+                sessionId: params.sessionId,
+              });
+              if (imageRecovery.recovered) {
+                activeSession.agent.state.messages =
+                  activeSessionManager.buildSessionContext().messages;
+              }
+            } catch (recoveryErr) {
+              log.warn(`failed to recover provider-rejected image history: ${String(recoveryErr)}`);
+            }
             try {
               activeSessionManager.appendCustomEntry("openclaw:prompt-error", {
                 timestamp: Date.now(),
@@ -4899,7 +4918,7 @@ export async function runEmbeddedAttempt(
                 provider: params.provider,
                 model: params.modelId,
                 api: params.model.api,
-                error: formatErrorMessage(promptError),
+                error: rawPromptError,
               });
             } catch (entryErr) {
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
