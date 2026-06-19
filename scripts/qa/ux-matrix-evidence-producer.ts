@@ -516,7 +516,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
             ]
           : []),
       ],
-      coverageIds: ["ui.control", "control-ui"],
+      coverageIds: ["ui.control", "gateway.control-ui-hosting"],
       failureReason: matrixScreenshotResult.failureReason,
       stage: "screenshot-artifact",
       status: matrixScreenshotResult.status,
@@ -526,7 +526,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     },
     {
       artifacts: [{ kind: "log", path: relativeToArtifactBase(options.artifactBase, cliLogPath) }],
-      coverageIds: ["cli-entrypoint", "status-snapshots"],
+      coverageIds: ["cli.entrypoint", "cli.status-snapshots"],
       failureReason: cliResult.failureReason,
       stage: "entrypoint-help",
       status: cliResult.status,

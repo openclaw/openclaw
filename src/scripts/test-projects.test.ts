@@ -884,6 +884,7 @@ describe("test-projects args", () => {
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
+          "test/scripts/openai-chat-tools-client.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
@@ -1009,6 +1010,25 @@ describe("test-projects args", () => {
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
     ).toStrictEqual([]);
+  });
+
+  it("routes auth setup script changes to the focused tooling planner test", () => {
+    const changedPaths = ["scripts/setup-auth-system.sh"];
+
+    expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/test-projects.test.ts"],
+    });
+    expect(
+      buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/test-projects.test.ts"],
+        watchMode: false,
+      },
+    ]);
   });
 
   it("keeps core test-only changes on their owning test lane", () => {

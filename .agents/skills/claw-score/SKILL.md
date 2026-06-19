@@ -30,6 +30,9 @@ out of this repo. If a score needs private evidence, use the redacted
   completeness-instruction paths.
 - Feature `coverageIds` are ANDed proof targets, not aliases. A feature may
   list multiple IDs when each ID proves part of one capability.
+- Coverage IDs use dotted `namespace.behavior` form, with lowercase
+  alphanumeric/dash segments. Profile, surface, and category IDs may remain
+  dashed or dotted.
 - Keep categories and feature names unique, product-shaped, and broader than raw
   coverage IDs. Do not promote generic IDs into standalone feature names.
 - Avoid duplicate coverage-ID bundles under different feature names in one

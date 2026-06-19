@@ -87,14 +87,16 @@ const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
 const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
   "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+const RELEASE_USER_JOURNEY_DOCKER_E2E_PATH = "scripts/e2e/release-user-journey-docker.sh";
 const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
 const GATEWAY_NETWORK_DOCKER_E2E_PATH = "scripts/e2e/gateway-network-docker.sh";
+const BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH = "scripts/e2e/browser-cdp-snapshot-docker.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
-  "scripts/e2e/browser-cdp-snapshot-docker.sh",
+  BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH,
   "scripts/e2e/qr-import-docker.sh",
   "scripts/lib/docker-e2e-image.sh",
   "scripts/sandbox-browser-setup.sh",
@@ -1054,6 +1056,29 @@ fi
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  it("fails fast on invalid browser CDP snapshot byte limits", () => {
+    const result = spawnSync("bash", [BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: "64kb",
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: 64kb");
+  });
+
+  it("forwards browser CDP snapshot byte limits into the Docker runner", () => {
+    const runner = readFileSync(BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain(
+      "docker_e2e_read_positive_int_env OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES 524288",
+    );
+    expect(runner).toContain('-e "OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES=$SNAPSHOT_MAX_BYTES"');
   });
 
   it("fails Docker commands fast when timeout is unavailable", () => {
@@ -2236,6 +2261,32 @@ fi
     expect(runner).toContain(
       'openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured',
     );
+    expect(runner).toContain(
+      'PROBE_TIMEOUT_MS="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS 60000)"',
+    );
+    expect(runner).toContain(
+      "openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS 5000",
+    );
+    expect(runner).toContain(
+      "openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES 1048576",
+    );
+    expect(runner).toContain('-e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"');
+    expect(runner).toContain(
+      '-e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"',
+    );
+    expect(runner).toContain(
+      '-e OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES="$PROBE_MAX_BODY_BYTES"',
+    );
+    expect(runner).toContain("readyz_probe_args=(");
+    expect(runner).toContain(
+      'readyz_probe_args+=(--allow-failing "$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING")',
+    );
+    expect(runner).toContain("readyz_probe_args+=(--allow-degraded-ready)");
+    expect(runner).toContain(
+      'node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${readyz_probe_args[@]}"',
+    );
+    expect(runner).toContain("OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING");
+    expect(runner).toContain("OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED");
 
     expect(publishedRunner).toContain(
       'COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
@@ -2291,6 +2342,9 @@ fi
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
     ["status budget", "OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS", "30s"],
+    ["probe timeout", "OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS", "soon"],
+    ["probe attempt timeout", "OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS", "0"],
+    ["probe body cap", "OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES", "64bytes"],
   ])("rejects invalid upgrade survivor Docker %s before Docker setup", (_label, envName, value) => {
     const result = spawnSync("bash", [UPGRADE_SURVIVOR_DOCKER_E2E_PATH], {
       encoding: "utf8",
@@ -2576,6 +2630,95 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain("cat /tmp/openclaw-codex-agent-after-uninstall.err");
   });
 
+  it.each([
+    [
+      "Codex npm plugin live",
+      CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH,
+      "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES",
+      "64kb",
+    ],
+    [
+      "npm onboard channel-agent",
+      NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+      "OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES",
+      "64kb",
+    ],
+    [
+      "plugins",
+      PLUGINS_DOCKER_E2E_PATH,
+      "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS",
+      "soon",
+    ],
+    [
+      "release user journey",
+      RELEASE_USER_JOURNEY_DOCKER_E2E_PATH,
+      "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES",
+      "64kb",
+    ],
+  ])(
+    "rejects invalid package assertion env before Docker setup for %s",
+    (_label, path, envName, value) => {
+      const result = spawnSync("bash", [path], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_SKIP_DOCKER_BUILD: "1",
+          [envName]: value,
+        },
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stderr).not.toContain("Docker image not found");
+    },
+  );
+
+  it("forwards package assertion env limits into Docker runners", () => {
+    const expectations = [
+      [
+        CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH,
+        [
+          ["OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES", "1048576"],
+          ["OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES", "65536"],
+          ["OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES", "64"],
+          ["OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES", "4096"],
+          ["OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES", "2097152"],
+        ],
+      ],
+      [
+        NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+        [
+          ["OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES", "1048576"],
+          ["OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES", "1048576"],
+        ],
+      ],
+      [
+        PLUGINS_DOCKER_E2E_PATH,
+        [
+          ["OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES", "1048576"],
+          ["OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", "30000"],
+        ],
+      ],
+      [
+        RELEASE_USER_JOURNEY_DOCKER_E2E_PATH,
+        [
+          ["OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS", "5000"],
+          ["OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES", "1048576"],
+        ],
+      ],
+    ] as const;
+
+    for (const [path, envs] of expectations) {
+      const runner = readFileSync(path, "utf8");
+      for (const [envName, fallback] of envs) {
+        expect(runner, `${path} reads ${envName}`).toContain(
+          `docker_e2e_read_positive_int_env ${envName} ${fallback}`,
+        );
+        expect(runner, `${path} forwards ${envName}`).toContain(`-e "${envName}=`);
+      }
+    }
+  });
+
   it("cleans package-backed onboarding and plugin Docker artifacts on every exit path", () => {
     for (const path of [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,
@@ -2604,7 +2747,19 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       'AGENT_OUTPUT_MAX_BYTES="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES 1048576)"',
     );
     expect(runner).toContain(
+      'AGENT_OUTPUT_DUMP_BYTES="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES 16384)"',
+    );
+    expect(runner).toContain(
+      'SESSION_SCAN_MAX_ENTRIES="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES 50000)"',
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES=$AGENT_OUTPUT_DUMP_BYTES"',
+    );
+    expect(runner).toContain(
       '-e "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES=$AGENT_OUTPUT_MAX_BYTES"',
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES=$SESSION_SCAN_MAX_ENTRIES"',
     );
     expect(runner).not.toContain(
       'AGENT_OUTPUT_MAX_BYTES="${OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES:-1048576}"',
@@ -2619,6 +2774,8 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
   it.each([
     ["timeout", "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS", "1e3"],
     ["output cap", "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES", "64kb"],
+    ["output dump cap", "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES", "64kb"],
+    ["session scan cap", "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES", "0"],
   ])(
     "rejects invalid live plugin tool Docker %s values before Docker setup",
     (_label, envName, value) => {
@@ -3217,20 +3374,81 @@ output="$(cat "$sampler_log")"
     expect(result.stderr).not.toContain("OPENAI_API_KEY was not available");
   });
 
-  it("rejects invalid Codex media path Docker timeouts before Docker setup", () => {
+  it.each([
+    ["timeout", "OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", "180s"],
+    ["log tail cap", "OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES", "64kb"],
+  ])("rejects invalid Codex media path Docker %s before Docker setup", (_label, envName, value) => {
     const result = spawnSync("bash", [CODEX_MEDIA_PATH_DOCKER_E2E_PATH], {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "180s",
+        [envName]: value,
         OPENCLAW_SKIP_DOCKER_BUILD: "1",
       },
     });
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 180s");
+    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
     expect(result.stderr).not.toContain("Docker image not found");
   });
+
+  it("forwards Codex media path client limits into Docker", () => {
+    const runner = readFileSync(CODEX_MEDIA_PATH_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain(
+      'LOG_TAIL_MAX_BYTES="$(docker_e2e_read_positive_int_env OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES 2097152)"',
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES=$LOG_TAIL_MAX_BYTES"',
+    );
+  });
+
+  it.each([
+    [MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH, "OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS", "1e3"],
+    [
+      MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH,
+      "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES",
+      "64bytes",
+    ],
+    [MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH, "OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS", "1e3"],
+    [
+      MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH,
+      "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES",
+      "64bytes",
+    ],
+  ])("rejects invalid MCP code-mode client env before setup", (scriptPath, envName, value) => {
+    const result = spawnSync("bash", [scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        [envName]: value,
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+    expect(result.stderr).not.toContain("Docker image not found");
+    expect(result.stderr).not.toContain("OPENAI_API_KEY was not available");
+  });
+
+  it.each([MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH, MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH])(
+    "forwards MCP code-mode client fetch limits into Docker",
+    (scriptPath) => {
+      const runner = readFileSync(scriptPath, "utf8");
+
+      expect(runner).toContain(
+        'CLIENT_TIMEOUT_MS="$(docker_e2e_read_positive_int_env OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS 300000)"',
+      );
+      expect(runner).toContain(
+        'CLIENT_BODY_MAX_BYTES="$(docker_e2e_read_positive_int_env OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES 1048576)"',
+      );
+      expect(runner).toContain('-e "OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS=$CLIENT_TIMEOUT_MS"');
+      expect(runner).toContain(
+        '-e "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES=$CLIENT_BODY_MAX_BYTES"',
+      );
+    },
+  );
 
   it.each([
     ["timeout", "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", "180s"],
@@ -3340,6 +3558,45 @@ output="$(cat "$sampler_log")"
     );
   });
 
+  it.each([
+    ["connect", "OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS", "100ms"],
+    ["ready", "OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS", "1e3"],
+  ])(
+    "rejects invalid gateway network client %s timeout before Docker setup",
+    (_label, envName, value) => {
+      const result = spawnSync("bash", [GATEWAY_NETWORK_DOCKER_E2E_PATH], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          [envName]: value,
+          OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        },
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stderr).not.toContain("Docker image not found");
+    },
+  );
+
+  it("forwards gateway network client timeout env into the Docker client", () => {
+    const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain(
+      "docker_e2e_read_positive_int_env OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS 80000",
+    );
+    expect(runner).toContain(
+      "docker_e2e_read_positive_int_env OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS 80000",
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS=$CLIENT_CONNECT_TIMEOUT_MS"',
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS=$CONNECT_READY_TIMEOUT_MS"',
+    );
+    expect(runner).toContain('"${CLIENT_LIMIT_ENV_ARGS[@]}"');
+  });
+
   it("requires TCP readiness for the gateway network runner", () => {
     const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
 
@@ -3427,7 +3684,15 @@ output="$(cat "$sampler_log")"
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
-    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300");
+    expect(wrapper).toContain(
+      "docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS 300",
+    );
+    expect(wrapper).toContain(
+      'docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS"',
+    );
+    expect(wrapper).toContain(
+      '-e OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS="$AGENT_TURN_TIMEOUT_SECONDS"',
+    );
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_PROFILE_FILE");
     expect(wrapper).toContain("OPENCLAW_PROFILE_FILE");
     expect(wrapper).toContain("OPENCLAW_TESTBOX_PROFILE_FILE");
@@ -3617,12 +3882,54 @@ output="$(cat "$sampler_log")"
     const sweep = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH, "utf8");
     const probe = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH, "utf8");
     const runtimeSmoke = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_RUNTIME_SMOKE_PATH, "utf8");
+    const forwardedRuntimeEnv = [
+      "OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS",
+      "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS",
+    ] as const;
 
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT");
-    expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
+    for (const envName of forwardedRuntimeEnv) {
+      expect(runner, `${envName} forwarded by Docker wrapper`).toContain(envName);
+      expect(probe + runtimeSmoke, `${envName} consumed by probe/runtime smoke`).toContain(envName);
+    }
     expect(runner).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TRACE");
+    for (const [envName, fallback] of [
+      ["OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS", "30000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES", "4194304"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS", "1048576"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES", "262144"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES", "16777216"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS", "900000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS", "60000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS", "210000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS", "1000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS", "120000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS", "5000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS", "10000"],
+      ["OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS", "1000"],
+    ] as const) {
+      expect(runner, `${envName} host validation`).toContain(
+        `docker_e2e_read_positive_int_env ${envName} ${fallback}`,
+      );
+      expect(runner, `${envName} Docker forwarding`).toContain(`-e "${envName}=`);
+    }
+    expect(runner).toContain(
+      "docker_e2e_read_tcp_port_env OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE 19000",
+    );
+    expect(runner).toContain('-e "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE=$RUNTIME_PORT_BASE"');
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
     expect(runner).toContain('tee "$RUN_LOG"');
     expect(runner).not.toContain('cat "$RUN_LOG"');
@@ -3642,6 +3949,30 @@ output="$(cat "$sampler_log")"
     expect(sweep).toContain("assert-installed");
     expect(sweep).toContain("assert-uninstalled");
   });
+
+  it.each([
+    ["list timeout", "OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS", "100ms"],
+    ["runtime port base", "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", "99999"],
+    ["runtime log scan", "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES", "64bytes"],
+    ["runtime command timeout", "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS", "soon"],
+    ["runtime teardown grace", "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS", "0"],
+  ])(
+    "rejects invalid bundled plugin Docker %s values before Docker setup",
+    (_label, envName, value) => {
+      const result = spawnSync("bash", [BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_SKIP_DOCKER_BUILD: "1",
+          [envName]: value,
+        },
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stderr).not.toContain("Docker image not found");
+    },
+  );
 
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
