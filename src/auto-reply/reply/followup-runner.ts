@@ -37,6 +37,10 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  launchMirrorDispatch,
+  type MirrorDispatchHandle,
+} from "../../infra/outbound/mirror-dispatch.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -625,6 +629,53 @@ export function createFollowupRunner(params: {
         }
       }
       const runId = crypto.randomUUID();
+      // Pin-from-here mirror for the QUEUED path. The inline launch
+      // (agent-runner-execution.ts:1783) is unreachable here: a queued turn returns
+      // at agent-runner.ts (enqueue-followup) before runAgentTurnWithFallback, so this
+      // drain is the sole owner of the mirror for follow-up turns. Bind originRunId to
+      // THIS `runId` — the same id passed to runEmbeddedAgent below, under which
+      // embedded-agent-subscribe emits the assistant stream — so the resolver's
+      // `evt.runId === originRunId` gate accepts the run's events (otherwise the mirror
+      // renders empty and the pinned target only sees the prompt echo). Subscribe
+      // synchronously here, before the model emits (the bus has no replay buffer); the
+      // resolver self-settles on the run's lifecycle event, disposed on abort.
+      let mirrorDispatch: MirrorDispatchHandle | undefined;
+      const mirrorSessionEntry =
+        (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ?? activeSessionEntry;
+      if (replySessionKey && mirrorSessionEntry?.echoTargets?.length) {
+        try {
+          mirrorDispatch = await launchMirrorDispatch({
+            originRunId: runId,
+            cfg: runtimeConfig,
+            sessionKey: replySessionKey,
+            sessionEntry: mirrorSessionEntry,
+            // Origin = the channel that enqueued THIS turn. Prefer the explicit queued
+            // origin (set for webchat chat.send) over the entry's `last*` (only fresh
+            // for channel inbounds) so a webchat follow-up does not self-exclude a pin.
+            originChannel:
+              queued.originatingChannel ??
+              mirrorSessionEntry.lastChannel ??
+              mirrorSessionEntry.channel ??
+              run.messageProvider ??
+              "",
+            originTo: queued.originatingTo ?? mirrorSessionEntry.lastTo ?? "",
+            originAccountId: mirrorSessionEntry.lastAccountId,
+            originThreadId: mirrorSessionEntry.lastThreadId,
+          });
+        } catch (err) {
+          logVerbose(`followup mirror dispatch launch failed (non-fatal): ${String(err)}`);
+        }
+        const mirrorAbortSignal = replyOperation?.abortSignal ?? queued.abortSignal;
+        if (mirrorDispatch && mirrorAbortSignal) {
+          mirrorAbortSignal.addEventListener(
+            "abort",
+            () => {
+              mirrorDispatch?.dispose();
+            },
+            { once: true },
+          );
+        }
+      }
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
