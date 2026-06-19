@@ -16,6 +16,7 @@ export type SessionFreshness = {
   fresh: boolean;
   dailyResetAt?: number;
   idleExpiresAt?: number;
+  closedAt?: number;
   staleReason?: SessionResetMode;
 };
 
@@ -85,6 +86,7 @@ export function evaluateSessionFreshness(params: {
   updatedAt: number;
   sessionStartedAt?: number;
   lastInteractionAt?: number;
+  sessionClosedAt?: number;
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
@@ -92,6 +94,7 @@ export function evaluateSessionFreshness(params: {
   const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
   const lastInteractionAt =
     resolveTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
+  const closedAt = resolveTimestamp(params.sessionClosedAt, params.now);
   // Daily reset uses session start, while idle reset uses last interaction; a continued session can
   // stay idle-fresh even when its original transcript is old.
   const dailyResetAt =
@@ -104,6 +107,7 @@ export function evaluateSessionFreshness(params: {
       : undefined;
   const staleDaily = dailyResetAt != null && sessionStartedAt < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
+  const staleClosed = closedAt != null;
   const staleReason =
     staleDaily && staleIdle
       ? // When both policies mark the session stale, report the boundary that went stale first.
@@ -116,9 +120,10 @@ export function evaluateSessionFreshness(params: {
           ? "daily"
           : undefined;
   return {
-    fresh: !(staleDaily || staleIdle),
+    fresh: !(staleClosed || staleDaily || staleIdle),
     dailyResetAt,
     idleExpiresAt,
+    ...(closedAt != null ? { closedAt } : {}),
     ...(staleReason ? { staleReason } : {}),
   };
 }

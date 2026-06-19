@@ -189,6 +189,27 @@ describe("resolveSessionResetPolicy", () => {
     });
   });
 
+  it("treats closed sessions as stale even when idle expiry is disabled", () => {
+    const now = 60 * 60 * 1_000;
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now,
+      sessionClosedAt: now - 1_000,
+      now,
+      policy: {
+        mode: "idle",
+        atHour: 4,
+        idleMinutes: 0,
+      },
+    });
+
+    expect(freshness).toEqual({
+      fresh: false,
+      dailyResetAt: undefined,
+      idleExpiresAt: undefined,
+      closedAt: now - 1_000,
+    });
+  });
+
   it("uses sessionStartedAt, not updatedAt, for daily reset freshness", () => {
     const now = new Date(2026, 3, 25, 12, 0, 0, 0).getTime();
     const freshness = evaluateSessionFreshness({

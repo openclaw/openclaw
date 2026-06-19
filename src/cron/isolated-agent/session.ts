@@ -133,6 +133,7 @@ export function resolveCronSession(params: {
     });
     const freshness = evaluateSessionFreshness({
       updatedAt: entry.updatedAt,
+      sessionClosedAt: entry.sessionClosedAt,
       ...resolveSessionLifecycleTimestamps({
         entry,
         agentId: params.agentId,

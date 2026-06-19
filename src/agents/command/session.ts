@@ -390,6 +390,7 @@ export function resolveSession(opts: {
     ? !terminalMainTranscriptNewerThanRegistry &&
       evaluateSessionFreshness({
         updatedAt: sessionEntry.updatedAt,
+        sessionClosedAt: sessionEntry.sessionClosedAt,
         ...resolveSessionLifecycleTimestamps({
           entry: sessionEntry,
           agentId: sessionAgentId,

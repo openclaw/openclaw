@@ -507,6 +507,7 @@ async function initSessionStateAttemptLocked(
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({
           updatedAt: entry.updatedAt,
+          sessionClosedAt: entry.sessionClosedAt,
           sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
           lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
           now,

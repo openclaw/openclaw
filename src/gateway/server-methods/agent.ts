@@ -1762,6 +1762,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         let freshness = entry
           ? evaluateSessionFreshness({
               updatedAt: entry.updatedAt,
+              sessionClosedAt: entry.sessionClosedAt,
               ...lifecycleTimestamps,
               now,
               policy: resetPolicy,
@@ -1949,6 +1950,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           const freshFreshness = freshEntry
             ? evaluateSessionFreshness({
                 updatedAt: freshEntry.updatedAt,
+                sessionClosedAt: freshEntry.sessionClosedAt,
                 ...freshLifecycleTimestamps,
                 now,
                 policy: resetPolicy,
