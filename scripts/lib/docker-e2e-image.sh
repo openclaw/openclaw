@@ -33,6 +33,39 @@ docker_e2e_resolve_image() {
   printf '%s\n' "$default_image"
 }
 
+docker_e2e_read_nonnegative_decimal_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
+docker_e2e_read_tcp_port_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  local decimal_value=$((10#$value))
+  if [ "$decimal_value" -lt 1 ] || [ "$decimal_value" -gt 65535 ]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
 docker_e2e_build_or_reuse() {
   local image_name="$1"
   local label="$2"

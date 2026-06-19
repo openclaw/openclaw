@@ -10,7 +10,6 @@ import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
-  sanitizeThinkingForRecovery,
   stripInvalidThinkingSignatures,
   stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
@@ -406,50 +405,7 @@ describe("stripInvalidThinkingSignatures", () => {
   });
 });
 
-describe("sanitizeThinkingForRecovery", () => {
-  it("drops the latest assistant message when the thinking block is unsigned", () => {
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "partial" }],
-      },
-    ]);
-
-    const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toEqual([messages[0]]);
-    expect(result.prefill).toBe(false);
-  });
-
-  it("preserves later turns when dropping an incomplete assistant message", () => {
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "partial" }],
-      },
-      { role: "user", content: "follow up" },
-    ]);
-
-    const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toEqual([messages[0], messages[2]]);
-    expect(result.prefill).toBe(false);
-  });
-
-  it("marks signed thinking without text as a prefill recovery case", () => {
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "complete", thinkingSignature: "sig" }],
-      },
-    ]);
-
-    const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toBe(messages);
-    expect(result.prefill).toBe(true);
-  });
-
+describe("assessLastAssistantMessage", () => {
   it("marks signed thinking with an empty text block as incomplete text", () => {
     const message = castAgentMessage({
       role: "assistant",

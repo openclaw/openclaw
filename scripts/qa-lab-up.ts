@@ -73,6 +73,9 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
     if (parsed === undefined) {
       throw new Error(`${flag} must be a positive integer.`);
     }
+    if (parsed > 65535) {
+      throw new Error(`${flag} must be a TCP port from 1 to 65535.`);
+    }
     return parsed;
   };
 

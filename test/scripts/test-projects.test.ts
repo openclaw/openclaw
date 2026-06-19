@@ -366,6 +366,13 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/release-user-journey-assertions.test.ts"],
       ],
       [
+        "scripts/e2e/lib/release-assertion-files.mjs",
+        [
+          "test/scripts/release-scenarios-assertions.test.ts",
+          "test/scripts/release-user-journey-assertions.test.ts",
+        ],
+      ],
+      [
         "scripts/e2e/lib/openai-chat-tools/write-config.mjs",
         ["test/scripts/openai-chat-tools-client.test.ts"],
       ],
@@ -375,10 +382,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/openai-chat-tools-docker.sh",
-        [
-          "test/scripts/openai-chat-tools-client.test.ts",
-          "test/scripts/docker-e2e-plan.test.ts",
-        ],
+        ["test/scripts/openai-chat-tools-client.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
       ],
       [
         "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs",
@@ -595,10 +599,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       ["scripts/e2e/mcp-channels-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
       ["scripts/e2e/docker-openai-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
-      [
-        "scripts/e2e/mcp-code-mode-gateway-seed.ts",
-        ["test/scripts/docker-e2e-seeds.test.ts"],
-      ],
+      ["scripts/e2e/mcp-code-mode-gateway-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
       [
         "scripts/e2e/cron-mcp-cleanup-docker.sh",
         [
@@ -903,14 +904,15 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes code-mode namespace live Docker repro changes through its regression tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live-docker.sh"]))
-      .toEqual({
-        mode: "targets",
-        targets: [
-          "test/scripts/code-mode-namespace-live.test.ts",
-          "test/scripts/docker-build-helper.test.ts",
-        ],
-      });
+    expect(
+      resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live-docker.sh"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/code-mode-namespace-live.test.ts",
+        "test/scripts/docker-build-helper.test.ts",
+      ],
+    });
   });
 
   it("routes group visible reply config changes through channel delivery regressions", () => {
@@ -1894,11 +1896,19 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps shared test helpers cheap by default when no precise target exists", () => {
-    expect(
-      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/poll.ts",
-      ]),
-    ).toStrictEqual([]);
+    let args: string[] | null = null;
+    withTinyGitRepo(
+      {
+        "test/helpers/unmapped-helper.ts": "export const unmapped = true;\n",
+      },
+      (cwd) => {
+        args = resolveChangedTargetArgs(["--changed", "origin/main"], cwd, () => [
+          "test/helpers/unmapped-helper.ts",
+        ]);
+      },
+    );
+
+    expect(args).toStrictEqual([]);
   });
 
   it("routes imported shared test helpers through affected tests", () => {
@@ -1920,14 +1930,22 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
-    expect(
-      resolveChangedTargetArgs(
-        ["--changed", "origin/main"],
-        process.cwd(),
-        () => ["test/helpers/poll.ts"],
-        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
-      ),
-    ).toBeNull();
+    let args: string[] | null = [];
+    withTinyGitRepo(
+      {
+        "test/helpers/unmapped-helper.ts": "export const unmapped = true;\n",
+      },
+      (cwd) => {
+        args = resolveChangedTargetArgs(
+          ["--changed", "origin/main"],
+          cwd,
+          () => ["test/helpers/unmapped-helper.ts"],
+          { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+        );
+      },
+    );
+
+    expect(args).toBeNull();
   });
 
   it("routes channel contract helper edits through the tests that import them", () => {

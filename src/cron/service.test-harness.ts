@@ -176,7 +176,7 @@ export async function withCronServiceForTest(
 
 export function createRunningCronServiceState(params: {
   storePath: string;
-  log: ReturnType<typeof createNoopLogger>;
+  log: CronServiceDeps["log"];
   nowMs: () => number;
   jobs: CronJob[];
 }) {

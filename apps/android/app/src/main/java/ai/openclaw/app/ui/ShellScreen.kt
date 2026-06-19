@@ -898,32 +898,38 @@ private fun SettingsShellScreen(
         ProfilePanel(displayName = displayName.ifBlank { "OpenClaw" }, onClick = { onRouteChange(SettingsRoute.Profile) })
       }
 
-      item {
-        SettingsGroup(
-          rows =
-            listOf(
-              SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person, route = SettingsRoute.Profile),
-              SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
-              SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
-              SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = SettingsRoute.Approvals),
-              SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
-              SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
-              SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
-              SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
-              SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
-              SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
-              SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
-              SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
-              SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
-              SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
-              SettingsRow("Appearance", appearanceThemeSummary(appearanceThemeMode), Icons.Default.Palette, route = SettingsRoute.Appearance),
-              SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
-              SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
-            ),
-          onOpen = onRouteChange,
+      val settingsRows =
+        listOf(
+          SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
+          SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
+          SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
+          SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = SettingsRoute.Approvals),
+          SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
+          SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
+          SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+          SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+          SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
+          SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
+          SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
+          SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
+          SettingsRow("Appearance", appearanceThemeSummary(appearanceThemeMode), Icons.Default.Palette, route = SettingsRoute.Appearance),
+          SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
+          SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
         )
+
+      settingsSections(settingsRows).forEach { section ->
+        item {
+          SettingsSectionTitle(section.title)
+        }
+        item {
+          SettingsGroup(rows = section.rows, onOpen = onRouteChange)
+        }
       }
 
+      item {
+        SettingsSectionTitle("Account")
+      }
       item {
         SettingsGroup(
           rows = listOf(SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)),
@@ -1057,13 +1063,72 @@ private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
     else -> null
   }
 
-private data class SettingsRow(
+internal data class SettingsRow(
   val title: String,
   val value: String,
   val icon: ImageVector,
   val status: Boolean? = null,
   val route: SettingsRoute? = null,
 )
+
+internal data class SettingsSection(
+  val title: String,
+  val rows: List<SettingsRow>,
+)
+
+internal fun settingsSections(rows: List<SettingsRow>): List<SettingsSection> =
+  settingsSectionOrder.mapNotNull { title ->
+    val sectionRows = rows.filter { row -> row.route?.let(::settingsSectionTitleForRoute) == title }
+    if (sectionRows.isEmpty()) null else SettingsSection(title = title, rows = sectionRows)
+  }
+
+private val settingsSectionOrder =
+  listOf(
+    "Connection",
+    "Agents & automation",
+    "Phone context & privacy",
+    "Profile & device",
+    "Diagnostics",
+  )
+
+internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
+  when (route) {
+    SettingsRoute.Gateway,
+    SettingsRoute.NodesDevices,
+    SettingsRoute.Channels,
+    -> "Connection"
+
+    SettingsRoute.Agents,
+    SettingsRoute.Approvals,
+    SettingsRoute.CronJobs,
+    SettingsRoute.Usage,
+    SettingsRoute.Skills,
+    SettingsRoute.Dreaming,
+    -> "Agents & automation"
+
+    SettingsRoute.Voice,
+    SettingsRoute.Canvas,
+    SettingsRoute.Notifications,
+    SettingsRoute.PhoneCapabilities,
+    -> "Phone context & privacy"
+
+    SettingsRoute.Profile,
+    SettingsRoute.Appearance,
+    SettingsRoute.About,
+    -> "Profile & device"
+
+    SettingsRoute.Health -> "Diagnostics"
+    SettingsRoute.Home -> "Diagnostics"
+  }
+
+@Composable
+private fun SettingsSectionTitle(title: String) {
+  Text(
+    text = title.uppercase(),
+    style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
+    color = ClawTheme.colors.textMuted,
+  )
+}
 
 @Composable
 private fun ProfilePanel(

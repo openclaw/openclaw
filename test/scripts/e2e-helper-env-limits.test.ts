@@ -210,4 +210,30 @@ describe("e2e helper numeric env limits", () => {
       server.close();
     }
   });
+
+  it("cancels Open WebUI HTTP probe response bodies", async () => {
+    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
+    let canceled = false;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    await expect(
+      probeHttpStatus({
+        bearer: "token-123",
+        fetchImpl,
+        timeoutMs: 500,
+        url: "http://127.0.0.1/probe",
+      }),
+    ).resolves.toBe(true);
+    expect(canceled).toBe(true);
+  });
 });

@@ -8,7 +8,7 @@ import Testing
                 gatewayConnected: false,
                 discoveredGatewayCount: 0,
                 talkConfigLoaded: false,
-                notificationStatusText: "Not Set") == [
+                notificationsAllowed: false) == [
                     .gatewayOffline,
                     .discoveryUnavailable,
                     .notificationsUnavailable,
@@ -21,12 +21,12 @@ import Testing
                 gatewayConnected: true,
                 discoveredGatewayCount: 1,
                 talkConfigLoaded: false,
-                notificationStatusText: "Allowed") == [.talkConfigMissing])
+                notificationsAllowed: true) == [.talkConfigMissing])
         #expect(
             SettingsDiagnostics.issueCount(
                 gatewayConnected: true,
                 discoveredGatewayCount: 1,
                 talkConfigLoaded: true,
-                notificationStatusText: "Allowed") == 0)
+                notificationsAllowed: true) == 0)
     }
 }
