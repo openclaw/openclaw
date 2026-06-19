@@ -205,8 +205,16 @@ export async function publishMemoryDatabaseTables(params: {
 
 /** Remove one closed shadow memory database and its journal-mode sidecars. */
 export function removeMemoryDatabaseFiles(dbPath: string): void {
+  let firstError: unknown;
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
-    fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    try {
+      fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    } catch (err) {
+      firstError ??= err;
+    }
+  }
+  if (firstError) {
+    throw firstError;
   }
 }
 

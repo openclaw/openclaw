@@ -1,4 +1,5 @@
 // Memory Core tests cover shared agent database publication and shadow cleanup.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,11 +8,12 @@ import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupAgedMemoryReindexTempFiles,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
+  removeMemoryDatabaseFiles,
 } from "./manager-db.js";
 import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 
@@ -35,6 +37,7 @@ describe("memory manager database publication", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -233,5 +236,28 @@ describe("memory manager database publication", () => {
     await expectPathMissing(`${oldShadow}-journal`);
     await expectPathMissing(lockedShadow);
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+  });
+
+  it("continues removing shadow sidecars after one cleanup failure", () => {
+    const databasePath = path.join(fixtureRoot, "agent.sqlite.memory-reindex-shadow");
+    const removedPaths: string[] = [];
+    const lockedError = Object.assign(new Error("EBUSY: resource busy or locked"), {
+      code: "EBUSY",
+    });
+    vi.spyOn(fsSync, "rmSync").mockImplementation((filePath) => {
+      const resolvedPath = String(filePath);
+      removedPaths.push(resolvedPath);
+      if (resolvedPath.endsWith("-wal")) {
+        throw lockedError;
+      }
+    });
+
+    expect(() => removeMemoryDatabaseFiles(databasePath)).toThrow("EBUSY");
+    expect(removedPaths).toEqual([
+      databasePath,
+      `${databasePath}-wal`,
+      `${databasePath}-shm`,
+      `${databasePath}-journal`,
+    ]);
   });
 });
