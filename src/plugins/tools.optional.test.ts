@@ -2550,20 +2550,22 @@ describe("resolvePluginTools optional tools", () => {
       diagnostics: [],
     };
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    pinActivePluginChannelRegistry({
+    const channelRegistry = {
       plugins: [{ id: "memory-core", status: "loaded" }],
       tools: [],
       diagnostics: [],
-    } as never);
+    } as never;
+    pinActivePluginChannelRegistry(channelRegistry);
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
         context: { ...createContext(), config },
         toolAllowlist: ["memory_search", "memory_get"],
         allowGatewaySubagentBinding: true,
       }),
-    );
+      runtimeRegistry: channelRegistry,
+    });
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);

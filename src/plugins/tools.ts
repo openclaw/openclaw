@@ -1094,7 +1094,9 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
-  let registry = params.runtimeRegistry;
+  let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
+    ? params.runtimeRegistry
+    : undefined;
   if (!registry) {
     registry = resolvePluginToolRegistry({
       loadOptions,
