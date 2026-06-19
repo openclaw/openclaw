@@ -516,6 +516,16 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
     });
   });
+
+  it("fails closed when the root dist facade scan exceeds its file limit", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package root dist contains more than 10000 JavaScript files; refusing to scan unbounded package contents.",
+      ]);
+    });
+  });
 });
 
 describe("collectInstalledContextEngineRuntimeErrors", () => {

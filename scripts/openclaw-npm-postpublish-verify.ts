@@ -662,13 +662,23 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScri
   });
 }
 
-function listInstalledFacadeActivationRuntimeFiles(packageRoot: string): string[] {
+function listInstalledFacadeActivationRuntimeFiles(
+  packageRoot: string,
+): DistJavaScriptFileListResult {
+  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
+  if (distFiles.limitExceeded) {
+    return distFiles;
+  }
+
   const distRoot = join(packageRoot, "dist");
-  return listInstalledRootDistJavaScriptFiles(packageRoot).filter((filePath) =>
-    INSTALLED_FACADE_ACTIVATION_RUNTIME_RELATIVE_PATH_RE.test(
-      relative(distRoot, filePath).replaceAll("\\", "/"),
+  return {
+    files: distFiles.files.filter((filePath) =>
+      INSTALLED_FACADE_ACTIVATION_RUNTIME_RELATIVE_PATH_RE.test(
+        relative(distRoot, filePath).replaceAll("\\", "/"),
+      ),
     ),
-  );
+    limitExceeded: false,
+  };
 }
 
 type ParsedImportSpecifiersResult =
@@ -846,7 +856,12 @@ function isSafeBundledRuntimeFacadeDirName(value: string): boolean {
 
 export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
   const errors: string[] = [];
-  for (const filePath of listInstalledFacadeActivationRuntimeFiles(packageRoot)) {
+  const facadeRuntimeFiles = listInstalledFacadeActivationRuntimeFiles(packageRoot);
+  if (facadeRuntimeFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("root dist", facadeRuntimeFiles.limit)];
+  }
+
+  for (const filePath of facadeRuntimeFiles.files) {
     const fileStat = lstatSync(filePath);
     const relativePath = relative(packageRoot, filePath).replaceAll("\\", "/");
     if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
