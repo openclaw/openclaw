@@ -1878,6 +1878,37 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    // When message_tool_only mode is configured but the model did not call the
+    // heartbeat_respond tool, treat as silent heartbeat to avoid leaking private
+    // final replies to Telegram. This fixes issue #94053.
+    if (usesHeartbeatResponseTool && !heartbeatToolResponse) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
     if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
       await restoreHeartbeatUpdatedAt({
         storePath,
