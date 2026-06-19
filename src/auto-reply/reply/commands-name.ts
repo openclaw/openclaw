@@ -5,12 +5,13 @@ import {
 import {
   getSessionEntry,
   resolveSessionStoreEntry,
+  type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
-import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -46,7 +47,15 @@ function syncNameSessionEntry(params: HandleCommandsParams): void {
   params.sessionEntry = entry;
 }
 
-type NameWriteResult = { ok: true; label: string } | { ok: false; error: string };
+type NameWriteResult =
+  | {
+      ok: true;
+      label: string;
+      sessionKey: string;
+      entry: SessionEntry;
+      hadLegacyAliases: boolean;
+    }
+  | { ok: false; error: string };
 
 export const handleNameCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -123,9 +132,21 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
       for (const legacyKey of resolved.legacyKeys) {
         delete store[legacyKey];
       }
-      return { ok: true, label: validated.label };
+      return {
+        ok: true,
+        label: validated.label,
+        sessionKey: resolved.normalizedKey,
+        entry,
+        hadLegacyAliases: resolved.legacyKeys.length > 0,
+      };
     },
-    { skipSaveWhenResult: (value) => !value.ok },
+    {
+      skipSaveWhenResult: (value) => !value.ok,
+      resolveSingleEntryPersistence: (value) =>
+        value.ok && !value.hadLegacyAliases
+          ? { sessionKey: value.sessionKey, entry: value.entry }
+          : null,
+    },
   );
 
   if (!result.ok) {

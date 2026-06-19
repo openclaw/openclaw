@@ -2,13 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  getSessionEntry,
-  updateSessionStore,
-  upsertSessionEntry,
-} from "../../config/sessions.js";
+import { getSessionEntry, updateSessionStore, upsertSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
+import { loadCommandHandlers } from "./commands-handlers.runtime.js";
 import { handleNameCommand, parseNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -74,6 +72,25 @@ describe("name command", () => {
     });
     expect(parseNameCommand("/name")).toEqual({ title: "" });
     expect(parseNameCommand("/goal status")).toBeNull();
+  });
+
+  it("registers and loads the command on text and native surfaces", () => {
+    const command = buildBuiltinChatCommands().find((entry) => entry.key === "name");
+
+    expect(command).toMatchObject({
+      nativeName: "name",
+      textAliases: ["/name"],
+      acceptsArgs: true,
+      scope: "both",
+      category: "session",
+    });
+    expect(command?.args).toEqual([
+      expect.objectContaining({
+        name: "title",
+        captureRemaining: true,
+      }),
+    ]);
+    expect(loadCommandHandlers()).toContain(handleNameCommand);
   });
 
   it("renames the current session and persists the label", async () => {
