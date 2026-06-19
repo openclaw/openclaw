@@ -184,18 +184,25 @@ function createInlineTextPairingAdapter(params: {
   idLabel: string;
   message: string;
   normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-  notify: (
+  notify?: (
     params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
       message: string;
     },
   ) => Promise<void> | void;
+  delivery?: ChannelPairingAdapter["notifyApprovalDelivery"];
 }): ChannelPairingAdapter {
   return {
     idLabel: params.idLabel,
     normalizeAllowEntry: params.normalizeAllowEntry,
-    notifyApproval: async (ctx) => {
-      await params.notify({ ...ctx, message: params.message });
-    },
+    approvalMessage: params.message,
+    notifyApprovalDelivery: params.delivery ?? "adapter",
+    ...(params.notify
+      ? {
+          notifyApproval: async (ctx) => {
+            await params.notify?.({ ...ctx, message: params.message });
+          },
+        }
+      : {}),
   };
 }
 export type {
@@ -637,11 +644,12 @@ type ChatChannelPairingOptions = {
     idLabel: string;
     message: string;
     normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-    notify: (
+    notify?: (
       params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
         message: string;
       },
     ) => Promise<void> | void;
+    delivery?: ChannelPairingAdapter["notifyApprovalDelivery"];
   };
 };
 

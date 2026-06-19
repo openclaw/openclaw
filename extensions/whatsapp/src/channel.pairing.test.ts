@@ -25,22 +25,10 @@ describe("whatsapp pairing", () => {
     vi.clearAllMocks();
   });
 
-  it("notifies the approved sender through the WhatsApp send path", async () => {
-    await whatsappPlugin.pairing?.notifyApproval?.({
-      cfg: { channels: { whatsapp: { enabled: true } } },
-      id: "5511999999999",
-      accountId: "work",
-    });
-
-    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
-      "5511999999999",
-      PAIRING_APPROVED_MESSAGE,
-      {
-        verbose: false,
-        cfg: { channels: { whatsapp: { enabled: true } } },
-        accountId: "work",
-      },
-    );
+  it("declares approval notifications for outbound gateway delivery", () => {
+    expect(whatsappPlugin.pairing?.approvalMessage).toBe(PAIRING_APPROVED_MESSAGE);
+    expect(whatsappPlugin.pairing?.notifyApprovalDelivery).toBe("outbound-message");
+    expect(whatsappPlugin.pairing?.notifyApproval).toBeUndefined();
   });
 
   it("keeps WhatsApp allowlist normalization on the pairing adapter", () => {

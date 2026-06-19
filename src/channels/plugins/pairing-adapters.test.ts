@@ -27,8 +27,22 @@ describe("pairing adapters", () => {
     });
     expect(pairing.idLabel).toBe("telegramUserId");
     expect(pairing.normalizeAllowEntry?.("telegram:123")).toBe("123");
+    expect(pairing.approvalMessage).toBe("approved");
+    expect(pairing.notifyApprovalDelivery).toBe("adapter");
     await pairing.notifyApproval?.({ cfg: {}, id: "123" });
     expect(notify).toHaveBeenCalledWith({ cfg: {}, id: "123", message: "approved" });
+  });
+
+  it("can declare outbound-message approval delivery", () => {
+    const pairing = createTextPairingAdapter({
+      idLabel: "whatsappSenderId",
+      message: "approved",
+      delivery: "outbound-message",
+    });
+
+    expect(pairing.approvalMessage).toBe("approved");
+    expect(pairing.notifyApprovalDelivery).toBe("outbound-message");
+    expect(pairing.notifyApproval).toBeUndefined();
   });
 
   it("builds logger-backed approval notifiers", async () => {

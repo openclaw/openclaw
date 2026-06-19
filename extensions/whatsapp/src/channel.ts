@@ -37,7 +37,7 @@ import {
   normalizeWhatsAppTarget,
 } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
+import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
@@ -75,13 +75,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         idLabel: "whatsappSenderId",
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
-        notify: async ({ cfg, id, message, accountId }) => {
-          await sendMessageWhatsApp(id, message, {
-            verbose: false,
-            cfg,
-            accountId,
-          });
-        },
+        delivery: "outbound-message",
       },
     },
     outbound: whatsappChannelOutbound,

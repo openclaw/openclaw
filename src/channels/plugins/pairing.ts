@@ -40,6 +40,17 @@ export async function notifyPairingApproved(params: {
 }): Promise<void> {
   // Extensions may provide adapter directly to bypass ESM module isolation
   const adapter = params.pairingAdapter ?? requirePairingAdapter(params.channelId);
+  if (adapter.notifyApprovalDelivery === "outbound-message" && adapter.approvalMessage) {
+    const { sendMessage } = await import("../../infra/outbound/message.js");
+    await sendMessage({
+      channel: params.channelId,
+      to: params.id,
+      content: adapter.approvalMessage,
+      cfg: params.cfg,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+    });
+    return;
+  }
   if (!adapter.notifyApproval) {
     return;
   }
