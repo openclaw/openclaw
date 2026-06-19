@@ -13,7 +13,7 @@ const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
 const INTERNAL_TRACE_LINE_QUICK_RE =
-  /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
+  /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call|commentary\s+to=)/i;
 const INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
 const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
@@ -22,6 +22,7 @@ const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
   /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
 const INTERNAL_CHANNEL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)\s*[:=]/i;
+const INTERNAL_COMMENTARY_TRACE_LINE_RE = /^(?:>\s*)?commentary\s+to=functions\.\S+/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -790,7 +791,8 @@ export function stripAssistantInternalTraceLines(text: string): string {
       (INTERNAL_TRACE_LINE_RE.test(trimmed) ||
         INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE.test(trimmed) ||
         INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE.test(trimmed) ||
-        INTERNAL_CHANNEL_TRACE_LINE_RE.test(trimmed));
+        INTERNAL_CHANNEL_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_COMMENTARY_TRACE_LINE_RE.test(trimmed));
     if (!shouldStrip) {
       result += rawLine;
     }
