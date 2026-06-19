@@ -771,6 +771,41 @@ describe("handleToolExecutionEnd message delivery evidence", () => {
       }),
     ).toEqual({ allowed: true });
   });
+
+  it("does not record historical SMS receipts from non-send message actions", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-read",
+      args: {
+        action: "read",
+        channel: "sms",
+        target: "+15551234567",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-read",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM-historical",
+        chatId: "+15551234567",
+        status: "queued",
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([]);
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I sent the SMS. Status: accepted/queued. Message ID: SM-historical",
+        evidence: ctx.state.messageDeliveryEvidence,
+      }),
+    ).toMatchObject({ allowed: false });
+  });
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
