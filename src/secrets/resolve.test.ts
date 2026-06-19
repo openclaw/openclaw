@@ -5,6 +5,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import {
+  killPidIfAlive,
+  readPidFile,
+  waitForPidToExit,
+  writeForkingNoOutputScript,
+} from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -55,6 +61,7 @@ describe("secret ref resolver", () => {
     jsonOnly?: boolean;
     allowSymlinkCommand?: boolean;
     trustedDirs?: string[];
+    env?: Record<string, string>;
     args?: string[];
     timeoutMs?: number;
     noOutputTimeoutMs?: number;
@@ -253,6 +260,28 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("ok");
+  });
+
+  itPosix("kills forked exec provider children on no-output timeout", async () => {
+    const root = await createCaseDir("exec-fork-timeout");
+    const scriptPath = await writeForkingNoOutputScript(root);
+    const pidPath = path.join(root, "forked.pid");
+    let childPid: number | undefined;
+
+    try {
+      await expect(
+        resolveExecSecret(scriptPath, {
+          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+          noOutputTimeoutMs: 150,
+          timeoutMs: 2000,
+        }),
+      ).rejects.toThrow('Exec provider "execmain" produced no output');
+
+      childPid = await readPidFile(pidPath);
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    } finally {
+      killPidIfAlive(childPid);
+    }
   });
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {

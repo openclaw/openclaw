@@ -57,6 +57,7 @@ import {
   usesBuiltOpenClawEntry,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -135,6 +136,14 @@ describe("kitchen-sink RPC isolated state", () => {
     await expect(
       resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
     ).resolves.toBe(19080);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65535" }),
+    ).resolves.toBe(65535);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65536" }),
+    ).rejects.toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: "65536"',
+    );
     await expect(
       resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
     ).resolves.toBe(45678);
@@ -759,6 +768,52 @@ describe("kitchen-sink RPC caller loading", () => {
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("kills descendants when timed commands exit cleanly after SIGTERM", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
+    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    let grandchildPid = 0;
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+      timeoutKillGraceMs: 2_000,
+      timeoutMs: 100,
+    });
+
+    try {
+      await waitFor(() => existsSync(grandchildPidPath));
+      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+
+      await expect(runPromise).rejects.toThrow("timed out after 100ms");
+      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+    } finally {
+      await runPromise.catch(() => {});
+      if (grandchildPid && isProcessAlive(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL");
+      }
+      cleanupTempDirs(tempDirs);
     }
   });
 });
@@ -1825,10 +1880,68 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  it("streams HTTP probe responses with non-decimal content-length values", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({
+        "content-length": "1e3",
+      }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return { done: false, value: new Uint8Array(1025) };
+            },
+            async cancel() {
+              canceled = true;
+            },
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("reads bounded response streams", async () => {
     await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
       '{"status":"live"}',
     );
+  });
+
+  it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
+    let canceled = false;
+    const timeoutError = Object.assign(new Error("fetch probe timed out"), {
+      code: "ETIMEDOUT",
+    });
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { headers: new Headers() },
+    );
+
+    await expect(
+      readBoundedResponseText(response, 1024, Promise.reject(timeoutError)),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "fetch probe timed out",
+    });
+    expect(canceled).toBe(true);
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

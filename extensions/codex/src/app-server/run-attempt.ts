@@ -139,6 +139,8 @@ import {
   type OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 import {
+  type CodexProjectedContextRange,
+  fitCodexProjectedContextForTurnStart,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -178,6 +180,7 @@ import {
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForModel,
+  resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -778,6 +781,7 @@ export async function runCodexAppServerAttempt(
     pluginConfig,
     profilerEnabled,
     forceHeartbeatTool: true,
+    ignoreDisableMessageTool: true,
     ignoreRuntimePlan: true,
     onYieldDetected: () => {
       yieldDetected = true;
@@ -788,8 +792,10 @@ export async function runCodexAppServerAttempt(
     tools,
     registeredTools,
     signal: runAbortController.signal,
-    loading: resolveCodexDynamicToolsLoadingForModel(pluginConfig, params.modelId),
-    directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
+    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, params.modelId, {
+      connectionClass: appServer.connectionClass,
+    }),
+    directToolNames: resolveCodexDynamicToolDirectNames(params),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -892,8 +898,15 @@ export async function runCodexAppServerAttempt(
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
   let promptText = params.prompt;
+  let promptContextRange: CodexProjectedContextRange | undefined;
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
+  const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
+    contextTokenBudget: params.contextTokenBudget,
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+      config: params.config,
+    }),
+  });
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
   let precomputedStaleBindingContinuityProjectionApplied = false;
   let staleBindingContinuityForcedFreshStart = false;
@@ -904,8 +917,10 @@ export async function runCodexAppServerAttempt(
       assembledMessages: historyMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
+      maxRenderedContextChars: codexContextProjectionMaxChars,
     });
     promptText = projection.promptText;
+    promptContextRange = projection.promptContextRange;
     prePromptMessageCount = projection.prePromptMessageCount;
   };
   const applyActiveContextEngineProjection = async (
@@ -945,12 +960,7 @@ export async function runCodexAppServerAttempt(
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
       systemPromptAddition: assembled.systemPromptAddition,
-      maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
-        contextTokenBudget: params.contextTokenBudget,
-        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
-          config: params.config,
-        }),
-      }),
+      maxRenderedContextChars: codexContextProjectionMaxChars,
       toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
     });
     const projectionDecision = contextEngineProjection
@@ -982,6 +992,7 @@ export async function runCodexAppServerAttempt(
       developerInstructionAdditionChars: projection.developerInstructionAddition?.length ?? 0,
     });
     promptText = projectionDecision.project ? projection.promptText : params.prompt;
+    promptContextRange = projectionDecision.project ? projection.promptContextRange : undefined;
     developerInstructions = joinPresentSections(
       baseDeveloperInstructions,
       projection.developerInstructionAddition,
@@ -1010,12 +1021,31 @@ export async function runCodexAppServerAttempt(
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
     });
+  const resolveShiftedPromptContextRange = (
+    prompt: string,
+    turnPromptText: string,
+  ): CodexProjectedContextRange | undefined => {
+    if (!promptContextRange || !prompt.endsWith(promptText) || !turnPromptText.endsWith(prompt)) {
+      return undefined;
+    }
+    const promptTextOffset = prompt.length - promptText.length;
+    const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
+    return {
+      start: turnPromptOffset + promptContextRange.start,
+      end: turnPromptOffset + promptContextRange.end,
+    };
+  };
   let promptBuild = await buildPromptFromCurrentInputs();
-  const decorateCodexTurnPromptText = (prompt: string) =>
-    prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
+  const decorateCodexTurnPromptText = (prompt: string) => {
+    const turnPromptText = prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
       preservePromptWithoutContext:
         params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron",
     });
+    return fitCodexProjectedContextForTurnStart({
+      promptText: turnPromptText,
+      contextRange: resolveShiftedPromptContextRange(prompt, turnPromptText),
+    });
+  };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
@@ -1084,8 +1114,10 @@ export async function runCodexAppServerAttempt(
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
+      maxRenderedContextChars: codexContextProjectionMaxChars,
     });
     promptText = projection.promptText;
+    promptContextRange = projection.promptContextRange;
     prePromptMessageCount = projection.prePromptMessageCount;
     return true;
   };
@@ -1162,6 +1194,11 @@ export async function runCodexAppServerAttempt(
     staleBindingContinuityForcedFreshStart =
       precomputedStaleBindingContinuityProjectionApplied &&
       !inactiveThreadBootstrapBindingForcedFreshStart;
+    if (staleBindingContinuityForcedFreshStart) {
+      // Once the native thread id is discarded, Codex no longer owns the
+      // pre-binding history; rebuild from the mirrored transcript.
+      applyFreshThreadContinuityProjection();
+    }
     if (activeContextEngine) {
       contextEngineProjection = undefined;
       try {
@@ -3186,6 +3223,13 @@ function handleApprovalRequest(params: {
   });
 }
 
+function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return [];
+  }
+  return ["message"];
+}
+
 export const testing = {
   buildCodexNativeHookRelayId,
   buildDeveloperInstructions,
@@ -3199,6 +3243,7 @@ export const testing = {
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
+  resolveCodexDynamicToolDirectNames,
   hasPendingDynamicToolTerminalDiagnostic,
   toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,

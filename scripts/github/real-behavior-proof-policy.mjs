@@ -267,10 +267,6 @@ export function extractRealBehaviorProofSections(body = "") {
   return extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
 }
 
-export function extractRealBehaviorProofSection(body = "") {
-  return extractRealBehaviorProofSections(body)[0] ?? "";
-}
-
 function extractOutOfScopeFollowUpsSection(body = "") {
   return extractMarkdownSection(/^#{2,6}\s+out-of-scope follow-ups\b[^\n]*$/im, body);
 }

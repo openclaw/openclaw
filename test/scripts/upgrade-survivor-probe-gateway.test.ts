@@ -259,6 +259,45 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+  it("rejects declared oversized probe bodies before waiting on the stream", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, {
+        "content-length": "65",
+        "content-type": "application/json",
+      });
+      response.flushHeaders();
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "oversized.json");
+    const startedAt = Date.now();
+    try {
+      const result = await runProbe(
+        [
+          "--base-url",
+          baseUrl,
+          "--path",
+          "/healthz",
+          "--expect",
+          "live",
+          "--out",
+          out,
+          "--timeout-ms",
+          "1000",
+        ],
+        5_000,
+        { OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64" },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`${baseUrl}/healthz probe body exceeded 64 bytes`);
+      expect(fs.existsSync(out)).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(3_500);
+    } finally {
+      server.close();
+    }
+  });
+
   it("bounds probes when a server accepts the connection but never responds", async () => {
     const sockets = new Set<Socket>();
     const server = createTcpServer((socket) => {

@@ -35,6 +35,8 @@ const prepareBoundaryArtifactsBin = resolve(
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
+const STEP_PROCESS_GROUP_EXIT_POLL_MS = 25;
+const STEP_POST_FORCE_KILL_WAIT_MS = 1_000;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
 const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
@@ -420,6 +422,34 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         child.kill(signal);
       }
     };
+    const processGroupAlive = () => {
+      if (platform === "win32" || typeof child.pid !== "number") {
+        return false;
+      }
+      try {
+        killProcess(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    };
+    const waitForProcessGroupExit = async (ms) => {
+      const deadlineAt = Date.now() + ms;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, STEP_PROCESS_GROUP_EXIT_POLL_MS);
+        });
+      }
+      return !processGroupAlive();
+    };
+    const waitAfterForceKill = async () => {
+      if (processGroupAlive()) {
+        await waitForProcessGroupExit(STEP_POST_FORCE_KILL_WAIT_MS);
+      }
+    };
     const abortSignal = abortController?.signal;
     const abortListener = () => {
       signalChild("SIGTERM");
@@ -443,30 +473,33 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       settled = true;
       cleanup();
       signalChild("SIGKILL");
-      const stdoutText = formatCapturedStepOutput(stdout);
-      const stderrText = formatCapturedStepOutput(stderr);
-      const error = attachStepFailureMetadata(
-        new Error(
-          formatStepFailure(label, {
+      void (async () => {
+        await waitAfterForceKill();
+        const stdoutText = formatCapturedStepOutput(stdout);
+        const stderrText = formatCapturedStepOutput(stderr);
+        const error = attachStepFailureMetadata(
+          new Error(
+            formatStepFailure(label, {
+              stdout: stdoutText,
+              stderr: stderrText,
+              kind: "timeout",
+              elapsedMs: Date.now() - startedAt,
+              note: `${label} timed out after ${timeoutMs}ms`,
+            }),
+          ),
+          label,
+          {
             stdout: stdoutText,
             stderr: stderrText,
             kind: "timeout",
             elapsedMs: Date.now() - startedAt,
             note: `${label} timed out after ${timeoutMs}ms`,
-          }),
-        ),
-        label,
-        {
-          stdout: stdoutText,
-          stderr: stderrText,
-          kind: "timeout",
-          elapsedMs: Date.now() - startedAt,
-          note: `${label} timed out after ${timeoutMs}ms`,
-        },
-      );
-      onFailure?.(error);
-      abortSiblingSteps(abortController);
-      rejectPromise(toLintErrorObject(error, "Step timed out"));
+          },
+        );
+        onFailure?.(error);
+        abortSiblingSteps(abortController);
+        rejectPromise(toLintErrorObject(error, "Step timed out"));
+      })();
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");

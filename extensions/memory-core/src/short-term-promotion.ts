@@ -2526,10 +2526,6 @@ export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
 
-export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
-  return resolvePhaseSignalPath(workspaceDir);
-}
-
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
   return resolveLockPath(workspaceDir);
 }

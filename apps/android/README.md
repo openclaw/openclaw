@@ -69,6 +69,17 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
+To make screenshot capture own emulator startup, pass a named AVD:
+
+```bash
+ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
+```
+
+The screenshot script uses one connected ADB device when available. If none is
+connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
+headlessly, waits for Android to finish booting, disables animations, captures
+the screenshots, then shuts down the emulator it started.
+
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
 - Play build: `openclaw-<version>-play-release.aab`

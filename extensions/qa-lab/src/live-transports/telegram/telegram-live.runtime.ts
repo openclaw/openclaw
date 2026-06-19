@@ -1229,9 +1229,15 @@ function assertTelegramScenarioMessageSet(params: {
 async function waitForTelegramChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
+  options?: {
+    pollMs?: number;
+    timeoutMs?: number;
+  },
 ) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 45_000) {
+  const timeoutMs = options?.timeoutMs ?? 45_000;
+  const pollMs = options?.pollMs ?? 500;
+  while (Date.now() - startedAt < timeoutMs) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -1240,19 +1246,24 @@ async function waitForTelegramChannelRunning(
       )) as {
         channelAccounts?: Record<
           string,
-          Array<{ accountId?: string; running?: boolean; restartPending?: boolean }>
+          Array<{
+            accountId?: string;
+            connected?: boolean;
+            running?: boolean;
+            restartPending?: boolean;
+          }>
         >;
       };
       const accounts = payload.channelAccounts?.telegram ?? [];
       const match = accounts.find((entry) => entry.accountId === accountId);
-      if (match?.running && match.restartPending !== true) {
+      if (match?.running && match.connected === true && match.restartPending !== true) {
         return;
       }
     } catch {
       // retry
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 500);
+      setTimeout(resolve, pollMs);
     });
   }
   throw new Error(`telegram account "${accountId}" did not become ready`);
@@ -2254,6 +2265,7 @@ export const testing = {
   shouldLogTelegramQaLiveProgress,
   formatTelegramQaProgressDetails,
   renderTelegramQaMarkdown,
+  waitForTelegramChannelRunning,
   waitForObservedMessage,
 };
 export { testing as __testing };
