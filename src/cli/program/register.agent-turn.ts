@@ -1,6 +1,6 @@
 // Single agent-turn command registration; delegates execution to the Gateway-backed agent command.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -62,6 +62,26 @@ export function registerAgentTurnCommand(
     .option(
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
+    )
+    .addOption(
+      new Option(
+        "--bootstrap-context-mode <mode>",
+        "Internal: workspace bootstrap context mode for embedded local runs",
+      )
+        .choices(["full", "lightweight"])
+        .hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--disable-tools",
+        "Internal: disable runtime tools for embedded local runs",
+      ).hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--stream-max-tokens <tokens>",
+        "Internal: max output tokens for embedded local runs",
+      ).hideHelp(),
     )
     .addHelpText(
       "after",
