@@ -1739,6 +1739,25 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+  it("samples the POSIX gateway root when command-line needles match", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout:
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
   it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
