@@ -382,4 +382,15 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
   });
+
+  it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
+    const backend = buildAnthropicCliBackend();
+    for (const args of [backend.config.args, backend.config.resumeArgs]) {
+      const idx = args.indexOf("--disallowedTools");
+      expect(idx).toBeGreaterThanOrEqual(0);
+      const deny = args[idx + 1] ?? "";
+      expect(deny).toContain("Bash(run_in_background:true)");
+      expect(deny).toContain("Monitor");
+    }
+  });
 });
