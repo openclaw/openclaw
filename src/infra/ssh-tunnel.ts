@@ -132,7 +132,7 @@ export async function startSshPortForward(opts: {
   const args = [
     "-N",
     "-L",
-    `${localPort}:127.0.0.1:${opts.remotePort}`,
+    `127.0.0.1:${localPort}:127.0.0.1:${opts.remotePort}`,
     "-p",
     String(parsed.port),
     "-o",

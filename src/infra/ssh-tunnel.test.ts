@@ -70,7 +70,7 @@ describe("startSshPortForward", () => {
   function spawnFakeSshListening() {
     mocks.spawn.mockImplementation((_cmd: string, args: string[]) => {
       const forwardSpec = args[args.indexOf("-L") + 1] ?? "";
-      const localPort = Number(forwardSpec.split(":")[0]);
+      const localPort = Number(forwardSpec.split(":")[1]);
       const server = net.createServer();
       server.on("error", () => {});
       openServers.push(server);
@@ -146,7 +146,7 @@ describe("startSshPortForward", () => {
     expect(tunnel.localPort).toBeGreaterThan(0);
     expect(mocks.spawn).toHaveBeenCalledWith(
       "/usr/bin/ssh",
-      expect.arrayContaining(["-L", `${tunnel.localPort}:127.0.0.1:18789`]),
+      expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
       expect.anything(),
     );
 
