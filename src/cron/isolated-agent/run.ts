@@ -423,7 +423,7 @@ export async function resolveCronDeliveryContext(params: {
       sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
     };
   }
-  const { resolveDeliveryTarget } = await loadCronDeliveryRuntime();
+  const { resolveDeliveryTarget, updateResolvedTaskRouteLease } = await loadCronDeliveryRuntime();
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
@@ -442,6 +442,19 @@ export async function resolveCronDeliveryContext(params: {
     // standard session-key lookup chain.
     runId: params.runId,
   });
+  // #92460 P1 #2: once the resolver has produced a concrete (channel, to,
+  // accountId, threadId), update the task-route lease with that resolved
+  // target so the completion-time resolver can recover the same target even
+  // when higher-precedence session sources have been evicted or retargeted
+  // (the lease was originally captured from `job.delivery`, which may have
+  // only `channel` and no `to` in the reported case). Idempotent and best-
+  // effort: never throws, no-op on a missing or terminal lease.
+  if (resolvedDelivery.ok && params.runId) {
+    updateResolvedTaskRouteLease({
+      runId: params.runId,
+      resolved: resolvedDelivery,
+    });
+  }
   return {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,

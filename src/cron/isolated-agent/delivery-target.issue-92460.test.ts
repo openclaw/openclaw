@@ -34,6 +34,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   acquireTaskRouteLease,
+  getActiveTaskRouteLease,
   resetTaskRouteLeasesForTests,
 } from "../../tasks/task-route-lease.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -85,7 +86,7 @@ const mockedModuleIds = [
 
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
-import { resolveDeliveryTarget } from "./delivery-target.js";
+import { resolveDeliveryTarget, updateResolvedTaskRouteLease } from "./delivery-target.js";
 
 afterAll(() => {
   for (const id of mockedModuleIds) {
@@ -349,5 +350,153 @@ describe("resolveDeliveryTarget — issue #92460 task-route lease fallback", () 
     if (result.ok) {
       expect(result.to).toBe("100200300");
     }
+  });
+
+  it("routability-based fallback: empty thread entry does not mask routable lease (#92460 P1 #1)", async () => {
+    // Reported case: the cron job's own session entry EXISTS but has no
+    // `deliveryContext` and no `lastChannel` / `lastTo` (no message has
+    // ever been routed through it). The first cut of this PR used a
+    // presence-based `??` chain that let that empty entry win over the
+    // lease; the fix is to check routability — does the entry resolve to
+    // a (channel, to) pair? If not, the next higher-precedence source is
+    // tried.
+    const stateDir = createTempStateDir();
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    acquireTaskRouteLease({
+      runId: RUN_ID,
+      taskId: "task-92460-p1-1",
+      requesterOrigin: LEASE_ORIGIN_TELEGRAM,
+      ttlMs: 60_000,
+    });
+    // Thread session entry exists but is empty (no deliveryContext, no
+    // lastChannel, no lastTo). This is the exact shape the issue reports.
+    setSessionStore({
+      "agent:test:thread:abc": {
+        sessionId: "sess-empty-thread",
+        updatedAt: 1000,
+      },
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ channels: { telegram: {} } }), AGENT_ID, {
+      channel: "last",
+      to: undefined,
+      sessionKey: "agent:test:thread:abc",
+      runId: RUN_ID,
+    });
+
+    // Thread entry is unroutable (no context, no last), so the resolver
+    // falls through to the lease. With the first cut this would have
+    // returned ok:false ("Channel is required"); now the lease wins and
+    // the cron delivers to its captured room.
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.channel).toBe("telegram");
+      expect(result.to).toBe("100200300");
+    }
+  });
+
+  it("usedSharedMainFallback is false when the lease is routable (#91613 false-positive guard)", async () => {
+    // When the lease is the routable source, `usedSharedMainFallback` must
+    // be false even if the shared main session bucket has a lastChannel
+    // and lastTo. The #91613 refusal is gated on this flag, and a false
+    // positive here would reject the cron even though the lease carries
+    // the explicit originating origin.
+    const stateDir = createTempStateDir();
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    acquireTaskRouteLease({
+      runId: RUN_ID,
+      taskId: "task-92460-91613-guard",
+      requesterOrigin: LEASE_ORIGIN_TELEGRAM,
+      ttlMs: 60_000,
+    });
+    setSessionStore({
+      "agent:test:main": {
+        sessionId: "sess-other",
+        updatedAt: 1000,
+        lastChannel: "telegram",
+        lastTo: "999888777",
+        lastAccountId: "default",
+      },
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ channels: { telegram: {} } }), AGENT_ID, {
+      channel: "last",
+      to: undefined,
+      runId: RUN_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.to).toBe("100200300"); // Lease wins, not the wrong room.
+    }
+  });
+});
+
+describe("updateResolvedTaskRouteLease (#92460 P1 #2)", () => {
+  it("updates the lease origin with the resolved (channel, to, thread)", () => {
+    // Reported case: cron captured only `channel: "webchat"` at acquire
+    // time. The resolver produced a concrete target. The lease is updated
+    // so the completion-time resolver can recover it after the higher-
+    // precedence session sources have been evicted / retargeted.
+    const stateDir = createTempStateDir();
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    acquireTaskRouteLease({
+      runId: "run-update-call",
+      taskId: "task-update-call",
+      requesterOrigin: { channel: "webchat" }, // captured from job.delivery
+      ttlMs: 60_000,
+    });
+    expect(getActiveTaskRouteLease("run-update-call")?.requesterOrigin).toEqual({
+      channel: "webchat",
+    });
+
+    const updated = updateResolvedTaskRouteLease({
+      runId: "run-update-call",
+      resolved: {
+        ok: true,
+        channel: "webchat",
+        to: "user:resolved-target",
+        threadId: "thread-99",
+        mode: "explicit",
+      },
+    });
+    expect(updated).toBe(true);
+    expect(getActiveTaskRouteLease("run-update-call")?.requesterOrigin).toEqual({
+      channel: "webchat",
+      to: "user:resolved-target",
+      accountId: undefined,
+      threadId: "thread-99",
+    });
+  });
+
+  it("returns false when runId is empty", () => {
+    const updated = updateResolvedTaskRouteLease({
+      runId: "",
+      resolved: {
+        ok: true,
+        channel: "webchat",
+        to: "user:nobody",
+        mode: "explicit",
+      },
+    });
+    expect(updated).toBe(false);
+  });
+
+  it("preserves the original origin when no lease is present", () => {
+    // The resolver may run for a path that never acquired a lease (e.g. a
+    // non-cron caller). updateResolvedTaskRouteLease must be a no-op,
+    // not a crash.
+    const stateDir = createTempStateDir();
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const updated = updateResolvedTaskRouteLease({
+      runId: "run-no-lease",
+      resolved: {
+        ok: true,
+        channel: "webchat",
+        to: "user:nobody",
+        mode: "explicit",
+      },
+    });
+    expect(updated).toBe(false);
   });
 });

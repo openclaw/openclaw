@@ -17,7 +17,8 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { getActiveTaskRouteLease } from "../../tasks/task-route-lease.js";
+import { getActiveTaskRouteLease, updateTaskRouteLease } from "../../tasks/task-route-lease.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -132,6 +133,80 @@ function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget
   return target.resolutionSource === "normalized";
 }
 
+/**
+ * Update the task-route lease for a run with the target the resolver
+ * just produced. Best-effort: never throws; no-op when the lease is
+ * missing, terminal, or the resolver produced no concrete target.
+ *
+ * Called by `resolveCronDeliveryContext` after `resolveDeliveryTarget`
+ * returns ok:true (see #92460 P1 #2). The lease captured at
+ * `tryCreateCronTaskRun` time may have only `channel` and no `to`; once
+ * the resolver has produced a routable target, persisting it to the lease
+ * lets the completion-time resolver recover the same target even when
+ * the higher-precedence session sources have been evicted or retargeted
+ * in the meantime.
+ */
+export function updateResolvedTaskRouteLease(params: {
+  runId: string;
+  resolved: Extract<DeliveryTargetResolution, { ok: true }>;
+  now?: number;
+}): boolean {
+  if (!params.runId) {
+    return false;
+  }
+  const origin: DeliveryContext = {
+    channel: params.resolved.channel,
+    to: params.resolved.to,
+  };
+  if (params.resolved.accountId) {
+    origin.accountId = params.resolved.accountId;
+  }
+  if (params.resolved.threadId !== undefined && params.resolved.threadId !== null) {
+    origin.threadId = params.resolved.threadId;
+  }
+  return updateTaskRouteLease(params.runId, origin, { now: params.now });
+}
+
+/**
+ * #92460 P1 #3 helper: is a session entry a routable delivery candidate
+ * given the caller-supplied explicit to and requested channel?
+ *
+ * An entry is "routable" when it carries a (channel, to) pair the resolver
+ * can use without further fallback to a different source:
+ *
+ *  - `entry.deliveryContext` has a non-empty channel AND either a non-empty
+ *    `to` or the caller has supplied `explicitTo`;
+ *  - OR `requestedChannel === "last"` AND the entry remembered a
+ *    `lastChannel`/`lastTo` pair (the resolver can use it for the "last"
+ *    branch of `resolveSessionDeliveryTarget`).
+ *
+ * Presence alone is not enough — the reported case in #92460 is exactly
+ * the case where the session entry exists without `deliveryContext` or
+ * `lastTo`, and a presence-based `??` chain would let that empty entry
+ * mask the routable task-route lease fallback.
+ */
+function isRoutableDeliveryEntry(
+  entry: SessionEntry | undefined,
+  params: { explicitTo?: string; requestedChannel: string },
+): entry is SessionEntry {
+  if (!entry) {
+    return false;
+  }
+  const ctx = entry.deliveryContext;
+  if (ctx?.channel) {
+    if (ctx.to) {
+      return true;
+    }
+    if (params.explicitTo) {
+      return true;
+    }
+  }
+  if (params.requestedChannel === "last" && entry.lastChannel && entry.lastTo) {
+    return true;
+  }
+  return false;
+}
+
 /** Resolves cron delivery config into a concrete channel target and optional thread/account. */
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -205,15 +280,39 @@ export async function resolveDeliveryTarget(
         deliveryContext: leaseOrigin,
       } satisfies SessionEntry)
     : undefined;
-  // Precedence: stored cron delivery context > thread entry > lease entry
-  // > shared main session bucket. The lease entry only wins when the
-  // higher-precedence sources are missing AND a lease exists for the run.
-  const main = storedDeliveryEntry ?? threadEntry ?? leaseEntry ?? mainEntry;
-  // True when the cron has no delivery identity of its own (no per-job target, no own
-  // sessionKey, no stored/creation delivery context, no active lease) and therefore fell
-  // back to the SHARED agent-main session bucket. See the #91613 refusal below.
+  // #92460 P1 #1: routability-based fallback. The reported case is exactly
+  // an isolated cron session entry that EXISTS but has no `deliveryContext`
+  // / `lastTo` (no message has ever been routed through it). A presence-
+  // based `??` chain treats that empty entry as authoritative and masks the
+  // task-route lease, which is the only place the original outbound origin
+  // survives. Prefer the first higher-precedence source that actually
+  // resolves to a routable (channel, to) pair; fall through to the
+  // presence-based chain ONLY when no source is routable, preserving the
+  // existing "no target" / "no channel" error path.
+  const fallbackCandidates: ReadonlyArray<SessionEntry | undefined> = [
+    storedDeliveryEntry,
+    threadEntry,
+    leaseEntry,
+    mainEntry,
+  ];
+  const routableCandidate = fallbackCandidates.find((entry) =>
+    isRoutableDeliveryEntry(entry, {
+      explicitTo,
+      requestedChannel,
+    }),
+  );
+  const main = routableCandidate ?? storedDeliveryEntry ?? threadEntry ?? leaseEntry ?? mainEntry;
+  // True when the cron has no delivery identity of its own (no per-job
+  // target, no own sessionKey, no routable stored/thread/lease entry) and
+  // therefore fell back to the SHARED agent-main session bucket. See the
+  // #91613 refusal below. The previous definition omitted `!threadEntry`
+  // and used presence (not routability) for the higher-precedence sources;
+  // both gaps masked the lease fallback in the reported #92460 case.
   const usedSharedMainFallback =
-    mainEntry !== undefined && main === mainEntry && !storedDeliveryEntry && !leaseEntry;
+    main === mainEntry &&
+    !isRoutableDeliveryEntry(storedDeliveryEntry, { explicitTo, requestedChannel }) &&
+    !isRoutableDeliveryEntry(threadEntry, { explicitTo, requestedChannel }) &&
+    !isRoutableDeliveryEntry(leaseEntry, { explicitTo, requestedChannel });
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
