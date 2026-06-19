@@ -462,11 +462,6 @@ function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOption
   ];
 }
 
-/** Build command-line args for launching chrome-devtools-mcp. */
-export function buildChromeMcpArgs(input?: string | ChromeMcpProfileOptions): string[] {
-  return buildChromeMcpArgsFromOptions(normalizeChromeMcpOptions(input));
-}
-
 function drainStderr(transport: StdioClientTransport): () => string {
   const stream = transport.stderr;
   if (!stream) {

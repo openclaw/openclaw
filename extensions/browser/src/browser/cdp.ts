@@ -318,37 +318,6 @@ export type CdpExceptionDetails = {
   stackTrace?: unknown;
 };
 
-/** Evaluate JavaScript in a CDP target and return by value when possible. */
-export async function evaluateJavaScript(opts: {
-  wsUrl: string;
-  expression: string;
-  awaitPromise?: boolean;
-  returnByValue?: boolean;
-}): Promise<{
-  result: CdpRemoteObject;
-  exceptionDetails?: CdpExceptionDetails;
-}> {
-  return await withCdpSocket(opts.wsUrl, async (send) => {
-    await send("Runtime.enable").catch(() => {});
-    const evaluated = (await send("Runtime.evaluate", {
-      expression: opts.expression,
-      awaitPromise: Boolean(opts.awaitPromise),
-      returnByValue: opts.returnByValue ?? true,
-      userGesture: true,
-      includeCommandLineAPI: true,
-    })) as {
-      result?: CdpRemoteObject;
-      exceptionDetails?: CdpExceptionDetails;
-    };
-
-    const result = evaluated?.result;
-    if (!result) {
-      throw new Error("CDP Runtime.evaluate returned no result");
-    }
-    return { result, exceptionDetails: evaluated.exceptionDetails };
-  });
-}
-
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;

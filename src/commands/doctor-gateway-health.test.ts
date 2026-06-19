@@ -8,6 +8,7 @@ import {
 
 const callGateway = vi.hoisted(() => vi.fn());
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
+const isGatewayTransportError = vi.hoisted(() => vi.fn(() => false));
 const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
@@ -27,6 +28,7 @@ vi.mock("../gateway/call.js", () => ({
   })),
   callGateway,
   isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
 }));
 
 vi.mock("../gateway/credentials.js", () => ({
@@ -54,6 +56,8 @@ describe("checkGatewayHealth", () => {
     callGateway.mockReset();
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
+    isGatewayTransportError.mockReset();
+    isGatewayTransportError.mockReturnValue(false);
     isGatewaySecretRefUnavailableError.mockReset();
     isGatewaySecretRefUnavailableError.mockReturnValue(false);
     probeGatewayStatus.mockReset();
@@ -119,6 +123,26 @@ describe("checkGatewayHealth", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("gateway timeout after 3000ms"),
     );
+  });
+
+  it("reports the typed close reason instead of claiming the gateway is not running", async () => {
+    const error = Object.assign(
+      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
+      {
+        kind: "closed",
+      },
+    );
+    callGateway.mockRejectedValueOnce(error);
+    isGatewayTransportError.mockImplementation((value) => value === error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      "Gateway connect failed: gateway closed (1008): protocol version mismatch",
+      "Gateway",
+    );
+    expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
   });
 
   it("reports credentials-required when status RPC auth blocks a reachable gateway", async () => {
