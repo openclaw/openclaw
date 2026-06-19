@@ -1,6 +1,5 @@
 // Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { note as clackNote } from "@clack/prompts";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 import { normalizeLowercaseStringOrEmpty } from "./string.js";
@@ -207,10 +206,47 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
-    output: createNoteOutput(columns),
-    format: (line) => line,
-  });
+  const wrapped = wrapNoteMessage(message, { columns });
+
+  // #94730: Draw the bordered box ourselves instead of delegating to
+  // clackNote, which re-wraps the message with hard wrapAnsi and can split
+  // copy-sensitive tokens (paths, URLs) mid-token at the box boundary.
+  // wrapNoteMessage already preserves copy-sensitive tokens via
+  // isCopySensitiveToken; rendering the box directly keeps that guarantee.
+  const lines = wrapped.split("\n");
+  const titleText = stylePromptTitle(title);
+  const innerWidth = columns - 4;
+  const out = createNoteOutput(columns);
+
+  // Top border: ◇  Title ────────────────────────────────────────────────╮
+  if (titleText) {
+    const titleLen = visibleWidth(titleText);
+    const titlePad = titleLen > 0 ? " " : "";
+    const barLen = Math.max(0, innerWidth - 2 - titleLen - titlePad.length);
+    out.write(`◇  ${titleText}${titlePad}${"─".repeat(barLen)}╮\n`);
+  } else {
+    out.write(`◇  ${"─".repeat(innerWidth - 2)}╮\n`);
+  }
+
+  // Vertical sides
+  out.write(`│${" ".repeat(innerWidth)}│\n`);
+
+  // Content lines — rendered as-is, no re-wrapping
+  for (const line of lines) {
+    const lineWidth = visibleWidth(line);
+    if (lineWidth <= innerWidth) {
+      out.write(`│  ${line}${" ".repeat(innerWidth - 2 - lineWidth)}│\n`);
+    } else {
+      // Copy-sensitive oversized line: let it overflow the right border
+      // so the user can still triple-click and copy the whole path/URL.
+      out.write(`│  ${line} │\n`);
+    }
+  }
+
+  out.write(`│${" ".repeat(innerWidth)}│\n`);
+
+  // Bottom border ──────────────────────────────────────────────────────╯
+  out.write(`├${"─".repeat(innerWidth)}╯\n`);
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {
