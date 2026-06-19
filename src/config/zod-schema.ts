@@ -6,7 +6,7 @@ import {
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
@@ -1331,6 +1331,8 @@ export const OpenClawSchema = z
     // Bindings referencing a missing agent id silently misroute at gateway
     // load time. Match routing's normalized id semantics; otherwise valid
     // configured routes like "Team Ops" -> "team-ops" would fail at load.
+    // Explicit "main" bindings are always valid — the implicit main session
+    // exists regardless of agents.list contents.
     const bindings = cfg.bindings;
     if (Array.isArray(bindings)) {
       for (let idx = 0; idx < bindings.length; idx += 1) {
@@ -1339,7 +1341,11 @@ export const OpenClawSchema = z
           continue;
         }
         const agentId = (binding as { agentId?: unknown }).agentId;
-        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+        if (
+          typeof agentId === "string" &&
+          agentId !== DEFAULT_AGENT_ID &&
+          !effectiveAgentIds.has(normalizeAgentId(agentId))
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["bindings", idx, "agentId"],
