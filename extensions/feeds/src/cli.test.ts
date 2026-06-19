@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
 import {
   feedsListCommand,
   feedsSearchCommand,
@@ -8,6 +14,10 @@ import {
 } from "./cli.js";
 
 describe("Feeds CLI", () => {
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+  });
+
   it("lists configured sources", async () => {
     const runtime = createRuntime({ sources: [{ id: "approved", url: "file:///feeds.json" }] });
     const exitCode = await feedsSourcesCommand({ json: true }, runtime);
@@ -78,6 +88,41 @@ describe("Feeds CLI", () => {
     expect(JSON.parse(runtime.stdout).entries).toEqual([
       expect.objectContaining({ id: "calendar-helper" }),
     ]);
+  });
+
+  it("loads HTTPS feeds through the SSRF guard", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({ schemaVersion: 1, id: "company-approved", entries: [] }),
+      ),
+      release,
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "https://feeds.example.com/feed.json" }],
+    });
+
+    const exitCode = await feedsListCommand({ json: true }, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout).entries).toEqual([]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://feeds.example.com/feed.json",
+      auditContext: "feeds.feed-document",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports SSRF guard blocks for HTTPS feeds", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValue(new Error("SSRF blocked private network target"));
+    const runtime = createRuntime({
+      sources: [{ id: "private", url: "https://127.0.0.1/feed.json" }],
+    });
+
+    const exitCode = await feedsListCommand({ json: true }, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("SSRF blocked private network target");
   });
 
   it("checks pinned feed integrity while loading entries", async () => {

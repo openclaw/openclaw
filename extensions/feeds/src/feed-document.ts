@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FeedSourceConfig = {
@@ -124,8 +125,15 @@ async function readFeedBytes(url: string, runtime: FeedDocumentRuntime): Promise
 }
 
 async function defaultFetch(url: string): Promise<{ readonly ok: boolean; readonly text: string }> {
-  const response = await fetch(url);
-  return { ok: response.ok, text: await response.text() };
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    auditContext: "feeds.feed-document",
+  });
+  try {
+    return { ok: response.ok, text: await response.text() };
+  } finally {
+    await release();
+  }
 }
 
 function parseFeedEntry(value: unknown, sourceId: string, index: number): FeedEntry {
