@@ -1193,6 +1193,44 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry on EADDRNOTAVAIL string code", async () => {
+    undiciFetch.mockRejectedValue(buildFetchFallbackError("EADDRNOTAVAIL"));
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on EADDRNOTAVAIL numeric errno (99)", async () => {
+    const connectErr = Object.assign(new Error("connect EADDRNOTAVAIL api.telegram.org:443"), {
+      errno: 99,
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: connectErr,
+    });
+    undiciFetch.mockRejectedValue(fetchError);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("retries sticky fallback when the local network is down during connect", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))

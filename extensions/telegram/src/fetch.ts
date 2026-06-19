@@ -431,6 +431,10 @@ function collectErrorCodes(err: unknown): Set<string> {
       if (typeof code === "string" && code.trim()) {
         codes.add(code.trim().toUpperCase());
       }
+      const errno = (current as { errno?: unknown }).errno;
+      if (typeof errno === "number") {
+        codes.add(String(errno));
+      }
       const cause = (current as { cause?: unknown }).cause;
       if (cause && !seen.has(cause)) {
         queue.push(cause);
@@ -473,6 +477,11 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
         : "",
     codes: collectErrorCodes(err),
   };
+  // ponytail: EADDRNOTAVAIL (ephemeral port exhaustion) is a local failure; switching to
+  // an alternative IP address cannot help. Check both the string code and numeric errno.
+  if (ctx.codes.has("EADDRNOTAVAIL") || ctx.codes.has("99")) {
+    return false;
+  }
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
   return hasKnownNetworkCode || (hasFetchFailedEnvelope && ctx.codes.size === 0);
