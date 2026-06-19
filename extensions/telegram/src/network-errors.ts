@@ -270,6 +270,14 @@ export function isTelegramRateLimitError(err: unknown): boolean {
   );
 }
 
+export function hasTelegramHttpErrorCode(err: unknown): boolean {
+  return hasTelegramErrorCode(err, () => true);
+}
+
+export function isTelegramUnauthorizedError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code === 401);
+}
+
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;

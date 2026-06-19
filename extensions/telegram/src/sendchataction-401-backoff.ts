@@ -7,9 +7,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  hasTelegramHttpErrorCode,
   isRecoverableTelegramNetworkError,
   isTelegramRateLimitError,
   isTelegramServerError,
+  isTelegramUnauthorizedError,
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 
@@ -67,6 +69,12 @@ const BACKOFF_POLICY: BackoffPolicy = {
 
 function is401Error(error: unknown): boolean {
   if (!error) {
+    return false;
+  }
+  if (isTelegramUnauthorizedError(error)) {
+    return true;
+  }
+  if (hasTelegramHttpErrorCode(error)) {
     return false;
   }
   const message = error instanceof Error ? error.message : JSON.stringify(error);
