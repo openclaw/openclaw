@@ -237,6 +237,52 @@ export function mapDeliveryStatusToLeaseRetirement(
 }
 
 /**
+ * Update the captured `requesterOrigin` of an active lease. Idempotent —
+ * updating an already-terminal lease is a no-op. Best-effort: never throws.
+ *
+ * Used after the delivery-target resolver has produced a concrete
+ * channel/to/account/thread (see #92460 P1 #2): the lease captured at
+ * `tryCreateCronTaskRun` time may have only the cron job's own
+ * `delivery.channel` and no `to`; once the resolver has produced a routable
+ * target, the lease is updated so the completion-time resolver can recover
+ * the same target even when higher-precedence session sources have been
+ * evicted or retargeted in the meantime.
+ */
+export function updateTaskRouteLease(
+  runId: string,
+  requesterOrigin: DeliveryContext | undefined,
+  options: { now?: number } = {},
+): boolean {
+  const origin = normalizeDeliveryContext(requesterOrigin);
+  try {
+    let updated = false;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const kysely = getTaskRouteLeaseKysely(db);
+      // Only update active leases. The active lookup filter (`status='active'`
+      // AND `expires_at > now`) is mirrored here so a lease that already
+      // settled or expired is not silently re-armed with a new origin.
+      const now = options.now ?? Date.now();
+      const result = executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("task_route_leases")
+          .set({
+            requester_origin_json: origin ? JSON.stringify(origin) : "",
+          })
+          .where("run_id", "=", runId)
+          .where("status", "=", "active")
+          .where("expires_at", ">", now),
+      );
+      updated = Number(result.numAffectedRows ?? 0n) > 0;
+    });
+    return updated;
+  } catch (error) {
+    log.warn("updateTaskRouteLease failed", { runId, error });
+    return false;
+  }
+}
+
+/**
  * Extend the TTL of an active lease. Idempotent — extending an already-
  * terminal lease is a no-op. Best-effort: never throws.
  */
