@@ -280,7 +280,8 @@ export function resolveCronPayloadOutcome(params: {
     params.failureSignal?.fatalForCron !== true &&
     hasRecoveringTerminalOutput &&
     (isNonTerminalToolErrorWarning(lastErrorPayload) ||
-      isCronToolWarning(lastErrorPayloadText));
+      (isCronToolWarning(lastErrorPayloadText) &&
+        errorPayloads.every((payload) => isCronToolWarning(payload?.text))));
   const hasPendingPresentationWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
