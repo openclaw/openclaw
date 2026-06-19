@@ -353,6 +353,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       // un-marks this target and the post-hoc final echo delivers (no silent drop).
       throw new Error(`telegram mirror: context dropped for ${mirror.target.to}`);
     }
+    // A mirror inbound is a synthetic re-home of an already-handled turn, NOT real
+    // user input. Suppress its message:received hooks so the echo hook does not treat
+    // the synthetic "." message as a user message and re-echo a phantom placeholder
+    // (or fire plugin received-hook side effects) into the other pinned targets.
+    context.ctxPayload.SuppressMessageReceivedHooks = true;
     await dispatchTelegramMessage({
       context,
       bot,
