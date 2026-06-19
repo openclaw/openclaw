@@ -1,5 +1,6 @@
 // Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -62,9 +63,12 @@ const EMBEDDED_FALLBACK_META = {
 } as const;
 const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
+const MAX_AGENT_MESSAGE_INPUT_BYTES = 10 * 1024 * 1024;
 
 type AgentCliOpts = {
-  message: string;
+  message?: string;
+  messageFile?: string;
+  messageStdin?: boolean;
   agent?: string;
   model?: string;
   to?: string;
@@ -94,6 +98,7 @@ type AgentCliProcessLike = {
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
 };
+type ResolvedAgentCliOpts = AgentCliOpts & { message: string };
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
@@ -192,6 +197,86 @@ function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
   return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
 }
 
+function formatMissingMessageError(): string {
+  return `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')}, --message-file <path>, or --message-stdin.`;
+}
+
+function formatMessageInputSizeError(source: string): string {
+  return `Message input from ${source} exceeds ${MAX_AGENT_MESSAGE_INPUT_BYTES} bytes. Use a smaller prompt or split the request.`;
+}
+
+function assertAgentMessageInputSize(value: string, source: string): void {
+  if (Buffer.byteLength(value, "utf8") > MAX_AGENT_MESSAGE_INPUT_BYTES) {
+    throw new Error(formatMessageInputSizeError(source));
+  }
+}
+
+function readAgentMessageFile(filePath: string): string {
+  const stat = statSync(filePath);
+  if (stat.size > MAX_AGENT_MESSAGE_INPUT_BYTES) {
+    throw new Error(formatMessageInputSizeError("--message-file"));
+  }
+  const value = readFileSync(filePath, "utf8");
+  assertAgentMessageInputSize(value, "--message-file");
+  return value;
+}
+
+async function readAgentMessageStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new Error(
+      "--message-stdin requires piped input. Pipe a prompt on stdin or use --message-file <path>.",
+    );
+  }
+  const chunks: string[] = [];
+  let byteLength = 0;
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) {
+    const text =
+      typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
+    byteLength += Buffer.byteLength(text, "utf8");
+    if (byteLength > MAX_AGENT_MESSAGE_INPUT_BYTES) {
+      throw new Error(formatMessageInputSizeError("--message-stdin"));
+    }
+    chunks.push(text);
+  }
+  return chunks.join("");
+}
+
+async function resolveAgentCliMessageInput(opts: AgentCliOpts): Promise<ResolvedAgentCliOpts> {
+  const messageFile = normalizeOptionalString(opts.messageFile);
+  const modes = [
+    typeof opts.message === "string",
+    Boolean(messageFile),
+    opts.messageStdin === true,
+  ].filter(Boolean);
+  if (modes.length !== 1) {
+    throw new Error(
+      "Choose exactly one message input: --message, --message-file, or --message-stdin.",
+    );
+  }
+
+  let rawMessage = "";
+  if (typeof opts.message === "string") {
+    rawMessage = opts.message;
+    assertAgentMessageInputSize(rawMessage, "--message");
+  } else if (messageFile) {
+    rawMessage = readAgentMessageFile(messageFile);
+  } else {
+    rawMessage = await readAgentMessageStdin();
+  }
+
+  const message = rawMessage.trim();
+  if (!message) {
+    throw new Error(formatMissingMessageError());
+  }
+  return {
+    ...opts,
+    message,
+    messageFile: undefined,
+    messageStdin: undefined,
+  };
+}
+
 async function getGatewayDispatchConfig(options?: {
   skipShellEnvFallback?: boolean;
 }): Promise<OpenClawConfig> {
@@ -231,7 +316,7 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
-function isControlCommandThatMustNotFallback(opts: Pick<AgentCliOpts, "message">): boolean {
+function isControlCommandThatMustNotFallback(opts: Pick<ResolvedAgentCliOpts, "message">): boolean {
   const normalized = opts.message.trim().toLowerCase();
   return normalized === "/compact" || normalized.startsWith("/compact ");
 }
@@ -288,7 +373,7 @@ function validateExplicitSessionKeyForDispatch(
   }
 }
 
-async function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): Promise<AgentCliOpts> {
+async function normalizeSessionKeyOptsForDispatch<T extends AgentCliOpts>(opts: T): Promise<T> {
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
   if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
@@ -620,17 +705,15 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
 }
 
 async function agentViaGatewayCommand(
-  opts: AgentCliOpts,
+  opts: ResolvedAgentCliOpts,
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
   protectJsonStdout(opts);
-  const body = (opts.message ?? "").trim();
+  const body = opts.message.trim();
   const explicitSessionKey = opts.sessionKey?.trim();
   if (!body) {
-    throw new Error(
-      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or pass --to/--session-key/--session-id for an existing conversation.`,
-    );
+    throw new Error(formatMissingMessageError());
   }
   if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
     throw new Error(
@@ -806,7 +889,7 @@ async function agentViaGatewayCommand(
 }
 
 async function agentViaGatewayCommandWithTransientRetries(
-  opts: AgentCliOpts,
+  opts: ResolvedAgentCliOpts,
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
@@ -839,7 +922,8 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
-  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
+  const resolvedOpts = await resolveAgentCliMessageInput(opts);
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(resolvedOpts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
