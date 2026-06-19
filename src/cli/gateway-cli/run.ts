@@ -952,7 +952,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       runtime: defaultRuntime,
       lockPort: port,
       healthHost,
-      start: async ({ startupStartedAt } = {}) => {
+      start: async ({ startupStartedAt, inProcessRestart } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
@@ -960,6 +960,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
+          inProcessRestart,
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),

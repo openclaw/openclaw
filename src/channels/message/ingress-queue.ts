@@ -843,3 +843,102 @@ export function createChannelIngressQueue<
     prune,
   };
 }
+
+/**
+ * Sweep all stale claims across every channel ingress queue.
+ *
+ * Called at gateway startup to release old claimed rows left behind by a
+ * previous crash. The `staleMs` age window is the owner boundary: fresh claims
+ * can belong to a concurrently-starting sibling gateway, while old claims are
+ * recoverable even if the recorded PID has been reused by this or another
+ * unrelated process.
+ *
+ * Best-effort: errors are surfaced to the caller, who should log and continue.
+ *
+ * @see recoverStaleClaims — per-queue recovery during normal drain
+ * @see https://github.com/openclaw/openclaw/issues/90945
+ */
+export async function recoverAllStaleChannelIngressClaims(options?: {
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+  /** Minimum age in ms before a claim is considered stale. Defaults to 60s. */
+  staleMs?: number;
+  log?: { info: (message: string) => void };
+}): Promise<number> {
+  const staleMs = Math.max(0, Math.floor(options?.staleMs ?? 60_000));
+  const database = openOpenClawStateDatabase({
+    env: options?.env ?? process.env,
+  });
+
+  const nowMs = (options?.now ?? Date.now)();
+  const cutoff = nowMs - staleMs;
+
+  const kysely = getChannelIngressKysely(database.db);
+  const claimedRows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("channel_ingress_events")
+      .select(["queue_name", "event_id", "claim_token", "claimed_at"])
+      .where("status", "=", "claimed")
+      .orderBy("claimed_at", "asc"),
+  ).rows;
+
+  if (claimedRows.length === 0) {
+    return 0;
+  }
+
+  // The age filter protects fresh claims from concurrently-starting sibling
+  // gateways. Once a claim ages past staleMs it is recoverable regardless of
+  // PID liveness, because unrelated processes can reuse recorded PIDs.
+  const staleRows = claimedRows.filter((row) => (row.claimed_at ?? 0) <= cutoff);
+
+  if (staleRows.length === 0) {
+    return 0;
+  }
+
+  // Batch release all stale claims in a single write transaction. Each release
+  // is guarded by the exact claim_token observed during selection: between the
+  // read above and this write, a sibling gateway could release and re-claim the
+  // same event (new token), and releasing on `status = "claimed"` alone would
+  // drop that fresh claim into duplicate processing.
+  const released = runOpenClawStateWriteTransaction(
+    (tx) => {
+      const txKysely = getChannelIngressKysely(tx.db);
+      let count = 0;
+      for (const row of staleRows) {
+        const result = executeSqliteQuerySync(
+          tx.db,
+          txKysely
+            .updateTable("channel_ingress_events")
+            .set((eb) => ({
+              status: "pending" as const,
+              claim_token: null,
+              claim_owner: null,
+              claimed_at: null,
+              attempts: eb("attempts", "+", 1),
+              last_attempt_at: nowMs,
+              last_error: "recovered at startup: stale claim",
+              updated_at: nowMs,
+            }))
+            .where("queue_name", "=", row.queue_name)
+            .where("event_id", "=", row.event_id)
+            .where("status", "=", "claimed")
+            .where("claim_token", "=", row.claim_token),
+        );
+        count += affectedRows(result);
+      }
+      return count;
+    },
+    { path: database.path },
+  );
+
+  if (released === 0) {
+    return 0;
+  }
+
+  options?.log?.info?.(
+    `gateway: recovered ${released} stale channel ingress claim(s) from previous session`,
+  );
+
+  return released;
+}

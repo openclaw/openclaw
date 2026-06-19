@@ -26,7 +26,10 @@ const cleanStaleGatewayProcessesSync = vi.fn(
 );
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
+type GatewayLoopStart = (params?: {
+  startupStartedAt?: number;
+  inProcessRestart?: boolean;
+}) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
@@ -348,6 +351,7 @@ describe("gateway run option collisions", () => {
       bind?: string;
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
+      inProcessRestart?: boolean;
     };
   }
 
@@ -1315,7 +1319,7 @@ describe("gateway run option collisions", () => {
   it("uses the startup snapshot only for the first in-process gateway start", async () => {
     runGatewayLoop.mockImplementationOnce(async ({ start }: { start: GatewayLoopStart }) => {
       await start({ startupStartedAt: 1000 });
-      await start({ startupStartedAt: 2000 });
+      await start({ startupStartedAt: 2000, inProcessRestart: true });
     });
 
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
@@ -1327,6 +1331,7 @@ describe("gateway run option collisions", () => {
     const secondOptions = gatewayStartOptions(1);
     expect(secondOptions.startupConfigSnapshotRead).toBeUndefined();
     expect(secondOptions.startupStartedAt).toBe(2000);
+    expect(secondOptions.inProcessRestart).toBe(true);
   });
 
   it("logs when first startup will build missing Control UI assets", async () => {
