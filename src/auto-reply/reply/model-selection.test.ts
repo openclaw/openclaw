@@ -1025,6 +1025,89 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
+  it("keeps provider-qualified stored overrides when providerOverride is also persisted", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:dashboard:child";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("openai/gpt-5.5");
+  });
+
+  it("normalizes provider-qualified parent stored overrides before allowlist checks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const parentSessionKey = "agent:main:dashboard:parent";
+    const sessionKey = "agent:main:dashboard:child";
+    const sessionEntry = makeEntry();
+    const parentEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry, [parentSessionKey]: parentEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[parentSessionKey]?.modelOverride).toBe("openai/gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+  });
+
   it("clears disallowed model overrides and falls back to the default", async () => {
     const cfg = {
       agents: {
