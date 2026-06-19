@@ -317,7 +317,10 @@ async function fetchOpencodeZenLiveModelIds(
 
 function buildDiscoveredOpencodeZenModels(modelIds: string[]): OpencodeZenModelDefinition[] {
   const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
-  return modelIds.map((modelId) => staticModels.get(modelId) ?? buildOpencodeZenModel(modelId));
+  return modelIds.flatMap((modelId) => {
+    const model = staticModels.get(modelId);
+    return model ? [model] : [];
+  });
 }
 
 export async function buildOpencodeZenLiveProviderConfig(
@@ -326,10 +329,10 @@ export async function buildOpencodeZenLiveProviderConfig(
   try {
     const liveModelIds = await fetchOpencodeZenLiveModelIds(params);
     if (liveModelIds.length > 0) {
-      return buildOpencodeZenProviderConfig(
-        buildDiscoveredOpencodeZenModels(liveModelIds),
-        params.apiKey,
-      );
+      const liveModels = buildDiscoveredOpencodeZenModels(liveModelIds);
+      if (liveModels.length > 0) {
+        return buildOpencodeZenProviderConfig(liveModels, params.apiKey);
+      }
     }
   } catch {
     // Live discovery is advisory; keep the provider-owned static seed visible.

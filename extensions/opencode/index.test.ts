@@ -272,7 +272,7 @@ describe("opencode provider plugin", () => {
     }
   });
 
-  it("uses cached live OpenCode Zen discovery and synthesizes live-only rows", async () => {
+  it("uses cached live OpenCode Zen discovery and filters live-only rows", async () => {
     const fetchGuard = vi.fn(async () => ({
       response: new Response(
         JSON.stringify({
@@ -299,14 +299,8 @@ describe("opencode provider plugin", () => {
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    expect(first.models.map((model) => model.id)).toEqual([
-      "claude-opus-4-8",
-      "gpt-6-experimental",
-    ]);
-    expect(second.models.map((model) => model.id)).toEqual([
-      "claude-opus-4-8",
-      "gpt-6-experimental",
-    ]);
+    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+    expect(second.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
     const claudeModel = first.models.find((model) => model.id === "claude-opus-4-8");
     expect(claudeModel).toMatchObject({
       api: "anthropic-messages",
@@ -314,13 +308,24 @@ describe("opencode provider plugin", () => {
       provider: "opencode",
     });
     const liveOnlyModel = first.models.find((model) => model.id === "gpt-6-experimental");
-    expect(liveOnlyModel).toMatchObject({
-      api: "openai-responses",
-      baseUrl: "https://opencode.ai/zen/v1",
-      provider: "opencode",
-      contextWindow: 400_000,
-      maxTokens: 128_000,
+    expect(liveOnlyModel).toBeUndefined();
+
+    clearLiveCatalogCacheForTests();
+    fetchGuard.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "gpt-6-experimental", object: "model" }],
+        }),
+      ),
+      finalUrl: "https://opencode.ai/zen/v1/models",
+      release: vi.fn(async () => undefined),
     });
+    const unknownOnly = await buildOpencodeZenLiveProviderConfig({
+      apiKey: "OPENCODE_API_KEY",
+      discoveryApiKey: "resolved-opencode-key",
+      fetchGuard,
+    });
+    expect(unknownOnly.models.map((model) => model.id)).toContain("claude-opus-4-8");
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
