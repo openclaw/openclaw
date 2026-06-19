@@ -225,22 +225,27 @@ function resolveTelegramCommandMenuModelContext(params: {
   agentId: string;
   sessionKey: string;
 }): { provider?: string; model?: string; thinkingLevel?: string } {
+  // Resolve the agent default model as the baseline fallback context.
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const defaultContext = {
+    provider: defaultModel.provider,
+    model: defaultModel.model,
+  };
+
   if (!params.sessionKey.trim()) {
-    return {};
+    return { ...defaultContext };
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
     const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return {
-        provider: defaultModel.provider,
-        model: defaultModel.model,
+        ...defaultContext,
         ...(thinkingLevel ? { thinkingLevel } : {}),
       };
     }
@@ -262,13 +267,20 @@ function resolveTelegramCommandMenuModelContext(params: {
       normalizeOptionalString(entry?.modelProvider);
     const model =
       normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
+    if (provider && model) {
+      return {
+        provider,
+        model,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+      };
+    }
+    // Fallback to agent default model when no session model info is found.
     return {
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
+      ...defaultContext,
       ...(thinkingLevel ? { thinkingLevel } : {}),
     };
   } catch {
-    return {};
+    return { ...defaultContext };
   }
 }
 
