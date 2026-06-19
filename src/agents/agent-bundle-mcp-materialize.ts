@@ -268,7 +268,11 @@ async function stageMcpBinaryAttachment(params: {
       return undefined;
     }
     reservedEstimatedBytes = estimatedBytes;
-    const buffer = decodeBoundedBase64Data({ canonicalBase64, maxBytes, estimatedBytes });
+    const buffer = decodeBoundedBase64Data({
+      canonicalBase64,
+      maxBytes,
+      estimatedBytes,
+    });
     const staged = await resolveOutboundAttachmentFromBuffer(buffer, maxBytes, {
       ...(mimeType ? { contentType: mimeType } : {}),
       filename: mcpAttachmentFileName({

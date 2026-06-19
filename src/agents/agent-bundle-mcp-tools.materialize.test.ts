@@ -284,12 +284,8 @@ describe("createBundleMcpToolRuntime", () => {
         operation: "tool",
       },
     });
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+    const result = await tool.execute("call-bundle-probe", {}, undefined, undefined);
     expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
@@ -323,12 +319,8 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+    const result = await tool.execute("call-bundle-probe", {}, undefined, undefined);
 
     expectTextContentBlock(
       result.content[0],
@@ -388,12 +380,8 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+    const result = await tool.execute("call-bundle-probe", {}, undefined, undefined);
 
     expect(result.content).toEqual([
       { type: "text", text: "intro" },
@@ -437,15 +425,13 @@ describe("createBundleMcpToolRuntime", () => {
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-5.mp3",
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-6.png",
     ]);
-    expect(
-      filterToolResultMediaUrls(runtime.tools[0].name, media?.mediaUrls ?? [], result),
-    ).toEqual([
+    expect(filterToolResultMediaUrls(tool.name, media?.mediaUrls ?? [], result)).toEqual([
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-4.pdf",
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-5.mp3",
       "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-6.png",
     ]);
     expect(
-      filterToolResultMediaUrls(runtime.tools[0].name, ["/tmp/openclaw/media/outbound/spoof.png"], {
+      filterToolResultMediaUrls(tool.name, ["/tmp/openclaw/media/outbound/spoof.png"], {
         details: {
           mcpServer: "bundleProbe",
           mcpTool: "bundle_probe",
@@ -475,7 +461,12 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
 
     expect(result.details).toMatchObject({
       media: {
@@ -519,7 +510,12 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
 
     expect(result.content).toEqual([
       { type: "image", data: "TQ", mimeType: "image/png" },
@@ -560,13 +556,77 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
 
     expect(result.content).toEqual([{ type: "text", text: "[audio audio/mpeg]" }]);
     expect(resolveOutboundAttachmentFromBufferMock).not.toHaveBeenCalled();
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
+    });
+  });
+
+  it("does not let invalid MCP base64 consume relay budget before valid media", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "image", data: "AA!A", mimeType: "image/png" },
+            { type: "audio", data: "AA!A", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://invalid-1", blob: "AA!A", mimeType: "application/pdf" },
+            },
+            { type: "image", data: "AA!A", mimeType: "image/png" },
+            { type: "audio", data: "AA!A", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://invalid-2", blob: "AA!A", mimeType: "application/pdf" },
+            },
+            { type: "image", data: "AA!A", mimeType: "image/png" },
+            { type: "audio", data: "AA!A", mimeType: "audio/mpeg" },
+            { type: "image", data: "TQ", mimeType: "image/png" },
+            { type: "audio", data: "TWE", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://valid", blob: "SGVsbG8", mimeType: "application/pdf" },
+            },
+          ],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
+    const media = extractToolResultMediaArtifact(result);
+
+    expect(resolveOutboundAttachmentFromBufferMock).toHaveBeenCalledTimes(3);
+    expect(
+      resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0].toString("utf8")),
+    ).toEqual(["M", "Ma", "Hello"]);
+    expect(media?.mediaUrls).toEqual([
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-8.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-9.mp3",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-10.pdf",
+    ]);
+    expect(result.details).toMatchObject({
+      media: {
+        attachments: [
+          { type: "image" },
+          { type: "audio" },
+          { type: "resource", uri: "blob://valid" },
+        ],
+      },
     });
   });
 
@@ -582,7 +642,10 @@ describe("createBundleMcpToolRuntime", () => {
     });
     const bufferFromSpy = vi.spyOn(Buffer, "from");
     try {
-      const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+      const result = await expectDefined(
+        runtime.tools[0],
+        "runtime.tools[0] test invariant",
+      ).execute("call-bundle-probe", {}, undefined, undefined);
 
       expect(result.details).toEqual({
         mcpServer: "bundleProbe",
@@ -611,7 +674,12 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
     const media = extractToolResultMediaArtifact(result);
 
     expect(result.content).toHaveLength(10);
@@ -644,7 +712,10 @@ describe("createBundleMcpToolRuntime", () => {
     });
     const bufferFromSpy = vi.spyOn(Buffer, "from");
     try {
-      const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+      const result = await expectDefined(
+        runtime.tools[0],
+        "runtime.tools[0] test invariant",
+      ).execute("call-bundle-probe", {}, undefined, undefined);
       const media = extractToolResultMediaArtifact(result);
 
       expect(result.content).toHaveLength(7);
