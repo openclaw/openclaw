@@ -727,7 +727,15 @@ export async function sendMessageTelegram(
             : api.sendMessage(chatId, chunk.plainText),
         label,
       );
-    const result = !chunk.htmlText
+    // When htmlText contains no formatting tags, the chunk is effectively
+    // plain text. Sending it without parse_mode="HTML" preserves iOS user
+    // font-size settings (regression #94131 introduced by PR #92679).
+    const hasFormatting =
+      chunk.htmlText &&
+      /<\/?(b|strong|i|em|u|ins|s|strike|del|code|pre|tg-spoiler|a|span|tg-emoji|tg-time|blockquote|br)\b[^>]*?>/i.test(
+        chunk.htmlText,
+      );
+    const result = !hasFormatting
       ? await requestPlain("message")
       : await withTelegramHtmlParseFallback({
           label: "message",
