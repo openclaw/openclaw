@@ -7,15 +7,22 @@ metadata:
     "openclaw":
       {
         "emoji": "📋",
-        "requires": { "bins": ["jq"], "env": ["TRELLO_API_KEY", "TRELLO_TOKEN"] },
+        "requires": { "bins": ["curl", "jq"], "env": ["TRELLO_API_KEY", "TRELLO_TOKEN"] },
         "install":
           [
             {
-              "id": "brew",
+              "id": "jq",
               "kind": "brew",
               "formula": "jq",
               "bins": ["jq"],
               "label": "Install jq (brew)",
+            },
+            {
+              "id": "curl",
+              "kind": "brew",
+              "formula": "curl",
+              "bins": ["curl"],
+              "label": "Install curl (brew)",
             },
           ],
       },
