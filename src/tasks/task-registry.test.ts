@@ -67,7 +67,7 @@ import {
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
   startTaskRegistryMaintenance,
-  stopTaskRegistryMaintenanceForTests,
+  stopTaskRegistryMaintenance,
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -2924,7 +2924,7 @@ describe("task-registry", () => {
       });
 
       startTaskRegistryMaintenance();
-      stopTaskRegistryMaintenanceForTests();
+      stopTaskRegistryMaintenance();
 
       await vi.advanceTimersByTimeAsync(5_000);
       await flushAsyncWork();
