@@ -625,6 +625,11 @@ export async function runCliTurnCompactionLifecycle(params: {
       // post-turn optimization — the assistant reply has already been generated
       // and persisted. Treat the failure as a warning rather than a fatal error
       // so the turn remains successful and the reply is still delivered.
+      // Since this is an unrecoverable failure (not a fallback-worthy code like
+      // unsupported harness or recoverable binding failure), skip the
+      // context-engine compaction path as well — it would waste a network
+      // round-trip on a session that may already be in a broken state.
+      useContextEngineCompaction = false;
       log.warn(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
           nativeOutcome.failureReason ?? "compaction did not reduce context"
