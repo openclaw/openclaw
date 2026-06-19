@@ -272,11 +272,15 @@ export function resolveCronPayloadOutcome(params: {
     hasSuccessfulPayloadBeforeLastError;
   // Some tools emit warning/error payloads before a final answer. Treat those
   // as non-terminal only when later visible output proves the run recovered.
+  // Also treat explicit cron tool warnings (⚠️ 🛠️) from recovered runs as
+  // non-terminal even when the payload lacks the nonTerminalToolErrorWarning
+  // metadata flag.
   const hasNonTerminalToolErrorWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
     hasRecoveringTerminalOutput &&
-    isNonTerminalToolErrorWarning(lastErrorPayload);
+    (isNonTerminalToolErrorWarning(lastErrorPayload) ||
+      isCronToolWarning(lastErrorPayloadText));
   const hasPendingPresentationWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
