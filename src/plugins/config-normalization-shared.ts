@@ -211,13 +211,31 @@ function normalizePluginEntries(
               : {}),
           }
         : undefined;
+    // Auto-configure lossless-claw LLM policy: when summaryModel is set,
+    // ensure allowModelOverride is enabled and the summary model is in the
+    // allowed list. This mirrors the logic in ensureLosslessLlmPolicy() that
+    // previously only ran during legacy config migration (#94289).
+    const entryConfig = entry.config as Record<string, unknown> | undefined;
+    const rawSummaryModel: unknown = entryConfig?.summaryModel;
+    const summaryModel =
+      normalizedKey === "lossless-claw" && typeof rawSummaryModel === "string" && rawSummaryModel.trim()
+        ? rawSummaryModel.trim()
+        : undefined;
+    const finalLlm = summaryModel
+      ? {
+          ...normalizedLlm,
+          allowModelOverride: true,
+          allowedModels: [summaryModel],
+          hasAllowedModelsConfig: true,
+        }
+      : normalizedLlm ?? normalized[normalizedKey]?.llm;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
-      llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
+      llm: finalLlm,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
