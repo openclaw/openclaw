@@ -126,6 +126,44 @@ export function pathForTab(tab: Tab, basePath = ""): string {
   return base ? `${base}${path}` : path;
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function pathForPluginUiEntryPoint(params: {
+  pluginId: string;
+  path: string;
+  basePath?: string;
+}): string | null {
+  const pluginId = params.pluginId.trim();
+  const path = params.path.trim();
+  if (
+    !pluginId ||
+    !path ||
+    !path.startsWith("/") ||
+    path.startsWith("//") ||
+    path.includes("\\") ||
+    path.includes("?") ||
+    path.includes("#") ||
+    hasControlCharacter(path) ||
+    /^(?:[a-z][a-z0-9+.-]*:)/i.test(path) ||
+    /%(?:2f|5c)/i.test(path)
+  ) {
+    return null;
+  }
+  const pluginRoot = `/plugins/${pluginId}`;
+  if (path !== pluginRoot && !path.startsWith(`${pluginRoot}/`)) {
+    return null;
+  }
+  return path;
+}
+
 export function isSettingsTab(tab: Tab): boolean {
   return (SETTINGS_TABS as readonly Tab[]).includes(tab);
 }

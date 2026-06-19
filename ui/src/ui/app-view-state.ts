@@ -4,8 +4,8 @@ import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
-import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
@@ -42,6 +42,7 @@ import type {
   ChatModelOverride,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  PluginControlUiEntryPoint,
   NostrProfile,
   PresenceEntry,
   SessionsUsageResult,
@@ -80,6 +81,9 @@ export type AppViewState = {
   lastErrorCode: string | null;
   chatError: string | null;
   eventLog: EventLogEntry[];
+  pluginUiEntryPoints?: PluginControlUiEntryPoint[];
+  activePluginUiEntryPoint?: PluginControlUiEntryPoint | null;
+  activePluginUiEntryPointSrc?: string | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarSource?: string | null;

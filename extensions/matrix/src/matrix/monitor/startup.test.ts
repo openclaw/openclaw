@@ -156,6 +156,8 @@ describe("runMatrixStartupMaintenance", () => {
 
   it("persists converted avatar URLs after profile sync", async () => {
     const params = createParams();
+    const logVerboseMessage = vi.fn();
+    params.logVerboseMessage = logVerboseMessage;
     const updatedCfg = { channels: { matrix: { avatarUrl: "mxc://avatar" } } };
     vi.mocked(deps.syncMatrixOwnProfile).mockResolvedValue(
       createProfileSyncResult({
@@ -199,13 +201,10 @@ describe("runMatrixStartupMaintenance", () => {
       { avatarUrl: "mxc://avatar" },
     );
     expect(params.replaceConfigFile).toHaveBeenCalledWith(updatedCfg as never);
-    const logVerboseMessage = params.logVerboseMessage;
-    if (!logVerboseMessage) {
-      throw new Error("expected logVerboseMessage");
+    const persistedLog = logVerboseMessage.mock.calls[0]?.[0];
+    if (persistedLog !== "matrix: persisted converted avatar URL for account ops (mxc://avatar)") {
+      throw new Error(`Expected converted-avatar verbose log, got ${String(persistedLog)}`);
     }
-    expect(logVerboseMessage).toHaveBeenCalledWith(
-      "matrix: persisted converted avatar URL for account ops (mxc://avatar)",
-    );
   });
 
   it("reports stale devices, pending verification, and restored legacy backups", async () => {
@@ -251,6 +250,8 @@ describe("runMatrixStartupMaintenance", () => {
 
   it("logs cooldown and request-failure verification outcomes without throwing", async () => {
     const params = createParams();
+    const logVerboseMessage = vi.fn();
+    params.logVerboseMessage = logVerboseMessage;
     params.auth.encryption = true;
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValueOnce(
       createStartupVerificationOutcome("cooldown", { retryAfterMs: 321 }),
@@ -258,9 +259,13 @@ describe("runMatrixStartupMaintenance", () => {
 
     await runMatrixStartupMaintenance(params, deps);
 
-    expect(params.logVerboseMessage).toHaveBeenCalledWith(
-      "matrix: skipped startup verification request due to cooldown (retryAfterMs=321)",
-    );
+    const cooldownLog = logVerboseMessage.mock.calls[0]?.[0];
+    if (
+      cooldownLog !==
+      "matrix: skipped startup verification request due to cooldown (retryAfterMs=321)"
+    ) {
+      throw new Error(`Expected cooldown verbose log, got ${String(cooldownLog)}`);
+    }
 
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValueOnce(
       createStartupVerificationOutcome("request-failed", { error: "boom" }),

@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { issuePluginUiEntryPointLaunchPath } from "./plugin-ui-entry-launch-tokens.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import {
   AUTH_NONE,
@@ -127,6 +128,7 @@ function createRuntimeScopeRecorderHandler(params: {
   method: string;
   observedRuntimeScopes: string[][];
   allowedResults: boolean[];
+  match?: "exact" | "prefix";
   gatewayRuntimeScopeSurface?: "trusted-operator";
 }) {
   return createGatewayPluginRequestHandler({
@@ -140,7 +142,7 @@ function createRuntimeScopeRecorderHandler(params: {
           ...(params.gatewayRuntimeScopeSurface
             ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
             : {}),
-          match: "exact",
+          match: params.match ?? "exact",
           handler: async (_req: IncomingMessage, res: ServerResponse) => {
             const runtimeScopes =
               getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
@@ -295,6 +297,240 @@ describe("gateway plugin HTTP auth boundary", () => {
         expectUnauthorizedResponse(unauthenticatedPublic);
 
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("allows Plugin UI Entry Point launch tokens and scoped plugin page navigation", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "notes-plugin",
+      path: "/plugins/notes-plugin",
+      method: "sessions.list",
+      observedRuntimeScopes,
+      allowedResults: [],
+      match: "prefix",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-entry-launch-token-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname.startsWith("/plugins/notes-plugin"),
+      },
+      run: async (server) => {
+        const launchPath = issuePluginUiEntryPointLaunchPath({
+          path: "/plugins/notes-plugin",
+          scopes: ["operator.read"],
+        });
+
+        const authenticated = await sendRequest(server, { path: launchPath });
+        expect(authenticated.res.statusCode).toBe(200);
+        expect(authenticated.getBody()).toBe("ok");
+        expect(observedRuntimeScopes).toEqual([["operator.read"]]);
+        const setCookie = authenticated.setHeader.mock.calls.find(
+          ([name]) => name === "Set-Cookie",
+        )?.[1] as string | undefined;
+        expect(setCookie).toContain("openclaw_plugin_entry=");
+        expect(setCookie).toContain("Path=/plugins/notes-plugin");
+        expect(setCookie).toContain("HttpOnly");
+
+        const cookie = setCookie?.split(";")[0];
+        const root = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/notes-plugin",
+            ...(cookie ? { headers: { cookie } } : {}),
+          }),
+          root.res,
+        );
+        expect(root.res.statusCode).toBe(200);
+        expect(observedRuntimeScopes).toEqual([["operator.read"], ["operator.read"]]);
+
+        const nested = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/notes-plugin/session/main",
+            ...(cookie ? { headers: { cookie } } : {}),
+          }),
+          nested.res,
+        );
+        expect(nested.res.statusCode).toBe(200);
+        expect(observedRuntimeScopes).toEqual([
+          ["operator.read"],
+          ["operator.read"],
+          ["operator.read"],
+        ]);
+
+        const malformedCookie = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/notes-plugin/session/main",
+            headers: { cookie: "openclaw_plugin_entry=%" },
+          }),
+          malformedCookie.res,
+        );
+        expectUnauthorizedResponse(malformedCookie);
+        expect(observedRuntimeScopes).toEqual([
+          ["operator.read"],
+          ["operator.read"],
+          ["operator.read"],
+        ]);
+
+        const replay = await sendRequest(server, { path: launchPath });
+        expectUnauthorizedResponse(replay);
+      },
+    });
+  });
+
+  test("binds Plugin UI Entry Point sessions to full scoped plugin paths", async () => {
+    const handledPaths: string[] = [];
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (
+        pathname === "/plugins/@team/one" ||
+        pathname.startsWith("/plugins/@team/one/") ||
+        pathname.startsWith("/plugins/@team/two/")
+      ) {
+        handledPaths.push(pathname);
+        res.statusCode = 200;
+        res.end("ok");
+        return true;
+      }
+      return false;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-entry-scoped-session-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname.startsWith("/plugins/@team/"),
+      },
+      run: async (server) => {
+        const launchPath = issuePluginUiEntryPointLaunchPath({
+          path: "/plugins/@team/one/",
+          scopes: ["operator.read"],
+        });
+
+        const authenticated = await sendRequest(server, { path: launchPath });
+        expect(authenticated.res.statusCode).toBe(200);
+        expect(authenticated.getBody()).toBe("ok");
+        const setCookie = authenticated.setHeader.mock.calls.find(
+          ([name]) => name === "Set-Cookie",
+        )?.[1] as string | undefined;
+        expect(setCookie).toContain("openclaw_plugin_entry=");
+        expect(setCookie).toContain("Path=/plugins/@team/one");
+
+        const cookie = setCookie?.split(";")[0];
+        expect(cookie).toBeDefined();
+
+        const root = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/@team/one",
+            ...(cookie ? { headers: { cookie } } : {}),
+          }),
+          root.res,
+        );
+        expect(root.res.statusCode).toBe(200);
+
+        const nested = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/@team/one/session/main",
+            ...(cookie ? { headers: { cookie } } : {}),
+          }),
+          nested.res,
+        );
+        expect(nested.res.statusCode).toBe(200);
+
+        const sibling = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/@team/two/session/main",
+            ...(cookie ? { headers: { cookie } } : {}),
+          }),
+          sibling.res,
+        );
+        expectUnauthorizedResponse(sibling);
+        expect(handledPaths).toEqual([
+          "/plugins/@team/one/",
+          "/plugins/@team/one",
+          "/plugins/@team/one/session/main",
+        ]);
+      },
+    });
+  });
+
+  test("preserves Plugin UI Entry Point scopes for trusted-operator plugin routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const adminAllowedResults: boolean[] = [];
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "notes-plugin",
+      path: "/plugins/notes-plugin",
+      method: "set-heartbeats",
+      observedRuntimeScopes,
+      allowedResults: adminAllowedResults,
+      match: "prefix",
+      gatewayRuntimeScopeSurface: "trusted-operator",
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-entry-trusted-operator-scope-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname.startsWith("/plugins/notes-plugin"),
+      },
+      run: async (server) => {
+        const launchPath = issuePluginUiEntryPointLaunchPath({
+          path: "/plugins/notes-plugin/",
+          scopes: ["operator.read"],
+        });
+
+        const authenticated = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: launchPath,
+            headers: {
+              "x-openclaw-scopes": "operator.admin,operator.write",
+            },
+          }),
+          authenticated.res,
+        );
+        expect(authenticated.res.statusCode).toBe(200);
+        expect(authenticated.getBody()).toBe("ok");
+        expect(observedRuntimeScopes).toEqual([["operator.read"]]);
+        expect(adminAllowedResults).toEqual([false]);
+
+        const setCookie = authenticated.setHeader.mock.calls.find(
+          ([name]) => name === "Set-Cookie",
+        )?.[1] as string | undefined;
+        const cookie = setCookie?.split(";")[0];
+        const nested = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/notes-plugin/session/main",
+            ...(cookie ? { headers: { cookie, "x-openclaw-scopes": "operator.admin" } } : {}),
+          }),
+          nested.res,
+        );
+        expect(nested.res.statusCode).toBe(200);
+        expect(observedRuntimeScopes).toEqual([["operator.read"], ["operator.read"]]);
+        expect(adminAllowedResults).toEqual([false, false]);
       },
     });
   });
