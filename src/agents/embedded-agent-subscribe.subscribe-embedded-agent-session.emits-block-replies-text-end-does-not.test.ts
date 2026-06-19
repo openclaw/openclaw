@@ -197,22 +197,30 @@ Message ID: 6655442331193344`,
       toolCallId: "tool-message-sms",
       isError: false,
       result: {
-        channel: "sms",
-        messageId: "SM_proof_redacted_1234",
-        chatId: "+15551234567",
-        receipt: {
-          raw: [
-            {
-              channel: "sms",
-              messageId: "SM_proof_redacted_1234",
-              chatId: "+15551234567",
-              toJid: "+15551234567",
-              meta: {
-                from: "+15557654321",
-                status: "queued",
+        content: [
+          {
+            type: "text",
+            text: "{}",
+          },
+        ],
+        details: {
+          channel: "sms",
+          messageId: "SM_proof_redacted_1234",
+          chatId: "+15551234567",
+          receipt: {
+            raw: [
+              {
+                channel: "sms",
+                messageId: "SM_proof_redacted_1234",
+                chatId: "+15551234567",
+                toJid: "+15551234567",
+                meta: {
+                  from: "+15557654321",
+                  status: "queued",
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       },
     });

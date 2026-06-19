@@ -212,26 +212,35 @@ export function normalizeMessageToolExternalActionEvidence(params: {
   if (!root) {
     return [];
   }
-  const receipt = asRecord(root.receipt);
-  const fallbackChannel = normalizeOptionalString(root.channel);
-  const fallbackRecipient = readFirstString(root, ["chatId", "toJid", "conversationId", "to"]);
-  const candidates = [
-    root,
-    ...asRecordArray(receipt?.raw),
-    ...asRecordArray(receipt?.parts).flatMap((part) => {
-      const raw = asRecord(part.raw);
-      return raw ? [part, raw] : [part];
-    }),
-  ];
   return dedupeEvidence(
-    candidates.flatMap((record) => {
-      const evidence = normalizeMessageToolSmsReceiptRecord({
-        record,
-        fallbackChannel,
-        fallbackRecipient,
-        toolName: params.toolName,
-      });
-      return evidence ? [evidence] : [];
-    }),
+    [root, asRecord(root.details)]
+      .filter((record): record is Record<string, unknown> => Boolean(record))
+      .flatMap((payload) => {
+        const receipt = asRecord(payload.receipt);
+        const fallbackChannel = normalizeOptionalString(payload.channel);
+        const fallbackRecipient = readFirstString(payload, [
+          "chatId",
+          "toJid",
+          "conversationId",
+          "to",
+        ]);
+        const candidates = [
+          payload,
+          ...asRecordArray(receipt?.raw),
+          ...asRecordArray(receipt?.parts).flatMap((part) => {
+            const raw = asRecord(part.raw);
+            return raw ? [part, raw] : [part];
+          }),
+        ];
+        return candidates.flatMap((record) => {
+          const evidence = normalizeMessageToolSmsReceiptRecord({
+            record,
+            fallbackChannel,
+            fallbackRecipient,
+            toolName: params.toolName,
+          });
+          return evidence ? [evidence] : [];
+        });
+      }),
   );
 }

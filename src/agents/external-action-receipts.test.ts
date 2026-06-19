@@ -161,4 +161,48 @@ describe("external action receipts", () => {
       }),
     ]);
   });
+
+  it("normalizes built-in message tool SMS receipts from AgentToolResult details", () => {
+    expect(
+      normalizeMessageToolExternalActionEvidence({
+        toolName: "message",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "{}",
+            },
+          ],
+          details: {
+            channel: "sms",
+            messageId: "SM-details",
+            chatId: "+15551234567",
+            receipt: {
+              raw: [
+                {
+                  channel: "sms",
+                  messageId: "SM-details",
+                  chatId: "+15551234567",
+                  toJid: "+15551234567",
+                  meta: {
+                    from: "+15557654321",
+                    status: "queued",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        actionFamily: "sms",
+        toolName: "message",
+        providerId: "SM-details",
+        status: "queued",
+        sender: "+15557654321",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
 });
