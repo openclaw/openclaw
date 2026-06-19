@@ -359,19 +359,18 @@ describe("LINE send helpers", () => {
     );
   });
 
-  it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
+  it("auto-capitalizes lowercased LINE-shaped recipients to handle core normalization", async () => {
     // 33-char value with lowercase leading char — what an upstream session-key
-    // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
-    // anyway; throwing locally keeps the failure permanent so delivery-recovery
-    // moves the entry to failed/ immediately instead of silently retrying 5×.
-    await expect(
-      sendModule.pushMessagesLine(
-        "cabcdef0123456789abcdef0123456789",
-        [{ type: "text", text: "hello" }],
-        { cfg: LINE_TEST_CFG },
-      ),
-    ).rejects.toThrow(/Recipient is not a valid LINE id/);
-    expect(pushMessageMock).not.toHaveBeenCalled();
+    // fragment looked like before this fix. We now auto-capitalize the first letter.
+    await sendModule.pushMessagesLine(
+      "cabcdef0123456789abcdef0123456789",
+      [{ type: "text", text: "hello" }],
+      { cfg: LINE_TEST_CFG },
+    );
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "Cabcdef0123456789abcdef0123456789",
+      messages: [{ type: "text", text: "hello" }],
+    });
   });
 
   it("accepts case-exact LINE recipients with the leading capital preserved", async () => {

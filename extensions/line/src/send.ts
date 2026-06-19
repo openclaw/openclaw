@@ -59,7 +59,7 @@ function normalizeTarget(to: string): string {
     throw new Error("Recipient is required for LINE sends");
   }
 
-  const normalized = trimmed
+  let normalized = trimmed
     .replace(/^line:group:/i, "")
     .replace(/^line:room:/i, "")
     .replace(/^line:user:/i, "")
@@ -71,6 +71,12 @@ function normalizeTarget(to: string): string {
 
   // Real LINE chat ids are a capital C/U/R followed by 32 lowercase hex chars
   // (33 chars total) and are case-sensitive — push returns HTTP 400 otherwise.
+  // Auto-capitalize the first letter if it is a lowercase c/u/r to handle
+  // case-insensitive normalization from OpenClaw core session keys.
+  if (normalized.length >= 33 && /^[cur]/.test(normalized)) {
+    normalized = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+
   // Reject values that match the LINE id shape but lost their leading capital
   // so the failure is surfaced as a permanent error (recovery moves the entry
   // to failed/ immediately instead of silently retrying 5 times). Short test
