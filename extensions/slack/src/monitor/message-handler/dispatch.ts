@@ -2043,7 +2043,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
-        if (!streamFallbackDelivered && !finalStream.delivered) {
+        if (!streamFallbackDelivered) {
           dispatchError ??= err;
         }
       } else {

@@ -3536,6 +3536,31 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(session.stopped).toBe(true);
   });
 
+  it("fails dispatch when an unexpected finalize fallback cannot deliver a buffered tail", async () => {
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "buffered tail",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(
+        "buffered tail",
+        "method_not_supported_for_channel_type",
+      ),
+    );
+    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+
+    await expect(dispatchPreparedSlackMessage(createPreparedSlackMessage())).rejects.toThrowError(
+      "slack-stream not delivered: method_not_supported_for_channel_type",
+    );
+
+    expectDeliverReplyCall(0, "buffered tail");
+  });
+
   it("routes all pending native stream text through chunked sender when an append flush fails", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
