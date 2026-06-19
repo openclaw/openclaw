@@ -41,6 +41,7 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -1031,15 +1032,42 @@ function configApplyHintForPaths(paths: string[]): string {
 
 function configApplyHintForOperations(
   operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
 ): string {
-  const paths: string[] = [];
+  const requestedPaths: string[] = [];
   for (const operation of operations) {
     if (!operation.requestedPath) {
       return RESTART_HINT;
     }
-    paths.push(toDotPath(operation.requestedPath));
+    requestedPaths.push(toDotPath(operation.requestedPath));
   }
-  return configApplyHintForPaths(paths);
+  return configApplyHintForPaths(
+    expandActualChangedPathsWithRequestedDescendants(
+      diffConfigPaths(beforeConfig, afterConfig),
+      requestedPaths,
+    ),
+  );
+}
+
+function expandActualChangedPathsWithRequestedDescendants(
+  actualChangedPaths: string[],
+  requestedPaths: string[],
+): string[] {
+  const expanded = new Set<string>();
+  for (const actualPath of actualChangedPaths) {
+    const requestedDescendants = requestedPaths.filter(
+      (requestedPath) => requestedPath === actualPath || requestedPath.startsWith(`${actualPath}.`),
+    );
+    if (requestedDescendants.length === 0) {
+      expanded.add(actualPath);
+      continue;
+    }
+    for (const requestedPath of requestedDescendants) {
+      expanded.add(requestedPath);
+    }
+  }
+  return [...expanded];
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
@@ -2052,6 +2080,9 @@ async function runConfigOperations(params: {
   // instead of snapshot.config (runtime-merged with defaults).
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+    structuredClone(snapshot.resolved) as OpenClawConfig,
+  );
   const mutationSchema = await loadConfigMutationSchema();
   const unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
@@ -2238,11 +2269,11 @@ async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    const hint = configApplyHintForOperations(operations);
+    const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
     runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
     return;
   }
-  const hint = configApplyHintForOperations(operations);
+  const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
   if (params.successMode === "set") {
     runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
     return;

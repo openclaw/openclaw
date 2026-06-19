@@ -54,14 +54,23 @@ vi.mock("../config/runtime-schema.js", () => ({
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
+    const restartReasons = changedPaths.filter(
+      (changedPath) =>
+        changedPath.startsWith("models.pricing.") || changedPath.startsWith("plugins.load."),
+    );
     const hotReasons = changedPaths.filter(
       (changedPath) =>
-        changedPath.startsWith("agents.list.") ||
-        changedPath.startsWith("agents.defaults.models.") ||
-        changedPath.startsWith("models.") ||
-        changedPath.startsWith("plugins."),
+        !restartReasons.includes(changedPath) &&
+        (changedPath.startsWith("agents.list.") ||
+          changedPath.startsWith("agents.defaults.models.") ||
+          changedPath.startsWith("models.") ||
+          changedPath.startsWith("plugins.")),
     );
-    const restartReasons = changedPaths.filter((changedPath) => !hotReasons.includes(changedPath));
+    restartReasons.push(
+      ...changedPaths.filter(
+        (changedPath) => !hotReasons.includes(changedPath) && !restartReasons.includes(changedPath),
+      ),
+    );
     return {
       changedPaths,
       restartGateway: restartReasons.length > 0,
@@ -3545,6 +3554,60 @@ describe("config cli", () => {
       expectLogIncludes("Updated models.providers.openai.agentRuntime.id");
       expectLogIncludes("Change will apply without restarting the gateway.");
       expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("keeps the restart hint for broad models writes that change pricing bootstrap", async () => {
+      const resolved: OpenClawConfig = {
+        models: {
+          pricing: {
+            enabled: false,
+          },
+          providers: {
+            openai: {
+              agentRuntime: { id: "node" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models",
+        '{"pricing":{"enabled":true},"providers":{"openai":{"agentRuntime":{"id":"node"}}}}',
+        "--strict-json",
+        "--replace",
+      ]);
+
+      expectLogIncludes("Updated models. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for broad plugins writes that change load paths", async () => {
+      const resolved: OpenClawConfig = {
+        plugins: {
+          load: {
+            paths: ["/tmp/openclaw-plugins-a"],
+          },
+          entries: {
+            canvas: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "plugins",
+        '{"load":{"paths":["/tmp/openclaw-plugins-b"]},"entries":{"canvas":{"enabled":true}}}',
+        "--strict-json",
+        "--replace",
+      ]);
+
+      expectLogIncludes("Updated plugins. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
     });
 
     it("keeps the restart hint for restart-required config paths", async () => {
