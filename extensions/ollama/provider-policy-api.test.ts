@@ -70,4 +70,15 @@ describe("ollama provider policy public artifact", () => {
       defaultLevel: "off",
     });
   });
+
+  it("treats undefined reasoning as potentially capable (fix #93835)", () => {
+    expect(resolveThinkingProfile({})).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(resolveThinkingProfile({ reasoning: undefined })).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+  });
 });
