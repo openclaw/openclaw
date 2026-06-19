@@ -866,7 +866,11 @@ export async function loadTranscriptEvents(
   const transcript = await resolveTranscriptReadAccess(scope);
   const events: TranscriptEvent[] = [];
   for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-    events.push(JSON.parse(line) as TranscriptEvent);
+    try {
+      events.push(JSON.parse(line) as TranscriptEvent);
+    } catch {
+      continue;
+    }
   }
   return events;
 }
