@@ -962,7 +962,7 @@ export async function preflightSessionTranscriptForManualCompact(
   const maxLines = Math.max(1, Math.floor(params.maxLines));
   let totalLines = 0;
   try {
-    for await (const _line of streamSessionTranscriptLines(transcript.sessionFile)) {
+    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
       totalLines += 1;
       if (totalLines > maxLines) {
         return { compacted: true };
