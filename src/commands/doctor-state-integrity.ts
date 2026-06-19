@@ -287,6 +287,27 @@ function tryResolveRealPath(targetPath: string): string | null {
   }
 }
 
+function resolvePathThroughExistingAncestor(
+  targetPath: string,
+  resolveRealPath: (targetPath: string) => string | null,
+  pathOps: Pick<typeof path, "resolve" | "dirname" | "basename">,
+): string | null {
+  const missingSegments: string[] = [];
+  let candidate = pathOps.resolve(targetPath);
+  while (true) {
+    const resolved = resolveRealPath(candidate);
+    if (resolved) {
+      return pathOps.resolve(resolved, ...missingSegments);
+    }
+    const parent = pathOps.dirname(candidate);
+    if (parent === candidate) {
+      return null;
+    }
+    missingSegments.unshift(pathOps.basename(candidate));
+    candidate = parent;
+  }
+}
+
 function decodeMountInfoPath(value: string): string {
   return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
     String.fromCharCode(Number.parseInt(octal, 8)),
@@ -436,7 +457,9 @@ export function detectLinuxSdBackedStateDir(
   const linuxPath = path.posix;
 
   const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
+    linuxPath.resolve(stateDir);
   const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
   if (!mountInfo) {
     return null;
@@ -516,7 +539,9 @@ export function detectLinuxVolatileStateDir(
   const linuxPath = path.posix;
 
   const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
+    linuxPath.resolve(stateDir);
   const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
   if (!mountInfo) {
     return null;

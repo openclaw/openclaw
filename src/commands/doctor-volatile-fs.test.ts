@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   detectLinuxVolatileStateDir,
@@ -53,6 +56,33 @@ describe("detectLinuxVolatileStateDir", () => {
       mountPoint: "/home/user/.openclaw",
       fsType: "tmpfs",
     });
+  });
+
+  it("detects a missing state directory through an existing symlink", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-volatile-"));
+    try {
+      const volatileMount = path.join(root, "volatile");
+      const stateLink = path.join(root, "state");
+      fs.mkdirSync(volatileMount);
+      fs.symlinkSync(volatileMount, stateLink, "dir");
+      const resolvedVolatileMount = fs.realpathSync(volatileMount);
+
+      const result = detectLinuxVolatileStateDir(path.join(stateLink, "openclaw"), {
+        platform: "linux",
+        mountInfo: [
+          "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw",
+          `35 22 0:35 / ${resolvedVolatileMount} rw - tmpfs tmpfs rw`,
+        ].join("\n"),
+      });
+
+      expect(result).toMatchObject({
+        path: path.join(resolvedVolatileMount, "openclaw"),
+        mountPoint: resolvedVolatileMount,
+        fsType: "tmpfs",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it.each([
