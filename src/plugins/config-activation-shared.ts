@@ -260,6 +260,25 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       cause: "enabled-by-effective-config",
     };
   }
+  // FIX #91873: When plugins.allow is empty (no restrictive allowlist),
+  // non-bundled installed plugins (e.g. npm-installed Slack) should be
+  // enabled by default — matching the auto-load behavior before 2026.6.5.
+  // Without this, non-bundled plugins with no explicit entry in config fall
+  // through to implicit disabled, requiring users to manually add them to
+  // plugins.allow even though no allowlist restriction is in place.
+  if (
+    params.origin !== "bundled" &&
+    params.origin !== "workspace" &&
+    params.config.allow.length === 0
+  ) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "default",
+      cause: "non-bundled-auto-enable",
+    };
+  }
   if (
     params.origin === "bundled" &&
     params.isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
