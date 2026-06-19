@@ -28,7 +28,6 @@ function runConfigureSigning(teamId: string, user = "localuser"): string {
       OPENCLAW_IOS_SHARE_BUNDLE_ID: "",
       OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID: "",
       OPENCLAW_IOS_WATCH_APP_BUNDLE_ID: "",
-      OPENCLAW_IOS_WATCH_EXTENSION_BUNDLE_ID: "",
       USER: user,
     },
     encoding: "utf8",

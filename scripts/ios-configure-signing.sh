@@ -70,7 +70,6 @@ bundle_base="$(normalize_bundle_id "${bundle_base}")"
 share_bundle_id="${OPENCLAW_IOS_SHARE_BUNDLE_ID:-${bundle_base}.share}"
 activity_widget_bundle_id="${OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID:-${bundle_base}.activitywidget}"
 watch_app_bundle_id="${OPENCLAW_IOS_WATCH_APP_BUNDLE_ID:-${bundle_base}.watchkitapp}"
-watch_extension_bundle_id="${OPENCLAW_IOS_WATCH_EXTENSION_BUNDLE_ID:-${watch_app_bundle_id}.extension}"
 
 code_sign_style="${OPENCLAW_IOS_CODE_SIGN_STYLE:-Automatic}"
 code_sign_identity="${OPENCLAW_IOS_CODE_SIGN_IDENTITY:-Apple Development}"
@@ -79,7 +78,6 @@ app_profile="${OPENCLAW_IOS_APP_PROFILE:-}"
 share_profile="${OPENCLAW_IOS_SHARE_PROFILE:-}"
 activity_widget_profile="${OPENCLAW_IOS_ACTIVITY_WIDGET_PROFILE:-}"
 watch_app_profile="${OPENCLAW_IOS_WATCH_APP_PROFILE:-}"
-watch_extension_profile="${OPENCLAW_IOS_WATCH_EXTENSION_PROFILE:-}"
 
 tmp_file="$(mktemp "${TMPDIR:-/tmp}/openclaw-ios-configure-signing.XXXXXX")"
 cat >"${tmp_file}" <<EOF
@@ -89,11 +87,11 @@ cat >"${tmp_file}" <<EOF
 // IOS_DEVELOPMENT_TEAM / IOS_PREFERRED_TEAM_ID
 // OPENCLAW_IOS_APP_BUNDLE_ID / OPENCLAW_IOS_BUNDLE_ID_BASE
 // OPENCLAW_IOS_SHARE_BUNDLE_ID / OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID
-// OPENCLAW_IOS_WATCH_APP_BUNDLE_ID / OPENCLAW_IOS_WATCH_EXTENSION_BUNDLE_ID
+// OPENCLAW_IOS_WATCH_APP_BUNDLE_ID
 // OPENCLAW_IOS_CODE_SIGN_STYLE / OPENCLAW_IOS_CODE_SIGN_IDENTITY
 // OPENCLAW_IOS_APNS_ENTITLEMENT_ENVIRONMENT / OPENCLAW_IOS_APP_PROFILE
 // OPENCLAW_IOS_SHARE_PROFILE / OPENCLAW_IOS_ACTIVITY_WIDGET_PROFILE
-// OPENCLAW_IOS_WATCH_APP_PROFILE / OPENCLAW_IOS_WATCH_EXTENSION_PROFILE
+// OPENCLAW_IOS_WATCH_APP_PROFILE
 OPENCLAW_CODE_SIGN_STYLE = ${code_sign_style}
 OPENCLAW_CODE_SIGN_IDENTITY = ${code_sign_identity}
 OPENCLAW_DEVELOPMENT_TEAM = ${team_id}
@@ -103,13 +101,11 @@ OPENCLAW_APP_BUNDLE_ID = ${bundle_base}
 OPENCLAW_SHARE_BUNDLE_ID = ${share_bundle_id}
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ${activity_widget_bundle_id}
 OPENCLAW_WATCH_APP_BUNDLE_ID = ${watch_app_bundle_id}
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ${watch_extension_bundle_id}
 OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT = ${apns_entitlement_environment}
 OPENCLAW_APP_PROFILE = ${app_profile}
 OPENCLAW_SHARE_PROFILE = ${share_profile}
 OPENCLAW_ACTIVITY_WIDGET_PROFILE = ${activity_widget_profile}
 OPENCLAW_WATCH_APP_PROFILE = ${watch_app_profile}
-OPENCLAW_WATCH_EXTENSION_PROFILE = ${watch_extension_profile}
 EOF
 
 if [[ -f "${LOCAL_SIGNING_FILE}" ]] && cmp -s "${tmp_file}" "${LOCAL_SIGNING_FILE}"; then

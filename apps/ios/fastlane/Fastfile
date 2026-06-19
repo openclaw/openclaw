@@ -293,6 +293,8 @@ def capture_watch_screenshot
   Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
   FileUtils.rm_rf(derived_data_path)
 
+  # Single-target watch apps only expose generic simulator build destinations in Xcode.
+  # Keep the selected UDID for install/launch/screenshot below.
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -303,7 +305,7 @@ def capture_watch_screenshot
       "-configuration",
       "Debug",
       "-destination",
-      "platform=watchOS Simulator,id=#{udid}",
+      "generic/platform=watchOS Simulator",
       "-derivedDataPath",
       derived_data_path,
       "build",
@@ -311,10 +313,8 @@ def capture_watch_screenshot
   )
 
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
-  extension_path = File.join(app_path, "PlugIns", "OpenClawWatchExtension.appex")
   watch_app_identifier = bundle_identifier_for_product(app_path)
-  watch_extension_identifier = bundle_identifier_for_product(extension_path)
-  screenshot_mode_bundle_identifiers = [watch_app_identifier, watch_extension_identifier]
+  screenshot_mode_bundle_identifiers = [watch_app_identifier]
 
   sh("#{shell_join(["xcrun", "simctl", "boot", udid])} >/dev/null 2>&1 || true")
   sh(shell_join(["xcrun", "simctl", "bootstatus", udid, "-b"]))

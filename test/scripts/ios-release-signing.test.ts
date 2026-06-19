@@ -28,9 +28,7 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain(
       "OPENCLAW_WATCH_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp",
     );
-    expect(output).toContain(
-      "OPENCLAW_WATCH_EXTENSION_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp.extension",
-    );
+    expect(output).not.toContain("OPENCLAW_WATCH_EXTENSION_PROFILE");
   });
 
   it("documents the canonical release signing plan", () => {
@@ -40,9 +38,7 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
     expect(output).toContain("Signing branch: main");
     expect(output).toContain("Signing setup and sync: Fastlane match");
-    expect(output).toContain(
-      "OpenClawWatchExtension: ai.openclawfoundation.app.watchkitapp.extension",
-    );
+    expect(output).not.toContain("OpenClawWatchExtension");
     expect(output).toContain("capabilities: PUSH_NOTIFICATIONS");
   });
 });

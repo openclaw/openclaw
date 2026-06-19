@@ -9,11 +9,9 @@ OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp.extension
 
 // Leave empty with automatic signing.
 OPENCLAW_APP_PROFILE =
 OPENCLAW_SHARE_PROFILE =
 OPENCLAW_ACTIVITY_WIDGET_PROFILE =
 OPENCLAW_WATCH_APP_PROFILE =
-OPENCLAW_WATCH_EXTENSION_PROFILE =

@@ -39,15 +39,6 @@
       "profileKey": "OPENCLAW_WATCH_APP_PROFILE",
       "profileName": "OpenClaw App Store ai.openclawfoundation.app.watchkitapp",
       "capabilities": []
-    },
-    {
-      "target": "OpenClawWatchExtension",
-      "displayName": "OpenClaw Watch Extension",
-      "bundleId": "ai.openclawfoundation.app.watchkitapp.extension",
-      "platform": "IOS",
-      "profileKey": "OPENCLAW_WATCH_EXTENSION_PROFILE",
-      "profileName": "OpenClaw App Store ai.openclawfoundation.app.watchkitapp.extension",
-      "capabilities": []
     }
   ]
 }

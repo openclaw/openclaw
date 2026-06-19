@@ -8,11 +8,9 @@ OPENCLAW_CODE_SIGN_STYLE = Automatic
 OPENCLAW_CODE_SIGN_IDENTITY = Apple Development
 OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp.extension
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
 OPENCLAW_ACTIVITY_WIDGET_PROFILE =
 OPENCLAW_WATCH_APP_PROFILE =
-OPENCLAW_WATCH_EXTENSION_PROFILE =
 
 // Local contributors can override this by running scripts/ios-configure-signing.sh.
 // Keep include after defaults: xcconfig is evaluated top-to-bottom.
