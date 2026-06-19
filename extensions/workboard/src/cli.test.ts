@@ -89,15 +89,22 @@ describe("registerWorkboardCli", () => {
 
   it("redacts claim tokens from card JSON output", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({ title: "Claimed worker", status: "running" });
+    const card = await store.create({
+      title: "Claimed worker",
+      status: "running",
+    });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
     const program = createProgram(store);
 
     const listOutput = await captureStdout(async () => {
-      await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+      await program.parseAsync(["workboard", "list", "--json"], {
+        from: "user",
+      });
     });
     const showOutput = await captureStdout(async () => {
-      await program.parseAsync(["workboard", "show", card.id, "--json"], { from: "user" });
+      await program.parseAsync(["workboard", "show", card.id, "--json"], {
+        from: "user",
+      });
     });
 
     expect(listOutput).not.toContain("secret-token");
@@ -108,14 +115,19 @@ describe("registerWorkboardCli", () => {
 
   it("does not fall back to local dispatch for explicit gateway targets", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({ title: "Remote target", status: "ready" });
+    const card = await store.create({
+      title: "Remote target",
+      status: "ready",
+    });
     const program = createProgram(store);
     gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
       new Error("connect ECONNREFUSED 127.0.0.1:18789"),
     );
 
     await expect(
-      program.parseAsync(["workboard", "dispatch", "--url", "ws://remote"], { from: "user" }),
+      program.parseAsync(["workboard", "dispatch", "--url", "ws://remote"], {
+        from: "user",
+      }),
     ).rejects.toThrow("ECONNREFUSED");
 
     const after = await store.get(card.id);
@@ -125,7 +137,10 @@ describe("registerWorkboardCli", () => {
 
   it("does not fall back to local dispatch for configured remote gateways", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({ title: "Configured remote target", status: "ready" });
+    const card = await store.create({
+      title: "Configured remote target",
+      status: "ready",
+    });
     const program = createProgram(store);
     gatewayRuntime.getRuntimeConfig.mockReturnValue({
       gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
@@ -151,5 +166,30 @@ describe("registerWorkboardCli", () => {
     await expect(
       program.parseAsync(["workboard", "show", prefix], { from: "user" }),
     ).rejects.toThrow("Ambiguous card id prefix");
+  });
+
+  it("filters out archived cards by default in list command", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const activeCard = await store.create({ title: "Active Card" });
+    const archivedCard = await store.create({ title: "Archived Card" });
+    await store.archive(archivedCard.id, true);
+    const program = createProgram(store);
+
+    const defaultOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--json"], {
+        from: "user",
+      });
+    });
+    const parsedDefault = JSON.parse(defaultOutput);
+    expect(parsedDefault.cards).toHaveLength(1);
+    expect(parsedDefault.cards[0].id).toBe(activeCard.id);
+
+    const archivedOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--include-archived", "--json"], {
+        from: "user",
+      });
+    });
+    const parsedArchived = JSON.parse(archivedOutput);
+    expect(parsedArchived.cards).toHaveLength(2);
   });
 });
