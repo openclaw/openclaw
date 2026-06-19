@@ -2544,6 +2544,67 @@ describe("resolveGatewayModelSupportsImages", () => {
     ).resolves.toBe(true);
   });
 
+  test("treats google-gemini-cli flash/pro chat models as image-capable with stale text-only metadata", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "google/gemini-3.5-flash",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "google/gemini-3.5-flash",
+            name: "Gemini 3.5 Flash",
+            provider: "google-gemini-cli",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("uses the preserved Gemini model name hint for aliases with stale text-only metadata", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "deployment-gemini-flash",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "deployment-gemini-flash",
+            name: "Gemini 3.5 Flash",
+            provider: "google-gemini-cli",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats google-gemini-cli flash/pro chat models as image-capable when catalog metadata is missing", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "google/gemini-3.1-pro-preview",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("keeps google-gemini-cli non-chat Gemini models text-only when metadata says text-only", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gemini-embedding-001",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gemini-embedding-001",
+            name: "Gemini Embedding",
+            provider: "google-gemini-cli",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
   test("matches catalog model ids case-insensitively for explicit providers", async () => {
     await expect(
       resolveGatewayModelSupportsImages({
