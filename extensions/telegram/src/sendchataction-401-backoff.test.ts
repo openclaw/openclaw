@@ -176,6 +176,30 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(handler.isSuspended()).toBe(false);
   });
 
+  // FIX #94787: a 429 whose grammY-rendered message contains "401" (e.g. "retry after 401")
+  // must NOT be miscounted as a 401. Reordered catch branches: transient check before 401 check.
+  it("does not miscount a 429 with 401 substring as a 401", async () => {
+    const make429With401InMessage = () =>
+      Object.assign(
+        new Error("Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)"),
+        { error_code: 429, parameters: { retry_after: 401 } },
+      );
+    const fn = vi.fn().mockRejectedValue(make429With401InMessage());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 3,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+
+    expect(handler.isSuspended()).toBe(false);
+    expect(logger.mock.calls.map(([msg]) => msg).filter((m) => m.includes("CRITICAL"))).toEqual([]);
+  });
+
   it.each([
     ["recoverable network", () => makeNetworkError(), 1000],
     ["Telegram 429", () => makeTelegramError("Too Many Requests", 429, { retry_after: 2 }), 2000],

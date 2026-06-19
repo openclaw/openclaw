@@ -176,7 +176,24 @@ export function createTelegramSendChatActionHandler({
       }
       clearTransientCooldown();
     } catch (error) {
-      if (is401Error(error)) {
+      // Check transient errors BEFORE is401Error: grammY renders rate-limit errors
+      // as "Call to 'sendChatAction' failed! (429: Too Many Requests: retry after N)"
+      // and a plain message.includes("401") substring check would misclassify a 429
+      // whose retry_after contains "401" as a 401, suspending the bot (#94787).
+      if (isTransientSendChatActionError(error)) {
+        consecutiveTransientFailures++;
+        const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);
+        const cooldownStartedAt = now();
+        // Keep transient failures rejected through the same-chat coalesce window;
+        // otherwise the next typing keepalive can look successful and reset its guard.
+        const coalescingUntilMs = key ? attemptedAt + minIntervalMs : 0;
+        transientCooldownUntilMs = Math.max(cooldownStartedAt + cooldownMs, coalescingUntilMs);
+        const effectiveCooldownMs = Math.max(0, transientCooldownUntilMs - cooldownStartedAt);
+        logger(
+          `sendChatAction transient error (${consecutiveTransientFailures}). ` +
+            `Cooling down ${effectiveCooldownMs}ms before retry.`,
+        );
+      } else if (is401Error(error)) {
         clearTransientCooldown();
         consecutive401Failures++;
 
@@ -193,19 +210,6 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
-      } else if (isTransientSendChatActionError(error)) {
-        consecutiveTransientFailures++;
-        const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);
-        const cooldownStartedAt = now();
-        // Keep transient failures rejected through the same-chat coalesce window;
-        // otherwise the next typing keepalive can look successful and reset its guard.
-        const coalescingUntilMs = key ? attemptedAt + minIntervalMs : 0;
-        transientCooldownUntilMs = Math.max(cooldownStartedAt + cooldownMs, coalescingUntilMs);
-        const effectiveCooldownMs = Math.max(0, transientCooldownUntilMs - cooldownStartedAt);
-        logger(
-          `sendChatAction transient error (${consecutiveTransientFailures}). ` +
-            `Cooling down ${effectiveCooldownMs}ms before retry.`,
-        );
       } else {
         clearTransientCooldown();
       }
