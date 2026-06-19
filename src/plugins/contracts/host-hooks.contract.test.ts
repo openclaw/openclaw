@@ -1133,6 +1133,8 @@ describe("host-hook fixture plugin contract", () => {
       "/plugins/entry-fixture/?session=agent:main:main",
       "/plugins/entry-fixture/#session",
       "/plugins/entry-fixture/%2F%2Fexample.com",
+      "/plugins/entry-fixture/%2e%2e/other-plugin/",
+      "/plugins/other-plugin/%2e%2e/entry-fixture/",
     ];
     for (const [index, badPath] of badPaths.entries()) {
       const { config, registry } = createPluginRegistryFixture();

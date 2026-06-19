@@ -136,7 +136,7 @@ import {
   restoreNativeTitleTooltip,
 } from "./dom-tooltips.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
-import type { Tab } from "./navigation.ts";
+import { isCanonicalPluginOwnedPath, type Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
@@ -242,7 +242,10 @@ function resolvePluginUiRequestPath(
       return null;
     }
     const pluginRoot = `/plugins/${entryPoint.pluginId}`;
-    if (url.pathname !== pluginRoot && !url.pathname.startsWith(`${pluginRoot}/`)) {
+    if (
+      (url.pathname !== pluginRoot && !url.pathname.startsWith(`${pluginRoot}/`)) ||
+      !isCanonicalPluginOwnedPath({ pluginId: entryPoint.pluginId, path: url.pathname })
+    ) {
       return null;
     }
     return `${url.pathname}${url.search}`;
@@ -290,8 +293,9 @@ async function proxyPluginUiFrameRequest(params: {
   const reply = (payload: Record<string, unknown>) => {
     const message = { type: "openclaw.pluginUi.response", id, ...payload };
     queueMicrotask(() => {
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- MessagePort.postMessage has no targetOrigin parameter.
       params.replyPort.postMessage(message);
-      params.frame.contentWindow?.postMessage(message, "*");
+      params.frame.contentWindow?.postMessage(message, window.location.origin);
     });
   };
   const path = resolvePluginUiRequestPath(params.entryPoint, params.message.path);

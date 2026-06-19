@@ -313,7 +313,7 @@ describe("control UI routing", () => {
         status: 201,
         body: "pong",
       }),
-      "*",
+      window.location.origin,
     );
 
     fetchSpy.mockClear();
@@ -330,6 +330,26 @@ describe("control UI routing", () => {
         expect.objectContaining({
           type: "openclaw.pluginUi.response",
           id: "req-2",
+          ok: false,
+          status: 400,
+        }),
+      ),
+    );
+
+    fetchSpy.mockClear();
+    postPluginUiBridgeMessage(bridgePort, {
+      type: "openclaw.pluginUi.request",
+      id: "req-encoded-sibling",
+      path: "/plugins/notes-plugin/%2e%2e/other-plugin/api/search",
+    });
+    await nextFrame();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-encoded-sibling",
           ok: false,
           status: 400,
         }),

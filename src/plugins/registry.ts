@@ -29,6 +29,7 @@ import {
 } from "../context-engine/registry.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
+import { canonicalizePathForSecurity } from "../gateway/security-path.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -1983,6 +1984,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (pathValue !== pluginRoot && !pathValue.startsWith(`${pluginRoot}/`)) {
       return null;
     }
+    const canonicalPluginRoot = canonicalizePathForSecurity(pluginRoot).canonicalPath;
+    const canonical = canonicalizePathForSecurity(pathValue);
+    if (
+      canonical.malformedEncoding ||
+      canonical.decodePassLimitReached ||
+      !canonical.candidates.every(
+        (candidate) =>
+          candidate === canonicalPluginRoot || candidate.startsWith(`${canonicalPluginRoot}/`),
+      )
+    ) {
+      return null;
+    }
     return pathValue;
   };
 
@@ -2321,7 +2334,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const description = normalizeOptionalHostHookString(entryPoint.description);
     const requiredScopes = normalizeHostHookStringList(entryPoint.requiredScopes);
     const surface = typeof entryPoint.surface === "string" ? entryPoint.surface : "";
-    const path = normalizeControlUiEntryPointPath(record.id, entryPoint.path);
+    const entryPointPath = normalizeControlUiEntryPointPath(record.id, entryPoint.path);
     const openMode =
       entryPoint.openMode === undefined || entryPoint.openMode === null
         ? "in-app"
@@ -2335,7 +2348,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       !controlUiEntryPointOpenModes.has(
         openMode as NonNullable<PluginControlUiEntryPoint["openMode"]>,
       ) ||
-      !path ||
+      !entryPointPath ||
       description === "" ||
       requiredScopes === null
     ) {
@@ -2380,7 +2393,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         id,
         surface: surface as PluginControlUiEntryPoint["surface"],
         label,
-        path,
+        path: entryPointPath,
         openMode: openMode as NonNullable<PluginControlUiEntryPoint["openMode"]>,
         ...(description !== undefined ? { description } : {}),
         ...(requiredScopes !== undefined

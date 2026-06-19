@@ -107,10 +107,12 @@ describe("openExternalUrlSafe", () => {
   });
 
   it("navigates a reserved window to a safe URL", () => {
+    const assignMock = vi.fn();
+    const closeMock = vi.fn();
     const openedLikeProxy = {
       opener: { postMessage: () => void 0 },
-      location: { assign: vi.fn() },
-      close: vi.fn(),
+      location: { assign: assignMock },
+      close: closeMock,
     } as unknown as WindowProxy;
 
     expect(
@@ -119,16 +121,18 @@ describe("openExternalUrlSafe", () => {
       }),
     ).toBe(true);
 
-    expect(openedLikeProxy.location.assign).toHaveBeenCalledWith("https://openclaw.ai/plugin");
-    expect(openedLikeProxy.close).not.toHaveBeenCalled();
+    expect(assignMock).toHaveBeenCalledWith("https://openclaw.ai/plugin");
+    expect(closeMock).not.toHaveBeenCalled();
     expect(openedLikeProxy.opener).toBeNull();
   });
 
   it("closes a reserved window for unsafe URLs", () => {
+    const assignMock = vi.fn();
+    const closeMock = vi.fn();
     const openedLikeProxy = {
       opener: { postMessage: () => void 0 },
-      location: { assign: vi.fn() },
-      close: vi.fn(),
+      location: { assign: assignMock },
+      close: closeMock,
     } as unknown as WindowProxy;
 
     expect(
@@ -137,8 +141,8 @@ describe("openExternalUrlSafe", () => {
       }),
     ).toBe(false);
 
-    expect(openedLikeProxy.location.assign).not.toHaveBeenCalled();
-    expect(openedLikeProxy.close).toHaveBeenCalled();
+    expect(assignMock).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalled();
   });
 
   it("nulls opener when window.open returns a proxy-like object", () => {

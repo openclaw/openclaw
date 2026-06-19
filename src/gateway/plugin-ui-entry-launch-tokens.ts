@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { canonicalizePathForSecurity } from "./security-path.js";
 
 export const PLUGIN_UI_ENTRY_LAUNCH_TOKEN_PARAM = "__openclaw_plugin_entry";
 export const PLUGIN_UI_ENTRY_SESSION_COOKIE = "openclaw_plugin_entry";
@@ -12,6 +13,8 @@ const MAX_TOKENS = 256;
 const MAX_SESSIONS = 256;
 
 type LaunchTokenRecord = {
+  canonicalPath: string;
+  canonicalPathRoot: string;
   expiresAtMs: number;
   path: string;
   scopes: string[];
@@ -20,6 +23,7 @@ type LaunchTokenRecord = {
 };
 
 type SessionTokenRecord = {
+  canonicalPathRoot: string;
   expiresAtMs: number;
   pathRoot: string;
   scopes: string[];
@@ -63,7 +67,11 @@ function appendTokenToPath(path: string, token: string): string {
 }
 
 function resolvePluginUiSessionPathRoot(path: string): string | undefined {
-  const pathname = path.split(/[?#]/, 1)[0] ?? "";
+  const canonical = canonicalizePathForSecurity(path.split(/[?#]/, 1)[0] ?? "");
+  if (canonical.malformedEncoding || canonical.decodePassLimitReached) {
+    return undefined;
+  }
+  const pathname = canonical.canonicalPath;
   if (!pathname.startsWith("/plugins/")) {
     return undefined;
   }
@@ -82,8 +90,30 @@ function resolvePluginUiSessionPathRoot(path: string): string | undefined {
   return `/plugins/${pluginPath}`;
 }
 
+function matchesCanonicalPluginUiRoot(params: { path: string; pathRoot: string }): boolean {
+  const canonical = canonicalizePathForSecurity(params.path);
+  if (canonical.malformedEncoding || canonical.decodePassLimitReached) {
+    return false;
+  }
+  return canonical.candidates.every(
+    (candidate) => candidate === params.pathRoot || candidate.startsWith(`${params.pathRoot}/`),
+  );
+}
+
+function resolvePluginUiEntryCanonicalPath(path: string): string | undefined {
+  const canonical = canonicalizePathForSecurity(path.split(/[?#]/, 1)[0] ?? "");
+  if (
+    canonical.malformedEncoding ||
+    canonical.decodePassLimitReached ||
+    !canonical.candidates.every((candidate) => candidate === canonical.canonicalPath)
+  ) {
+    return undefined;
+  }
+  return canonical.canonicalPath;
+}
+
 function matchesPluginUiSessionPath(params: { path: string; pathRoot: string }): boolean {
-  return params.path === params.pathRoot || params.path.startsWith(`${params.pathRoot}/`);
+  return matchesCanonicalPluginUiRoot(params);
 }
 
 function parseCookieHeader(header: string | string[] | undefined): Map<string, string> {
@@ -120,6 +150,7 @@ function issuePluginUiEntryPointSession(params: {
   }
   const token = randomUUID();
   sessionTokens.set(token, {
+    canonicalPathRoot: pathRoot,
     expiresAtMs: params.nowMs + SESSION_TTL_MS,
     pathRoot,
     scopes: [...params.scopes],
@@ -147,12 +178,21 @@ export function issuePluginUiEntryPointLaunchPath(params: {
 }): string {
   const nowMs = params.nowMs ?? Date.now();
   pruneExpiredTokens(nowMs);
+  const canonicalPath = resolvePluginUiEntryCanonicalPath(params.path);
+  const canonicalPathRoot = canonicalPath
+    ? resolvePluginUiSessionPathRoot(canonicalPath)
+    : undefined;
+  if (!canonicalPath || !canonicalPathRoot) {
+    throw new Error("plugin UI entry launch path must be a canonical plugin-owned route path");
+  }
   const token = randomUUID();
   const ttlMs =
     typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs)
       ? Math.max(1_000, Math.min(params.ttlMs, SESSION_TTL_MS))
       : TOKEN_TTL_MS;
   launchTokens.set(token, {
+    canonicalPath,
+    canonicalPathRoot,
     expiresAtMs: nowMs + ttlMs,
     path: params.path,
     scopes: [...params.scopes],
@@ -184,7 +224,13 @@ export function consumePluginUiEntryPointLaunchToken(params: {
   pruneExpiredTokens(nowMs);
   const record = launchTokens.get(token);
   launchTokens.delete(token);
-  if (!record || record.expiresAtMs <= nowMs || record.path !== params.path) {
+  const canonicalPath = resolvePluginUiEntryCanonicalPath(params.path);
+  if (
+    !record ||
+    record.expiresAtMs <= nowMs ||
+    canonicalPath !== record.canonicalPath ||
+    !matchesCanonicalPluginUiRoot({ path: params.path, pathRoot: record.canonicalPathRoot })
+  ) {
     return { ok: false };
   }
   const session = issuePluginUiEntryPointSession({
@@ -219,7 +265,7 @@ export function resolvePluginUiEntryPointSessionCookie(params: {
   if (
     !record ||
     record.expiresAtMs <= nowMs ||
-    !matchesPluginUiSessionPath({ path: params.path, pathRoot: record.pathRoot })
+    !matchesPluginUiSessionPath({ path: params.path, pathRoot: record.canonicalPathRoot })
   ) {
     if (record?.expiresAtMs !== undefined && record.expiresAtMs <= nowMs) {
       sessionTokens.delete(token);

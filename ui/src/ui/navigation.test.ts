@@ -199,6 +199,8 @@ describe("pathForPluginUiEntryPoint", () => {
       "/plugins/notes-plugin/?session=agent:main:main",
       "/plugins/notes-plugin/#session",
       "/plugins/notes-plugin/%2F%2Fexample.com",
+      "/plugins/notes-plugin/%2e%2e/other-plugin/",
+      "/plugins/other-plugin/%2e%2e/notes-plugin/",
     ];
     for (const path of badPaths) {
       expect(

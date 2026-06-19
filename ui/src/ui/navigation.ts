@@ -136,6 +136,77 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+function normalizeSecurityPath(pathname: string): string {
+  let resolved = pathname;
+  try {
+    resolved = new URL(pathname, window.location.origin).pathname;
+  } catch {
+    // Keep the raw value; later checks reject invalid or escaping forms.
+  }
+  const collapsed = resolved
+    .trim()
+    .toLowerCase()
+    .replace(/\/{2,}/g, "/");
+  if (collapsed.length <= 1) {
+    return collapsed || "/";
+  }
+  return collapsed.replace(/\/+$/, "");
+}
+
+function buildSecurityPathCandidates(pathname: string): {
+  candidates: string[];
+  malformedEncoding: boolean;
+  decodePassLimitReached: boolean;
+} {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (value: string) => {
+    const normalized = normalizeSecurityPath(value);
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      candidates.push(normalized);
+    }
+  };
+
+  pushCandidate(pathname);
+  let decoded = pathname;
+  let malformedEncoding = false;
+  for (let pass = 0; pass < 32; pass += 1) {
+    let nextDecoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      malformedEncoding = true;
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+    pushCandidate(decoded);
+  }
+  let decodePassLimitReached = false;
+  if (!malformedEncoding) {
+    try {
+      decodePassLimitReached = decodeURIComponent(decoded) !== decoded;
+    } catch {
+      malformedEncoding = true;
+    }
+  }
+  return { candidates, malformedEncoding, decodePassLimitReached };
+}
+
+export function isCanonicalPluginOwnedPath(params: { pluginId: string; path: string }): boolean {
+  const pluginRoot = normalizeSecurityPath(`/plugins/${params.pluginId.trim()}`);
+  const canonical = buildSecurityPathCandidates(params.path);
+  if (canonical.malformedEncoding || canonical.decodePassLimitReached) {
+    return false;
+  }
+  return canonical.candidates.every(
+    (candidate) => candidate === pluginRoot || candidate.startsWith(`${pluginRoot}/`),
+  );
+}
+
 export function pathForPluginUiEntryPoint(params: {
   pluginId: string;
   path: string;
@@ -158,7 +229,10 @@ export function pathForPluginUiEntryPoint(params: {
     return null;
   }
   const pluginRoot = `/plugins/${pluginId}`;
-  if (path !== pluginRoot && !path.startsWith(`${pluginRoot}/`)) {
+  if (
+    (path !== pluginRoot && !path.startsWith(`${pluginRoot}/`)) ||
+    !isCanonicalPluginOwnedPath({ pluginId, path })
+  ) {
     return null;
   }
   return path;

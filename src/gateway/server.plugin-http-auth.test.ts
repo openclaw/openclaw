@@ -26,7 +26,10 @@ import {
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
 import { createTestRegistry } from "./server/__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -468,6 +471,82 @@ describe("gateway plugin HTTP auth boundary", () => {
           "/plugins/@team/one",
           "/plugins/@team/one/session/main",
         ]);
+      },
+    });
+  });
+
+  test("rejects Plugin UI Entry Point sessions when decoded path candidates leave the plugin root", async () => {
+    const handledRoutes: string[] = [];
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "notes-plugin",
+          source: "notes-plugin",
+          path: "/plugins/notes-plugin",
+          auth: "gateway",
+          match: "prefix",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            handledRoutes.push("notes-plugin");
+            res.statusCode = 200;
+            res.end("notes");
+            return true;
+          },
+        },
+        {
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          path: "/plugins/other-plugin",
+          auth: "gateway",
+          match: "prefix",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            handledRoutes.push("other-plugin");
+            res.statusCode = 200;
+            res.end("other");
+            return true;
+          },
+        },
+      ],
+    });
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry,
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-entry-canonical-session-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
+      },
+      run: async (server) => {
+        const launchPath = issuePluginUiEntryPointLaunchPath({
+          path: "/plugins/notes-plugin/",
+          scopes: ["operator.read"],
+        });
+
+        const authenticated = await sendRequest(server, { path: launchPath });
+        expect(authenticated.res.statusCode).toBe(200);
+        const setCookie = authenticated.setHeader.mock.calls.find(
+          ([name]) => name === "Set-Cookie",
+        )?.[1] as string | undefined;
+        const cookie = setCookie?.split(";")[0];
+        expect(cookie).toBeDefined();
+
+        const siblingEscape = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/plugins/notes-plugin/%2e%2e/other-plugin/secret",
+            ...(cookie ? { headers: { cookie } } : {}),
+          }),
+          siblingEscape.res,
+        );
+        expectUnauthorizedResponse(siblingEscape);
+        expect(handledRoutes).toEqual(["notes-plugin"]);
       },
     });
   });
