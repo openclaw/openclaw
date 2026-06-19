@@ -3795,8 +3795,15 @@ output="$(cat "$sampler_log")"
   });
 
   it("routes doctor install switch commands through the E2E timeout helper", () => {
+    const runner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");
     const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
 
+    expect(runner).toContain('NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"');
+    expect(runner).toContain(
+      'COMMAND_TIMEOUT="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"',
+    );
+    expect(runner).toContain('-e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$NPM_INSTALL_TIMEOUT"');
+    expect(runner).toContain('-e "OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT=$COMMAND_TIMEOUT"');
     expect(scenario).toContain(
       'command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"',
     );

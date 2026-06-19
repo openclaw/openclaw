@@ -208,6 +208,35 @@ describe("parallels npm update smoke", () => {
     expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
   });
 
+  it("passes platform model timeouts to POSIX update agent turns", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.5.3-beta.2",
+      updateTarget: "2026.5.3-beta.2",
+    };
+    withEnv(
+      {
+        OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: undefined,
+        OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: undefined,
+        OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: undefined,
+      },
+      () => {
+        expect(macosUpdateScript(input)).toContain("--timeout 1800 --json");
+        expect(linuxUpdateScript(input)).toContain("--timeout 900 --json");
+      },
+    );
+    withEnv(
+      {
+        OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: "321",
+        OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: "654",
+      },
+      () => {
+        expect(macosUpdateScript(input)).toContain("--timeout 654 --json");
+        expect(linuxUpdateScript(input)).toContain("--timeout 321 --json");
+      },
+    );
+  });
+
   it("streams fresh lane logs instead of retaining them in memory", async () => {
     const root = makeTempDir();
     const logPath = path.join(root, "fresh.log");
