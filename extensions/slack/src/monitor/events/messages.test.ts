@@ -449,6 +449,22 @@ describe("registerSlackMessageEvents", () => {
     ]);
   });
 
+  it("logs channel app_mention receipts with unknown sender when user is absent", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
+        user: undefined,
+      },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
+    ]);
+  });
+
   it("formats the inbound receipt line with channel, sender, body length, and bot identity", () => {
     expect(
       formatSlackInboundLogLine({
