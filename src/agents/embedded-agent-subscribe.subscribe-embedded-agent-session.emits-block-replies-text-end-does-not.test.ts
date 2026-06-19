@@ -140,13 +140,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
     await Promise.resolve();
 
-    expect(onPartialReply).toHaveBeenCalledTimes(2);
-    const provisional = onPartialReply.mock.calls[0]?.[0] as PartialReplyPayload | undefined;
-    expect(provisional).toMatchObject({
-      text: "I sent the SMS.",
-      delta: "I sent the SMS.",
-    });
-    const finalPayload = onPartialReply.mock.calls[1]?.[0] as PartialReplyPayload | undefined;
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    const finalPayload = onPartialReply.mock.calls[0]?.[0] as PartialReplyPayload | undefined;
     expect(finalPayload).toMatchObject({
       text: "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
       delta:
@@ -307,16 +302,13 @@ Message ID: 6655442331193344`,
     });
     await Promise.resolve();
 
-    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
     expect(onPartialReply.mock.calls[0]?.[0]).toMatchObject({
-      text: "I sent the SMS.",
-      delta: "I sent the SMS.",
-    });
-    expect(onPartialReply.mock.calls[1]?.[0]).toMatchObject({
       text: deliveryText,
-      delta: " Status: accepted/queued. Message ID: SM_split_proof",
+      delta: deliveryText,
+      replace: true,
     });
-    expect(onPartialReply.mock.calls[1]?.[0]).not.toMatchObject({
+    expect(onPartialReply.mock.calls[0]?.[0]).not.toMatchObject({
       text: expect.stringContaining("cannot verify"),
     });
   });

@@ -125,6 +125,7 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
+  suppressedReceiptPartialText?: string;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;

@@ -49,6 +49,18 @@ Message ID: 6655442331193344`),
     });
   });
 
+  it("detects first-person SMS sent assertions without receipt fields", () => {
+    expect(detectMessageDeliveryReceiptClaim("I sent the SMS.")).toMatchObject({
+      channel: "sms",
+    });
+  });
+
+  it("detects sent-before-text-message assertions without receipt fields", () => {
+    expect(detectMessageDeliveryReceiptClaim("Sent the text message.")).toMatchObject({
+      channel: "sms",
+    });
+  });
+
   it("detects sent-to phone receipts without a colon", () => {
     expect(detectMessageDeliveryReceiptClaim("SMS sent to +15550009999")).toMatchObject({
       channel: "sms",

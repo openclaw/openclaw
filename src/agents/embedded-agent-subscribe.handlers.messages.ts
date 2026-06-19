@@ -860,6 +860,20 @@ export function handleMessageUpdate(
         ? cleanedText !== previousCleaned || hasMedia || hasAudio
         : Boolean(deltaText || hasMedia || hasAudio);
     }
+    const hadSuppressedReceiptPartial = Boolean(ctx.state.suppressedReceiptPartialText);
+    if (evtType === "text_end" && hadSuppressedReceiptPartial && cleanedText) {
+      replace = true;
+      deltaText = cleanedText;
+      shouldEmit = true;
+      ctx.state.suppressedReceiptPartialText = undefined;
+    } else if (
+      shouldEmit &&
+      evtType !== "text_end" &&
+      hasPotentialSmsReceiptAssertion(cleanedText)
+    ) {
+      ctx.state.suppressedReceiptPartialText = cleanedText;
+      shouldEmit = false;
+    }
 
     if (shouldUsePhaseAwareBlockReply) {
       if (replace) {
@@ -1017,6 +1031,7 @@ export function handleMessageEnd(
     ctx.state.partialBlockState.pendingTagFragment = undefined;
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.suppressedReceiptPartialText = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
 

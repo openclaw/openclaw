@@ -62,6 +62,12 @@ Message ID: 4797682962735104`;
     ).toMatchObject({ allowed: false });
   });
 
+  it("blocks first-person SMS sent claims without receipt fields", () => {
+    expect(guardMessageDeliveryReceiptText({ text: "I sent the SMS." })).toMatchObject({
+      allowed: false,
+    });
+  });
+
   it("blocks mismatched sent-to phone claims", () => {
     expect(
       guardMessageDeliveryReceiptText({

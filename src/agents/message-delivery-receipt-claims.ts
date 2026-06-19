@@ -9,7 +9,7 @@ export type MessageDeliveryReceiptClaim = {
 };
 
 const SMS_PREFILTER_RE =
-  /\b(?:sms|text message)\b[\s\S]{0,240}\b(?:sent|queued|delivered|accepted\/queued|message id|status)\b|\b(?:sent|queued|delivered)\b[\s\S]{0,80}\b(?:sms|text message)\b[\s\S]{0,240}\b(?:message id|status)\b|\bSent to\b[\s\S]{0,240}\b(?:To:|Status:|Message ID:)/iu;
+  /\b(?:sms|text message)\b[\s\S]{0,240}\b(?:sent|queued|delivered|accepted\/queued|message id|status)\b|\b(?:sent|queued|delivered)\b[\s\S]{0,80}\b(?:sms|text message)\b(?:[\s\S]{0,240}\b(?:message id|status)\b)?|\bSent to\b[\s\S]{0,240}\b(?:To:|Status:|Message ID:)/iu;
 const SMS_DELIVERY_ASSERTION_RE =
   /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:the\s+)?(?:sms|text message)\b)/giu;
 const UNCERTAIN_OR_NEGATED_RE =
