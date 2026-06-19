@@ -12,13 +12,12 @@ function buildSerializationKey(ip: string | undefined, scope: string | undefined
   return `${normalizeScope(scope)}:${normalizeRateLimitClientIp(ip)}`;
 }
 
-/** Runs one rate-limit attempt after prior attempts for the same IP/scope finish. */
-export async function withSerializedRateLimitAttempt<T>(params: {
-  ip: string | undefined;
-  scope: string | undefined;
+/** Runs one attempt after prior work for the same stable key finishes. */
+export async function withSerializedKeyedAttempt<T>(params: {
+  key: string;
   run: () => Promise<T>;
 }): Promise<T> {
-  const key = buildSerializationKey(params.ip, params.scope);
+  const key = params.key;
   const previous = pendingAttempts.get(key) ?? Promise.resolve();
   let releaseCurrent!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -36,4 +35,16 @@ export async function withSerializedRateLimitAttempt<T>(params: {
       pendingAttempts.delete(key);
     }
   }
+}
+
+/** Runs one rate-limit attempt after prior attempts for the same IP/scope finish. */
+export async function withSerializedRateLimitAttempt<T>(params: {
+  ip: string | undefined;
+  scope: string | undefined;
+  run: () => Promise<T>;
+}): Promise<T> {
+  return await withSerializedKeyedAttempt({
+    key: buildSerializationKey(params.ip, params.scope),
+    run: params.run,
+  });
 }

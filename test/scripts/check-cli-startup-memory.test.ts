@@ -86,6 +86,11 @@ describe("check-cli-startup-memory", () => {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000.5",
       }),
     ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
+    expect(() =>
+      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
+        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
     expect(
       testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000",

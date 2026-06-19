@@ -616,17 +616,6 @@ export function resolveProviderAttributionPolicy(
   return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
 }
 
-export function resolveProviderAttributionHeaders(
-  provider?: string | null,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  const policy = resolveProviderAttributionPolicy(provider, env);
-  if (!policy?.enabledByDefault) {
-    return undefined;
-  }
-  return policy.headers;
-}
-
 export function resolveProviderRequestPolicy(
   input: ProviderRequestPolicyInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -692,13 +681,6 @@ export function resolveProviderRequestPolicy(
     usesVerifiedOpenAIAttributionHost,
     usesExplicitProxyLikeEndpoint,
   };
-}
-
-export function resolveProviderRequestAttributionHeaders(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  return resolveProviderRequestPolicy(input, env).attributionHeaders;
 }
 
 export function resolveProviderRequestCapabilities(

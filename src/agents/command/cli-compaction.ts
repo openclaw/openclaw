@@ -7,8 +7,10 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -284,6 +286,18 @@ async function compactCliTranscript(params: {
     contextTokenBudget: params.contextTokenBudget,
     trigger: "cli_budget",
   });
+  const runtimeSettings = buildContextEngineRuntimeSettings({
+    contextEngineHost: buildGenericCliContextEngineHostSupport({
+      backendId: params.provider,
+      capabilities: ["compact", "maintain"],
+    }),
+    provider: params.provider,
+    requestedModel: params.model,
+    resolvedModel: params.model,
+    selectedContextEngineId: params.contextEngine.info.id,
+    contextEngineSelectionSource: "configured",
+    promptTokenBudget: params.contextTokenBudget,
+  });
 
   let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
   try {
@@ -298,6 +312,7 @@ async function compactCliTranscript(params: {
         force: true,
         compactionTarget: "budget",
         runtimeContext,
+        runtimeSettings,
       },
       resolveCompactionTimeoutMs(params.cfg),
     );
@@ -337,6 +352,7 @@ async function compactCliTranscript(params: {
       reason: "compaction",
       sessionManager: params.sessionManager,
       runtimeContext,
+      runtimeSettings,
       config: params.cfg,
     });
   } catch (error) {
@@ -663,6 +679,7 @@ export async function runCliTurnCompactionLifecycle(params: {
         sessionKey: params.sessionKey,
         sessionStore: params.sessionStore,
         storePath: params.storePath,
+        expectedSessionId: params.sessionId,
       })) ?? params.sessionEntry
     );
   }
@@ -680,6 +697,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       tokensAfter: nativeCompactionResult?.result?.tokensAfter,
       newSessionId: nativeCompactionResult?.result?.sessionId,
       newSessionFile: nativeCompactionResult?.result?.sessionFile,
+      expectedSessionId: params.sessionId,
     })) ?? params.sessionEntry
   );
 }

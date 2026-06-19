@@ -1,5 +1,7 @@
 name: OpenClaw Performance
 
+run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}
+
 on:
   schedule:
     - cron: "11 5 * * *"
@@ -43,7 +45,12 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: b63b6f9e20efb23641df00487e982230d81a90ac
+        default: 4f146016583018bad9e24f8e64a6af5f963bb7ee
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -56,8 +63,10 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCM_VERSION: v0.2.15
+  OCM_LINUX_X64_SHA256: b849b8de5d77e97e0df9319703254ae95e29d7f26a7552ea79bf173ff110ea0a
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.5
+  KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
   kova:
@@ -90,7 +99,7 @@ jobs:
             live: "true"
             include_filters: "scenario:agent-cold-warm-message"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'b63b6f9e20efb23641df00487e982230d81a90ac' }}
+      KOVA_REF: ${{ inputs.kova_ref || '4f146016583018bad9e24f8e64a6af5f963bb7ee' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -144,7 +153,7 @@ jobs:
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.target_ref || github.ref }}
           fetch-depth: 1
@@ -152,7 +161,7 @@ jobs:
 
       - name: Checkout performance workflow helpers
         if: steps.lane.outputs.run == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           path: .artifacts/performance-workflow
@@ -187,11 +196,20 @@ jobs:
           set -euo pipefail
           KOVA_SRC="${RUNNER_TEMP}/kova-src"
           echo "KOVA_SRC=$KOVA_SRC" >> "$GITHUB_ENV"
-          mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")"
-          curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh \
-            | bash -s -- --version "$OCM_VERSION" --prefix "$HOME/.local" --force
-          git clone --filter=blob:none "https://github.com/${KOVA_REPOSITORY}.git" "$KOVA_SRC"
-          git -C "$KOVA_SRC" checkout "$KOVA_REF"
+          mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
+
+          ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused \
+            -o "$ocm_archive" \
+            "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
+          tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
+          install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
+
+          git init -b main "$KOVA_SRC"
+          git -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
+          git -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
+          git -C "$KOVA_SRC" checkout --detach FETCH_HEAD
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash
           export KOVA_HOME="${KOVA_HOME}"
@@ -274,6 +292,7 @@ jobs:
             --auth "$AUTH_MODE"
             --parallel 1
             --repeat "$repeat"
+            --timeout-ms "$KOVA_SCENARIO_TIMEOUT_MS"
             --report-dir "$REPORT_DIR"
             --execute
             --json
@@ -344,6 +363,7 @@ jobs:
           - Kova repository: ${KOVA_REPOSITORY}
           - Kova ref: ${KOVA_REF}
           - Kova profile: ${PROFILE}
+          - Kova scenario timeout: ${KOVA_SCENARIO_TIMEOUT_MS}ms
           - Lane auth: ${AUTH_MODE}
           - Lane model: ${PERFORMANCE_MODEL_ID}
           - Lane repeat: ${repeat}
@@ -546,7 +566,7 @@ jobs:
 
       - name: Upload Kova artifacts
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

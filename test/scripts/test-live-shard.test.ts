@@ -46,7 +46,10 @@ describe("scripts/test-live-shard", () => {
 
     expect(allFiles.length).toBeGreaterThan(0);
     expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
-    expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
+    expect(duplicateFiles).toEqual([
+      "src/agents/zai.live.test.ts",
+      "extensions/music-generation-providers.live.test.ts",
+    ]);
     expect(musicProviderFanout).toEqual([
       "native-live-extensions-media-music-google",
       "native-live-extensions-media-music-minimax",
@@ -80,6 +83,12 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+    );
+    expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
+      "src/agents/zai.live.test.ts",
+    ]);
     expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
       "src/gateway/gateway-acp-bind.live.test.ts",
       "src/gateway/gateway-cli-backend.live.test.ts",

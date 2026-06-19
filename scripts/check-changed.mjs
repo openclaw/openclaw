@@ -13,6 +13,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
+  isChangedLaneTestPath,
   listChangedPathsFromGit,
   listStagedChangedPaths,
   normalizeChangedPath,
@@ -44,6 +45,12 @@ const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+const ANDROID_VERSION_SYNC_PATHS = new Set([
+  "apps/android/CHANGELOG.md",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/android/version.json",
+]);
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -62,6 +69,12 @@ function isTruthyEnvFlag(value) {
     .trim()
     .toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function hasAndroidVersionSyncPath(paths) {
+  return paths.some((changedPath) =>
+    ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
+  );
 }
 
 function executableExistsOnPath(command, env = process.env) {
@@ -160,6 +173,10 @@ export function shouldRunShrinkwrapGuard(paths) {
   return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
 }
 
+export function shouldRunTestTempCreationReport(paths) {
+  return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
+}
+
 export function createShrinkwrapGuardCommand(paths) {
   if (!shouldRunShrinkwrapGuard(paths)) {
     return null;
@@ -210,6 +227,22 @@ export function createChangedCheckPlan(result, options = {}) {
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
   const addLint = (name, args) => add(name, args, baseEnv);
+  const addTestTempCreationReport = () => {
+    if (!shouldRunTestTempCreationReport(result.paths)) {
+      return;
+    }
+    addCommand(
+      "test temp creation report (warning-only)",
+      "node",
+      [
+        "scripts/report-test-temp-creations.mjs",
+        ...(options.staged
+          ? ["--staged"]
+          : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
+      ],
+      baseEnv,
+    );
+  };
 
   add("conflict markers", ["check:no-conflict-markers"]);
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -235,8 +268,11 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  addTestTempCreationReport();
+
   const lanes = result.lanes;
   const runAll = lanes.all;
+  const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -246,6 +282,7 @@ export function createChangedCheckPlan(result, options = {}) {
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    add("Android version sync", ["android:version:check"]);
     add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
@@ -256,7 +293,12 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  if (shouldRunAndroidVersionSync) {
+    add("Android version sync", ["android:version:check"]);
+  }
+
   if (runAll) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -322,6 +364,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.extensions) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);

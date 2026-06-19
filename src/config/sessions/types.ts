@@ -51,6 +51,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
@@ -201,6 +202,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type RestartRecoveryRun = {
+  runId: string;
+  lifecycleGeneration: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -250,6 +256,8 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Interrupted run generations whose late lifecycle events must be ignored. */
+  restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
@@ -624,12 +632,6 @@ export function resolveFreshSessionTotalTokens(
   return total;
 }
 
-export function isSessionTotalTokensFresh(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): boolean {
-  return resolveFreshSessionTotalTokens(entry) !== undefined;
-}
-
 export type GroupKeyResolution = {
   key: string;
   channel?: string;
@@ -724,6 +726,5 @@ export type SessionSystemPromptReport = {
   };
 };
 
-export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

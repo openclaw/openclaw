@@ -23,6 +23,7 @@ import {
   resumeCodexCliSessionOnNode,
   resolveCodexCliSessionForBindingOnNode,
 } from "./src/node-cli-sessions.js";
+import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
 export default definePluginEntry({
   id: "codex",
@@ -45,6 +46,9 @@ export default definePluginEntry({
     api.registerProvider(buildCodexProvider({ pluginConfig: api.pluginConfig }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
+    );
+    api.registerWebSearchProvider(
+      createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     for (const command of createCodexCliSessionNodeHostCommands()) {

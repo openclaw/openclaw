@@ -5,11 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type FileLockOptions, withFileLock } from "../plugin-sdk/file-lock.js";
-import {
-  clearStoreWriterQueuesForTest,
-  runQueuedStoreWrite,
-  type StoreWriterQueue,
-} from "../shared/store-writer-queue.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 
 const WRITER_QUEUES = new Map<string, StoreWriterQueue>();
 
@@ -44,8 +40,4 @@ export async function runExclusiveCommitmentsStoreWrite<T>(
       return await withFileLock(storePath, DEFAULT_COMMITMENTS_LOCK_OPTIONS, fn);
     },
   });
-}
-
-export function clearCommitmentsStoreWriterQueuesForTest(): void {
-  clearStoreWriterQueuesForTest(WRITER_QUEUES, "commitments store writer queue cleared for test");
 }

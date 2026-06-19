@@ -36,11 +36,20 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
+import {
+  sendJson,
+  sendMissingScopeForbidden,
+  setSseHeaders,
+  watchClientDisconnect,
+  writeDone,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isGatewaySessionKeyOverrideError,
+  isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -425,7 +434,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      allowModelOverride: true,
+      allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
     },
     defaultRuntime,
@@ -462,6 +471,11 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
+  if (!modelOverrideAuth.allowed) {
+    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
+    return true;
+  }
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
@@ -477,7 +491,18 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
-  const agentId = resolveAgentIdForRequest({ req, model });
+  let agentId: string;
+  try {
+    agentId = resolveAgentIdForRequest({ req, model });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -588,6 +613,14 @@ export async function handleOpenResponsesHttpRequest(
                     surroundContentWithNewlines: false,
                   }),
                 );
+              } else {
+                fileContexts.push(
+                  renderFileContextBlock({
+                    filename: file.filename,
+                    content: "[No extractable text]",
+                    surroundContentWithNewlines: false,
+                  }),
+                );
               }
               if (file.images && file.images.length > 0) {
                 images = images.concat(file.images);
@@ -624,14 +657,25 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const resolved = resolveGatewayRequestContext({
-    req,
-    model,
-    user,
-    sessionPrefix: "openresponses",
-    defaultMessageChannel: "webchat",
-    useMessageChannelHeader: true,
-  });
+  let resolved: ReturnType<typeof resolveGatewayRequestContext>;
+  try {
+    resolved = resolveGatewayRequestContext({
+      req,
+      model,
+      user,
+      sessionPrefix: "openresponses",
+      defaultMessageChannel: "webchat",
+      useMessageChannelHeader: true,
+    });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,

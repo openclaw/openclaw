@@ -37,6 +37,7 @@
           {
             "id": "accounts/fireworks/models/kimi-k2p6",
             "name": "Kimi K2.6",
+            "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 262144,
             "maxTokens": 262144,
@@ -50,6 +51,7 @@
           {
             "id": "accounts/fireworks/routers/kimi-k2p5-turbo",
             "name": "Kimi K2.5 Turbo (Fire Pass)",
+            "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 256000,
             "maxTokens": 256000,

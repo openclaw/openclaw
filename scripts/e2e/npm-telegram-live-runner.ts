@@ -17,12 +17,48 @@ function splitCsv(value: string | undefined) {
     .filter((entry) => entry.length > 0);
 }
 
+function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, name: string) {
+  const raw = env[name]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
+}
+
 function resolveCredentialSource(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE;
 }
 
 function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
+}
+
+const DEFAULT_RTT_CHECK_ID = "telegram-mentioned-message-reply";
+
+function resolveRttOptions(env: NodeJS.ProcessEnv, selectedScenarioIds: readonly string[] = []) {
+  const explicitCheckIds = splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS);
+  if (
+    explicitCheckIds.length === 0 &&
+    selectedScenarioIds.length > 0 &&
+    !selectedScenarioIds.includes(DEFAULT_RTT_CHECK_ID)
+  ) {
+    return {};
+  }
+  const rttCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES") ?? 20;
+  return {
+    rttCount,
+    rttTimeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS"),
+    maxRttFailures:
+      parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES") ?? rttCount,
+    rttCheckIds: explicitCheckIds,
+  };
 }
 
 async function shouldFailPackageTelegramRun(
@@ -74,16 +110,18 @@ async function main() {
   const outputDir =
     process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR?.trim() ||
     path.join(repoRoot, ".artifacts", "qa-e2e", `npm-telegram-live-${Date.now().toString(36)}`);
+  const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
   const result = await runTelegramQaLive({
+    env: process.env,
     repoRoot,
     outputDir,
     sutOpenClawCommand,
-    preflightInstalledOnboarding: true,
     providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE,
     primaryModel: process.env.OPENCLAW_NPM_TELEGRAM_MODEL,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
-    scenarioIds: splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS),
+    scenarioIds,
+    ...resolveRttOptions(process.env, scenarioIds),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
@@ -91,7 +129,6 @@ async function main() {
 
   process.stdout.write(`Package Telegram QA report: ${result.reportPath}\n`);
   process.stdout.write(`Package Telegram QA summary: ${result.summaryPath}\n`);
-  process.stdout.write(`Package Telegram QA observed messages: ${result.observedMessagesPath}\n`);
   if (await shouldFailPackageTelegramRun(result)) {
     process.exitCode = 1;
   }
@@ -116,8 +153,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 
 export const testing = {
+  parsePositiveIntegerEnv,
   resolveCredentialRole,
   resolveCredentialSource,
+  resolveRttOptions,
   shouldFailPackageTelegramRun,
 };
 export { testing as __testing };

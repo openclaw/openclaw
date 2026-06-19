@@ -43,6 +43,8 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  instanceReplaySafe: boolean;
+  replaySafe: boolean;
   mutatingAction: boolean;
   actionFingerprint?: string;
   commandExcerpt?: string;
@@ -50,7 +52,7 @@ export type ToolCallSummary = {
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
-export type AssistantStreamData = {
+type AssistantStreamData = {
   text: string;
   delta: string;
   replace?: true;
@@ -59,7 +61,7 @@ export type AssistantStreamData = {
 };
 
 /** Deferred assistant stream event plus whether it should emit partial replies. */
-export type AssistantStreamDelivery = {
+type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
 };
@@ -70,6 +72,7 @@ export type EmbeddedAgentSubscribeState = {
   toolMetas: Array<{
     toolName?: string;
     meta?: string;
+    replaySafe?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -170,6 +173,7 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
+  hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
@@ -238,6 +242,7 @@ export type EmbeddedAgentSubscribeContext = {
     chunkerHasBuffered: boolean;
   }) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt: (toolCallId: string) => unknown;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
@@ -272,10 +277,20 @@ type ToolHandlerParams = Pick<
   | "onAgentEvent"
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
+  | "onAgentToolResult"
   | "onToolResult"
+  | "config"
+  | "messageChannel"
   | "sessionKey"
+  | "currentChannelId"
+  | "currentMessagingTarget"
+  | "currentThreadId"
+  | "currentMessageId"
+  | "replyToMode"
+  | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "replaySafeToolNames"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
@@ -326,6 +341,7 @@ export type ToolHandlerContext = {
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
 
 export type EmbeddedAgentSubscribeEvent =

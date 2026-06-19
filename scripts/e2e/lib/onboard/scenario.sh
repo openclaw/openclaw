@@ -77,7 +77,8 @@ start_gateway() {
 }
 
 wait_for_gateway() {
-  local wait_attempts="${OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS:-20}"
+  local wait_attempts
+  wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS 20)" || return $?
   local wait_interval_s="${OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S:-1}"
   local saw_listening_log="false"
   for _ in $(seq 1 "$wait_attempts"); do

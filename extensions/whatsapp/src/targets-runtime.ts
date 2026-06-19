@@ -8,6 +8,9 @@ import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-ru
 
 const WHATSAPP_FENCE_PLACEHOLDER = "\x00FENCE";
 const WHATSAPP_INLINE_CODE_PLACEHOLDER = "\x00CODE";
+// Terminates the numeric index in a placeholder so the restore regex cannot
+// absorb a digit from adjacent user text (e.g. `code`5) into the index.
+const WHATSAPP_PLACEHOLDER_TERMINATOR = "\x00";
 
 export type WebChannel = "web";
 
@@ -197,25 +200,26 @@ export function markdownToWhatsApp(text: string): string {
   const fences: string[] = [];
   let result = text.replace(/```[\s\S]*?```/g, (match) => {
     fences.push(match);
-    return `${WHATSAPP_FENCE_PLACEHOLDER}${fences.length - 1}`;
+    return `${WHATSAPP_FENCE_PLACEHOLDER}${fences.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
 
   const inlineCodes: string[] = [];
   result = result.replace(/`[^`\n]+`/g, (match) => {
     inlineCodes.push(match);
-    return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}`;
+    return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
 
   result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
   result = result.replace(/__(.+?)__/g, "*$1*");
   result = result.replace(/~~(.+?)~~/g, "~$1~");
 
+  const terminator = escapeRegExp(WHATSAPP_PLACEHOLDER_TERMINATOR);
   result = result.replace(
-    new RegExp(`${escapeRegExp(WHATSAPP_INLINE_CODE_PLACEHOLDER)}(\\d+)`, "g"),
+    new RegExp(`${escapeRegExp(WHATSAPP_INLINE_CODE_PLACEHOLDER)}(\\d+)${terminator}`, "g"),
     (_, idx) => inlineCodes[Number(idx)] ?? "",
   );
   result = result.replace(
-    new RegExp(`${escapeRegExp(WHATSAPP_FENCE_PLACEHOLDER)}(\\d+)`, "g"),
+    new RegExp(`${escapeRegExp(WHATSAPP_FENCE_PLACEHOLDER)}(\\d+)${terminator}`, "g"),
     (_, idx) => fences[Number(idx)] ?? "",
   );
   return result;

@@ -1,7 +1,8 @@
 // Qa Lab plugin module implements suite runtime agent process behavior.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   appendQaChildOutput,
@@ -12,6 +13,7 @@ import {
   QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
 } from "./child-output.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
@@ -79,6 +81,21 @@ function parseQaCliJsonOutput(text: string) {
   }
 }
 
+function signalQaCliProcessTree(
+  child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">,
+  signal: NodeJS.Signals,
+) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The detached process group may already be gone; fall back to the child handle.
+    }
+  }
+  child.kill(signal);
+}
+
 async function runQaCli(
   env: Pick<
     QaSuiteRuntimeEnv,
@@ -98,12 +115,15 @@ async function runQaCli(
         ...env.gateway.runtimeEnv,
         ...opts?.env,
       },
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`qa cli timed out: openclaw ${args.join(" ")}`));
+      signalQaCliProcessTree(child, "SIGKILL");
+      reject(
+        new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
+      );
     }, timeoutMs);
     child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
     child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
@@ -187,16 +207,24 @@ async function waitForAgentRun(
   runId: string,
   timeoutMs = 30_000,
 ) {
-  return (await env.gateway.call(
-    "agent.wait",
-    {
-      runId,
-      timeoutMs,
-    },
-    {
-      timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs),
-    },
-  )) as { status?: string; error?: string };
+  try {
+    return (await env.gateway.call(
+      "agent.wait",
+      {
+        runId,
+        timeoutMs,
+      },
+      {
+        timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs),
+      },
+    )) as { status?: string; error?: string };
+  } catch (error) {
+    throw new QaSuiteInfraError(
+      "agent_wait_failed",
+      `agent.wait failed: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {

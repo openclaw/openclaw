@@ -694,13 +694,6 @@ export function buildProviderRequestDispatcherPolicy(
   };
 }
 
-/** Builds direct TLS client options for providers that own their transport client. */
-export function buildProviderRequestTlsClientOptions(
-  request: Pick<ResolvedProviderRequestConfig, "tls">,
-): Record<string, unknown> | undefined {
-  return toTlsConnectOptions(request.tls);
-}
-
 /** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,

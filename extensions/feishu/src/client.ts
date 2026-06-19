@@ -55,33 +55,40 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
 
 let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
-// Override the SDK's default User-Agent interceptor.
-// The Lark SDK registers an axios request interceptor that sets
-// 'oapi-node-sdk/1.0.0'. Axios request interceptors execute in LIFO order
-// (last-registered runs first), so simply appending ours doesn't work — the
-// SDK's interceptor would run last and overwrite our UA. We must clear
-// handlers[] first, then register our own as the sole interceptor.
-//
-// Risk is low: the SDK only registers one interceptor (UA) at init time, and
-// we clear it at module load before any other code can register handlers.
-// If a future SDK version adds more interceptors, the upgrade will need
-// compatibility verification regardless.
-{
-  const inst = Lark.defaultHttpInstance as {
-    interceptors?: {
-      request: { handlers: unknown[]; use: (fn: (req: unknown) => unknown) => void };
-    };
+type RequestInterceptorApi = {
+  use: (fn: (req: unknown) => unknown) => unknown;
+};
+
+type FeishuDefaultHttpInstanceWithInterceptors = {
+  interceptors?: {
+    request?: RequestInterceptorApi;
   };
-  if (inst.interceptors?.request) {
-    inst.interceptors.request.handlers = [];
-    inst.interceptors.request.use((req: unknown) => {
-      const r = req as { headers?: Record<string, string> };
-      if (r.headers) {
-        r.headers["User-Agent"] = getFeishuUserAgent();
-      }
-      return req;
-    });
+};
+
+function setRequestUserAgent(req: unknown) {
+  const request = req as { headers?: unknown };
+  const headers = request.headers;
+  if (!headers) {
+    request.headers = { "User-Agent": getFeishuUserAgent() };
+    return req;
   }
+
+  const maybeAxiosHeaders = headers as { set?: unknown };
+  if (typeof maybeAxiosHeaders.set === "function") {
+    maybeAxiosHeaders.set("User-Agent", getFeishuUserAgent());
+    return req;
+  }
+
+  (headers as Record<string, string>)["User-Agent"] = getFeishuUserAgent();
+  return req;
+}
+
+// Override the SDK's default User-Agent through the public interceptor API.
+// The SDK fallback interceptor only fills User-Agent when it is absent, so this
+// interceptor can preserve the rest of the SDK's request interceptor stack.
+{
+  const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors;
+  inst.interceptors?.request?.use(setRequestUserAgent);
 }
 
 export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
@@ -237,13 +244,6 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
 }
 
 /**
- * Get a cached client for an account (if exists).
- */
-export function getFeishuClient(accountId: string): Lark.Client | null {
-  return clientCache.get(accountId)?.client ?? null;
-}
-
-/**
  * Clear client cache for a specific account or all accounts.
  */
 export function clearClientCache(accountId?: string): void {
@@ -260,4 +260,5 @@ export function setFeishuClientRuntimeForTest(overrides?: {
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
+  clearClientCache();
 }

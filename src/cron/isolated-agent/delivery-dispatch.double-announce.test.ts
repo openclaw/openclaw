@@ -1391,36 +1391,55 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     }
   });
 
-  it("suppresses NO_REPLY payload in direct delivery so sentinel never leaks to external channels", async () => {
-    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
-    // Force the useDirectDelivery path (structured content) to exercise
-    // deliverViaDirect without going through finalizeTextDelivery.
-    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
-    const state = await dispatchCronDelivery(params);
+  it.each([SILENT_REPLY_TOKEN, "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "suppresses %s payload in direct delivery so control tokens never leak to external channels",
+    async (controlToken) => {
+      const params = makeBaseParams({ synthesizedText: controlToken });
+      // Force the useDirectDelivery path (structured content) to exercise
+      // deliverViaDirect without going through finalizeTextDelivery.
+      (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+      const state = await dispatchCronDelivery(params);
 
-    // NO_REPLY must be filtered out before reaching the outbound adapter.
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expectResultFields(state.result, {
-      status: "ok",
-      delivered: false,
-      deliveryAttempted: true,
-    });
-    // deliveryAttempted must be true so the heartbeat timer does not fire
-    // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
-    expect(state.deliveryAttempted).toBe(true);
+      // Control tokens must be filtered out before reaching the outbound adapter.
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expectResultFields(state.result, {
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      // deliveryAttempted must be true so the heartbeat timer does not fire
+      // a fallback enqueueSystemEvent with the control-token text.
+      expect(state.deliveryAttempted).toBe(true);
 
-    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "NO_REPLY",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-  });
+      // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
+      expect(
+        shouldEnqueueCronMainSummary({
+          summaryText: controlToken,
+          deliveryRequested: true,
+          delivered: state.result?.delivered,
+          deliveryAttempted: state.result?.deliveryAttempted,
+          suppressMainSummary: false,
+          isCronSystemEvent: () => true,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "suppresses %s payload in text delivery so control tokens never leak to external channels",
+    async (controlToken) => {
+      const params = makeBaseParams({ synthesizedText: controlToken });
+      const state = await dispatchCronDelivery(params);
+
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expectResultFields(state.result, {
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      expect(state.deliveryAttempted).toBe(true);
+    },
+  );
 
   it("delivers explicit targets with direct text through the outbound adapter", async () => {
     const params = makeBaseParams({ synthesizedText: "hello from cron" });

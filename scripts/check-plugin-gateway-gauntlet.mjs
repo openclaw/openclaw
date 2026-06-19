@@ -17,6 +17,8 @@ import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  collectPluginsWithRequiredEntries,
+  collectRequiredPluginEntries,
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
@@ -207,6 +209,13 @@ Options:
   --cpu-core-warn <ratio>        Hot CPU threshold (default: 0.9)
   --hot-wall-warn-ms <ms>        Minimum wall time for hot CPU observations (default: 30000)
   --max-rss-warn-mb <mb>         Maximum RSS warning threshold (default: 1536)
+  --wall-anomaly-multiplier <n>  Wall-time anomaly multiplier (default: 3)
+  --rss-anomaly-multiplier <n>   RSS anomaly multiplier (default: 2.5)
+  --qa-cpu-regression-multiplier <n>  QA baseline CPU regression multiplier (default: 2)
+  --qa-wall-regression-multiplier <n> QA baseline wall regression multiplier (default: 2)
+  --command-timeout-ms <ms>      Lifecycle/slash command timeout (default: 120000)
+  --build-timeout-ms <ms>        Prebuild command timeout (default: 600000)
+  --qa-timeout-ms <ms>           QA chunk timeout (default: 900000)
   --skip-prebuild                Skip the upfront build used to avoid per-command rebuild noise
   --skip-lifecycle              Skip plugin install/inspect/disable/enable/doctor/uninstall
   --skip-qa                     Skip QA Lab RPC conversation runs
@@ -214,6 +223,14 @@ Options:
   --allow-empty                 Allow zero-command runs when every active phase is skipped
   --fail-on-observation         Treat RSS/CPU/wall observation rows as guard failures
   --keep-run-root               Preserve isolated HOME/state/log temp root after success
+
+Environment:
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS   Comma-separated plugin ids to include
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_TOTAL Total plugin shards
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_INDEX Zero-based shard index
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION=1
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT=1
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES  QA summary read ceiling
 `);
 }
 
@@ -236,15 +253,23 @@ function readOptionalNonNegativeIntEnv(name) {
   return raw ? parseNonNegativeInt(raw, name) : undefined;
 }
 
+function shouldPromoteObservationGuardFailure(observation) {
+  // Setup and the first cold work command are still reported, but they are not
+  // stable enough to fail the gauntlet's steady-state regression guard.
+  return observation?.phase !== "prebuild" && observation?.coldStart !== true;
+}
+
 export function buildObservationGuardFailures(observations, enabled = false) {
   if (!enabled) {
     return [];
   }
-  return observations.map((observation) => ({
-    kind: `observation:${observation.kind ?? "unknown"}`,
-    message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
-    observation,
-  }));
+  return observations
+    .filter((observation) => shouldPromoteObservationGuardFailure(observation))
+    .map((observation) => ({
+      kind: `observation:${observation.kind ?? "unknown"}`,
+      message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
+      observation,
+    }));
 }
 
 /**
@@ -661,8 +686,35 @@ function buildSlashHelpProbe(params) {
   };
 }
 
+async function runPluginLifecycleCommand(params) {
+  process.stderr.write(`[plugin-gauntlet] ${params.logPluginId} ${params.phase}\n`);
+  params.rows.push(
+    await runMeasuredCommand({
+      cwd: params.repoRoot,
+      env: params.env,
+      logDir: path.join(params.outputDir, "logs", "lifecycle"),
+      ...openclawCommand(params.repoRoot, ["plugins", ...params.args]),
+      label: params.label,
+      phase: `lifecycle:${params.phase}`,
+      pluginId: params.pluginId,
+      timeoutMs: params.commandTimeoutMs,
+    }),
+  );
+}
+
 async function runPluginLifecycle(params) {
   for (const plugin of params.plugins) {
+    const requiredPlugins = collectRequiredPluginEntries(params.matrix, [plugin]);
+    for (const requiredPlugin of requiredPlugins) {
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-requires-${requiredPlugin.id}-install`,
+        phase: `requires:${requiredPlugin.id}:install`,
+        args: ["install", requiredPlugin.id],
+        pluginId: requiredPlugin.id,
+      });
+    }
     const commands = [
       {
         phase: "install",
@@ -680,8 +732,8 @@ async function runPluginLifecycle(params) {
       { phase: "uninstall", args: ["uninstall", plugin.id, "--force"] },
     ];
     for (const { phase, args, alias } of commands) {
-      process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
       if (alias) {
+        process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
         params.rows.push(
           await runMeasuredCommand({
             ...buildSlashHelpProbe({
@@ -697,18 +749,24 @@ async function runPluginLifecycle(params) {
         );
         continue;
       }
-      params.rows.push(
-        await runMeasuredCommand({
-          cwd: params.repoRoot,
-          env: params.env,
-          logDir: path.join(params.outputDir, "logs", "lifecycle"),
-          ...openclawCommand(params.repoRoot, ["plugins", ...args]),
-          label: `${plugin.id}-${phase}`,
-          phase: `lifecycle:${phase}`,
-          pluginId: plugin.id,
-          timeoutMs: params.commandTimeoutMs,
-        }),
-      );
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-${phase}`,
+        phase,
+        args,
+        pluginId: plugin.id,
+      });
+    }
+    for (const requiredPlugin of requiredPlugins.toReversed()) {
+      await runPluginLifecycleCommand({
+        ...params,
+        logPluginId: plugin.id,
+        label: `${plugin.id}-requires-${requiredPlugin.id}-uninstall`,
+        phase: `requires:${requiredPlugin.id}:uninstall`,
+        args: ["uninstall", requiredPlugin.id, "--force"],
+        pluginId: requiredPlugin.id,
+      });
     }
   }
 }
@@ -750,6 +808,9 @@ async function runQaChunks(params) {
     const outputDir = path.join(params.outputDir, "qa-suite", chunk.label);
     const outputArg = toRepoRelativePath(params.repoRoot, outputDir);
     const pluginIds = chunk.plugins.map((plugin) => plugin.id);
+    const enabledPluginIds = collectPluginsWithRequiredEntries(params.matrix, chunk.plugins).map(
+      (plugin) => plugin.id,
+    );
     const pluginIdLabel = pluginIds.length > 0 ? pluginIds.join(",") : "<baseline>";
     process.stderr.write(
       `[plugin-gauntlet] qa chunk ${index + 1}/${chunks.length}: ${pluginIdLabel}\n`,
@@ -768,7 +829,7 @@ async function runQaChunks(params) {
         "--output-dir",
         outputArg,
         ...params.qaScenarios.flatMap((scenario) => ["--scenario", scenario]),
-        ...pluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
+        ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
       ]),
       label: `qa-${chunk.label}`,
       phase: "qa:rpc",
@@ -811,10 +872,11 @@ async function main() {
       shardIndex: options.shardIndex,
       limit: options.limit,
     });
+    const selectedPluginsWithRequired = collectPluginsWithRequiredEntries(matrix, selectedPlugins);
     const rows = [];
     const commandEnv = buildGauntletPrebuildEnv(env, {
       includePrivateQa: !options.skipQa,
-      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      buildIds: selectedPluginsWithRequired.map((plugin) => plugin.buildId),
       skipDeclarationBuild: true,
     });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
@@ -841,6 +903,7 @@ async function main() {
         repoRoot,
         outputDir: options.outputDir,
         env: commandEnv,
+        matrix,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -865,6 +928,7 @@ async function main() {
             repoRoot,
             outputDir: options.outputDir,
             env: commandEnv,
+            matrix,
             plugins: selectedPlugins,
             qaBaseline: options.qaBaseline,
             rows,

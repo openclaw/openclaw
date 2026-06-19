@@ -45,6 +45,13 @@ export function describeSessionsSpawnTool(options?: {
     options?.acpAvailable === false
       ? 'Spawn clean child session; default `runtime="subagent"`.'
       : 'Spawn clean child session; default `runtime="subagent"`; set `runtime="acp"` explicitly for ACP.';
+  const sessionCompletionGuidance =
+    options?.acpAvailable === false
+      ? "After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread."
+      : 'After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread unless ACP uses `streamTo="parent"`.';
+  const completionGuidance = options?.threadAvailable
+    ? sessionCompletionGuidance
+    : "After spawning, do non-overlapping work while run-mode results return.";
   const baseDescription = [
     runtimeDescription,
     options?.threadAvailable
@@ -54,6 +61,9 @@ export function describeSessionsSpawnTool(options?: {
     "Native subagents get task in first visible `[Subagent Task]` message.",
     'Native only: `context="fork"` only when child needs current transcript; else omit or `isolated`.',
     "Use for fresh child-session work.",
+    "Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection.",
+    "Avoid delegating quick lookups or single-file reads unless policy prefers delegation.",
+    completionGuidance,
   ];
   if (options?.acpAvailable === false) {
     return baseDescription.join(" ");

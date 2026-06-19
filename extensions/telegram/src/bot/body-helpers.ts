@@ -93,6 +93,22 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
+const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message received]";
+
+type TelegramTextMessage = Pick<Message, "text" | "caption" | "entities" | "caption_entities"> & {
+  rich_message?: unknown;
+};
+
+function hasTelegramRichMessage(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function resolveTelegramRichMessagePlaceholder(
+  msg: TelegramTextMessage,
+): string | undefined {
+  return hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+}
+
 export function isBinaryContent(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -108,9 +124,7 @@ export function resolveTelegramTextContent(text: unknown, caption?: unknown): st
   return isBinaryContent(raw) ? "" : raw;
 }
 
-export function getTelegramTextParts(
-  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
-): {
+export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {

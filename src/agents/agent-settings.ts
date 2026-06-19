@@ -20,32 +20,8 @@ type AgentSettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 
-/**
- * Ensures the compaction reserve tokens are at least the specified minimum.
- * Note: This function is not context-aware and uses an uncapped floor.
- * If called for small-context models without threading `contextTokenBudget`,
- * it may re-introduce context overflow issues.
- */
-export function ensureAgentCompactionReserveTokens(params: {
-  settingsManager: AgentSettingsManagerLike;
-  minReserveTokens?: number;
-}): { didOverride: boolean; reserveTokens: number } {
-  const minReserveTokens = params.minReserveTokens ?? DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
-  const current = params.settingsManager.getCompactionReserveTokens();
-
-  if (current >= minReserveTokens) {
-    return { didOverride: false, reserveTokens: current };
-  }
-
-  params.settingsManager.applyOverrides({
-    compaction: { reserveTokens: minReserveTokens },
-  });
-
-  return { didOverride: true, reserveTokens: minReserveTokens };
-}
-
 /** Resolves the configured reserve-token floor for agent compaction. */
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
+function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
@@ -189,7 +165,7 @@ export function isSilentOverflowProneModel(model: {
  * Default-mode runs against ordinary providers keep OpenClaw runtime's auto-compaction as
  * the existing baseline.
  */
-export function shouldDisableAgentAutoCompaction(params: {
+function shouldDisableAgentAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;

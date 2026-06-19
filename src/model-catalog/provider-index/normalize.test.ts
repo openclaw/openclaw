@@ -149,6 +149,15 @@ describe("OpenClaw provider index", () => {
       (model) => model.id === "kimi-k2.6",
     );
     expect(kimi?.status).toBe("preview");
+    const kimiCode = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.7-code",
+    );
+    expect(kimiCode).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      status: "preview",
+    });
     expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
     const deepseekChat = index.providers.deepseek?.previewCatalog?.models.find(
       (model) => model.id === "deepseek-chat",

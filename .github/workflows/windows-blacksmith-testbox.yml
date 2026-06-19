@@ -65,7 +65,9 @@ jobs:
           fi
           runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
 
-          response="$(curl -s -f -L --post302 --post303 -X POST "${api_url}/api/testbox/phone-home" \
+          hydrating_response="$RUNNER_TEMP/testbox-hydrating.response"
+          hydrating_http_code="$(curl -sS -L --post302 --post303 -o "$hydrating_response" -w '%{http_code}' \
+            -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
             -d "{
@@ -77,7 +79,15 @@ jobs:
               \"working_directory\": \"${GITHUB_WORKSPACE}\",
               \"adopted_run_id\": \"${GITHUB_RUN_ID}\",
               \"metadata\": {}
-            }" 2>/dev/null || true)"
+            }" || true)"
+
+          echo "phone_home_hydrating_http=${hydrating_http_code}"
+          if [[ ! "$hydrating_http_code" =~ ^2 ]]; then
+            echo "Blacksmith phone-home hydrating failed; response body:" >&2
+            cat "$hydrating_response" >&2 || true
+            exit 1
+          fi
+          response="$(cat "$hydrating_response")"
 
           echo "$TESTBOX_ID" > "$state/testbox_id"
           echo "$installation_model_id" > "$state/installation_model_id"
@@ -100,15 +110,17 @@ jobs:
           fi
 
           ssh_public_key="$(cat "$state/ssh_public_key" 2>/dev/null || true)"
-          if [ -n "$ssh_public_key" ]; then
-            mkdir -p ~/.ssh
-            printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
-            chmod 700 ~/.ssh
-            chmod 600 ~/.ssh/authorized_keys
+          if [ -z "$ssh_public_key" ]; then
+            echo "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections." >&2
+            exit 1
           fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/authorized_keys
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           submodules: false
@@ -161,6 +173,11 @@ jobs:
             -H "Authorization: Bearer ${auth_token}" \
             --data-binary @"$ready_body" || true)"
           echo "phone_home_ready_http=${http_code}"
+          if [[ ! "$http_code" =~ ^2 ]]; then
+            echo "Blacksmith phone-home ready failed; response body:" >&2
+            cat "$RUNNER_TEMP/testbox-ready.response" >&2 || true
+            exit 1
+          fi
 
           echo "============================================"
           echo "Testbox ready!"

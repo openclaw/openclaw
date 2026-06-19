@@ -29,6 +29,19 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () => [
+    {
+      pluginDir: "/bundled/anthropic-vertex",
+      origin: "bundled",
+      manifest: {
+        id: "anthropic-vertex",
+        nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+      },
+    },
+  ],
+}));
+
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: () => [],
   resolveOwningPluginIdsForProviderRef: () => [],

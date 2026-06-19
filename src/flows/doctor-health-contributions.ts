@@ -8,6 +8,7 @@ import {
 } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
@@ -29,7 +30,7 @@ type DoctorConfigResult = {
   preservedLegacyRootKeys?: readonly string[];
 };
 
-type DoctorHealthFlowContext = {
+export type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -45,6 +46,7 @@ type DoctorHealthFlowContext = {
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 };
 
 type DoctorHealthContribution = FlowContribution & {
@@ -424,6 +426,9 @@ async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.postInstallDoctorResult) {
+    ctx.postInstallDoctorResult = result.postInstallDoctorResult;
+  }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -505,7 +510,7 @@ async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
-    await import("../commands/doctor-cron.js");
+    await import("../commands/doctor/cron/index.js");
   await noteLegacyWhatsAppCrontabHealthCheck();
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
@@ -567,7 +572,8 @@ async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteOpenAIOAuthTlsPrerequisites } = await import("../commands/oauth-tls-preflight.js");
+  const { noteOpenAIOAuthTlsPrerequisites } =
+    await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
   await noteOpenAIOAuthTlsPrerequisites({
     cfg: ctx.cfg,
     deep: ctx.options.deep === true,

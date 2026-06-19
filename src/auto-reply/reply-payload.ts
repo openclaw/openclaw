@@ -1,4 +1,5 @@
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
+import type { ReplyToMode } from "../config/types.base.js";
 import type {
   InteractiveReply,
   MessagePresentation,
@@ -65,6 +66,12 @@ export type ReplyPayload = {
 export type ReplyPayloadTtsSupplement = {
   spokenText: string;
   visibleTextAlreadyDelivered?: boolean;
+};
+
+/** Reply policy facts that provider adapters use to resolve the final transport route. */
+export type ReplyDeliveryContext = {
+  chatType?: "direct" | "group" | "channel" | null;
+  replyToMode: ReplyToMode;
 };
 
 export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
@@ -156,6 +163,17 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** The runtime owns the transcript decision for this assistant payload. */
+  assistantTranscriptOwned?: boolean;
+  /** replyToId existed before reply threading could inject an implicit target. */
+  replyToIdExplicit?: boolean;
+  /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */
+  replyDelivery?: ReplyDeliveryContext;
+  /** Route identity that produced replyDelivery, used to reject stale cross-route policy. */
+  replyDeliverySource?: {
+    channel: string;
+    accountId?: string;
+  };
   /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal

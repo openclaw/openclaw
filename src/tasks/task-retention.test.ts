@@ -1,12 +1,13 @@
 // Covers task retention pruning and stale-task cleanup windows.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_TASK_RETENTION_MS,
-  LOST_TASK_RETENTION_MS,
   resolveEffectiveTaskCleanupAfter,
   resolveTaskCleanupAfter,
   resolveTaskRetentionMs,
 } from "./task-retention.js";
+
+const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
 
 describe("task retention", () => {
   it("keeps lost tasks on a shorter retention window", () => {

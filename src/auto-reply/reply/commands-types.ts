@@ -15,6 +15,7 @@ export type CommandContext = {
   surface: string;
   channel: string;
   channelId?: ChannelId;
+  accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;

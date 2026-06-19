@@ -356,16 +356,33 @@ import UIKit
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
     }
 
+    @Test @MainActor func foregroundStaleConnectionRestartReappliesActiveGatewayConfig() async {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        await appModel._test_restartGatewaySessionsAfterForegroundStaleConnection()
+
+        #expect(appModel.gatewayStatusText == "Reconnecting…")
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)
+        #expect(appModel._test_hasGatewayLoopTasks().node)
+        #expect(appModel._test_hasGatewayLoopTasks().operator)
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
-        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
         defer {
             if let prior {
-                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.saveString(
+                    prior,
+                    service: "ai.openclawfoundation.app.gateway",
+                    account: "lastConnection")
             } else {
-                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
 
         GatewaySettingsStore.saveLastGatewayConnectionManual(
             host: "gateway.example.com",
@@ -381,15 +398,18 @@ import UIKit
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
-        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
         defer {
             if let prior {
-                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.saveString(
+                    prior,
+                    service: "ai.openclawfoundation.app.gateway",
+                    account: "lastConnection")
             } else {
-                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
 
         // Plant legacy UserDefaults with invalid host/port to exercise migration + validation.
         withUserDefaults([

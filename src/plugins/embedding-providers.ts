@@ -12,6 +12,7 @@ export type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
   EmbeddingProviderCreateResult,
+  EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
@@ -112,5 +113,3 @@ export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbedding
 export function clearEmbeddingProviders(): void {
   getEmbeddingProviders().clear();
 }
-
-export const resetEmbeddingProviders = clearEmbeddingProviders;

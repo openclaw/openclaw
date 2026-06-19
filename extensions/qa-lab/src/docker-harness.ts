@@ -318,7 +318,7 @@ export async function writeQaDockerHarnessFiles(params: {
       path.join(params.outputDir, "state", "seed-workspace", "IDENTITY.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
     ],
   };
 }

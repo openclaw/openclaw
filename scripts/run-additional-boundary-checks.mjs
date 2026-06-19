@@ -7,6 +7,8 @@ import { performance } from "node:perf_hooks";
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 5_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
 
 /** Ordered list of supplemental boundary checks used by CI sharding. */
 export const BOUNDARY_CHECKS = [
@@ -105,11 +107,11 @@ export function parseShardSpec(value) {
   if (!match) {
     throw new Error(`Invalid shard spec '${value}' (expected N/TOTAL)`);
   }
-  const index = Number.parseInt(match[1], 10);
-  const count = Number.parseInt(match[2], 10);
+  const index = Number(match[1]);
+  const count = Number(match[2]);
   if (
-    !Number.isInteger(index) ||
-    !Number.isInteger(count) ||
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(count) ||
     index < 1 ||
     count < 1 ||
     index > count
@@ -227,6 +229,31 @@ function terminateChild(child, signal) {
   child.kill(signal);
 }
 
+function processGroupAlive(child) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessGroupExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processGroupAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+    });
+  }
+  return !processGroupAlive(child);
+}
+
 function terminateActiveChildren(activeChildren, signal) {
   for (const child of activeChildren) {
     terminateChild(child, signal);
@@ -317,6 +344,16 @@ export function runSingleCheck(
         output: output.read(),
       });
     };
+    const finishAfterTimeoutTeardown = async (code, signal) => {
+      if (processGroupAlive(child)) {
+        await waitForProcessGroupExit(child, TIMEOUT_KILL_GRACE_MS);
+      }
+      if (processGroupAlive(child)) {
+        terminateChild(child, "SIGKILL");
+        await waitForProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS);
+      }
+      finish(code, signal);
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
       output.append(
@@ -341,7 +378,13 @@ export function runSingleCheck(
       output.append(`${error.stack ?? error.message}\n`);
       finish(1, null);
     });
-    child.on("close", (code, signal) => finish(code, signal));
+    child.on("close", (code, signal) => {
+      if (timedOut) {
+        void finishAfterTimeoutTeardown(code, signal);
+        return;
+      }
+      finish(code, signal);
+    });
   });
 }
 

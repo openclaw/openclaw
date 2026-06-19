@@ -105,7 +105,7 @@ function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: Temp
   };
 }
 
-export type ReplyDirectiveContinuation = {
+type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
   allowTextCommands: boolean;
@@ -145,7 +145,7 @@ export type ReplyDirectiveContinuation = {
   };
 };
 
-export type ReplyDirectiveResult =
+type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
 
@@ -585,6 +585,8 @@ export async function resolveReplyDirectives(params: {
         agentCfg,
         provider,
         model,
+        modelContextWindow: modelState.modelContextWindow,
+        modelContextTokens: modelState.modelContextTokens,
       });
 
   const initialModelLabel = `${provider}/${model}`;

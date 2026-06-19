@@ -63,11 +63,6 @@ export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
   ".dreams",
   "phase-signals.json",
 );
-export const SHORT_TERM_LOCK_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "short-term-promotion.lock",
-);
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
@@ -1355,6 +1350,29 @@ export async function filterLiveShortTermRecallEntries(params: {
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
 
+function buildMemoryRecallSkippedEvent(params: {
+  timestamp: string;
+  query: string;
+  eligibleResultCount: number;
+  skipped: MemorySearchResult[];
+}) {
+  return {
+    type: "memory.recall.skipped" as const,
+    timestamp: params.timestamp,
+    query: params.query,
+    reason: "non-short-term-memory-path" as const,
+    eligibleResultCount: params.eligibleResultCount,
+    skippedResultCount: params.skipped.length,
+    results: params.skipped.map((result) => ({
+      path: normalizeMemoryPath(result.path),
+      startLine: Math.max(1, Math.floor(result.startLine)),
+      endLine: Math.max(1, Math.floor(result.endLine)),
+      score: clampScore(result.score),
+      reason: "non-short-term-memory-path" as const,
+    })),
+  };
+}
+
 export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
@@ -1373,15 +1391,27 @@ export async function recordShortTermRecalls(params: {
   if (!query) {
     return;
   }
-  const relevant = params.results.filter(
-    (result) => result.source === "memory" && isShortTermMemoryPath(result.path),
-  );
-  if (relevant.length === 0) {
+  const memoryResults = params.results.filter((result) => result.source === "memory");
+  const relevant = memoryResults.filter((result) => isShortTermMemoryPath(result.path));
+  const skipped = memoryResults.filter((result) => !isShortTermMemoryPath(result.path));
+  if (relevant.length === 0 && skipped.length === 0) {
     return;
   }
 
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  if (relevant.length === 0) {
+    await appendMemoryHostEvent(
+      workspaceDir,
+      buildMemoryRecallSkippedEvent({
+        timestamp: nowIso,
+        query,
+        eligibleResultCount: relevant.length,
+        skipped,
+      }),
+    );
+    return;
+  }
   const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
   const todayBucket =
@@ -1466,6 +1496,17 @@ export async function recordShortTermRecalls(params: {
         score: clampScore(result.score),
       })),
     });
+    if (skipped.length > 0) {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        buildMemoryRecallSkippedEvent({
+          timestamp: nowIso,
+          query,
+          eligibleResultCount: relevant.length,
+          skipped,
+        }),
+      );
+    }
   });
 }
 
@@ -2478,10 +2519,6 @@ export async function applyShortTermPromotions(
 
 export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
-}
-
-export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
-  return resolvePhaseSignalPath(workspaceDir);
 }
 
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
