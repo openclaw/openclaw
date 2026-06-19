@@ -48,4 +48,22 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     expect(result.stderr).not.toContain("Cannot find package 'tsx'");
     expect(result.stderr).not.toContain("docker");
   });
+
+  it("prints redacted Claude subscription probe failures", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('direct_probe_log="$(mktemp)"');
+    expect(script).toContain("direct Claude subscription probe exited with status");
+    expect(script).toContain("<redacted-email>");
+    expect(script).toContain("<redacted-secret>");
+  });
+
+  it("prefers explicit Claude setup tokens over staged credentials", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toMatch(
+      /if \[\[ -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then[\s\S]*?CLAUDE_SUBSCRIPTION_AUTH_SOURCE="env-token"[\s\S]*?elif \[\[ -f "\$CLAUDE_CREDS_FILE" \]\]; then/,
+    );
+    expect(script).toContain(".claude.json | .claude/.credentials.json) ;;");
+  });
 });

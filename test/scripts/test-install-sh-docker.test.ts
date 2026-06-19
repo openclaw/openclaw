@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
+const INSTALL_E2E_DOCKER_PATH = "scripts/test-install-sh-e2e-docker.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
 const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
@@ -470,6 +471,75 @@ describe("test-install-sh-docker", () => {
 });
 
 describe("install-sh E2E runner", () => {
+  it("normalizes Docker wrapper timing and toggle knobs before forwarding", () => {
+    const wrapper = readFileSync(INSTALL_E2E_DOCKER_PATH, "utf8");
+
+    expect(wrapper).toContain(
+      'AGENT_TURN_TIMEOUT_SECONDS="$(\n  docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS 300\n)"',
+    );
+    expect(wrapper).toContain(
+      'OPENAI_PROVIDER_TIMEOUT_SECONDS="$(\n  docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS"\n)"',
+    );
+    expect(wrapper).toContain(
+      'AGENT_TURNS_PARALLEL="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL 1)"',
+    );
+    expect(wrapper).toContain(
+      'AGENT_TOOL_SMOKE="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE 1)"',
+    );
+    expect(wrapper).toContain(
+      'SESSION_SCAN_BYTES="$(\n  docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES 16777216\n)"',
+    );
+    expect(wrapper).toContain(
+      'SESSION_LINE_BYTES="$(\n  docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES 1048576\n)"',
+    );
+    expect(wrapper).toContain(
+      'SESSION_SCAN_DEPTH="$(docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_SESSION_SCAN_DEPTH 64)"',
+    );
+    expect(wrapper).toContain(
+      'SESSION_SCAN_NODES="$(docker_e2e_read_positive_int_env OPENCLAW_INSTALL_E2E_SESSION_SCAN_NODES 100000)"',
+    );
+    expect(wrapper).toContain(
+      '-e OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS="$OPENAI_PROVIDER_TIMEOUT_SECONDS"',
+    );
+    expect(wrapper).toContain(
+      '-e OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS="$AGENT_TURN_TIMEOUT_SECONDS"',
+    );
+    expect(wrapper).toContain(
+      '-e OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL="$AGENT_TURNS_PARALLEL"',
+    );
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE="$AGENT_TOOL_SMOKE"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES="$SESSION_SCAN_BYTES"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES="$SESSION_LINE_BYTES"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_E2E_SESSION_SCAN_DEPTH="$SESSION_SCAN_DEPTH"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_E2E_SESSION_SCAN_NODES="$SESSION_SCAN_NODES"');
+    expect(wrapper).not.toContain(
+      'OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS:-}"',
+    );
+  });
+
+  it.each([
+    ["turn timeout", "OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS", "300s"],
+    ["provider timeout", "OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS", "1e3"],
+    ["parallel toggle", "OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL", "2"],
+    ["tool smoke toggle", "OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE", "false"],
+    ["session scan bytes", "OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES", "16mb"],
+    ["session line bytes", "OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES", "1mb"],
+    ["session scan depth", "OPENCLAW_INSTALL_E2E_SESSION_SCAN_DEPTH", "0"],
+    ["session scan nodes", "OPENCLAW_INSTALL_E2E_SESSION_SCAN_NODES", "100k"],
+  ])("rejects invalid install E2E Docker %s before image build", (_label, envName, value) => {
+    const result = spawnSync("bash", [INSTALL_E2E_DOCKER_PATH], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        [envName]: value,
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+    expect(result.stdout).not.toContain("==> Build image:");
+  });
+
   it("validates agent timing and toggle knobs before running provider setup", () => {
     const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 

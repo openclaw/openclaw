@@ -213,7 +213,7 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: [],
                   artifactPaths: [],
-                  coverageIds: ["cli-entrypoint"],
+                  coverageIds: ["cli.entrypoint"],
                   runner: {
                     availability: "local",
                     command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
@@ -247,7 +247,7 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
-    expect(html).toContain("Coverage: cli-entrypoint");
+    expect(html).toContain("Coverage: cli.entrypoint");
     expect(html).toContain("Runner: cli-status");
     expect(html).toContain("Open media artifact");
     expect(html).toContain("Open video artifact");

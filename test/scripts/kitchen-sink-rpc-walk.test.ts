@@ -1815,6 +1815,30 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("aborts HTTP probe retry backoff when the external signal fires", async () => {
+    const controller = new AbortController();
+    const reset = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi.fn().mockRejectedValue(reset);
+    const startedAt = Date.now();
+
+    setTimeout(() => {
+      controller.abort(new Error("gateway exited before ready"));
+    }, 25);
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 2,
+        fetchImpl,
+        retryDelayMs: 5_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("gateway exited before ready");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
   it("bounds HTTP probe response bodies", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
 

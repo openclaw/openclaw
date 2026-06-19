@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
 import {
@@ -32,7 +33,6 @@ const legacyWriterNames = new Set([
 const legacyTranscriptWriterNames = new Set([
   "appendSessionTranscriptMessage",
   "emitSessionTranscriptUpdate",
-  "rewriteTranscriptEntriesInSessionFile",
 ]);
 const sessionCreateLifecycleWriterNames = new Set([
   "applySessionStoreEntryPatch",
@@ -48,6 +48,28 @@ const legacyManualCompactTrimNames = new Set([
 const legacyLifecycleCleanupNames = new Set([
   "archiveRemovedSessionTranscripts",
   "cleanupArchivedSessionTranscripts",
+]);
+const sessionStoreRuntimeFileBackedCompatNames = new Set([
+  "loadSessionStore",
+  "readSessionEntries",
+  "readSessionEntry",
+  "readLatestAssistantTextFromSessionTranscript",
+  "readSessionStoreReadOnly",
+  "resolveAndPersistSessionFile",
+  "resolveSessionFilePath",
+  "resolveSessionStoreEntry",
+  "saveSessionStore",
+  "updateSessionStore",
+]);
+
+export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
+  "loadSessionStore",
+  "readLatestAssistantTextFromSessionTranscript",
+  "resolveAndPersistSessionFile",
+  "resolveSessionFilePath",
+  "resolveSessionStoreEntry",
+  "saveSessionStore",
+  "updateSessionStore",
 ]);
 
 export const migratedSessionAccessorFiles = new Set([
@@ -96,6 +118,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
   "src/auto-reply/reply/agent-runner-execution.ts",
   "src/auto-reply/reply/agent-runner-memory.ts",
+  "src/auto-reply/reply/agent-runner-session-reset.ts",
   "src/auto-reply/reply/agent-runner.ts",
   "src/auto-reply/reply/body.ts",
   "src/auto-reply/reply/commands-acp/lifecycle.ts",
@@ -106,6 +129,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/followup-runner.ts",
   "src/auto-reply/reply/get-reply.ts",
   "src/auto-reply/reply/model-selection.ts",
+  "src/auto-reply/reply/session.ts",
   "src/auto-reply/reply/session-reset-model.ts",
   "src/auto-reply/reply/session-updates.ts",
   "src/auto-reply/reply/session-usage.ts",
@@ -249,6 +273,74 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
     legacyNames,
     `legacy session store ${legacyKind}`,
   );
+}
+
+export function collectSessionStoreRuntimeFileBackedCompatExports(content, fileName = "source.ts") {
+  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const exports = new Map();
+
+  const rememberExport = (node, exportedName, sourceName = exportedName) => {
+    if (!sessionStoreRuntimeFileBackedCompatNames.has(sourceName)) {
+      return;
+    }
+    exports.set(exportedName, {
+      line: toLine(sourceFile, node),
+      sourceName,
+    });
+  };
+
+  for (const statement of sourceFile.statements) {
+    const isExported = statement.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+    );
+    if (isExported && ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) {
+          rememberExport(declaration.name, declaration.name.text);
+        }
+      }
+      continue;
+    }
+    if (isExported && ts.isFunctionDeclaration(statement) && statement.name) {
+      rememberExport(statement.name, statement.name.text);
+      continue;
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause)
+    ) {
+      for (const specifier of statement.exportClause.elements) {
+        rememberExport(
+          specifier,
+          specifier.name.text,
+          specifier.propertyName?.text ?? specifier.name.text,
+        );
+      }
+    }
+  }
+
+  return exports;
+}
+
+export function findSessionStoreRuntimeFileBackedCompatExportViolations(
+  content,
+  fileName = "source.ts",
+) {
+  const exports = collectSessionStoreRuntimeFileBackedCompatExports(content, fileName);
+  const violations = [];
+  for (const [exportedName, exported] of exports) {
+    if (
+      exportedName !== exported.sourceName ||
+      !allowedSessionStoreRuntimeFileBackedCompatExports.has(exportedName)
+    ) {
+      violations.push({
+        line: exported.line,
+        reason: `exports unratcheted file-backed SDK session helper "${exported.sourceName}"`,
+      });
+    }
+  }
+  return violations;
 }
 
 export function findSessionAccessorBoundaryViolations(content, fileName = "source.ts") {
@@ -404,6 +496,14 @@ export async function main() {
       ),
     findViolations: findSessionLifecycleCleanupBoundaryViolations,
   });
+  const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
+  const sessionStoreRuntimeCompatViolations =
+    findSessionStoreRuntimeFileBackedCompatExportViolations(
+      await fs.readFile(sessionStoreRuntimePath, "utf8"),
+      sessionStoreRuntimePath,
+    ).map((violation) =>
+      Object.assign({ path: "src/plugin-sdk/session-store-runtime.ts" }, violation),
+    );
   const violations = [
     ...readViolations,
     ...writeViolations,
@@ -411,6 +511,7 @@ export async function main() {
     ...sessionCreateLifecycleViolations,
     ...manualCompactTrimViolations,
     ...lifecycleCleanupViolations,
+    ...sessionStoreRuntimeCompatViolations,
   ];
 
   if (violations.length === 0) {
@@ -423,7 +524,7 @@ export async function main() {
     console.error(`- ${violation.path}:${violation.line}: ${violation.reason}`);
   }
   console.error(
-    "Use src/config/sessions/session-accessor.ts helpers for migrated read/write and transcript-writer paths. Expand this ratchet only after a slice migrates more files.",
+    "Use src/config/sessions/session-accessor.ts helpers for migrated read/write and transcript-writer paths. Expand file-backed SDK compatibility only as an explicit pre-SQLite migration decision.",
   );
   process.exit(1);
 }

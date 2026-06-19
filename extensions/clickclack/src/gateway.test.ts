@@ -5,7 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
 class FakeSocket extends EventEmitter {
+  emitErrorOnClose = false;
+
   close = vi.fn(() => {
+    if (this.emitErrorOnClose) {
+      this.emit("error", new Error("socket closed while connecting"));
+    }
     this.emit("close");
   });
 }
@@ -189,6 +194,46 @@ describe("ClickClack gateway", () => {
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
     abort.abort();
     await run;
+  });
+
+  it("reconnects after ClickClack websocket errors", async () => {
+    const firstSocket = new FakeSocket();
+    firstSocket.emitErrorOnClose = true;
+    const secondSocket = new FakeSocket();
+    mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    firstSocket.emit("error", new Error("gateway dropped"));
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(2));
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      "[default] ClickClack websocket error; reconnecting: gateway dropped",
+    );
+    abort.abort();
+    await run;
+  });
+
+  it("does not log reconnect warnings when abort closes a connecting websocket", async () => {
+    const socket = new FakeSocket();
+    socket.emitErrorOnClose = true;
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    abort.abort();
+    await run;
+
+    expect(ctx.log?.warn).not.toHaveBeenCalledWith(
+      "[default] ClickClack websocket error; reconnecting: socket closed while connecting",
+    );
+    expect(mocks.client.websocket).toHaveBeenCalledTimes(1);
   });
 
   it("clears running status when backlog polling fails", async () => {

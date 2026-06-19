@@ -174,4 +174,31 @@ describe("readBoundedJsonResponse", () => {
       readBoundedJsonResponse(new Response('{"padding":"too-large"}'), "ClawHub package", 8),
     ).rejects.toThrow("ClawHub package response body exceeded 8 bytes.");
   });
+
+  it("keeps ClawHub request timeouts active while reading JSON bodies", async () => {
+    let canceled = false;
+    const abortController = new AbortController();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"partial":'));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+    );
+
+    const json = readBoundedJsonResponse(response, "ClawHub package", 64, {
+      signal: abortController.signal,
+    });
+
+    await new Promise((resolveDelay) => {
+      setTimeout(resolveDelay, 0);
+    });
+    abortController.abort(new Error("ClawHub body timed out"));
+
+    await expect(json).rejects.toThrow("ClawHub body timed out");
+    expect(canceled).toBe(true);
+  });
 });

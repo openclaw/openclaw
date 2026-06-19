@@ -43,6 +43,19 @@ print_log_tail() {
 
 read_positive_int_env OPENCLAW_CLEANUP_SMOKE_LOG_PRINT_BYTES 65536 >/dev/null
 
+ensure_cleanup_smoke_node_options() {
+  local current="${NODE_OPTIONS:-}"
+  case " $current " in
+    *" --max-old-space-size="* | *" --max-old-space-size "* | *" --max_old_space_size="* | *" --max_old_space_size "*)
+      ;;
+    *)
+      current="${current:+$current }--max-old-space-size=8192"
+      ;;
+  esac
+  export NODE_OPTIONS="$current"
+}
+ensure_cleanup_smoke_node_options
+
 echo "==> Build"
 if ! pnpm build >/tmp/openclaw-cleanup-build.log 2>&1; then
   print_log_tail /tmp/openclaw-cleanup-build.log

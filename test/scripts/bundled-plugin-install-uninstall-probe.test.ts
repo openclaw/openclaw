@@ -1062,6 +1062,34 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+  it("bounds readyz diagnostic response bodies", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, {
+        "content-length": String(1024 * 1024 + 1),
+        "content-type": "application/json",
+      });
+      response.end();
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).rejects.toThrow("/readyz probe response body exceeded 1048576 bytes");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("bounds stalled runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const sockets = new Set<Socket>();
