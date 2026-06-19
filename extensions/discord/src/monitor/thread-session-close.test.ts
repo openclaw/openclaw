@@ -35,7 +35,10 @@ function entry(sessionId: string, updatedAt: number, extra: Partial<TestSessionE
 
 function setupStore(store: Record<string, TestSessionEntry>) {
   hoisted.listSessionEntries.mockImplementation(() =>
-    Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry: { ...entry } })),
+    Object.entries(store).map(([sessionKey, sessionEntry]) => ({
+      sessionKey,
+      entry: { ...sessionEntry },
+    })),
   );
   hoisted.patchSessionEntry.mockImplementation(
     async (params: {
@@ -43,9 +46,13 @@ function setupStore(store: Record<string, TestSessionEntry>) {
       update: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
     }) => {
       const current = store[params.sessionKey];
-      if (!current) return null;
+      if (!current) {
+        return null;
+      }
       const patch = params.update(current);
-      if (!patch) return null;
+      if (!patch) {
+        return null;
+      }
       store[params.sessionKey] = patch as TestSessionEntry;
       return store[params.sessionKey];
     },
