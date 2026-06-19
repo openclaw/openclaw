@@ -435,7 +435,7 @@ vi.mock("../../media/store.js", async () => {
             )
           : `/tmp/${mockState.savedMediaCalls.length}.png`);
       if (subdir === "outgoing/originals" && !next?.path) {
-        fs.rmSync(savedPath, { force: true });
+        fs.writeFileSync(savedPath, buffer);
       }
       try {
         return {
@@ -3194,9 +3194,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-image-");
+    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
     mockState.finalPayload = {
       text: "Scan this QR code with the OpenClaw iOS app:",
-      mediaUrl: "data:image/png;base64,cG5n",
+      mediaUrl,
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -3214,7 +3215,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       text: "Scan this QR code with the OpenClaw iOS app:",
     });
     expectManagedPngImageBlock(content[1]);
-    expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
+    expect(JSON.stringify(payload?.message)).not.toContain(`MEDIA:${mediaUrl}`);
   });
 
   it("does not append a duplicate media reply when the agent transcript already has a raw MEDIA reply", async () => {
@@ -5244,7 +5245,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("preserves media-only final replies in the final broadcast message", async () => {
     createTranscriptFixture("openclaw-chat-send-media-only-final-");
-    mockState.finalPayload = { mediaUrl: "data:image/png;base64,cG5n" };
+    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+    mockState.finalPayload = { mediaUrl };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -5261,9 +5263,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
     createTranscriptFixture("openclaw-chat-send-media-only-silent-final-");
+    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
     mockState.finalPayload = {
       text: "NO_REPLY",
-      mediaUrl: "data:image/png;base64,cG5n",
+      mediaUrl,
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -5281,9 +5284,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
     createTranscriptFixture("openclaw-chat-send-media-reply-tags-");
+    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
     mockState.finalPayload = {
       replyToCurrent: true,
-      mediaUrl: "data:image/png;base64,cG5n",
+      mediaUrl,
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -5314,7 +5318,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       type: "text",
       text: "[[reply_to_current]]Image reply",
     });
-    expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
+    expect(JSON.stringify(transcriptUpdate)).not.toContain(mediaUrl);
   });
 
   it("does not persist sensitive image media into transcript updates", async () => {
