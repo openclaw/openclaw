@@ -312,7 +312,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
-  it("does not promote complete under-cap text tool calls for non-tool terminal reasons", async () => {
+  it("promotes complete under-cap text tool calls for length terminal reasons", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
       createEventStream([
@@ -337,10 +337,24 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       events.push(event);
     }
 
-    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
-    const done = events.at(-1) as { reason?: unknown; message?: { stopReason?: unknown } };
-    expect(done.reason).toBe("length");
-    expect(done.message?.stopReason).toBe("length");
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as {
+      reason?: unknown;
+      message?: { content?: unknown; stopReason?: unknown };
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
   });
 
   it("promotes XML invoke text tool calls that terminate with toolUse", async () => {

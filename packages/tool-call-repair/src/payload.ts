@@ -127,9 +127,7 @@ function parseXmlishFunctionOpening(text: string, start: number): PlainTextToolC
 }
 
 function parseXmlishInvokeOpening(text: string, start: number): PlainTextToolCallOpening | null {
-  const match = /^<invoke\s+name=["']([A-Za-z0-9_.:-]{1,120})["']\s*>\s*/i.exec(
-    text.slice(start),
-  );
+  const match = /^<invoke\s+name=["']([A-Za-z0-9_.:-]{1,120})["']\s*>\s*/i.exec(text.slice(start));
   if (!match?.[1]) {
     return null;
   }
