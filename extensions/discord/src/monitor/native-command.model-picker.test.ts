@@ -401,10 +401,32 @@ describe("Discord model picker interactions", () => {
       models: {
         providers: {
           openai: {
-            models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+            baseUrl: "https://api.openai.example.test/v1",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
           },
           anthropic: {
-            models: [{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" }],
+            baseUrl: "https://api.anthropic.example.test/v1",
+            models: [
+              {
+                id: "claude-sonnet-4-5",
+                name: "Claude Sonnet 4.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
           },
         },
       },
