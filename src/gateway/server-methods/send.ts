@@ -462,6 +462,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       action: string;
       params: Record<string, unknown>;
       accountId?: string;
+      requesterAccountId?: string;
       requesterSenderId?: string;
       senderIsOwner?: boolean;
       sessionKey?: string;
@@ -541,6 +542,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           params: request.params,
           accountId,
+          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true

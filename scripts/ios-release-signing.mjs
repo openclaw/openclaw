@@ -68,7 +68,7 @@ function readManifest(manifestPath) {
   if (!Array.isArray(parsed.targets) || parsed.targets.length === 0) {
     throw new Error("Signing manifest must include targets.");
   }
-  if (typeof parsed.appGroupId !== "undefined") {
+  if (parsed.appGroupId !== undefined) {
     validateAppGroupId(parsed.appGroupId, "Signing manifest appGroupId");
   }
 
