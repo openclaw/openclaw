@@ -12,8 +12,6 @@ import type { RuntimeEnv } from "../../runtime.js";
 export type ChannelPairingAdapter = {
   idLabel: string;
   normalizeAllowEntry?: (entry: string) => string;
-  approvalMessage?: string;
-  notifyApprovalDelivery?: "adapter" | "outbound-message";
   notifyApproval?: (params: {
     cfg: OpenClawConfig;
     id: string;

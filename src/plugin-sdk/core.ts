@@ -180,29 +180,49 @@ export type {
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
 
-function createInlineTextPairingAdapter(params: {
+type InlineTextPairingBase = {
   idLabel: string;
   message: string;
   normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-  notify?: (
+};
+
+type InlineTextPairingAdapterNotify = InlineTextPairingBase & {
+  delivery?: "adapter";
+  notify: (
     params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
       message: string;
     },
   ) => Promise<void> | void;
-  delivery?: ChannelPairingAdapter["notifyApprovalDelivery"];
-}): ChannelPairingAdapter {
+};
+
+type InlineTextPairingOutboundNotify = InlineTextPairingBase & {
+  delivery: "outbound-message";
+  notify?: never;
+};
+
+type InlineTextPairingOptions = InlineTextPairingAdapterNotify | InlineTextPairingOutboundNotify;
+
+function createInlineTextPairingAdapter(
+  params: InlineTextPairingOptions,
+  channelId: string,
+): ChannelPairingAdapter {
   return {
     idLabel: params.idLabel,
     normalizeAllowEntry: params.normalizeAllowEntry,
-    approvalMessage: params.message,
-    notifyApprovalDelivery: params.delivery ?? "adapter",
-    ...(params.notify
-      ? {
-          notifyApproval: async (ctx) => {
-            await params.notify?.({ ...ctx, message: params.message });
-          },
-        }
-      : {}),
+    notifyApproval: async (ctx) => {
+      if (params.delivery === "outbound-message") {
+        const { sendMessage } = await import("../infra/outbound/message.js");
+        await sendMessage({
+          channel: channelId,
+          to: ctx.id,
+          content: params.message,
+          cfg: ctx.cfg,
+          ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+        });
+        return;
+      }
+      await params.notify({ ...ctx, message: params.message });
+    },
   };
 }
 export type {
@@ -640,17 +660,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
 };
 
 type ChatChannelPairingOptions = {
-  text: {
-    idLabel: string;
-    message: string;
-    normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-    notify?: (
-      params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
-        message: string;
-      },
-    ) => Promise<void> | void;
-    delivery?: ChannelPairingAdapter["notifyApprovalDelivery"];
-  };
+  text: InlineTextPairingOptions;
 };
 
 type ChatChannelThreadingReplyModeOptions<TResolvedAccount> =
@@ -755,6 +765,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
 
 function resolveChatChannelPairing(
   pairing: ChannelPairingAdapter | ChatChannelPairingOptions | undefined,
+  channelId: string,
 ): ChannelPairingAdapter | undefined {
   if (!pairing) {
     return undefined;
@@ -762,7 +773,7 @@ function resolveChatChannelPairing(
   if (!("text" in pairing)) {
     return pairing;
   }
-  return createInlineTextPairingAdapter(pairing.text);
+  return createInlineTextPairingAdapter(pairing.text, channelId);
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
@@ -829,7 +840,9 @@ export function createChatChannelPlugin<
       ...params.base.conversationBindings,
     },
     ...(params.security ? { security: resolveChatChannelSecurity(params.security) } : {}),
-    ...(params.pairing ? { pairing: resolveChatChannelPairing(params.pairing) } : {}),
+    ...(params.pairing
+      ? { pairing: resolveChatChannelPairing(params.pairing, params.base.id) }
+      : {}),
     ...(params.threading ? { threading: resolveChatChannelThreading(params.threading) } : {}),
     ...(params.outbound ? { outbound: resolveChatChannelOutbound(params.outbound) } : {}),
   } as ChannelPlugin<TResolvedAccount, Probe, Audit>;

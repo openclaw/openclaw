@@ -36,20 +36,13 @@ export function createTextPairingAdapter(params: {
   idLabel: string;
   message: string;
   normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-  notify?: (params: PairingNotifyParams & { message: string }) => Promise<void> | void;
-  delivery?: ChannelPairingAdapter["notifyApprovalDelivery"];
+  notify: (params: PairingNotifyParams & { message: string }) => Promise<void> | void;
 }): ChannelPairingAdapter {
   return {
     idLabel: params.idLabel,
     normalizeAllowEntry: params.normalizeAllowEntry,
-    approvalMessage: params.message,
-    notifyApprovalDelivery: params.delivery ?? "adapter",
-    ...(params.notify
-      ? {
-          notifyApproval: async (ctx) => {
-            await params.notify?.({ ...ctx, message: params.message });
-          },
-        }
-      : {}),
+    notifyApproval: async (ctx) => {
+      await params.notify({ ...ctx, message: params.message });
+    },
   };
 }

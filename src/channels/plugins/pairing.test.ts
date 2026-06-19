@@ -1,6 +1,5 @@
 // Pairing facade tests cover approval notification dispatch choices.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "./types.plugin.js";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -23,6 +22,7 @@ vi.mock("../../infra/outbound/message.js", () => ({
   sendMessage: mocks.sendMessage,
 }));
 
+import { createChatChannelPlugin } from "../../plugin-sdk/core.js";
 import { notifyPairingApproved } from "./pairing.js";
 
 describe("pairing facade", () => {
@@ -31,16 +31,20 @@ describe("pairing facade", () => {
   });
 
   it("routes outbound-message approval notifications through sendMessage", async () => {
-    const notifyApproval = vi.fn();
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
+    const plugin = createChatChannelPlugin({
+      base: {
+        id: "whatsapp",
+        meta: { id: "whatsapp", label: "WhatsApp" },
+      } as never,
       pairing: {
-        idLabel: "whatsappSenderId",
-        approvalMessage: "approved",
-        notifyApprovalDelivery: "outbound-message",
-        notifyApproval,
+        text: {
+          idLabel: "whatsappSenderId",
+          message: "approved",
+          delivery: "outbound-message",
+        },
       },
-    } satisfies Partial<ChannelPlugin>);
+    });
+    mocks.getChannelPlugin.mockReturnValue(plugin);
 
     const cfg = { channels: { whatsapp: { enabled: true } } };
     await notifyPairingApproved({
@@ -57,6 +61,5 @@ describe("pairing facade", () => {
       cfg,
       accountId: "work",
     });
-    expect(notifyApproval).not.toHaveBeenCalled();
   });
 });

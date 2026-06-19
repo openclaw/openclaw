@@ -26,9 +26,9 @@ describe("whatsapp pairing", () => {
   });
 
   it("declares approval notifications for outbound gateway delivery", () => {
-    expect(whatsappPlugin.pairing?.approvalMessage).toBe(PAIRING_APPROVED_MESSAGE);
-    expect(whatsappPlugin.pairing?.notifyApprovalDelivery).toBe("outbound-message");
-    expect(whatsappPlugin.pairing?.notifyApproval).toBeUndefined();
+    expect(whatsappPlugin.pairing?.notifyApproval).toEqual(expect.any(Function));
+    expect(whatsappPlugin.pairing).not.toHaveProperty("approvalMessage");
+    expect(whatsappPlugin.pairing).not.toHaveProperty("notifyApprovalDelivery");
   });
 
   it("keeps WhatsApp allowlist normalization on the pairing adapter", () => {
