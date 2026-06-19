@@ -197,8 +197,8 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "sticker":
         return "[Sticker]";
       case "interactive": {
-        const parsed = JSON.parse(content);
-        return parseInteractiveCardContent(parsed);
+        const interactiveParsed = JSON.parse(content);
+        return parseInteractiveCardContent(interactiveParsed);
       }
       case "merge_forward":
         return "[Nested Merged Forward]";
