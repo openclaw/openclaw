@@ -35,6 +35,13 @@ const transcriptAppendQueues = new Map<string, Promise<void>>();
 
 type TranscriptLeafInfo = {
   leafId?: string;
+  /** Last message-type entry ID so delivery mirror messages don't get parented
+   * to a non-message entry (e.g. cache-ttl custom marker). */
+  lastMessageId?: string;
+  /** True when trailing entries included a leaf-control record that explicitly
+   * selects the append parent. In that case leafId reflects the control target
+   * and should be respected over lastMessageId. */
+  hasTrailingLeafControl?: boolean;
   appendMode: "active" | "side";
   hasParentLinkedEntries: boolean;
   nonSessionEntryCount: number;
@@ -45,6 +52,7 @@ type TranscriptLineInfo = {
   hasParentLinkedEntry: boolean;
   entryId?: string;
   isCanonicalEntry?: boolean;
+  isMessageEntry?: boolean;
   appendMode?: "side";
   leafControl?: {
     targetId: string | null;
@@ -122,6 +130,7 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
       hasParentLinkedEntry: true,
       entryId,
       ...(isCanonicalEntry ? { isCanonicalEntry: true as const } : {}),
+      ...(isCanonicalEntry && parsed.type === "message" ? { isMessageEntry: true as const } : {}),
       ...(isCanonicalEntry && parsed.appendMode === "side"
         ? { appendMode: parsed.appendMode }
         : {}),
@@ -222,6 +231,7 @@ async function resolveTranscriptLeafIdFromTrailingControls(
 
 async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
   let leafId: string | undefined;
+  let lastMessageId: string | undefined;
   let hasParentLinkedEntries = false;
   let nonSessionEntryCount = 0;
   let hasTrailingLeafControl = false;
@@ -245,6 +255,9 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
       continue;
     }
     leafId = lineInfo.entryId;
+    if (lineInfo.isMessageEntry) {
+      lastMessageId = lineInfo.entryId;
+    }
     if (lineInfo.isCanonicalEntry) {
       appendMode = lineInfo.appendMode === "side" ? "side" : "active";
     }
@@ -257,6 +270,8 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
   }
   return {
     ...(leafId ? { leafId } : {}),
+    ...(lastMessageId ? { lastMessageId } : {}),
+    ...(hasTrailingLeafControl ? { hasTrailingLeafControl: true } : {}),
     appendMode,
     hasParentLinkedEntries,
     nonSessionEntryCount,
@@ -576,10 +591,18 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
       ? redactTranscriptMessage(message, params.config)
       : redactSecrets(message)
   ) as TMessage;
+  // When the last entry is not a message (e.g. a cache-ttl custom marker), but
+  // there is no trailing leaf control overriding it, prefer the last message
+  // entry as the parent so delivery mirrors and similar write operations do not
+  // get parented to a non-message node.
+  const noTrailingLeafControl = !leafInfo.hasTrailingLeafControl && !shouldRawAppend;
+  const effectiveParentId = noTrailingLeafControl
+    ? (leafInfo.lastMessageId ?? leafInfo.leafId ?? null)
+    : (leafInfo.leafId ?? null);
   const entry = {
     type: "message",
     id: messageId,
-    ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
+    ...(shouldRawAppend ? {} : { parentId: effectiveParentId }),
     timestamp: resolveTimestampMsToIsoString(now),
     message: finalMessage,
     ...(leafInfo.appendMode === "side" && isTranscriptOnlyOpenClawAssistantMessage(finalMessage)
