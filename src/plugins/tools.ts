@@ -1022,7 +1022,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 }): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {
-    return;
+    return undefined;
   }
   const registry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "channel",
