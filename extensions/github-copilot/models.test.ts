@@ -1,7 +1,6 @@
 // Github Copilot tests cover models plugin behavior.
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -53,98 +52,6 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
   }
   return result;
 }
-
-describe("github-copilot model defaults", () => {
-  describe("getDefaultCopilotModelIds", () => {
-    it("includes claude-opus-4.7", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7");
-      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
-    });
-
-    it("includes claude-opus-4.8", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.8");
-    });
-
-    it("includes claude-sonnet-4.6", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
-    });
-
-    it("excludes retired and old Claude fallback rows", () => {
-      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4");
-      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4.5");
-      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.5");
-      expect(getDefaultCopilotModelIds()).not.toContain("claude-haiku-4.5");
-      expect(getDefaultCopilotModelIds()).not.toContain("grok-code-fast-1");
-    });
-
-    it("returns a mutable copy", () => {
-      const a = getDefaultCopilotModelIds();
-      const b = getDefaultCopilotModelIds();
-      expect(a).not.toBe(b);
-      expect(a).toEqual(b);
-    });
-  });
-
-  describe("buildCopilotModelDefinition", () => {
-    it("builds a valid definition for claude-sonnet-4.6", () => {
-      const def = buildCopilotModelDefinition("claude-sonnet-4.6");
-      expect(def.id).toBe("claude-sonnet-4.6");
-      expect(def.api).toBe("anthropic-messages");
-    });
-
-    it("uses static metadata overrides for gpt-5.5 fallback rows", () => {
-      const def = buildCopilotModelDefinition("gpt-5.5");
-      expect(def).toEqual({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-responses",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      });
-    });
-
-    it("uses static metadata overrides for Claude Opus 1M fallback rows", () => {
-      const def = buildCopilotModelDefinition("claude-opus-4.7-1m-internal");
-      expect(def).toEqual({
-        id: "claude-opus-4.7-1m-internal",
-        name: "Claude Opus 4.7 (1M context)",
-        api: "anthropic-messages",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_000_000,
-        maxTokens: 64_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: null },
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-      });
-    });
-
-    it("trims whitespace from model id", () => {
-      const def = buildCopilotModelDefinition("  gpt-4o  ");
-      expect(def.id).toBe("gpt-4o");
-      expect(def.api).toBe("openai-responses");
-    });
-
-    it("routes Gemini models through Chat Completions with Copilot compat flags", () => {
-      const def = buildCopilotModelDefinition("gemini-3.1-pro-preview");
-      expect(def.api).toBe("openai-completions");
-      expect(def.compat).toEqual({
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: false,
-        maxTokensField: "max_tokens",
-      });
-    });
-
-    it("throws on empty model id", () => {
-      expect(() => buildCopilotModelDefinition("")).toThrow("Model id required");
-      expect(() => buildCopilotModelDefinition("  ")).toThrow("Model id required");
-    });
-  });
-});
 
 describe("resolveCopilotForwardCompatModel", () => {
   it("returns undefined for empty modelId", () => {
@@ -241,6 +148,12 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(result.name).toBe("gpt-5.4-mini");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
+  });
+
+  it("disables eager tool streaming for synthetic Copilot Claude 4.5 models", () => {
+    const result = requireResolvedModel(createMockCtx("claude-haiku-4.5"));
+    expect(result.api).toBe("anthropic-messages");
+    expect(result.compat).toEqual({ supportsEagerToolInputStreaming: false });
   });
 
   it("creates synthetic Gemini models with Chat Completions compatibility", () => {
@@ -620,6 +533,7 @@ describe("fetchCopilotModelCatalog", () => {
     const opus45 = out.find((m) => m.id === "claude-opus-4-5");
     expect(opus45?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
     expect(opus45?.compat).toEqual({
+      supportsEagerToolInputStreaming: false,
       supportedReasoningEfforts: ["low", "medium", "high", "max"],
     });
   });

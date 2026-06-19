@@ -5,6 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../cli-credentials.js", () => ({
@@ -83,17 +84,7 @@ async function resolveWithConfig(params: {
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
-  const previous = process.env[key];
-  process.env[key] = value;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = previous;
-    }
-  }
+  return await withEnvAsync({ [key]: value }, run);
 }
 
 async function expectResolvedApiKey(params: {

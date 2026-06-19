@@ -201,6 +201,10 @@ describe("runParallelMcpSearch", () => {
     expect(headerOf(endpointMockState.calls[2], "MCP-Protocol-Version")).toBe("2025-06-18");
     // No bearer token on the anonymous free path.
     expect(headerOf(endpointMockState.calls[0], "Authorization")).toBeUndefined();
+    // Every call identifies OpenClaw at the HTTP layer (not just node).
+    for (const call of endpointMockState.calls) {
+      expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
+    }
     // tools/call carries the documented web_search args.
     const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;

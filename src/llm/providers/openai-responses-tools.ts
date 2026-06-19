@@ -3,9 +3,13 @@ import { createHash } from "node:crypto";
 import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
 import { resolveOpenAIStrictToolSetting } from "../../agents/openai-strict-tool-setting.js";
 import {
-  findOpenAIStrictToolSchemaDiagnostics,
+  projectOpenAITools,
+  type OpenAIToolProjection,
+} from "../../agents/openai-tool-projection.js";
+import {
+  findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
-  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIProjectedToolsStrictToolFlag,
 } from "../../agents/openai-tool-schema.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Model, Tool } from "../types.js";
@@ -26,6 +30,11 @@ type ResponsesFunctionTool = {
   strict?: boolean | null;
 };
 
+export type ConvertedResponsesTools = {
+  projection: OpenAIToolProjection;
+  tools: OpenAITool[];
+};
+
 // Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
 const log = createSubsystemLogger("llm/openai-responses");
 const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
@@ -36,10 +45,19 @@ export function convertResponsesTools(
   tools: Tool[],
   options?: ConvertResponsesToolsOptions,
 ): OpenAITool[] {
+  return convertResponsesToolPayload(tools, options).tools;
+}
+
+/** Converts and returns the projection used to reconcile tool choices. */
+export function convertResponsesToolPayload(
+  tools: Tool[],
+  options?: ConvertResponsesToolsOptions,
+): ConvertedResponsesTools {
+  const projection = projectOpenAITools(tools);
   const strictSetting = resolveResponsesStrictToolSetting(options);
-  const strict = resolveResponsesStrictToolFlag(tools, strictSetting, options?.model);
+  const strict = resolveResponsesStrictToolFlag(projection, strictSetting, options?.model);
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
-  return sortResponsesToolsByName(tools).map((tool) => {
+  const convertedTools = sortResponsesToolsByName(projection.tools).map((tool) => {
     const result: ResponsesFunctionTool = {
       type: "function",
       name: tool.name,
@@ -48,13 +66,14 @@ export function convertResponsesTools(
         tool.parameters,
         strict === true,
         options?.model?.compat as OpenAIToolSchemaCompat,
-      ) as Record<string, unknown>,
+      ),
     };
     if (strict !== undefined) {
       result.strict = strict;
     }
     return result as OpenAITool;
   });
+  return { projection, tools: convertedTools };
 }
 
 function resolveResponsesStrictToolSetting(
@@ -73,13 +92,13 @@ function resolveResponsesStrictToolSetting(
 }
 
 function resolveResponsesStrictToolFlag(
-  tools: Tool[],
+  projection: OpenAIToolProjection,
   strictSetting: boolean | null | undefined,
   model: Model | undefined,
 ): boolean | undefined {
-  const strict = resolveOpenAIStrictToolFlagForInventory(tools, strictSetting);
+  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false && model && log.isEnabled("debug", "any")) {
-    const diagnostics = findOpenAIStrictToolSchemaDiagnostics(tools);
+    const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     if (shouldLogStrictToolDowngradeDiagnostic(diagnostics, model)) {
       const sample = diagnostics.slice(0, 5).map((entry) => ({
         tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
@@ -102,7 +121,7 @@ function resolveResponsesStrictToolFlag(
 }
 
 function shouldLogStrictToolDowngradeDiagnostic(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolSchemaDiagnostics>,
+  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   model: Model,
 ): boolean {
   // Strict downgrade diagnostics can repeat per turn; hash details and cap memory.

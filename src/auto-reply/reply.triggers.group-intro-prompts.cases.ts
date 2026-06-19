@@ -12,11 +12,14 @@ export function registerGroupIntroPromptCases(): void {
       name: string;
       message: InboundMessage;
       expected: string[];
+      forbidden?: string[];
       defaultActivation?: "always" | "mention";
       setup?: (cfg: ReturnType<typeof makeCfg>) => void;
     };
     const groupParticipationNote =
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
+    const telegramGroupParticipationNote =
+      "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const groupSilentNote =
       'If no response is needed, reply with exactly "NO_REPLY" (and nothing else) so OpenClaw stays silent.';
     const groupSilentProseGuard =
@@ -52,7 +55,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+          "You are in a WhatsApp group chat. Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -71,11 +74,12 @@ export function registerGroupIntroPromptCases(): void {
         },
         expected: [
           "You are in a Telegram group chat.",
-          groupParticipationNote,
+          telegramGroupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
           "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.",
         ],
+        forbidden: ["Avoid Markdown tables"],
       },
       {
         name: "whatsapp-always-on",
@@ -135,6 +139,11 @@ export function registerGroupIntroPromptCases(): void {
         for (const expectedFragment of testCase.expected) {
           expect(extraSystemPrompt, `${testCase.name}:${expectedFragment}`).toContain(
             expectedFragment,
+          );
+        }
+        for (const forbiddenFragment of testCase.forbidden ?? []) {
+          expect(extraSystemPrompt, `${testCase.name}:${forbiddenFragment}`).not.toContain(
+            forbiddenFragment,
           );
         }
       });

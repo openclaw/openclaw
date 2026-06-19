@@ -4,17 +4,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  isUpdatePlanToolEnabledForOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
-} from "./openclaw-tools.registration.js";
+import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
-type UpdatePlanGatingParams = Parameters<typeof isUpdatePlanToolEnabledForOpenClawTools>[0];
+type UpdatePlanGatingParams = Parameters<typeof shouldIncludeUpdatePlanToolForOpenClawTools>[0];
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
 
 function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boolean): void {
-  expect(isUpdatePlanToolEnabledForOpenClawTools(params)).toBe(expected);
+  expect(shouldIncludeUpdatePlanToolForOpenClawTools(params)).toBe(expected);
 }
 
 function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
@@ -229,11 +226,8 @@ describe("openclaw-tools update_plan gating", () => {
   });
 
   it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {
-    // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") is
-    // universal, not opt-in. Unspecified executionContract on a supported
-    // provider/model auto-activates strict-agentic so unconfigured installs
-    // get the same behavior as explicit opt-in. Explicit "default" still
-    // opts out (see "respects explicit default contract opt-out" below).
+    // Unspecified executionContract on a supported provider/model enables the
+    // structured plan tool by default. Explicit "default" still opts out.
     const cfg = {
       agents: {
         list: [{ id: "main" }],

@@ -25,6 +25,7 @@ export {
   type MarkdownParseOptions,
   type MarkdownStyle,
   type MarkdownStyleSpan,
+  type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "../../packages/markdown-core/src/ir.js";
 /** Render-size-aware Markdown chunking for channel payload limits. */

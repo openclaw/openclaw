@@ -4,13 +4,15 @@
  * tool update streams.
  */
 import {
+  asOptionalObjectRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
-import { asRecord } from "./tool-display-record.js";
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -26,7 +28,7 @@ export type ToolDisplaySpec = {
 };
 
 /** Normalized display target for code/search bridge tools. */
-export type ToolSearchCodeDisplayTarget = {
+type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
   displayArgs?: Record<string, unknown>;

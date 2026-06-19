@@ -18,6 +18,10 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
+import {
+  forceKillChildProcessTree,
+  shouldDetachChildForProcessTree,
+} from "../process/child-process-tree.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -497,6 +501,7 @@ async function runExecResolver(params: {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      detached: shouldDetachChildForProcessTree(),
     });
 
     let settled = false;
@@ -508,7 +513,7 @@ async function runExecResolver(params: {
     let noOutputTimer: NodeJS.Timeout | null = null;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      forceKillChildProcessTree(child);
     }, params.timeoutMs);
 
     const clearTimers = () => {
@@ -525,7 +530,7 @@ async function runExecResolver(params: {
       }
       noOutputTimer = setTimeout(() => {
         noOutputTimedOut = true;
-        child.kill("SIGKILL");
+        forceKillChildProcessTree(child);
       }, params.noOutputTimeoutMs);
     };
 
@@ -533,7 +538,7 @@ async function runExecResolver(params: {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       outputBytes += Buffer.byteLength(text, "utf8");
       if (outputBytes > params.maxOutputBytes) {
-        child.kill("SIGKILL");
+        forceKillChildProcessTree(child);
         if (!settled) {
           settled = true;
           clearTimers();

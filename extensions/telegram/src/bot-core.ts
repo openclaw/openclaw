@@ -22,7 +22,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
@@ -40,6 +40,7 @@ import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
+import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import {
   asTelegramClientFetch,
   createTelegramClientFetch,
@@ -48,7 +49,10 @@ import {
   resolveTelegramOutboundClientTimeoutFloorSeconds,
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
+import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
+import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -56,40 +60,7 @@ import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 export type { TelegramBotOptions } from "./bot.types.js";
 
 export { getTelegramSequentialKey };
-
-export function resolveTelegramScopedGroupConfig(
-  telegramCfg: ResolvedTelegramAccount["config"],
-  chatId: string | number,
-  messageThreadId?: number,
-) {
-  const resolveTopicConfig = <T extends object>(
-    scopedConfig: { topics?: Record<string, T | undefined> } | undefined,
-  ): T | undefined => {
-    if (!scopedConfig || messageThreadId == null) {
-      return undefined;
-    }
-    const defaultConfig = scopedConfig.topics?.["*"];
-    const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
-    if (defaultConfig && exactConfig) {
-      return { ...defaultConfig, ...exactConfig };
-    }
-    return exactConfig ?? defaultConfig;
-  };
-  const groups = telegramCfg.groups;
-  const direct = telegramCfg.direct;
-  const chatIdStr = String(chatId);
-  const isDm = !chatIdStr.startsWith("-");
-
-  if (isDm) {
-    const groupConfig = direct?.[chatIdStr] ?? direct?.["*"];
-    const topicConfig = resolveTopicConfig(groupConfig);
-    return { groupConfig, topicConfig };
-  }
-
-  const groupConfig = groups?.[chatIdStr] ?? groups?.["*"];
-  const topicConfig = resolveTopicConfig(groupConfig);
-  return { groupConfig, topicConfig };
-}
+export { resolveTelegramScopedGroupConfig };
 
 type TelegramBotRuntime = {
   Bot: typeof Bot;
@@ -248,6 +219,20 @@ export function createTelegramBotCore(
     }
   });
 
+  // Answer callback queries immediately before sequentialize queues them behind
+  // agent turns for the same chat/topic. Telegram has a ~15s server-side timeout
+  // for answerCallbackQuery; if an agent turn is already processing, sequentialize
+  // delays the answer beyond that window and the user sees a stuck loading spinner.
+  bot.use(async (ctx, next) => {
+    const callback = ctx.callbackQuery;
+    if (callback) {
+      const answerPromise = bot.api.answerCallbackQuery(callback.id);
+      setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
+      void answerPromise.catch(() => {});
+    }
+    await next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
@@ -274,7 +259,14 @@ export function createTelegramBotCore(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
+  const telegramTextLimit =
+    telegramCfg.richMessages === true ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
+  const textLimit = Math.min(
+    resolveTextChunkLimit(cfg, "telegram", account.accountId, {
+      fallbackLimit: telegramTextLimit,
+    }),
+    telegramTextLimit,
+  );
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
@@ -362,7 +354,7 @@ export function createTelegramBotCore(
     return resolveTelegramScopedGroupConfig(freshTelegramCfg, chatId, messageThreadId);
   };
 
-  // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
+  // Global sendChatAction handler with 401 backoff and transient cooldown.
   // Created BEFORE the message processor so it can be injected into every message context.
   // Shared across all message contexts for this account so that consecutive 401s
   // from ANY chat are tracked together — prevents infinite retry storms.

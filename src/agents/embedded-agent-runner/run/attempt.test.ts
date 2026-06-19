@@ -1627,6 +1627,43 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages).toBe(messages);
   });
 
+  it("preserves deferred directory tool calls allowed only for replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_hidden", name: "hidden_catalog_tool", arguments: {} },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "call_hidden",
+        content: [{ type: "toolResult", result: { ok: true } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["tool_describe", "tool_call", "hidden_catalog_tool"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toBe(messages);
+  });
+
   it("strips trailing assistant prefill turns for Anthropic outbound replay", async () => {
     const messages = [
       {

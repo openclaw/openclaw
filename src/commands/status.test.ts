@@ -550,8 +550,12 @@ vi.mock("../config/sessions/main-session.js", () => ({
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: mocks.resolveStorePath,
 }));
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: mocks.loadSessionStore,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: (opts?: { storePath?: string }) =>
+    Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
   resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
@@ -718,6 +722,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
+  readBestEffortConfigSnapshot: vi.fn(async () => {
+    const config = mocks.loadConfig();
+    return { config, sourceConfig: config };
+  }),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 vi.mock("../daemon/service.js", () => ({

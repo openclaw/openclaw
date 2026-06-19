@@ -20,13 +20,13 @@ function listTaskJsonRecords(): TaskRecord[] {
   return listTaskRecords();
 }
 
-export type TasksListJsonArgs = {
+type TasksListJsonArgs = {
   json?: boolean;
   runtime?: string;
   status?: string;
 };
 
-export type TasksAuditJsonArgs = {
+type TasksAuditJsonArgs = {
   json?: boolean;
   severity?: string;
   code?: string;

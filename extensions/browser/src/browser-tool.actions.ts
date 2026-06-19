@@ -486,6 +486,7 @@ export async function executeSnapshotAction(params: {
       labels: snapshot.labels,
       labelsCount: snapshot.labelsCount,
       labelsSkipped: snapshot.labelsSkipped,
+      annotations: snapshot.annotations,
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
       refsFallback,

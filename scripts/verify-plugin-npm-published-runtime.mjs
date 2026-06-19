@@ -198,7 +198,13 @@ export function resolveNpmPackFilename(output) {
     .split(/\r?\n/u)
     .findLast((line) => line.trim().length > 0)
     ?.trim();
-  if (typeof filename !== "string" || !filename.endsWith(".tgz")) {
+  if (
+    typeof filename !== "string" ||
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
     throw new Error(`npm pack did not report a tarball filename`);
   }
   return filename;

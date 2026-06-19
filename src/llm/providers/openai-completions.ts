@@ -12,6 +12,12 @@ import type {
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
 import {
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  type OpenAICompletionsToolChoice,
+  type OpenAIToolProjection,
+} from "../../agents/openai-tool-projection.js";
+import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
@@ -57,7 +63,9 @@ function hasToolHistory(messages: Message[]): boolean {
       return true;
     }
     if (msg.role === "assistant") {
-      if (msg.content.some((block) => block.type === "toolCall")) {
+      // Assistant content can be a raw string from transcript replay; a string
+      // never carries tool calls, so it should not count toward tool history.
+      if (Array.isArray(msg.content) && msg.content.some((block) => block.type === "toolCall")) {
         return true;
       }
     }
@@ -82,7 +90,7 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
-  toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
+  toolChoice?: OpenAICompletionsToolChoice;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
@@ -653,9 +661,16 @@ function buildParams(
     params.stop = options.stop;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    params.tools = convertTools(context.tools, compat);
-    if (compat.zaiToolStream) {
+  let toolProjection: OpenAIToolProjection | undefined;
+  if (context.tools) {
+    const converted = convertTools(context.tools, compat);
+    toolProjection = converted.projection;
+    if (converted.tools.length > 0) {
+      params.tools = converted.tools;
+    } else if (hasToolHistory(context.messages)) {
+      params.tools = [];
+    }
+    if (compat.zaiToolStream && converted.tools.length > 0) {
       params.tool_stream = true;
     }
   } else if (hasToolHistory(context.messages)) {
@@ -668,7 +683,13 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    params.tool_choice = options.toolChoice;
+    const toolChoice = reconcileOpenAICompletionsToolChoice(
+      options.toolChoice,
+      toolProjection ?? projectOpenAITools([]),
+    );
+    if (toolChoice !== undefined) {
+      params.tool_choice = toolChoice;
+    }
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
@@ -1155,17 +1176,24 @@ export function convertMessages(
 function convertTools(
   tools: Tool[],
   compat: ResolvedOpenAICompletionsCompat,
-): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
-      // Only include strict if provider supports it. Some reject unknown fields.
-      ...(compat.supportsStrictMode && { strict: false }),
-    },
-  }));
+): {
+  projection: OpenAIToolProjection;
+  tools: OpenAI.Chat.Completions.ChatCompletionTool[];
+} {
+  const projection = projectOpenAITools(tools);
+  return {
+    projection,
+    tools: projection.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        // Only include strict if provider supports it. Some reject unknown fields.
+        ...(compat.supportsStrictMode && { strict: false }),
+      },
+    })),
+  };
 }
 
 function parseChunkUsage(

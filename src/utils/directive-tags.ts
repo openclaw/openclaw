@@ -95,15 +95,15 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
 }
 
 function stripUnsafeReplyDirectiveChars(value: string): string {
-  let next = "";
+  const chars: string[] = [];
   for (const ch of value) {
     const code = ch.charCodeAt(0);
     if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
       continue;
     }
-    next += ch;
+    chars.push(ch);
   }
-  return next;
+  return chars.join("");
 }
 
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {

@@ -16,7 +16,9 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
-import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -279,7 +281,7 @@ export function buildCodexSystemPromptReport(params: {
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
-  const toolEntries = params.tools.map(buildCodexToolReportEntry);
+  const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = readPositiveNumber(
@@ -343,7 +345,7 @@ function buildCodexSkillReportEntries(
     .filter((entry) => entry.blockChars > 0);
 }
 
-function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
+function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
   const summary = tool.description.trim();
   if (tool.deferLoading === true) {
     return {
@@ -584,17 +586,12 @@ export function prependCodexOpenClawPromptContext(
   return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
-const CODEX_DELIVERY_HINT_LINES = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
-
 function splitLeadingCodexDeliveryHint(prompt: string): {
   deliveryHint?: string;
   prompt: string;
 } {
   const trimmedStart = prompt.trimStart();
-  const matchedHint = CODEX_DELIVERY_HINT_LINES.find((hint) => trimmedStart.startsWith(hint));
+  const matchedHint = MESSAGE_TOOL_DELIVERY_HINTS.find((hint) => trimmedStart.startsWith(hint));
   if (!matchedHint) {
     return { prompt };
   }
@@ -858,13 +855,15 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
 }
 
 /** Returns whether the current dynamic tool list can serve workspace memory. */
-export function hasCodexWorkspaceMemoryTools(tools: readonly { name: string }[]): boolean {
+export function hasCodexWorkspaceMemoryTools(tools: readonly CodexDynamicToolSpec[]): boolean {
   return getCodexWorkspaceMemoryToolNames(tools).length > 0;
 }
 
 /** Lists available memory tool names understood by Codex workspace memory routing. */
-export function getCodexWorkspaceMemoryToolNames(tools: readonly { name: string }[]): string[] {
-  const availableToolNames = new Set(tools.map((tool) => normalizeCodexDynamicToolName(tool.name)));
+export function getCodexWorkspaceMemoryToolNames(tools: readonly CodexDynamicToolSpec[]): string[] {
+  const availableToolNames = new Set(
+    flattenCodexDynamicToolFunctions(tools).map((tool) => normalizeCodexDynamicToolName(tool.name)),
+  );
   return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
 }
 

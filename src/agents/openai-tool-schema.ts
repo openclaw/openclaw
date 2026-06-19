@@ -6,6 +6,7 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { shouldOmitEmptyArrayItems } from "../plugins/provider-model-compat.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 
 /**
  * OpenAI strict-tool-schema normalization and diagnostics.
@@ -16,11 +17,6 @@ import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js"
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
-};
-
-type ToolWithParameters = {
-  name?: unknown;
-  parameters: unknown;
 };
 
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
@@ -179,26 +175,26 @@ type OpenAIStrictToolSchemaDiagnostic = {
   violations: string[];
 };
 
-/** Returns strict-schema violation paths for each incompatible tool definition. */
-export function findOpenAIStrictToolSchemaDiagnostics(
-  tools: readonly ToolWithParameters[],
+/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
+export function findOpenAIStrictToolProjectionDiagnostics(
+  projection: OpenAIToolProjection,
 ): OpenAIStrictToolSchemaDiagnostic[] {
-  return tools.flatMap((tool, toolIndex) => {
-    const violations = findStrictOpenAIJsonSchemaViolations(
-      normalizeStrictOpenAIJsonSchema(tool.parameters),
-      `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [
-      {
-        toolIndex,
-        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
-        violations,
-      },
-    ];
-  });
+  return [
+    ...projection.diagnostics.map((diagnostic) => ({
+      toolIndex: diagnostic.toolIndex,
+      ...(diagnostic.toolName ? { toolName: diagnostic.toolName } : {}),
+      violations: [...diagnostic.violations],
+    })),
+    ...projection.tools.flatMap((tool) => {
+      const violations = findStrictOpenAIJsonSchemaViolations(
+        normalizeStrictOpenAIJsonSchema(tool.parameters),
+        `${tool.name}.parameters`,
+      );
+      return violations.length > 0
+        ? [{ toolIndex: tool.toolIndex, toolName: tool.name, violations }]
+        : [];
+    }),
+  ];
 }
 
 function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
@@ -314,13 +310,13 @@ function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): st
   return violations;
 }
 
-/** Resolves the strict flag to advertise for a tool inventory after compatibility checks. */
-export function resolveOpenAIStrictToolFlagForInventory(
-  tools: readonly ToolWithParameters[],
+/** Resolves strict mode for the projected tools that will be emitted in the request payload. */
+export function resolveOpenAIProjectedToolsStrictToolFlag(
+  projection: OpenAIToolProjection,
   strict: boolean | null | undefined,
 ): boolean | undefined {
   if (strict !== true) {
     return strict === false ? false : undefined;
   }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
 }

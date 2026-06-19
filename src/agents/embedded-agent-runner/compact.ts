@@ -11,9 +11,17 @@ import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
+  readSessionLeafStateFromTranscriptAsync,
+  resolveCompactionCheckpointTranscriptPosition,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
+import {
+  createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
@@ -96,8 +104,8 @@ import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
-import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
+import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -159,6 +167,7 @@ import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
@@ -529,6 +538,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const attempt = params.attempt ?? 1;
   const maxAttempts = params.maxAttempts ?? 1;
   const runId = params.runId ?? params.sessionId;
+  // Parent compaction model-call spans to the active run/harness trace when one
+  // exists, otherwise start a fresh root. Compaction emits no intermediate span
+  // of its own (unlike the run lifecycle, which backs its run trace with a
+  // run.started span), so a child trace here would orphan the model call under a
+  // phantom parent. The :compaction: runId/callId already distinguishes the span.
+  const compactionModelCallTrace = freezeDiagnosticTraceContext(
+    getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
+  );
+  const diagnosticCompactionRunId = `${runId}:compaction:${diagId}`;
+  let diagnosticModelCallSeq = 0;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   ensureRuntimePluginsLoaded({
     config: params.config,
@@ -845,6 +864,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
+      oneShotCliRun: params.oneShotCliRun,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -1302,6 +1322,23 @@ async function compactEmbeddedAgentSessionDirectOnce(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
+            session.agent.streamFn,
+            {
+              runId: diagnosticCompactionRunId,
+              ...(params.sessionKey && { sessionKey: params.sessionKey }),
+              sessionId: params.sessionId,
+              provider,
+              model: modelId,
+              api: effectiveModel.api,
+              transport: session.agent.transport,
+              contextTokenBudget,
+              trace: compactionModelCallTrace,
+              contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
+              nextCallId: () =>
+                `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
+            },
+          );
 
           const prior = await sanitizeSessionHistory({
             messages: session.messages,
@@ -1503,6 +1540,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
+              const transcriptState =
+                await readSessionLeafStateFromTranscriptAsync(activeSessionFile);
+              const checkpointPosition = resolveCompactionCheckpointTranscriptPosition({
+                preferredLeafId: activePostLeafId,
+                transcriptState,
+              });
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
@@ -1516,8 +1559,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
                 tokensBefore: observedTokenCount ?? result.tokensBefore,
                 tokensAfter,
                 postSessionFile: activeSessionFile,
-                postLeafId: activePostLeafId,
-                postEntryId: activePostLeafId,
+                postLeafId: checkpointPosition.leafId,
+                postEntryId: checkpointPosition.entryId,
                 createdAt: compactStartedAt,
               });
               checkpointSnapshotRetained = storedCheckpoint !== null;

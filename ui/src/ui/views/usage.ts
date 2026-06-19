@@ -135,6 +135,21 @@ function renderUsageEmptyState(onRefresh: () => void) {
   `;
 }
 
+function closeDetailsOnOutsideClick(e: Event) {
+  const el = e.currentTarget as HTMLDetailsElement;
+  if (!el.open) {
+    return;
+  }
+  const onClick = (ev: MouseEvent) => {
+    const path = ev.composedPath();
+    if (!path.includes(el)) {
+      el.open = false;
+      window.removeEventListener("click", onClick, true);
+    }
+  };
+  window.addEventListener("click", onClick, true);
+}
+
 export function renderUsage(props: UsageProps) {
   const { data, filters, display, detail, callbacks } = props;
   const filterActions = callbacks.filters;
@@ -290,7 +305,22 @@ export function renderUsage(props: UsageProps) {
         : filters.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const hasAggregateFilters =
+    filters.selectedSessions.length > 0 ||
+    hasQuery ||
+    filters.selectedHours.length > 0 ||
+    filters.selectedDays.length > 0 ||
+    Boolean(filters.agentId);
+  const activeAggregates = hasAggregateFilters
+    ? buildAggregatesFromSessions(aggregateSessions, data.aggregates)
+    : buildAggregatesFromSessions([], data.aggregates);
+  const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
+  const insightTotals = insightsUseVisiblePage
+    ? computeSessionTotals(aggregateSessions)
+    : displayTotals;
+  const insightAggregates = insightsUseVisiblePage
+    ? buildAggregatesFromSessions(aggregateSessions)
+    : activeAggregates;
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -311,18 +341,18 @@ export function renderUsage(props: UsageProps) {
         })()
       : data.costDaily;
 
-  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
+  const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
   const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
-    (displayTotals?.missingCostEntries ?? 0) > 0 ||
-    (displayTotals
-      ? displayTotals.totalTokens > 0 &&
-        displayTotals.totalCost === 0 &&
-        displayTotals.input +
-          displayTotals.output +
-          displayTotals.cacheRead +
-          displayTotals.cacheWrite >
+    (insightTotals?.missingCostEntries ?? 0) > 0 ||
+    (insightTotals
+      ? insightTotals.totalTokens > 0 &&
+        insightTotals.totalCost === 0 &&
+        insightTotals.input +
+          insightTotals.output +
+          insightTotals.cacheRead +
+          insightTotals.cacheWrite >
           0
       : false);
   const datePresets = [
@@ -353,23 +383,7 @@ export function renderUsage(props: UsageProps) {
       options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
     const selectedCount = selected.length;
     return html`
-      <details
-        class="usage-filter-select"
-        @toggle=${(e: Event) => {
-          const el = e.currentTarget as HTMLDetailsElement;
-          if (!el.open) {
-            return;
-          }
-          const onClick = (ev: MouseEvent) => {
-            const path = ev.composedPath();
-            if (!path.includes(el)) {
-              el.open = false;
-              window.removeEventListener("click", onClick, true);
-            }
-          };
-          window.addEventListener("click", onClick, true);
-        }}
-      >
+      <details class="usage-filter-select" @toggle=${closeDetailsOnOutsideClick}>
         <summary>
           <span>${label}</span>
           ${selectedCount > 0
@@ -502,23 +516,7 @@ export function renderUsage(props: UsageProps) {
             >
               ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
             </button>
-            <details
-              class="usage-export-menu"
-              @toggle=${(e: Event) => {
-                const el = e.currentTarget as HTMLDetailsElement;
-                if (!el.open) {
-                  return;
-                }
-                const onClick = (ev: MouseEvent) => {
-                  const path = ev.composedPath();
-                  if (!path.includes(el)) {
-                    el.open = false;
-                    window.removeEventListener("click", onClick, true);
-                  }
-                };
-                window.addEventListener("click", onClick, true);
-              }}
-            >
+            <details class="usage-export-menu" @toggle=${closeDetailsOnOutsideClick}>
               <summary class="btn btn--sm">${t("usage.export.label")} ▾</summary>
               <div class="usage-export-popover">
                 <div class="usage-export-list">
@@ -790,8 +788,8 @@ export function renderUsage(props: UsageProps) {
         ? renderUsageEmptyState(filterActions.onRefresh)
         : html`
             ${renderUsageInsights(
-              displayTotals,
-              activeAggregates,
+              insightTotals,
+              insightAggregates,
               insightStats,
               hasMissingCost,
               buildPeakErrorHours(aggregateSessions, filters.timeZone),

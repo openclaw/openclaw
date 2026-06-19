@@ -21,7 +21,7 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
-import { extractToolPayload } from "./tool-payload.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 
 /** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {

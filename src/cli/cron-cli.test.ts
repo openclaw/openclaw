@@ -307,6 +307,7 @@ describe("cron cli", () => {
 
     expect(addCommand?.helpInformation()).toContain("Gateway host local timezone");
     expect(editCommand?.helpInformation()).toContain("Gateway host local timezone");
+    expect(editCommand?.helpInformation()).toMatch(/offset-less uses\s+--tz/);
   });
 
   it.each([

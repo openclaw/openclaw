@@ -223,7 +223,6 @@ const COPILOT_REPLAY_SAFE_READ_ONLY_TOOL_NAMES = new Set([
   "list",
   "ls",
   "memory_get",
-  "memory_search",
   "probe",
   "query",
   "read",

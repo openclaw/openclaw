@@ -36,6 +36,34 @@ type TargetModelRef = {
   modelId: string;
 };
 
+function createDirectTargetModel(target: TargetModelRef): Model | null {
+  const common = {
+    id: target.modelId,
+    name: target.modelId,
+    provider: target.provider,
+    reasoning: true,
+    input: ["text"] as Model["input"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  };
+  if (target.provider === "openai") {
+    return {
+      ...common,
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+  }
+  if (target.provider === "anthropic") {
+    return {
+      ...common,
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    };
+  }
+  return null;
+}
+
 function parseTargetModelRefs(raw: string | undefined): TargetModelRef[] {
   const refs: TargetModelRef[] = [];
   for (const item of (raw ?? "").split(",")) {
@@ -102,6 +130,21 @@ function buildReplayMessages(model: Model): AgentMessage[] {
         };
 
   return [
+    {
+      role: "assistant",
+      provider: source.provider,
+      api: source.api,
+      model: source.model,
+      stopReason: "length",
+      timestamp: now - 1,
+      content: [
+        {
+          type: "thinking",
+          thinking: "partial hidden reasoning",
+          thinkingSignature: "partial-signature",
+        },
+      ],
+    },
     {
       role: "user",
       content: "Use noop.",
@@ -205,7 +248,9 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
+        const model =
+          (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
+          createDirectTargetModel(target);
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -316,7 +361,9 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
+        const model =
+          (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
+          createDirectTargetModel(target);
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);

@@ -141,6 +141,13 @@ export async function createLocalEmbeddingProviderInProcess(
     return initPromise;
   };
 
+  const outputDimensionality =
+    typeof options.outputDimensionality === "number" ? options.outputDimensionality : undefined;
+  const normalize = (vector: ArrayLike<number>): number[] =>
+    sanitizeAndNormalizeEmbedding(
+      outputDimensionality ? Array.from(vector).slice(0, outputDimensionality) : Array.from(vector),
+    );
+
   return {
     id: "local",
     model: modelPath,
@@ -151,7 +158,7 @@ export async function createLocalEmbeddingProviderInProcess(
       throwIfClosed();
       optionsValue?.signal?.throwIfAborted();
       const embedding = await ctx.getEmbeddingFor(text);
-      return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
+      return normalize(embedding.vector);
     },
     embedBatch: async (texts, optionsLocal) => {
       throwIfClosed();
@@ -164,7 +171,7 @@ export async function createLocalEmbeddingProviderInProcess(
         throwIfClosed();
         optionsLocal?.signal?.throwIfAborted();
         const embedding = await ctx.getEmbeddingFor(text);
-        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+        embeddings.push(normalize(embedding.vector));
       }
       return embeddings;
     },

@@ -1,4 +1,5 @@
 // Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -44,6 +45,43 @@ function createMockPipe() {
   };
   pipe.setEncoding = () => {};
   return pipe;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timeout waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`process still alive: ${pid}`);
 }
 
 afterEach(() => {
@@ -423,6 +461,7 @@ describe("check-extension-package-tsc-boundary", () => {
 
   it("hard-kills timed out async node steps", async () => {
     const processSignals: Array<[number, NodeJS.Signals | number | undefined]> = [];
+    let processGroupAlive = true;
     const child = new EventEmitter() as EventEmitter & {
       kill: (signal?: NodeJS.Signals | number) => boolean;
       pid: number;
@@ -445,6 +484,13 @@ describe("check-extension-package-tsc-boundary", () => {
           return child;
         },
         killProcess(pid: number, signal?: NodeJS.Signals | number) {
+          if (signal === "SIGKILL") {
+            processGroupAlive = false;
+          }
+          if (signal === 0 && !processGroupAlive) {
+            processSignals.push([pid, signal]);
+            throw Object.assign(new Error("gone"), { code: "ESRCH" });
+          }
           processSignals.push([pid, signal]);
           return true;
         },
@@ -457,7 +503,10 @@ describe("check-extension-package-tsc-boundary", () => {
       (error: unknown) => error,
     );
 
-    expect(processSignals).toEqual([[-1234, "SIGKILL"]]);
+    expect(processSignals).toEqual([
+      [-1234, "SIGKILL"],
+      [-1234, 0],
+    ]);
     expect(failure).toBeInstanceOf(Error);
     if (!(failure instanceof Error)) {
       throw new Error("expected timeout failure to reject with an Error");
@@ -465,6 +514,57 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(failure.message).toContain("hung-plugin timed out after 5ms");
     expect((failure as { kind?: unknown }).kind).toBe("timeout");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "waits for timed-out async node step process groups",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-timeout-"));
+      tempRoots.add(root);
+      const childPidPath = path.join(root, "child.pid");
+      let childPid = 0;
+      const childScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      try {
+        const failurePromise = runNodeStepAsync(
+          "hung-step-group",
+          ["--eval", parentScript],
+          100,
+          {
+            spawnImpl(command: string, args: string[], options: unknown) {
+              return spawn(command, args, options as Parameters<typeof spawn>[2]);
+            },
+          },
+        ).then(
+          () => {
+            throw new Error("expected hung-step-group to time out");
+          },
+          (error: unknown) => error,
+        );
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        const failure = await failurePromise;
+        expect(failure).toBeInstanceOf(Error);
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("aborts concurrent sibling steps after the first failure", async () => {
     const startedAt = Date.now();

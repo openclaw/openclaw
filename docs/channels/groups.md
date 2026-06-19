@@ -50,6 +50,8 @@ Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room shoul
 
 Use `"automatic"` for weaker models or runtimes that do not reliably understand tool-only delivery. In automatic mode, the agent's final assistant text is the visible source reply path, so a model that cannot consistently call `message(action=send)` can still answer normally.
 
+In automatic mode, normal text final replies are posted directly to the room. If the visible reply needs files, images, or other attachments, the agent may still use `message(action=send)` for that attachment instead of trying to force it through the final text reply.
+
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
@@ -586,7 +588,7 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
+The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Non-Telegram groups also discourage Markdown tables; Telegram rich-text guidance comes from the Telegram channel prompt. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 

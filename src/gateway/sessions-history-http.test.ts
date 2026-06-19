@@ -67,6 +67,26 @@ async function seedSession(params?: { text?: string }) {
   return { storePath };
 }
 
+async function writeResetArchiveTranscript(params: {
+  dir: string;
+  sessionId: string;
+  timestamp: string;
+  texts: string[];
+}) {
+  await fs.writeFile(
+    path.join(params.dir, `${params.sessionId}.jsonl.reset.${params.timestamp}`),
+    [
+      JSON.stringify({ type: "session", version: 1, id: params.sessionId }),
+      ...params.texts.map((text) =>
+        JSON.stringify({
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        }),
+      ),
+    ].join("\n"),
+    "utf-8",
+  );
+}
+
 function makeTranscriptAssistantMessage(params: {
   text: string;
   content?: AssistantMessage["content"];
@@ -366,6 +386,90 @@ describe("session history HTTP endpoints", () => {
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         seq: 1,
       });
+    });
+  });
+
+  test("returns session history from the latest reset archive when the active transcript is missing", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-reset-main";
+    const dir = path.dirname(storePath);
+    await writeResetArchiveTranscript({
+      dir,
+      sessionId,
+      timestamp: "2026-02-16T22-26-33.000Z",
+      texts: ["older archived history"],
+    });
+    await writeResetArchiveTranscript({
+      dir,
+      sessionId,
+      timestamp: "2026-02-16T22-26-34.000Z",
+      texts: ["restored first", "restored latest"],
+    });
+    await writeSessionStoreForTestAsync(storePath, {
+      "agent:main:main": {
+        sessionId,
+        updatedAt: 1,
+      },
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: "?limit=1",
+      });
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "restored latest",
+      ]);
+      expect(body.hasMore).toBe(true);
+      expect(body.nextCursor).toBe("2");
+      expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
+        seq: 2,
+      });
+    });
+  });
+
+  test("refreshes unbounded SSE when an active transcript replaces reset archive history", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-reset-sse-takeover";
+    const dir = path.dirname(storePath);
+    await writeResetArchiveTranscript({
+      dir,
+      sessionId,
+      timestamp: "2026-02-16T22-26-34.000Z",
+      texts: ["archived before reset"],
+    });
+    await writeSessionStoreForTestAsync(storePath, {
+      "agent:main:main": {
+        sessionId,
+        updatedAt: 1,
+      },
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main");
+      try {
+        await expectHistoryEventTexts(stream, ["archived before reset"]);
+
+        const activeTranscriptPath = path.join(dir, `${sessionId}.jsonl`);
+        const activeMessage = makeTranscriptAssistantMessage({ text: "active after reset" });
+        await fs.writeFile(
+          activeTranscriptPath,
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({ message: activeMessage }),
+          ].join("\n"),
+          "utf-8",
+        );
+        emitSessionTranscriptUpdate({
+          sessionFile: activeTranscriptPath,
+          sessionKey: "agent:main:main",
+          message: activeMessage,
+        });
+
+        await expectHistoryEventTexts(stream, ["active after reset"]);
+      } finally {
+        await stream.reader.cancel();
+      }
     });
   });
 

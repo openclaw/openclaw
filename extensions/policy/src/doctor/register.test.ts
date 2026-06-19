@@ -28,6 +28,8 @@ import {
 } from "./register.js";
 
 let workspaceDir: string;
+let originalOpenClawHome: string | undefined;
+let originalOpenClawStateDir: string | undefined;
 
 function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -104,10 +106,37 @@ describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
     clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
+    originalOpenClawHome = process.env.OPENCLAW_HOME;
+    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
+    process.env.OPENCLAW_HOME = workspaceDir;
+    delete process.env.OPENCLAW_STATE_DIR;
+    await fs.mkdir(join(workspaceDir, ".openclaw"), { recursive: true });
+    try {
+      await fs.symlink(
+        "../exec-approvals.json",
+        join(workspaceDir, ".openclaw", "exec-approvals.json"),
+      );
+    } catch (err) {
+      if (typeof err !== "object" || err === null || !("code" in err) || err.code !== "EPERM") {
+        throw err;
+      }
+      await fs.rm(join(workspaceDir, ".openclaw"), { recursive: true, force: true });
+      await fs.symlink(workspaceDir, join(workspaceDir, ".openclaw"), "junction");
+    }
   });
 
   afterEach(async () => {
+    if (originalOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = originalOpenClawHome;
+    }
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
     clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
@@ -247,6 +276,23 @@ describe("registerPolicyDoctorChecks", () => {
       {
         path: "dataHandling.memory.denySessionTranscriptIndexing",
         strictness: "requires-true",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "execApprovals.agents.allowSecurity",
+        strictness: "allowlist-subset",
+        emptyList: "disabled",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "execApprovals.agents.allowAutoAllowSkills",
+        strictness: "requires-false",
+        selectors: ["agentIds"],
+      },
+      {
+        path: "execApprovals.agents.allowlist.expected",
+        strictness: "exact-list",
+        emptyList: "meaningful",
         selectors: ["agentIds"],
       },
     ]);
@@ -564,6 +610,13 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/secrets-insecure-provider",
       "policy/auth-profile-invalid-metadata",
       "policy/auth-profile-unapproved-mode",
+      "policy/exec-approvals-missing",
+      "policy/exec-approvals-invalid",
+      "policy/exec-approvals-default-security-unapproved",
+      "policy/exec-approvals-agent-security-unapproved",
+      "policy/exec-approvals-auto-allow-skills-enabled",
+      "policy/exec-approvals-allowlist-missing",
+      "policy/exec-approvals-allowlist-unexpected",
       "policy/tools-missing-risk-level",
       "policy/tools-unknown-risk-level",
       "policy/tools-missing-sensitivity-token",
@@ -7801,6 +7854,768 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/policy-jsonc-invalid",
         target:
           "oc://policy.jsonc/scopes/restricted/dataHandling/memory/denySessionTranscriptIndexing",
+      }),
+    ]);
+  });
+
+  it("reports exec approvals file conformance findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          requireFile: true,
+          defaults: { allowSecurity: ["deny"] },
+          agents: {
+            allowSecurity: ["allowlist"],
+            allowlist: { expected: ["deploy", "doctor"] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        socket: { path: "/tmp/openclaw.sock", token: "secret-token" },
+        defaults: { security: "full" },
+        agents: {
+          sebby: {
+            security: "full",
+            allowlist: [{ pattern: "deploy", commandText: "deploy --prod" }],
+          },
+          buddy: {
+            security: "allowlist",
+            allowlist: [{ pattern: "status" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-default-security-unapproved",
+          ocPath: "oc://exec-approvals.json/defaults",
+          requirement: "oc://policy.jsonc/execApprovals/defaults/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-agent-security-unapproved",
+          ocPath: "oc://exec-approvals.json/agents/sebby",
+          requirement: "oc://policy.jsonc/execApprovals/agents/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-missing",
+          target: "oc://exec-approvals.json",
+          requirement: "oc://policy.jsonc/execApprovals/agents/allowlist/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-unexpected",
+          ocPath: "oc://exec-approvals.json/agents/buddy/allowlist/#0",
+          requirement: "oc://policy.jsonc/execApprovals/agents/allowlist/expected",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(result.findings)).not.toContain("secret-token");
+    expect(JSON.stringify(result.findings)).not.toContain("deploy --prod");
+  });
+
+  it("compares exec approval allowlist entries with argPattern", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: { expected: [{ pattern: "deploy", argPattern: "^--prod$" }] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "deploy" }] } },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-allowlist-missing",
+        message:
+          "exec approvals allowlist is missing expected pattern 'deploy argPattern=^--prod$'.",
+        target: "oc://exec-approvals.json",
+      }),
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-allowlist-unexpected",
+        message: "exec approvals allowlist has unexpected pattern 'deploy'.",
+        ocPath: "oc://exec-approvals.json/agents/main/allowlist/#0",
+      }),
+    ]);
+  });
+
+  it("checks inherited default security for global exec approval agent rules", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowSecurity: ["allowlist"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-agent-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement: "oc://policy.jsonc/execApprovals/agents/allowSecurity",
+      }),
+    ]);
+  });
+
+  it("reports inherited autoAllowSkills when policy requires manual exec allowlists", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowAutoAllowSkills: false } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { autoAllowSkills: true } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-auto-allow-skills-enabled",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement: "oc://policy.jsonc/execApprovals/agents/allowAutoAllowSkills",
+      }),
+    ]);
+  });
+
+  it("uses wildcard security for global exec approval agents that only add allowlist entries", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full" },
+        agents: {
+          "*": { security: "deny" },
+          main: { allowlist: [{ pattern: "status" }] },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("checks default-inherited global exec approval agents when explicit agents exist", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { agents: { allowSecurity: ["allowlist"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "full" },
+        agents: { main: { security: "allowlist" } },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-agent-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement: "oc://policy.jsonc/execApprovals/agents/allowSecurity",
+      }),
+    ]);
+  });
+
+  it("applies scoped exec approvals only to selected agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: {
+                allowSecurity: ["allowlist"],
+                allowlist: { expected: ["deploy", "doctor"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          sebby: {
+            security: "full",
+            allowlist: [{ pattern: "deploy" }, { pattern: "status" }],
+          },
+          buddy: {
+            security: "full",
+            allowlist: [{ pattern: "unrelated" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-agent-security-unapproved",
+          ocPath: "oc://exec-approvals.json/agents/sebby",
+          requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-missing",
+          requirement:
+            "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowlist/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-unexpected",
+          ocPath: "oc://exec-approvals.json/agents/sebby/allowlist/#1",
+          requirement:
+            "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowlist/expected",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ocPath: expect.stringContaining("agents/buddy") }),
+      ]),
+    );
+  });
+
+  it("does not inherit wildcard security when exact agent security is malformed", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: { agents: { allowSecurity: ["deny"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          "*": { security: "full" },
+          sebby: { security: "bogus" },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("uses runtime defaults for malformed exec approval mode fields", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["full"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "bogus" } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("requires exec approvals artifacts for scoped exec approval rules", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby", "buddy"],
+            execApprovals: {
+              agents: { allowSecurity: ["allowlist"] },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-missing",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals",
+      }),
+    ]);
+  });
+
+  it("rejects invalid exec approvals artifacts for scoped exec approval rules", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby", "buddy"],
+            execApprovals: {
+              agents: { allowSecurity: ["allowlist"] },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "exec-approvals.json"), "{", "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-invalid",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals",
+      }),
+    ]);
+  });
+
+  it("does not require exec approvals artifacts for requireFile false alone", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { requireFile: false } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("applies wildcard exec approvals to scoped agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: {
+                allowSecurity: ["allowlist"],
+                allowlist: { expected: ["deploy"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          "*": {
+            security: "full",
+            allowlist: [{ pattern: "status" }],
+          },
+          sebby: {
+            allowlist: [{ pattern: "deploy" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-agent-security-unapproved",
+          ocPath: 'oc://exec-approvals.json/agents/"*"',
+          requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+        }),
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-allowlist-unexpected",
+          ocPath: 'oc://exec-approvals.json/agents/"*"/allowlist/#0',
+          requirement:
+            "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowlist/expected",
+        }),
+      ]),
+    );
+  });
+
+  it("applies wildcard autoAllowSkills posture to scoped exec approvals", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: { allowAutoAllowSkills: false },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        agents: {
+          "*": { autoAllowSkills: true },
+          buddy: { autoAllowSkills: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-auto-allow-skills-enabled",
+        ocPath: 'oc://exec-approvals.json/agents/"*"',
+        requirement:
+          "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowAutoAllowSkills",
+      }),
+    ]);
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ocPath: expect.stringContaining("agents/buddy") }),
+      ]),
+    );
+  });
+
+  it("applies inherited default autoAllowSkills posture to scoped exec approvals", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["sebby"],
+            execApprovals: {
+              agents: { allowAutoAllowSkills: false },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { autoAllowSkills: true },
+        agents: {
+          sebby: { allowlist: [{ pattern: "deploy" }] },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-auto-allow-skills-enabled",
+        ocPath: "oc://exec-approvals.json/defaults",
+        requirement:
+          "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowAutoAllowSkills",
+      }),
+    ]);
+  });
+
+  it("evaluates legacy default exec approvals for scoped main policies", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          restricted: {
+            agentIds: ["main"],
+            execApprovals: {
+              agents: {
+                allowSecurity: ["deny"],
+                allowlist: { expected: ["legacy", "doctor"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {
+          default: {
+            security: "allowlist",
+            allowlist: ["legacy", { pattern: "doctor" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-agent-security-unapproved",
+        ocPath: "oc://exec-approvals.json/agents/default",
+        target: "oc://exec-approvals.json/agents/default",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+      }),
+    ]);
+  });
+
+  it("uses OPENCLAW_HOME for the default exec approvals artifact path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const openclawHome = join(workspaceDir, "home");
+    const approvalsDir = join(openclawHome, ".openclaw");
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    await fs.mkdir(approvalsDir, { recursive: true });
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(approvalsDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    process.env.OPENCLAW_HOME = openclawHome;
+    try {
+      registerPolicyDoctorChecks();
+      const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+      expect(result.findings).toEqual([
+        expect.objectContaining({
+          checkId: "policy/exec-approvals-default-security-unapproved",
+          ocPath: "oc://exec-approvals.json/defaults",
+        }),
+      ]);
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+    }
+  });
+
+  it("uses OPENCLAW_STATE_DIR for the exec approvals artifact path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const stateDir = join(workspaceDir, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { defaults: { allowSecurity: ["deny"] } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "deny" } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(stateDir, "exec-approvals.json"),
+      JSON.stringify({ version: 1, defaults: { security: "full" } }),
+      "utf-8",
+    );
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-default-security-unapproved",
+        ocPath: "oc://exec-approvals.json/defaults",
+      }),
+    ]);
+  });
+
+  it("rejects unsupported exec approval allowlist requirement keys", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argpattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/execApprovals/agents/allowlist/expected/#0",
+        }),
+      ]),
+    );
+  });
+
+  it("targets the missing exec approvals artifact when required", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { requireFile: true } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-missing",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/execApprovals/requireFile",
+      }),
+    ]);
+  });
+
+  it("rejects required versionless exec approvals artifacts", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: { requireFile: true, defaults: { allowSecurity: ["deny"] } },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "exec-approvals.json"),
+      JSON.stringify({ defaults: { security: "deny" } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-invalid",
+        requirement: "oc://policy.jsonc/execApprovals",
       }),
     ]);
   });

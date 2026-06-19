@@ -36,7 +36,7 @@ on:
           - stable
           - full
       run_release_soak:
-        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=full
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for stable and full release profiles
         required: false
         default: false
         type: boolean
@@ -130,7 +130,7 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.ref_name }}
           path: workflow
@@ -158,7 +158,7 @@ jobs:
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -234,7 +234,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout target SHA
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
@@ -275,7 +275,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count
+            local dispatch_output run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -298,8 +298,6 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
             dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
@@ -309,20 +307,7 @@ jobs:
             )"
 
             if [[ -z "$run_id" ]]; then
-              for _ in $(seq 1 60); do
-                run_id="$(
-                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-                )"
-                if [[ -n "$run_id" ]]; then
-                  break
-                fi
-                sleep 5
-              done
-            fi
-
-            if [[ -z "${run_id:-}" ]]; then
-              echo "Could not find dispatched run for ${workflow}." >&2
+              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
               exit 1
             fi
 
@@ -423,7 +408,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count
+            local dispatch_output run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -446,8 +431,6 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
             dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
@@ -457,20 +440,7 @@ jobs:
             )"
 
             if [[ -z "$run_id" ]]; then
-              for _ in $(seq 1 60); do
-                run_id="$(
-                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-                )"
-                if [[ -n "$run_id" ]]; then
-                  break
-                fi
-                sleep 5
-              done
-            fi
-
-            if [[ -z "${run_id:-}" ]]; then
-              echo "Could not find dispatched run for ${workflow}." >&2
+              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
               exit 1
             fi
 
@@ -567,7 +537,7 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -581,7 +551,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count run_json
+            local dispatch_output run_id status conclusion url poll_count run_json
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -604,8 +574,6 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
             dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
@@ -615,20 +583,7 @@ jobs:
             )"
 
             if [[ -z "$run_id" ]]; then
-              for _ in $(seq 1 60); do
-                run_id="$(
-                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                    --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-                )"
-                if [[ -n "$run_id" ]]; then
-                  break
-                fi
-                sleep 5
-              done
-            fi
-
-            if [[ -z "${run_id:-}" ]]; then
-              echo "Could not find dispatched run for ${workflow}." >&2
+              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
               exit 1
             fi
 
@@ -783,7 +738,7 @@ jobs:
           fi
 
           args=(
-            -f ref="$TARGET_SHA"
+            -f ref="$TARGET_REF"
             -f expected_sha="$TARGET_SHA"
             -f provider="$PROVIDER"
             -f mode="$MODE"
@@ -825,7 +780,7 @@ jobs:
       source_sha: ${{ steps.package.outputs.source_sha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ github.ref_name }}
@@ -871,7 +826,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release package artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-package-under-test
           path: |
@@ -928,8 +883,6 @@ jobs:
             return "$status"
           }
 
-          before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
-
           args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -z "${PACKAGE_SPEC// }" ]]; then
             if [[ "$PREPARE_PACKAGE_RESULT" != "success" || -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
@@ -946,22 +899,16 @@ jobs:
             args+=(-f scenario="$SCENARIO")
           fi
 
-          gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
-
-          run_id=""
-          for _ in $(seq 1 60); do
-            run_id="$(
-              BEFORE_IDS="$before_json" gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
-            )"
-            if [[ -n "$run_id" ]]; then
-              break
-            fi
-            sleep 5
-          done
+          dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"
+          printf '%s\n' "$dispatch_output"
+          run_id="$(
+            printf '%s\n' "$dispatch_output" |
+              sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+              tail -n 1
+          )"
 
           if [[ -z "$run_id" ]]; then
-            echo "Could not find dispatched run for npm-telegram-beta-e2e.yml." >&2
+            echo "::error::gh workflow run npm-telegram-beta-e2e.yml did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
             exit 1
           fi
 
@@ -1070,25 +1017,30 @@ jobs:
             echo "- Repeat: \`3\`"
             echo "- Deep profile: \`false\`"
             echo "- Live OpenAI candidate: \`false\`"
-            echo "- Release impact: advisory"
+            echo "- Release impact: blocking"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          before_json="$(gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          dispatch_run_name="OpenClaw Performance ${dispatch_id}"
 
-          gh_with_retry workflow run openclaw-performance.yml \
+          dispatch_output="$(gh_with_retry workflow run openclaw-performance.yml \
             --ref "$CHILD_WORKFLOW_REF" \
             -f target_ref="$TARGET_SHA" \
             -f profile=release \
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=false
+            -f fail_on_regression=true \
+            -f dispatch_id="$dispatch_id")"
+          printf '%s\n' "$dispatch_output"
 
           run_id=""
           for _ in $(seq 1 60); do
             run_id="$(
-              BEFORE_IDS="$before_json" gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
-                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+              DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-performance.yml/runs" \
+                -F event=workflow_dispatch \
+                -F per_page=100 \
+                --jq '.workflow_runs | map(select(.display_title == env.DISPATCH_RUN_NAME)) | sort_by(.created_at) | reverse | .[0].id // empty'
             )"
             if [[ -n "$run_id" ]]; then
               break
@@ -1097,8 +1049,8 @@ jobs:
           done
 
           if [[ -z "$run_id" ]]; then
-            echo "::warning::Could not find dispatched run for openclaw-performance.yml."
-            exit 0
+            echo "::error::Could not find dispatched run for ${dispatch_run_name}." >&2
+            exit 1
           fi
 
           echo "Dispatched openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -1133,8 +1085,9 @@ jobs:
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
-            echo "::warning::OpenClaw Performance is advisory and ended with ${conclusion}: ${url}"
+            echo "::error::OpenClaw Performance ended with ${conclusion}: ${url}"
             gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+            exit 1
           fi
 
   summary:
@@ -1425,6 +1378,7 @@ jobs:
           normal_ci_required=0
           plugin_prerelease_required=0
           release_checks_required=0
+          performance_required=0
           if [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
             echo "::error::Docker runtime-assets preflight ended with ${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}."
             failed=1
@@ -1432,6 +1386,7 @@ jobs:
             normal_ci_required=1
             plugin_prerelease_required=1
             release_checks_required=1
+            performance_required=1
           else
             case "$RERUN_GROUP" in
               ci)
@@ -1442,6 +1397,9 @@ jobs:
                 ;;
               release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)
                 release_checks_required=1
+                ;;
+              performance)
+                performance_required=1
                 ;;
             esac
           fi
@@ -1476,6 +1434,12 @@ jobs:
             check_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID" 1 || failed=1
           fi
 
+          if [[ "$PERFORMANCE_RESULT" == "skipped" && -z "${PERFORMANCE_RUN_ID// }" ]]; then
+            check_child "product_performance" "" "$performance_required" || failed=1
+          else
+            check_child "product_performance" "$PERFORMANCE_RUN_ID" "$performance_required" || failed=1
+          fi
+
           summarize_child_timing "normal_ci" "$NORMAL_CI_RUN_ID"
           summarize_child_timing "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
           summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
@@ -1487,6 +1451,7 @@ jobs:
             summarize_failed_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
             summarize_failed_child "release_checks" "$RELEASE_CHECKS_RUN_ID"
             summarize_failed_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
+            summarize_failed_child "product_performance" "$PERFORMANCE_RUN_ID"
           fi
 
           exit "$failed"
@@ -1573,12 +1538,13 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
           PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
+          PERFORMANCE_CONCLUSION: ${{ needs.performance.outputs.conclusion }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1598,8 +1564,9 @@ jobs:
             --arg releaseChecksRunId "$RELEASE_CHECKS_RUN_ID" \
             --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
             --arg performanceRunId "$PERFORMANCE_RUN_ID" \
+            --arg performanceConclusion "$PERFORMANCE_CONCLUSION" \
             '{
-              version: 1,
+              version: 2,
               workflowName: $workflowName,
               runId: $runId,
               runAttempt: $runAttempt,
@@ -1609,18 +1576,26 @@ jobs:
               releaseProfile: $releaseProfile,
               rerunGroup: $rerunGroup,
               runReleaseSoak: $runReleaseSoak,
+              controls: {
+                stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
+                performanceBlocking: true
+              },
               childRuns: {
                 normalCi: $normalCiRunId,
                 pluginPrerelease: $pluginPrereleaseRunId,
                 releaseChecks: $releaseChecksRunId,
                 npmTelegram: $npmTelegramRunId,
-                productPerformance: $performanceRunId
+                productPerformance: {
+                  runId: $performanceRunId,
+                  conclusion: $performanceConclusion,
+                  blocking: true
+                }
               }
             }' > "${manifest_dir}/full-release-validation-manifest.json"
 
       - name: Upload release validation manifest
         if: ${{ success() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-validation

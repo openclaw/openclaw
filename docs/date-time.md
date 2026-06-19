@@ -37,7 +37,7 @@ You can override this behavior:
 - `envelopeTimezone: "local"` uses the host timezone.
 - `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
 - Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
-- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
+- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers, direct agent prompt prefixes, and embedded model-input prefixes.
 - `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
 
 ### Examples

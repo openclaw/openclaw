@@ -3,7 +3,20 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import {
+  createPluginRegistryFixture,
+  registerTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { afterEach, expect, test, vi } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -19,6 +32,11 @@ const {
   openClient,
   resetConfiguredGlobalAgentSessionStore,
 } = setupGatewaySessionsTestHarness();
+
+afterEach(() => {
+  releasePinnedPluginSessionExtensionRegistry();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -185,6 +203,72 @@ function expectMainPatchBroadcast(
     ...expected,
   });
 }
+
+test("sessions.pluginPatch over WebSocket keeps pinned startup extensions after active churn", async () => {
+  const { config, registry } = createPluginRegistryFixture();
+  registerTestPlugin({
+    registry,
+    config,
+    record: createPluginRecord({
+      id: "session-pin-ws-fixture",
+      name: "Session Pin WS Fixture",
+    }),
+    register(api) {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "Pinned workflow state",
+      });
+    },
+  });
+  setActivePluginRegistry(registry.registry);
+  pinActivePluginSessionExtensionRegistry(registry.registry);
+  setActivePluginRegistry(createEmptyPluginRegistry());
+
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const { ws } = await openClient();
+  const patched = await rpcReq<{ ok: boolean; key: string; value: { state: string } }>(
+    ws,
+    "sessions.pluginPatch",
+    {
+      key: "main",
+      pluginId: "session-pin-ws-fixture",
+      namespace: "workflow",
+      value: { state: "after-active-registry-churn" },
+    },
+  );
+  ws.close();
+
+  expect(patched.ok).toBe(true);
+  expect(patched.payload).toEqual({
+    ok: true,
+    key: "agent:main:main",
+    value: { state: "after-active-registry-churn" },
+  });
+
+  const store = loadSessionStore(storePath);
+  const entry = store.main ?? store["agent:main:main"];
+  expect(entry).toBeDefined();
+  const row = buildGatewaySessionRow({
+    cfg: { session: { store: storePath } },
+    storePath,
+    store,
+    key: "agent:main:main",
+    entry,
+  });
+  expect(row.pluginExtensions).toEqual([
+    {
+      pluginId: "session-pin-ws-fixture",
+      namespace: "workflow",
+      value: { state: "after-active-registry-churn" },
+    },
+  ]);
+});
 
 async function invokeSessionsCompact({
   getRuntimeConfig,
@@ -577,6 +661,70 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     "main one\nmain two\n",
   );
   await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe("work two\n");
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact trims default global agent when no agentId is supplied", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    agentId: "main",
+    reason: "compact",
+    compacted: true,
+  });
+  await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe("main two\n");
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    "work one\nwork two\n",
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact keeps manual trim no-op response shape", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 5,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 2 });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    "work one\nwork two\n",
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact keeps manual trim no-transcript response shape", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore();
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, {
+    ok: true,
+    key: "global",
+    compacted: false,
+    reason: "no transcript",
+  });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 

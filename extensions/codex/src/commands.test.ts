@@ -2563,7 +2563,7 @@ describe("codex command", () => {
         await firstConfirmBindingRead;
       }
       return {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         threadId: "thread-race",
         cwd: "/repo",
         sessionFile: bindingSessionFile,
@@ -3403,6 +3403,7 @@ describe("codex command", () => {
       workspaceDir: "/repo",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       sessionKey: undefined,
+      agentId: "main",
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -3463,6 +3464,7 @@ describe("codex command", () => {
       workspaceDir: "/repo with space",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       sessionKey: undefined,
+      agentId: "main",
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,

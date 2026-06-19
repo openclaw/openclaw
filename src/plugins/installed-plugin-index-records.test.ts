@@ -674,6 +674,21 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("preserves an authored empty plugins section while stripping transient install records", () => {
+    expect(
+      withoutPluginInstallRecords(
+        {
+          plugins: {
+            installs: {
+              twitch: { source: "npm", spec: "twitch@1.0.0" },
+            },
+          },
+        },
+        { preserveEmptyPlugins: true },
+      ),
+    ).toEqual({ plugins: {} });
+  });
+
   it("returns empty records when the persisted plugin index is missing", async () => {
     const stateDir = makeStateDir();
 
