@@ -7,7 +7,10 @@ import {
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
@@ -198,12 +201,13 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "member-info") {
-    const userId =
-      readStringParam(actionParams, "userId") ?? normalizeOptionalString(ctx.requesterSenderId);
+    const requesterUserId =
+      normalizeOptionalLowercaseString(ctx.toolContext?.currentChannelProvider) === "slack"
+        ? normalizeOptionalString(ctx.requesterSenderId)
+        : undefined;
+    const userId = readStringParam(actionParams, "userId") ?? requesterUserId;
     if (!userId) {
-      throw new Error(
-        "member-info requires a userId. Provide one, or call it in a channel where the inbound sender can be defaulted.",
-      );
+      throw new Error("member-info requires a userId outside a current Slack conversation.");
     }
     return await invoke({ action: "memberInfo", userId, accountId }, cfg);
   }

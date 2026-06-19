@@ -559,6 +559,7 @@ describe("handleSlackMessageAction", () => {
         cfg: {},
         params: {},
         requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: " Slack " },
       } as never,
       invoke: invoke as never,
     });
@@ -569,15 +570,18 @@ describe("handleSlackMessageAction", () => {
     );
   });
 
-  it("rejects member-info with an actionable error when no userId and no inbound sender", async () => {
+  it.each([
+    ["has no inbound sender", { toolContext: { currentChannelProvider: "slack" } }],
+    ["has no source provider", { requesterSenderId: "U123" }],
+    [
+      "comes from another provider",
+      { requesterSenderId: "U123", toolContext: { currentChannelProvider: "telegram" } },
+    ],
+  ])("rejects member-info without userId when the request %s", async (_label, context) => {
     await expect(
       handleSlackMessageAction({
         providerId: "slack",
-        ctx: {
-          action: "member-info",
-          cfg: {},
-          params: {},
-        } as never,
+        ctx: { action: "member-info", cfg: {}, params: {}, ...context } as never,
         invoke: createInvokeSpy() as never,
       }),
     ).rejects.toThrow(/member-info requires a userId/i);
@@ -593,6 +597,7 @@ describe("handleSlackMessageAction", () => {
         cfg: {},
         params: { userId: "U999" },
         requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "telegram" },
       } as never,
       invoke: invoke as never,
     });
