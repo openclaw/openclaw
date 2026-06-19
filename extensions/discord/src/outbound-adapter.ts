@@ -243,6 +243,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
               replyTo: replyToId ?? undefined,
               accountId: accountId ?? undefined,
               silent: silent ?? undefined,
+              mediaLocalRoots,
+              mediaReadFile,
             }),
         });
       }

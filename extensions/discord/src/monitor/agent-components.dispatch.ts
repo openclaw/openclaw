@@ -8,7 +8,7 @@ import {
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
@@ -255,7 +255,9 @@ export async function dispatchDiscordComponentEvent(params: {
     token,
     accountId,
   }).rest;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({ cfg: ctx.cfg, agentId });
+  const mediaLocalRoots = mediaAccess.localRoots;
+  const mediaReadFile = mediaAccess.readFile;
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
   const replyReference = createReplyReferencePlanner({
@@ -334,6 +336,7 @@ export async function dispatchDiscordComponentEvent(params: {
               tableMode,
               chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
               mediaLocalRoots,
+              mediaReadFile,
               kind: info.kind,
             });
             replyReference.markSent();
