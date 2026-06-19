@@ -1,6 +1,10 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  useTempSessionsFixture,
+  writeSessionStoreForTest,
+} from "../config/sessions/test-helpers.js";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
   testing as sessionBindingServiceTesting,
@@ -4115,6 +4119,57 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("directly delivers DM media completions when the requester handoff fails", async () => {
+    // Companion to the Slack-channel case above. For a *direct-message* target a
+    // failed requester-agent handoff must NOT drop the user-requested media —
+    // regression test for background image_generate completions that were
+    // silently lost when the requester session could not be woken
+    // (no_active_run on the MCP-bridged CLI runtime), leaving the user with
+    // nothing until they pinged again.
+    const callGateway = vi.fn(async () => {
+      throw new Error("requester handoff exploded after dispatch");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-dm-error",
+          childSessionId: "task-dm-error",
+          announceType: "image generation task",
+          taskLabel: "errored handoff dm image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-dm-error.png",
+          mediaUrls: ["/tmp/generated-dm-error.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-dm-error.png"],
+        idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
+  });
+
   it("runs inactive isolated cron media completions through the requester agent first", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -4809,5 +4864,97 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+});
+
+describe("deliverSubagentAnnouncement origin backfill from session store", () => {
+  // Scoped temp session store so we can seed the requester session's persisted
+  // delivery context (lastChannel/lastTo) without touching the real store.
+  const sessionsFixture = useTempSessionsFixture("openclaw-announce-backfill-");
+
+  it("backfills an empty completion origin from the requester session's stored delivery context", async () => {
+    // Regression test for the real background-task drop: the claude-cli /
+    // MCP-bridged runtime captures an EMPTY (or internal "webchat") completion
+    // origin, so the captured origin carries no deliverable channel. Without
+    // backfilling the requester session's persisted lastChannel/lastTo, the
+    // media completion has no external target and is silently dropped (the user
+    // gets nothing until they ping again).
+    //
+    // This test supplies NO deliverable origin in any param — completion/direct/
+    // session origins are all omitted. Delivery can therefore only succeed if
+    // deliveryContextFromSession(entry) rescues the Telegram target from the
+    // session store. Without the backfill the announce handoff returns no
+    // visible output and the result is a `visible_reply_missing` drop with no
+    // sendMessage call.
+    const requesterSessionKey = "agent:main:telegram:75597985";
+    writeSessionStoreForTest(sessionsFixture.storePath(), {
+      [requesterSessionKey]: {
+        sessionId: "requester-session-telegram",
+        lastChannel: "telegram",
+        lastTo: "75597985",
+        lastAccountId: "bot-1",
+      },
+    });
+
+    // Handoff succeeds (does not throw) but produces no visible output — the
+    // `private-final` case where the woken turn never calls the message tool.
+    const callGateway = createGatewayMock({ result: { payloads: [] } });
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-telegram",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({ session: { store: sessionsFixture.storePath() } }) as never,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey,
+      targetRequesterSessionKey: requesterSessionKey,
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      // Deliberately no requesterOrigin / requesterSessionOrigin /
+      // completionDirectOrigin / directOrigin: the session-store backfill is the
+      // only possible source of a deliverable Telegram target.
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-telegram-backfill",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-backfill",
+          childSessionId: "task-backfill",
+          announceType: "image generation task",
+          taskLabel: "backfill origin image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-backfill.png",
+          mediaUrls: ["/tmp/generated-backfill.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    // The Telegram target (channel/to/accountId) was resolved purely from the
+    // backfilled session entry — that is the behaviour under test.
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "75597985",
+        mediaUrls: ["/tmp/generated-backfill.png"],
+        idempotencyKey: "announce-telegram-backfill:generated-media-direct",
+      }),
+    );
   });
 });

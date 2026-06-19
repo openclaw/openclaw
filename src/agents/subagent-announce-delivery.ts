@@ -28,7 +28,11 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -1228,19 +1232,29 @@ async function sendSubagentAnnounceDirectly(params: {
     // (channel, to, accountId) fall back to the originating session's
     // lastChannel / lastTo. Without this, a completion origin that carries a
     // channel but not a `to` would prevent external delivery.
+    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    // Last-resort fallback: the requester session's persisted delivery context
+    // (lastChannel / lastTo / origin). This rescues completions whose captured
+    // origin never carried a deliverable channel — e.g. background tasks spawned
+    // from an MCP-bridged CLI runtime, where the tool context lacks the live
+    // inbound channel and the origin collapses to the internal "webchat" channel.
+    // Without this, the completion wake runs but the agent's reply is dropped.
+    const requesterStoredOrigin =
+      params.expectsCompletionMessage && !params.requesterIsSubagent
+        ? deliveryContextFromSession(requesterEntry)
+        : undefined;
     const externalCompletionDirectOrigin =
       stripNonDeliverableChannelForCompletionOrigin(completionDirectOrigin);
     const completionExternalFallbackOrigin = mergeDeliveryContext(
-      directOrigin,
-      requesterSessionOrigin,
+      mergeDeliveryContext(directOrigin, requesterSessionOrigin),
+      requesterStoredOrigin,
     );
     const effectiveDirectOrigin = params.expectsCompletionMessage
       ? mergeDeliveryContext(externalCompletionDirectOrigin, completionExternalFallbackOrigin)
       : directOrigin;
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
-      : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+      : (requesterSessionOrigin ?? requesterStoredOrigin);
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -1476,14 +1490,31 @@ async function sendSubagentAnnounceDirectly(params: {
           return textDelivery;
         }
       }
+      // Generated media is the user-requested result, so when the
+      // requester-agent handoff fails we deliver it directly rather than
+      // dropping it — but only for cases where direct delivery is unambiguously
+      // correct:
+      //   * write-lock failures (any target): the lock is transient and the
+      //     media already exists, so a direct send is the safe recovery.
+      //   * direct-message targets (any non-permanent handoff failure): the user
+      //     asked for this media in a DM; there is no channel/threading context
+      //     that requires the requester agent to mediate. This is the path that
+      //     was silently dropping background image_generate completions when the
+      //     requester session could not be woken (e.g. no_active_run on the
+      //     MCP-bridged CLI runtime), leaving the user with nothing until they
+      //     pinged again.
+      // Channel/group completions intentionally fall through to the visible
+      // throw below so the requester run can re-deliver with proper context.
+      // tryGeneratedMediaDirectDelivery() no-ops when the session is genuinely
+      // active/wakeable or there is no deliverable target.
       if (
-        activeRequesterWakeFailed &&
         agentMediatedCompletion &&
         expectedMediaUrls.length > 0 &&
-        isSessionWriteLockAnnounceAgentError(err)
+        (isSessionWriteLockAnnounceAgentError(err) ||
+          isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey))
       ) {
         const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
-        if (generatedMediaDelivery) {
+        if (generatedMediaDelivery?.delivered) {
           return generatedMediaDelivery;
         }
       }
