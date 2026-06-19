@@ -2164,9 +2164,15 @@ async function agentCommandInternal(
       }
 
       const payloads = result.payloads ?? [];
-      const hasDeliverableCliReply = payloads.some(
-        (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
-      );
+      const hasDeliverableCliReply =
+        Boolean(result.meta.finalAssistantVisibleText?.trim()) ||
+        payloads.some(
+          (payload) =>
+            !payload.isError &&
+            !payload.isReasoning &&
+            typeof payload.text === "string" &&
+            payload.text.trim().length > 0,
+        );
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
       const embeddedAssistantGapFill =
         transcriptPersistenceRunner === "embedded" ||

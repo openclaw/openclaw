@@ -1878,6 +1878,56 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
+  it("rethrows post-turn compaction failures for error-only CLI payload text", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeEmptyResult("openai", "gpt-5.4") as ReturnType<typeof makeEmptyResult> & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.payloads = [{ text: "Command failed", isError: true }];
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("Summarization failed");
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("rethrows post-turn compaction failures for reasoning-only CLI payload text", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeEmptyResult("openai", "gpt-5.4") as ReturnType<typeof makeEmptyResult> & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.payloads = [{ text: "Thinking through the command", isReasoning: true }];
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("Summarization failed");
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
   it("skips post-run persistence after the session is deleted", async () => {
     setupSingleAttemptFallback();
     setupSessionTouchStore();
