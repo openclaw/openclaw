@@ -169,6 +169,30 @@ describe("noteSessionLockHealth", () => {
     });
   });
 
+  it("preserves fresh malformed stale locks in dry-run repair effects", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const malformedLock = path.join(sessionsDir, "malformed.jsonl.lock");
+    await fs.writeFile(malformedLock, "{}", "utf8");
+
+    const [lock] = await detectStaleSessionLocks({
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+
+    expect(lock?.staleReasons).toEqual(["missing-pid", "invalid-createdAt"]);
+    expect(lock?.removable).toBe(false);
+    expect(sessionLockToHealthFinding(lock!).fixHint).toContain("after the cleanup grace period");
+    expect(sessionLockToRepairEffect(lock!)).toEqual({
+      kind: "state",
+      action: "would-preserve-mtime-gated-stale-session-lock",
+      target: malformedLock,
+      dryRunSafe: false,
+    });
+    await expect(fs.access(malformedLock)).resolves.toBeUndefined();
+  });
+
   it("uses the supplied env to choose the structured lint state dir", async () => {
     const other = await createOpenClawTestState({
       layout: "state-only",

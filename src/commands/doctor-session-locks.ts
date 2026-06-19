@@ -67,21 +67,25 @@ export async function detectStaleSessionLocks(params?: {
 }
 
 export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthFinding {
+  const fixHint = lock.removable
+    ? 'Run "openclaw doctor --fix" to remove this stale lock file automatically.'
+    : 'Run "openclaw doctor --fix" after the cleanup grace period if this stale lock remains.';
   return {
     checkId: SESSION_LOCKS_CHECK_ID,
     severity: "warning",
     message: `Stale session lock file: ${shortenHomePath(lock.lockPath)} (${lock.staleReasons.join(", ") || "unknown"})`,
     path: lock.lockPath,
-    fixHint: 'Run "openclaw doctor --fix" to remove stale lock files automatically.',
+    fixHint,
   };
 }
 
 export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRepairEffect {
-  const action =
-    lock.staleReasons.length > 0 &&
-    lock.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))
+  const action = lock.removable
+    ? "would-remove-stale-session-lock"
+    : lock.staleReasons.length > 0 &&
+        lock.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))
       ? "would-preserve-report-only-stale-session-lock"
-      : "would-remove-stale-session-lock";
+      : "would-preserve-mtime-gated-stale-session-lock";
   return {
     kind: "state",
     action,
