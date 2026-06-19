@@ -9,6 +9,7 @@ const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const NOTE_BOX_BORDER_WIDTH = 2;
 const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
@@ -20,6 +21,45 @@ function isSuppressedByEnv(value: string | undefined): boolean {
     return false;
   }
   return normalized !== "0" && normalized !== "false" && normalized !== "off";
+}
+
+function splitCopySensitiveToken(token: string, maxLen: number): string[] {
+  if (token.length <= maxLen) {
+    return [token];
+  }
+  // For paths and URLs, try to split at path separators.
+  const parts: string[] = [];
+  let remaining = token;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      parts.push(remaining);
+      break;
+    }
+    // Find the last path separator within maxLen boundary
+    const slice = remaining.slice(0, maxLen);
+    const lastSlash = Math.max(slice.lastIndexOf("/"), slice.lastIndexOf("\\"));
+    const breakPoint = lastSlash > 0 ? lastSlash + 1 : maxLen;
+    parts.push(remaining.slice(0, breakPoint));
+    remaining = remaining.slice(breakPoint);
+  }
+  return parts;
+}
+
+/**
+ * Splits a copy-sensitive token (path, URL) at path-separator boundaries
+ * so each segment fits within maxWidth. Used as a second pass after
+ * wrapLine has already performed word-wrapping — only reaches lines
+ * whose single copy-sensitive token still exceeds the clack note box
+ * inner width.
+ */
+function splitOversizedCopySensitiveLine(line: string, maxWidth: number): string[] {
+  const match = line.match(/^(\s*)(.*)$/);
+  const indent = match?.[1] ?? "";
+  const content = match?.[2] ?? "";
+  const segments = splitCopySensitiveToken(content, maxWidth);
+  // Each segment inherits the original indentation so the visual
+  // alignment stays consistent inside the clack note box.
+  return segments.map((seg) => indent + seg);
 }
 
 function splitLongWord(word: string, maxLen: number): string[] {
@@ -173,9 +213,19 @@ export function wrapNoteMessage(
   const text = coerceNoteMessage(message);
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
+  const boxInnerWidth = columns - NOTE_BOX_BORDER_WIDTH;
   return text
     .split("\n")
     .flatMap((line) => wrapLine(line, maxWidth))
+    .flatMap((line) => {
+      if (visibleWidth(line) <= boxInnerWidth) {
+        return [line];
+      }
+      // After the first-pass word wrap, any remaining oversized line must
+      // contain a copy-sensitive token that overflowed maxWidth.  Split it
+      // at path-separator boundaries so it renders within clack's box.
+      return splitOversizedCopySensitiveLine(line, boxInnerWidth);
+    })
     .join("\n");
 }
 
