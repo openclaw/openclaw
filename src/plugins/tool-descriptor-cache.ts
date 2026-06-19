@@ -164,11 +164,12 @@ function hasValidAvailabilityGroupShape(
       return false;
     }
     return expr.allOf.every((entry) => {
-      // Plugin-authored data is untyped — primitives, null, and arrays
-      // are not group expressions; skip them.  The evaluator will
-      // diagnose them as malformed expressions later.
+      // Plugin-authored data is untyped — null and non-object primitives
+      // (string, number, boolean) crash the evaluator (TypeError on
+      // "kind" in expr).  Reject them so the whole expression is stripped
+      // with a warning instead of crashing tool registration.
       if (entry === null || typeof entry !== "object") {
-        return true;
+        return false;
       }
       return hasValidAvailabilityGroupShape(entry as ToolAvailabilityExpression);
     });
@@ -179,7 +180,7 @@ function hasValidAvailabilityGroupShape(
     }
     return expr.anyOf.every((entry) => {
       if (entry === null || typeof entry !== "object") {
-        return true;
+        return false;
       }
       return hasValidAvailabilityGroupShape(entry as ToolAvailabilityExpression);
     });
@@ -213,13 +214,14 @@ export function capturePluginToolDescriptor(params: {
       : undefined;
 
   // Defensive shape guard: plugin-authored availability is untyped at this
-  // boundary.  Non-array allOf / anyOf values would reach the evaluator and
-  // throw on .flatMap / .map, crashing tool registration.  Diagnose and
-  // strip the malformed expression so the evaluator stays pure.
+  // boundary.  Non-array allOf / anyOf values and null/non-object entries
+  // would reach the evaluator and throw (TypeError on .flatMap / .map or
+  // "kind" in expr), crashing tool registration.  Diagnose and strip the
+  // malformed expression so the evaluator stays pure.
   if (availability && !hasValidAvailabilityGroupShape(availability)) {
     console.warn(
       `[plugins] tool descriptor authoring error (${params.pluginId}/${params.tool.name}): ` +
-        `Non-array availability group — allOf/anyOf values must be arrays`,
+        `Malformed availability group — allOf/anyOf must be arrays of valid expression objects`,
     );
     availability = undefined;
   }

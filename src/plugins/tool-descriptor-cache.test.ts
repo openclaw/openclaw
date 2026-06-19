@@ -290,7 +290,7 @@ describe("capturePluginToolDescriptor availability validation", () => {
       });
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Non-array availability group"),
+        expect.stringContaining("Malformed availability group"),
       );
       // Malformed availability must be stripped so the evaluator never sees it
       expect(cached.descriptor.availability).toBeUndefined();
@@ -309,7 +309,7 @@ describe("capturePluginToolDescriptor availability validation", () => {
       });
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Non-array availability group"),
+        expect.stringContaining("Malformed availability group"),
       );
       expect(cached.descriptor.availability).toBeUndefined();
     } finally {
@@ -335,7 +335,7 @@ describe("capturePluginToolDescriptor availability validation", () => {
       });
       // All groups are valid arrays — no shape warning expected
       const shapeWarnings = warnSpy.mock.calls.filter((c) =>
-        String(c[0]).includes("Non-array availability group"),
+        String(c[0]).includes("Malformed availability group"),
       );
       expect(shapeWarnings).toHaveLength(0);
       // Descriptor should preserve the valid availability
@@ -359,7 +359,7 @@ describe("capturePluginToolDescriptor availability validation", () => {
         optional: false,
       });
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Non-array availability group"),
+        expect.stringContaining("Malformed availability group"),
       );
       // Descriptor should strip the malformed availability
       expect(cached.descriptor.availability).toBeUndefined();
@@ -368,10 +368,58 @@ describe("capturePluginToolDescriptor availability validation", () => {
     }
   });
 
-  it("does not crash on non-object entries inside availability groups", () => {
+  it("warns and strips availability when allOf contains null entries", () => {
+    // Null entries crash the evaluator (TypeError on "kind" in null).
+    // The shape guard must reject them so the whole expression is stripped
+    // with a warning instead of crashing tool registration.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({
+          availability: {
+            allOf: [{ kind: "always" }, null as never],
+          },
+        }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Malformed availability group"),
+      );
+      // Malformed availability must be stripped so the evaluator never sees it
+      expect(result.descriptor.availability).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns and strips availability when anyOf contains non-object entries", () => {
+    // Non-object primitives (string, number, boolean) also crash the
+    // evaluator.  The shape guard must reject them.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({
+          availability: {
+            anyOf: ["not-an-object" as never, 42 as never],
+          },
+        }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Malformed availability group"),
+      );
+      expect(result.descriptor.availability).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not crash when availability group contains non-object entries", () => {
     // Plugin-authored data is arbitrary JS — null, primitives, and arrays
-    // inside allOf/anyOf should not throw during the shape check.  The
-    // evaluator will diagnose them as malformed expressions later.
+    // inside allOf/anyOf should never throw.  They are rejected by the
+    // shape guard and the availability is stripped with a warning.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const result = capturePluginToolDescriptor({
@@ -390,13 +438,13 @@ describe("capturePluginToolDescriptor availability validation", () => {
         }),
         optional: false,
       });
-      // Should not throw — non-object entries are silently skipped
+      // Should not throw — malformed entries are detected and stripped
       const shapeWarnings = warnSpy.mock.calls.filter((c) =>
-        String(c[0]).includes("Non-array availability group"),
+        String(c[0]).includes("Malformed availability group"),
       );
-      expect(shapeWarnings).toHaveLength(0);
-      // Valid availability preserved (non-object entries are evaluator's problem)
-      expect(result.descriptor.availability).toBeDefined();
+      expect(shapeWarnings.length).toBeGreaterThanOrEqual(1);
+      // Availability is stripped because the group contained null/primitives
+      expect(result.descriptor.availability).toBeUndefined();
     } finally {
       warnSpy.mockRestore();
     }
