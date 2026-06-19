@@ -173,6 +173,8 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
+const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
+
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
     return message;
@@ -206,6 +208,25 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
 
+function isManagedOutgoingImageUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value, "http://localhost");
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
+function isManagedOutgoingAssistantImageBlock(block: Record<string, unknown>): boolean {
+  if (block.type !== "image") {
+    return false;
+  }
+  return isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl);
+}
+
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
   const strippedText = stripInternalMetadataForDisplay(replayContent);
   const trimmed = strippedText.trim();
@@ -224,6 +245,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
       sanitizedContent.push(block);
+      continue;
+    }
+    if (isManagedOutgoingAssistantImageBlock(block as Record<string, unknown>)) {
+      touched = true;
       continue;
     }
     const text = (block as { text?: unknown }).text;
