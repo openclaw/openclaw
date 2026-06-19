@@ -1,8 +1,8 @@
 // Qqbot tests cover stt plugin behavior.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../../../test/helpers/temp-dir.js";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -18,6 +18,30 @@ afterAll(() => {
 });
 
 import { resolveSTTConfig, transcribeAudio } from "./stt.js";
+
+const tempDirs = createTempDirTracker();
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 
 function requireFirstSsrfRequest(): {
   url?: unknown;
@@ -47,6 +71,7 @@ describe("engine/utils/stt", () => {
   });
 
   afterEach(() => {
+    tempDirs.cleanup();
     ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
     vi.unstubAllGlobals();
   });
@@ -110,7 +135,7 @@ describe("engine/utils/stt", () => {
   });
 
   it("posts audio to OpenAI-compatible transcription endpoint", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qqbot-stt-"));
+    const tmpDir = tempDirs.make("openclaw-qqbot-stt-");
     const audioPath = path.join(tmpDir, "voice.wav");
     fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
@@ -151,6 +176,47 @@ describe("engine/utils/stt", () => {
     expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
       new Uint8Array([1, 2, 3, 4]),
     );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds STT error bodies without using response.text()", async () => {
+    const tmpDir = tempDirs.make("openclaw-qqbot-stt-error-");
+    const audioPath = path.join(tmpDir, "voice.wav");
+    fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"stt provider unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: tracked.response,
+      release,
+    });
+
+    let error: unknown;
+    try {
+      await transcribeAudio(audioPath, {
+        channels: {
+          qqbot: {
+            stt: {
+              baseUrl: "https://api.example.test/v1/",
+              apiKey: "secret",
+              model: "whisper-1",
+            },
+          },
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(String(error)).toContain("STT failed (HTTP 503): stt provider unavailable");
+    expect(String(error)).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
