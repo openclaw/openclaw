@@ -10,7 +10,7 @@ import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOAuthLoginCancelledError,
@@ -29,6 +29,12 @@ import { generatePKCE } from "./openai-chatgpt-pkce.runtime.js";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
+const TOKEN_HOSTNAME = new URL(TOKEN_URL).hostname;
+const TOKEN_SSRF_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+  hostnameAllowlist: [TOKEN_HOSTNAME],
+} satisfies SsrFPolicy;
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
 const DEFAULT_CALLBACK_HOST = "localhost";
@@ -42,6 +48,7 @@ const SCOPE = "openid profile email offline_access";
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed"; message: string; status?: number };
 type TokenResult = TokenSuccess | TokenFailure;
+type ParsedTokenResponse = { type: "parsed"; json: TokenResponseJson } | TokenFailure;
 type TokenResponseJson = {
   access_token?: string;
   refresh_token?: string;
@@ -160,6 +167,20 @@ function formatTokenRequestError(
   return `OpenAI Codex token ${operation} error: ${error instanceof Error ? error.message : String(error)}`;
 }
 
+async function readTokenResponseJson(
+  response: Response,
+  operation: "exchange" | "refresh",
+): Promise<ParsedTokenResponse> {
+  try {
+    return { type: "parsed", json: (await response.json()) as TokenResponseJson };
+  } catch {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} response was not valid JSON`,
+    };
+  }
+}
+
 async function postTokenForm(
   body: URLSearchParams,
   options: TokenRequestOptions = {},
@@ -173,6 +194,9 @@ async function postTokenForm(
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     },
+    // Transparent proxy stacks can resolve public OpenAI hosts into fake-IP ranges.
+    // Keep that exemption scoped to auth.openai.com so literal private token URLs stay blocked.
+    policy: TOKEN_SSRF_POLICY,
     timeoutMs,
     signal: options.signal,
     auditContext: "openai-chatgpt-oauth-token",
@@ -224,7 +248,11 @@ async function exchangeAuthorizationCode(
     };
   }
 
-  const json = (await response.json()) as TokenResponseJson;
+  const parsed = await readTokenResponseJson(response, "exchange");
+  if (parsed.type !== "parsed") {
+    return parsed;
+  }
+  const json = parsed.json;
 
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
@@ -266,7 +294,11 @@ async function refreshAccessToken(
       };
     }
 
-    const json = (await response.json()) as TokenResponseJson;
+    const parsed = await readTokenResponseJson(response, "refresh");
+    if (parsed.type !== "parsed") {
+      return parsed;
+    }
+    const json = parsed.json;
 
     const expires = resolveOAuthTokenExpiresAt(json.expires_in);
     if (!json.access_token || !json.refresh_token || expires === undefined) {
@@ -326,8 +358,20 @@ type OAuthServerInfo = {
   waitForCode: () => Promise<{ code: string } | null>;
 };
 
+function sendOAuthHtmlResponse(
+  res: import("node:http").ServerResponse,
+  statusCode: number,
+  html: string,
+): void {
+  res.statusCode = statusCode;
+  res.setHeader("Connection", "close");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(html);
+}
+
 async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
   const { http } = await loadNodeOAuthRuntime();
+  const sockets = new Set<import("node:net").Socket>();
   let settleWait: ((value: { code: string } | null) => void) | undefined;
   const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
     let settled = false;
@@ -344,40 +388,52 @@ async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
     try {
       const url = new URL(req.url || "", "http://localhost");
       if (url.pathname !== "/auth/callback") {
-        res.statusCode = 404;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(oauthErrorHtml("Callback route not found."));
+        sendOAuthHtmlResponse(res, 404, oauthErrorHtml("Callback route not found."));
         return;
       }
       if (url.searchParams.get("state") !== state) {
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(oauthErrorHtml("State mismatch."));
+        sendOAuthHtmlResponse(res, 400, oauthErrorHtml("State mismatch."));
         return;
       }
       const code = url.searchParams.get("code");
       if (!code) {
-        res.statusCode = 400;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(oauthErrorHtml("Missing authorization code."));
+        sendOAuthHtmlResponse(res, 400, oauthErrorHtml("Missing authorization code."));
         return;
       }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.end(oauthSuccessHtml("OpenAI authentication completed. You can close this window."));
+      sendOAuthHtmlResponse(
+        res,
+        200,
+        oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
+      );
       settleWait?.({ code });
     } catch {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.end(oauthErrorHtml("Internal error while processing OAuth callback."));
+      sendOAuthHtmlResponse(
+        res,
+        500,
+        oauthErrorHtml("Internal error while processing OAuth callback."),
+      );
     }
   });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+  });
+  // Login completion must release accepted callback sockets; keep-alive clients
+  // can otherwise pin the auth CLI after the OAuth success page is written.
+  const closeServer = () => {
+    server.close();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+  };
 
   return new Promise((resolve) => {
     server
       .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
         resolve({
-          close: () => server.close(),
+          close: closeServer,
           cancelWait: () => {
             settleWait?.(null);
           },
@@ -389,7 +445,7 @@ async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
         resolve({
           close: () => {
             try {
-              server.close();
+              closeServer();
             } catch {
               // ignore
             }
@@ -604,6 +660,7 @@ export const testing = {
   refreshAccessToken,
   resolveCallbackHost,
   resolveRedirectUri,
+  startLocalOAuthServer,
 };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
