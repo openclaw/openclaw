@@ -197,6 +197,25 @@ describe("createTelegramSendChatActionHandler", () => {
     ]);
   });
 
+  it("treats a recoverable network error whose message contains '401' as transient, not a 401 suspension", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("read ECONNRESET 401"), { code: "ECONNRESET" }));
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 1,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+
+    expect(handler.isSuspended()).toBe(false);
+    expect(logger.mock.calls.at(-1)).toEqual([
+      "sendChatAction transient error (1). Cooling down 1000ms before retry.",
+    ]);
+  });
+
   it.each([
     ["recoverable network", () => makeNetworkError(), 1000],
     ["Telegram 429", () => makeTelegramError("Too Many Requests", 429, { retry_after: 2 }), 2000],

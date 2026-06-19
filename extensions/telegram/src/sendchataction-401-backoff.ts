@@ -77,6 +77,9 @@ function is401Error(error: unknown): boolean {
   if (hasTelegramHttpErrorCode(error)) {
     return false;
   }
+  if (isRecoverableTelegramNetworkError(error, { context: "send" })) {
+    return false;
+  }
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return (
     message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
