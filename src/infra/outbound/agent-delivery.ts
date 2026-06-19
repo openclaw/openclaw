@@ -15,6 +15,7 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import type { OutboundTargetResolution } from "./targets.js";
 import {
   resolveOutboundTarget,
@@ -156,6 +157,11 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   ) {
     return plan;
   }
+  const plugin = resolveOutboundChannelPlugin({
+    channel: plan.resolvedChannel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+  });
   const normalizedTarget = resolveOutboundTarget({
     channel: plan.resolvedChannel,
     to: plan.resolvedTo,
@@ -163,16 +169,28 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     accountId: plan.resolvedAccountId,
     mode: plan.deliveryTargetMode ?? "explicit",
   });
-  // Reserved-literal errors are not fatal for explicit delivery: the async
-  // session-route resolver (resolveChannelTarget → resolveMessagingTarget)
-  // does directory-first lookup before rejecting reserved literals, so a
-  // configured directory entry named like a reserved word still resolves.
-  const isReservedLiteralError =
-    !normalizedTarget.ok && normalizedTarget.error.message.includes("Reserved target");
-  if (!normalizedTarget.ok && !isReservedLiteralError) {
-    return { ...plan, targetResolutionError: normalizedTarget.error };
+  let sessionRouteTarget: string;
+  let resolvedSessionRouteTarget: ResolvedMessagingTarget | undefined;
+  if (normalizedTarget.ok) {
+    sessionRouteTarget = normalizedTarget.to;
+  } else {
+    if (!normalizedTarget.error.message.includes("Reserved target")) {
+      return { ...plan, targetResolutionError: normalizedTarget.error };
+    }
+    const resolvedTarget = await resolveChannelTarget({
+      cfg: params.cfg,
+      channel: plan.resolvedChannel as ChannelId,
+      input: plan.resolvedTo,
+      accountId: plan.resolvedAccountId,
+      unknownTargetMode: "normalized",
+      plugin,
+    });
+    if (!resolvedTarget.ok) {
+      return { ...plan, targetResolutionError: resolvedTarget.error };
+    }
+    sessionRouteTarget = resolvedTarget.target.to;
+    resolvedSessionRouteTarget = resolvedTarget.target;
   }
-  const sessionRouteTarget = normalizedTarget.ok ? normalizedTarget.to : (plan.resolvedTo ?? "");
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""
       ? params.explicitThreadId
@@ -185,6 +203,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         agentId: params.agentId,
         accountId: plan.resolvedAccountId,
         target: sessionRouteTarget,
+        ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
         currentSessionKey: params.currentSessionKey,
         threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
       });

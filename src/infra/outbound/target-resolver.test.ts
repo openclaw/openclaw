@@ -171,6 +171,78 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
+  it("keeps reserved literals on the directory path before id-like plugin normalization", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        normalizeTarget: (raw: string) =>
+          raw === "current" || raw === "telegram:current" ? "telegram:@current" : raw,
+        targetResolver: {
+          looksLikeId: (raw: string) => raw === "current" || raw === "telegram:current",
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValueOnce([
+      { kind: "group", id: "room-1", name: "current" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const hit = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
+    expect(hit.ok).toBe(true);
+    if (hit.ok) {
+      expect(hit.target.to).toBe("room-1");
+      expect(hit.target.source).toBe("directory");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+
+    resetDirectoryCache();
+    mocks.listGroups.mockResolvedValueOnce([
+      { kind: "group", id: "room-1", name: "current" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const prefixedHit = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "telegram:current",
+    });
+
+    expect(prefixedHit.ok).toBe(true);
+    if (prefixedHit.ok) {
+      expect(prefixedHit.target.to).toBe("room-1");
+      expect(prefixedHit.target.source).toBe("directory");
+    }
+
+    resetDirectoryCache();
+    mocks.listGroups.mockResolvedValueOnce([]);
+    mocks.listGroupsLive.mockResolvedValueOnce([]);
+
+    const miss = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) {
+      expect(miss.error.message).toContain('Reserved target "current"');
+      expect(miss.error.message).toContain("Telegram");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
   it("rejects reserved literal targets after directory miss", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
