@@ -361,6 +361,13 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   })();
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
+  } else if (targetResolution?.error.message.includes("Reserved target")) {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "no-target",
+      accountId: delivery.accountId,
+      lastChannel: delivery.lastChannel,
+      lastAccountId: delivery.lastAccountId,
+    });
   }
   if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({
