@@ -93,6 +93,12 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     return registry;
   }
 
+  // Tool discovery returns a request-local snapshot. Installing it would replace live provider,
+  // channel, or HTTP-route registries with a registry that intentionally omits those surfaces.
+  if (params.loadOptions.toolDiscovery === true) {
+    return registry;
+  }
+
   installStandaloneRegistry(registry, {
     loadOptions: params.loadOptions,
     surface,

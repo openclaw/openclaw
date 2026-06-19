@@ -377,9 +377,14 @@ export async function probeGateway(opts: {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info) => {
         close = { code, reason };
         if (connectLatencyMs == null) {
+          // Preserve the transport boundary: request-level handshake failures
+          // still prove the listener was reachable once the socket opened.
+          if (info?.transportValidated === true) {
+            connectLatencyMs = Date.now() - startedAt;
+          }
           settleProbe({
             ok: false,
             error: connectError || formatProbeCloseError(close),
