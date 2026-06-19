@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+// Validates docs MDX files for syntax and repository-specific conventions.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
 import {
   checkMintlifyAccordionIndentation,
@@ -47,7 +49,61 @@ const MINTLIFY_LANGUAGE_CODES = new Set([
   "hu",
 ]);
 
-function parseArgs(argv) {
+const POISON_TEXT_PATTERNS = [
+  {
+    pattern: /\banalysis\s+to=functions\./iu,
+    message: "Leaked tool-call channel marker.",
+  },
+  {
+    pattern: /\b(?:commentary|final)\s+to=functions\./iu,
+    message: "Leaked tool-call channel marker.",
+  },
+  {
+    pattern: /\bfunctions\.(?:read|write|exec|search|run)\b/iu,
+    message: "Leaked internal tool name.",
+  },
+  {
+    pattern: /\b[A-Za-z_\u3400-\u9fff][\w\u3400-\u9fff-]*_input=\{/u,
+    message: "Leaked tool-call input payload.",
+  },
+  {
+    pattern: /<\/?openclaw_docs_i18n_input>/iu,
+    message: "Leaked docs i18n prompt wrapper.",
+  },
+  {
+    pattern: /\/home\/runner\/work\//u,
+    message: "Leaked GitHub Actions workspace path.",
+  },
+  {
+    pattern: /彩神马争霸/u,
+    message: "Known spam/gambling text from a poisoned translation.",
+  },
+];
+
+function parsePositiveIntegerArg(raw, label) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function readRequiredValue(argv, index, label) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${label} requires a value`);
+  }
+  return value;
+}
+
+/**
+ * Parses docs MDX check arguments.
+ */
+export function parseArgs(argv) {
   const roots = [];
   let jsonOut = "";
   let maxErrors = 50;
@@ -55,12 +111,12 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const part = argv[index];
     if (part === "--json-out") {
-      jsonOut = argv[index + 1] ?? "";
+      jsonOut = readRequiredValue(argv, index, "--json-out");
       index += 1;
       continue;
     }
     if (part === "--max-errors") {
-      maxErrors = Number.parseInt(argv[index + 1] ?? "", 10);
+      maxErrors = parsePositiveIntegerArg(argv[index + 1], "--max-errors");
       index += 1;
       continue;
     }
@@ -73,7 +129,7 @@ function parseArgs(argv) {
   return {
     roots: roots.length ? roots : ["docs"],
     jsonOut,
-    maxErrors: Number.isFinite(maxErrors) && maxErrors > 0 ? maxErrors : 50,
+    maxErrors,
   };
 }
 
@@ -133,8 +189,40 @@ function checkMintlifyMdxStructure(filePath, raw) {
   }));
 }
 
+function lineColumnForIndex(raw, offset) {
+  const prefix = raw.slice(0, offset);
+  const lines = prefix.split(/\r?\n/u);
+  return {
+    line: lines.length,
+    column: lines.at(-1).length + 1,
+  };
+}
+
+function checkPoisonText(filePath, raw) {
+  const errors = [];
+  for (const { pattern, message } of POISON_TEXT_PATTERNS) {
+    const match = pattern.exec(raw);
+    if (!match) {
+      continue;
+    }
+    const location = lineColumnForIndex(raw, match.index);
+    errors.push({
+      type: "poison-text",
+      file: filePath,
+      line: location.line,
+      column: location.column,
+      message,
+    });
+  }
+  return errors;
+}
+
 async function checkMdxFile(filePath) {
   const raw = fs.readFileSync(filePath, "utf8");
+  const poisonErrors = checkPoisonText(filePath, raw);
+  if (poisonErrors.length > 0) {
+    return poisonErrors;
+  }
   const structureErrors = checkMintlifyMdxStructure(filePath, raw);
   if (structureErrors.length > 0) {
     return structureErrors;
@@ -283,7 +371,13 @@ async function main() {
   process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error?.stack ?? error);
-  process.exit(1);
-});
+const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;
+
+if (isMain) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error?.stack ?? error);
+      process.exit(1);
+    },
+  );
+}

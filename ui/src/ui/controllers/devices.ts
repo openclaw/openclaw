@@ -1,3 +1,4 @@
+// Control UI controller manages devices gateway state.
 import { clearDeviceAuthToken, storeDeviceAuthToken } from "../device-auth.ts";
 import { loadOrCreateDeviceIdentity } from "../device-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
@@ -115,7 +116,7 @@ export async function rotateDeviceToken(
   }
   try {
     const res = await state.client.request<{
-      token: string;
+      token?: string;
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;

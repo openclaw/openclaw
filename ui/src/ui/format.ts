@@ -1,3 +1,5 @@
+// Control UI module implements format behavior.
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
@@ -36,11 +38,66 @@ export function formatUnknownText(
   return Object.prototype.toString.call(value);
 }
 
+export type UiTimeFormatPreference = "auto" | "12" | "24";
+
+// Resolved `agents.defaults.timeFormat`, threaded in once at bootstrap. "auto"
+// (or unset) keeps the browser locale default so existing deployments render
+// unchanged; only "12"/"24" force an hour cycle across Control UI timestamps.
+let uiTimeFormatPreference: UiTimeFormatPreference = "auto";
+
+export function setUiTimeFormatPreference(value: UiTimeFormatPreference | null | undefined): void {
+  uiTimeFormatPreference = value === "12" || value === "24" ? value : "auto";
+}
+
+export function resolveUiHourCycleOptions(): Intl.DateTimeFormatOptions {
+  if (uiTimeFormatPreference === "12") {
+    return { hour12: true };
+  }
+  if (uiTimeFormatPreference === "24") {
+    return { hour12: false };
+  }
+  return {};
+}
+
 export function formatMs(ms?: number | null): string {
-  if (!ms && ms !== 0) {
+  const timestampMs = asDateTimestampMs(ms);
+  if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(ms).toLocaleString();
+  return new Date(timestampMs).toLocaleString([], resolveUiHourCycleOptions());
+}
+
+export function formatDateMs(
+  ms?: number | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = t("common.na"),
+): string {
+  const timestampMs = asDateTimestampMs(ms);
+  return timestampMs === undefined
+    ? fallback
+    : new Date(timestampMs).toLocaleDateString([], options);
+}
+
+export function formatTimeMs(
+  ms?: number | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = t("common.na"),
+): string {
+  const timestampMs = asDateTimestampMs(ms);
+  return timestampMs === undefined
+    ? fallback
+    : new Date(timestampMs).toLocaleTimeString([], { ...resolveUiHourCycleOptions(), ...options });
+}
+
+export function formatDateTimeMs(
+  ms?: number | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = t("common.na"),
+): string {
+  const timestampMs = asDateTimestampMs(ms);
+  return timestampMs === undefined
+    ? fallback
+    : new Date(timestampMs).toLocaleString([], { ...resolveUiHourCycleOptions(), ...options });
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {
@@ -109,4 +166,29 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   }
   const m = tokens / 1_000_000;
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
+}
+
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  if (!key.startsWith("agent:")) {
+    return null;
+  }
+  const rest = key.slice("agent:".length);
+  const firstColon = rest.indexOf(":");
+  if (firstColon < 1) {
+    return null;
+  }
+  const agentId = rest.slice(0, firstColon);
+  const afterAgent = rest.slice(firstColon + 1);
+  const secondColon = afterAgent.indexOf(":");
+  if (secondColon < 1) {
+    return null;
+  }
+  const channel = afterAgent.slice(0, secondColon);
+  const accountId = afterAgent.slice(secondColon + 1);
+  if (!accountId) {
+    return null;
+  }
+  return { agentId, channel, accountId };
 }

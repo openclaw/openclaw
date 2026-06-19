@@ -1,3 +1,4 @@
+// Matrix plugin module implements verification events behavior.
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -293,9 +294,9 @@ async function resolveVerificationSasNoticeForSignal(
     };
   }
 
-  await new Promise((resolve) =>
-    setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS),
-  );
+  await new Promise((resolve) => {
+    setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
+  });
   const retriedSummary = await resolveVerificationSummaryForSignal(client, params);
   return {
     summary: retriedSummary,
@@ -358,21 +359,23 @@ async function isVerificationNoticeAuthorized(params: {
     );
     return false;
   }
-  if (params.dmPolicy === "open") {
-    return true;
-  }
-  const storeAllowFrom = await params.readStoreAllowFrom();
-  const accessState = resolveMatrixMonitorAccessState({
+  const storeAllowFrom =
+    params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
+      ? await params.readStoreAllowFrom()
+      : [];
+  const accessState = await resolveMatrixMonitorAccessState({
     allowFrom: params.allowFrom,
     storeAllowFrom,
+    dmPolicy: params.dmPolicy,
     // Verification flows only exist in strict DMs, so room/group allowlists do
     // not participate in the authorization decision here.
+    groupPolicy: "open",
     groupAllowFrom: [],
     roomUsers: [],
     senderId: params.senderId,
     isRoom: false,
   });
-  if (accessState.directAllowMatch.allowed) {
+  if (accessState.messageIngress.senderAccess.decision === "allow") {
     return true;
   }
   params.logVerboseMessage(
@@ -626,7 +629,7 @@ export function createMatrixVerificationEventRouter(params: {
         routeTask,
       );
     } else {
-      void routeTask().catch((err) => {
+      void routeTask().catch((err: unknown) => {
         params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
       });
     }

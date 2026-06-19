@@ -3,9 +3,12 @@ import Observation
 import UserNotifications
 import WatchKit
 
-enum WatchPayloadType: String, Codable, Sendable, Equatable {
+enum WatchPayloadType: String, Codable, Equatable {
     case notify = "watch.notify"
     case reply = "watch.reply"
+    case appSnapshot = "watch.app.snapshot"
+    case appSnapshotRequest = "watch.app.snapshotRequest"
+    case appCommand = "watch.app.command"
     case execApprovalPrompt = "watch.execApproval.prompt"
     case execApprovalResolve = "watch.execApproval.resolve"
     case execApprovalResolved = "watch.execApproval.resolved"
@@ -14,18 +17,18 @@ enum WatchPayloadType: String, Codable, Sendable, Equatable {
     case execApprovalSnapshotRequest = "watch.execApproval.snapshotRequest"
 }
 
-enum WatchRiskLevel: String, Codable, Sendable, Equatable {
+enum WatchRiskLevel: String, Codable, Equatable {
     case low
     case medium
     case high
 }
 
-enum WatchExecApprovalDecision: String, Codable, Sendable, Equatable {
+enum WatchExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case deny
 }
 
-enum WatchExecApprovalCloseReason: String, Codable, Sendable, Equatable {
+enum WatchExecApprovalCloseReason: String, Codable, Equatable {
     case expired
     case notFound = "not-found"
     case unavailable
@@ -33,7 +36,7 @@ enum WatchExecApprovalCloseReason: String, Codable, Sendable, Equatable {
     case resolved
 }
 
-struct WatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
+struct WatchExecApprovalItem: Codable, Equatable, Identifiable {
     var id: String
     var commandText: String
     var commandPreview: String?
@@ -45,51 +48,99 @@ struct WatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
     var risk: WatchRiskLevel?
 }
 
-struct WatchExecApprovalPromptMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalPromptMessage: Codable, Equatable {
     var approval: WatchExecApprovalItem
     var sentAtMs: Int?
     var deliveryId: String?
     var resetResolvingState: Bool?
 }
 
-struct WatchExecApprovalResolvedMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalResolvedMessage: Codable, Equatable {
     var approvalId: String
     var decision: WatchExecApprovalDecision?
     var resolvedAtMs: Int?
     var source: String?
 }
 
-struct WatchExecApprovalExpiredMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalExpiredMessage: Codable, Equatable {
     var approvalId: String
     var reason: WatchExecApprovalCloseReason
     var expiredAtMs: Int?
 }
 
-struct WatchExecApprovalSnapshotMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalSnapshotMessage: Codable, Equatable {
     var approvals: [WatchExecApprovalItem]
     var sentAtMs: Int?
     var snapshotId: String?
 }
 
-struct WatchExecApprovalSnapshotRequestMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalSnapshotRequestMessage: Codable, Equatable {
     var requestId: String
     var sentAtMs: Int?
 }
 
-struct WatchExecApprovalResolveMessage: Codable, Sendable, Equatable {
+struct WatchExecApprovalResolveMessage: Codable, Equatable {
     var approvalId: String
     var decision: WatchExecApprovalDecision
     var replyId: String
     var sentAtMs: Int?
 }
 
-struct WatchPromptAction: Codable, Sendable, Equatable, Identifiable {
+struct WatchAppSnapshotMessage: Codable, Equatable {
+    var gatewayStatusText: String
+    var gatewayConnected: Bool
+    var agentName: String
+    var agentAvatarURL: String?
+    var agentAvatarText: String?
+    var sessionKey: String
+    var gatewayStableID: String?
+    var talkStatusText: String
+    var talkEnabled: Bool
+    var talkListening: Bool
+    var talkSpeaking: Bool
+    var pendingApprovalCount: Int
+    var chatItems: [WatchChatItem]?
+    var chatStatusText: String?
+    var sentAtMs: Int?
+    var snapshotId: String?
+}
+
+struct WatchChatItem: Codable, Equatable, Identifiable {
+    var id: String
+    var role: String
+    var text: String
+    var timestampMs: Int?
+}
+
+struct WatchAppSnapshotRequestMessage: Codable, Equatable {
+    var requestId: String
+    var sentAtMs: Int?
+}
+
+enum WatchAppCommand: String, Codable, Equatable {
+    case refresh
+    case openChat = "open-chat"
+    case sendChat = "send-chat"
+    case startTalk = "start-talk"
+    case stopTalk = "stop-talk"
+}
+
+struct WatchAppCommandMessage: Codable, Equatable {
+    var command: WatchAppCommand
+    var commandId: String
+    var sessionKey: String?
+    var gatewayStableID: String?
+    var text: String?
+    var sentAtMs: Int?
+}
+
+struct WatchPromptAction: Codable, Equatable, Identifiable {
     var id: String
     var label: String
     var style: String?
 }
 
-struct WatchNotifyMessage: Sendable {
+struct WatchNotifyMessage {
     var id: String?
     var title: String
     var body: String
@@ -103,7 +154,7 @@ struct WatchNotifyMessage: Sendable {
     var actions: [WatchPromptAction]
 }
 
-struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
+struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var approval: WatchExecApprovalItem
     var transport: String
     var updatedAt: Date
@@ -112,7 +163,9 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     var statusText: String?
     var statusAt: Date?
 
-    var id: String { self.approval.id }
+    var id: String {
+        self.approval.id
+    }
 }
 
 @MainActor @Observable final class WatchInboxStore {
@@ -136,6 +189,10 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
         var lastExecApprovalSnapshotID: String?
         var lastExecApprovalOutcomeText: String?
         var lastExecApprovalOutcomeAt: Date?
+        var appSnapshot: WatchAppSnapshotMessage?
+        var appSnapshotUpdatedAt: Date?
+        var appSnapshotStatusText: String?
+        var appCommandStatusText: String?
     }
 
     private static let persistedStateKey = "watch.inbox.state.v2"
@@ -161,6 +218,11 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     var selectedExecApprovalID: String?
     var lastExecApprovalOutcomeText: String?
     var lastExecApprovalOutcomeAt: Date?
+    var appSnapshot: WatchAppSnapshotMessage?
+    var appSnapshotUpdatedAt: Date?
+    var appSnapshotStatusText: String?
+    var appCommandStatusText: String?
+    var greetingTextOverride: String?
     var isExecApprovalReviewLoading = false
     var execApprovalReviewStatusText: String?
     var execApprovalReviewStatusAt: Date?
@@ -168,12 +230,17 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        requestNotificationAuthorization: Bool = true)
+    {
         self.defaults = defaults
         self.restorePersistedState()
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
-        Task {
-            await self.ensureNotificationAuthorization()
+        if requestNotificationAuthorization {
+            Task {
+                await self.ensureNotificationAuthorization()
+            }
         }
     }
 
@@ -190,7 +257,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
 
     var activeExecApproval: WatchExecApprovalRecord? {
         if let selectedExecApprovalID,
-           let selected = self.execApprovals.first(where: { $0.id == selectedExecApprovalID })
+           let selected = execApprovals.first(where: { $0.id == selectedExecApprovalID })
         {
             return selected
         }
@@ -211,6 +278,35 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
 
     var shouldShowExecApprovalReviewStatus: Bool {
         self.execApprovals.isEmpty && !(self.execApprovalReviewStatusText?.isEmpty ?? true)
+    }
+
+    var hasAppSnapshot: Bool {
+        self.appSnapshot != nil
+    }
+
+    var hasMessagePrompt: Bool {
+        self.title != Self.defaultTitle
+            || self.body != Self.defaultBody
+            || !self.actions.isEmpty
+    }
+
+    var gatewaySummaryText: String {
+        guard let appSnapshot else { return "Waiting for iPhone" }
+        return appSnapshot.gatewayConnected ? "Connected" : appSnapshot.gatewayStatusText
+    }
+
+    var talkSummaryText: String {
+        guard let appSnapshot else { return "Not synced" }
+        if appSnapshot.talkListening {
+            return "Listening"
+        }
+        if appSnapshot.talkSpeaking {
+            return "Speaking"
+        }
+        if appSnapshot.talkEnabled {
+            return appSnapshot.talkStatusText.isEmpty ? "Ready" : appSnapshot.talkStatusText
+        }
+        return "Off"
     }
 
     func beginExecApprovalReviewLoading() {
@@ -305,12 +401,12 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
         transport: String)
     {
         let snapshotID = message.snapshotId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let snapshotID, !snapshotID.isEmpty, snapshotID == self.lastExecApprovalSnapshotID {
+        if let snapshotID, !snapshotID.isEmpty, snapshotID == lastExecApprovalSnapshotID {
             return
         }
 
         let existingRecordsByID = Dictionary(
-            uniqueKeysWithValues: self.execApprovals.map { ($0.id, $0) })
+            uniqueKeysWithValues: execApprovals.map { ($0.id, $0) })
         self.execApprovals = message.approvals.map { approval in
             self.mergedExecApprovalRecord(
                 approval: approval,
@@ -323,24 +419,99 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
            !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
         {
             self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
-        } else if self.selectedExecApprovalID == nil {
-            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        } else if selectedExecApprovalID == nil {
+            selectedExecApprovalID = self.sortedExecApprovals.first?.id
         }
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
         self.markExecApprovalReviewLoaded()
         self.persistState()
     }
 
+    func consume(appSnapshot message: WatchAppSnapshotMessage) {
+        let snapshotID = message.snapshotId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let snapshotID, !snapshotID.isEmpty, snapshotID == appSnapshot?.snapshotId {
+            return
+        }
+        var merged = message
+        if merged.chatItems == nil {
+            merged.chatItems = self.appSnapshot?.chatItems
+        }
+        if merged.chatStatusText == nil {
+            merged.chatStatusText = self.appSnapshot?.chatStatusText
+        }
+        self.appSnapshot = merged
+        self.appSnapshotUpdatedAt = Date()
+        self.appSnapshotStatusText = nil
+        self.persistState()
+    }
+
+    func markAppSnapshotRequestStarted() {
+        self.appSnapshotStatusText = "Refreshing from iPhone…"
+        self.persistState()
+    }
+
+    func markAppSnapshotRequestResult(_ result: WatchReplySendResult) {
+        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
+            self.appSnapshotStatusText = "Refresh failed: \(errorMessage)"
+        } else if result.deliveredImmediately {
+            self.appSnapshotStatusText = "Refresh requested"
+        } else if result.queuedForDelivery {
+            self.appSnapshotStatusText = "Refresh queued"
+        } else {
+            self.appSnapshotStatusText = nil
+        }
+        self.persistState()
+    }
+
+    func makeAppCommand(_ command: WatchAppCommand, text: String? = nil) -> WatchAppCommandMessage {
+        let snapshotSessionKey = self.appSnapshot?.sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WatchAppCommandMessage(
+            command: command,
+            commandId: UUID().uuidString,
+            sessionKey: (snapshotSessionKey?.isEmpty == false) ? snapshotSessionKey : self.sessionKey,
+            gatewayStableID: self.appSnapshot?.gatewayStableID,
+            text: text,
+            sentAtMs: Self.nowMs())
+    }
+
+    var hasGatewayTaggedAppSnapshot: Bool {
+        let gatewayStableID = self.appSnapshot?.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !gatewayStableID.isEmpty
+    }
+
+    func markAppCommandSending(_ command: WatchAppCommand) {
+        self.appCommandStatusText = "Sending \(Self.commandLabel(command))…"
+        self.persistState()
+    }
+
+    func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
+        self.appCommandStatusText = "\(Self.commandLabel(command)): \(reason)"
+        self.persistState()
+    }
+
+    func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand) {
+        let label = Self.commandLabel(command)
+        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
+            self.appCommandStatusText = "\(label) failed: \(errorMessage)"
+        } else if result.deliveredImmediately {
+            self.appCommandStatusText = "\(label): sent"
+        } else if result.queuedForDelivery {
+            self.appCommandStatusText = "\(label): queued"
+        } else {
+            self.appCommandStatusText = "\(label): sent"
+        }
+        self.persistState()
+    }
+
     func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
         self.removeExecApproval(id: message.approvalId)
-        let statusText: String
-        switch message.decision {
+        let statusText = switch message.decision {
         case .allowOnce:
-            statusText = "Allowed once"
+            "Allowed once"
         case .deny:
-            statusText = "Denied"
+            "Denied"
         case nil:
-            statusText = "Approval resolved"
+            "Approval resolved"
         }
         self.lastExecApprovalOutcomeText = statusText
         self.lastExecApprovalOutcomeAt = Date()
@@ -349,18 +520,17 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
 
     func consume(execApprovalExpired message: WatchExecApprovalExpiredMessage) {
         self.removeExecApproval(id: message.approvalId)
-        let statusText: String
-        switch message.reason {
+        let statusText = switch message.reason {
         case .expired:
-            statusText = "Approval expired"
+            "Approval expired"
         case .notFound:
-            statusText = "Approval no longer available"
+            "Approval no longer available"
         case .resolved:
-            statusText = "Approval resolved elsewhere"
+            "Approval resolved elsewhere"
         case .replaced:
-            statusText = "Approval replaced"
+            "Approval replaced"
         case .unavailable:
-            statusText = "Approval unavailable"
+            "Approval unavailable"
         }
         self.lastExecApprovalOutcomeText = statusText
         self.lastExecApprovalOutcomeAt = Date()
@@ -376,7 +546,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     }
 
     func markExecApprovalSending(approvalId: String, decision: WatchExecApprovalDecision) {
-        guard let index = self.execApprovals.firstIndex(where: { $0.id == approvalId }) else { return }
+        guard let index = execApprovals.firstIndex(where: { $0.id == approvalId }) else { return }
         self.execApprovals[index].isResolving = true
         self.execApprovals[index].pendingDecision = decision
         self.execApprovals[index].statusText = "Sending \(Self.decisionLabel(decision))…"
@@ -389,7 +559,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
         decision: WatchExecApprovalDecision,
         result: WatchReplySendResult)
     {
-        guard let index = self.execApprovals.firstIndex(where: { $0.id == approvalId }) else { return }
+        guard let index = execApprovals.firstIndex(where: { $0.id == approvalId }) else { return }
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
             self.execApprovals[index].isResolving = false
             self.execApprovals[index].statusText = "Failed: \(errorMessage)"
@@ -414,7 +584,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
         keepSelectionIfPossible: Bool,
         resetResolvingState: Bool = false)
     {
-        if let index = self.execApprovals.firstIndex(where: { $0.id == approval.id }) {
+        if let index = execApprovals.firstIndex(where: { $0.id == approval.id }) {
             self.execApprovals[index] = self.mergedExecApprovalRecord(
                 approval: approval,
                 transport: transport,
@@ -481,8 +651,8 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     }
 
     private func restorePersistedState() {
-        guard let data = self.defaults.data(forKey: Self.persistedStateKey),
-            let state = try? JSONDecoder().decode(PersistedState.self, from: data)
+        guard let data = defaults.data(forKey: Self.persistedStateKey),
+              let state = try? JSONDecoder().decode(PersistedState.self, from: data)
         else {
             return
         }
@@ -506,30 +676,38 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
         self.lastExecApprovalSnapshotID = state.lastExecApprovalSnapshotID
         self.lastExecApprovalOutcomeText = state.lastExecApprovalOutcomeText
         self.lastExecApprovalOutcomeAt = state.lastExecApprovalOutcomeAt
+        self.appSnapshot = state.appSnapshot
+        self.appSnapshotUpdatedAt = state.appSnapshotUpdatedAt
+        self.appSnapshotStatusText = state.appSnapshotStatusText
+        self.appCommandStatusText = state.appCommandStatusText
     }
 
     private func persistState() {
         let updatedAt = self.updatedAt ?? self.lastExecApprovalOutcomeAt ?? Date()
         let state = PersistedState(
-            title: self.title,
-            body: self.body,
-            transport: self.transport,
+            title: title,
+            body: body,
+            transport: transport,
             updatedAt: updatedAt,
-            lastDeliveryKey: self.lastDeliveryKey,
-            promptId: self.promptId,
-            sessionKey: self.sessionKey,
-            kind: self.kind,
-            details: self.details,
-            expiresAtMs: self.expiresAtMs,
-            risk: self.risk,
-            actions: self.actions,
-            replyStatusText: self.replyStatusText,
-            replyStatusAt: self.replyStatusAt,
-            execApprovals: self.execApprovals,
-            selectedExecApprovalID: self.selectedExecApprovalID,
-            lastExecApprovalSnapshotID: self.lastExecApprovalSnapshotID,
-            lastExecApprovalOutcomeText: self.lastExecApprovalOutcomeText,
-            lastExecApprovalOutcomeAt: self.lastExecApprovalOutcomeAt)
+            lastDeliveryKey: lastDeliveryKey,
+            promptId: promptId,
+            sessionKey: sessionKey,
+            kind: kind,
+            details: details,
+            expiresAtMs: expiresAtMs,
+            risk: risk,
+            actions: actions,
+            replyStatusText: replyStatusText,
+            replyStatusAt: replyStatusAt,
+            execApprovals: execApprovals,
+            selectedExecApprovalID: selectedExecApprovalID,
+            lastExecApprovalSnapshotID: lastExecApprovalSnapshotID,
+            lastExecApprovalOutcomeText: lastExecApprovalOutcomeText,
+            lastExecApprovalOutcomeAt: lastExecApprovalOutcomeAt,
+            appSnapshot: appSnapshot,
+            appSnapshotUpdatedAt: appSnapshotUpdatedAt,
+            appSnapshotStatusText: appSnapshotStatusText,
+            appCommandStatusText: appCommandStatusText)
         guard let data = try? JSONEncoder().encode(state) else { return }
         self.defaults.set(data, forKey: Self.persistedStateKey)
     }
@@ -555,11 +733,11 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     private func mapHapticRisk(_ risk: String?) -> WKHapticType {
         switch risk?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "high":
-            return .failure
+            .failure
         case "medium":
-            return .notification
+            .notification
         default:
-            return .click
+            .click
         }
     }
 
@@ -619,6 +797,21 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
             "Allow Once"
         case .deny:
             "Deny"
+        }
+    }
+
+    private static func commandLabel(_ command: WatchAppCommand) -> String {
+        switch command {
+        case .refresh:
+            "Refresh"
+        case .openChat:
+            "Open Chat"
+        case .sendChat:
+            "Chat"
+        case .startTalk:
+            "Start Talk"
+        case .stopTalk:
+            "Stop Talk"
         }
     }
 

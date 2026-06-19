@@ -1,7 +1,8 @@
+/** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
@@ -10,6 +11,7 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
+import * as providerDiscoveryModule from "./provider-discovery.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
@@ -26,8 +28,6 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -88,6 +88,23 @@ function makeModelProviderConfig(overrides?: Partial<ModelProviderConfig>): Mode
     baseUrl: "http://127.0.0.1:8000/v1",
     models: [],
     ...overrides,
+  };
+}
+
+function makeModel(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
   };
 }
 
@@ -166,6 +183,23 @@ async function expectProviderCatalogResult(params: {
 }
 
 describe("resolveInstalledPluginProviderContributionIds", () => {
+  it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
+    const callerPaths = [
+      "src/agents/models-config.providers.implicit.ts",
+      "src/commands/models/list.provider-catalog.ts",
+    ];
+
+    for (const callerPath of callerPaths) {
+      expect(fs.readFileSync(path.join(process.cwd(), callerPath), "utf-8")).not.toContain(
+        "resolvePluginDiscoveryProviders",
+      );
+    }
+  });
+
+  it("does not keep exporting the ambiguous runtime-discovery alias", () => {
+    expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
+  });
+
   it("reads provider ids from the installed plugin index without importing runtime entries", () => {
     const candidate = createProviderContributionCandidate({
       pluginId: "demo",
@@ -201,7 +235,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
       preferPersisted: false,
     };
 
-    expect(resolveInstalledPluginProviderContributionIds(params)).toEqual([]);
+    expect(resolveInstalledPluginProviderContributionIds(params)).toStrictEqual([]);
     expect(
       resolveInstalledPluginProviderContributionIds({
         ...params,
@@ -345,6 +379,130 @@ describe("normalizePluginDiscoveryResult", () => {
         },
       },
     },
+    {
+      name: "skips unreadable multi-provider entries while preserving healthy siblings",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: Object.defineProperty(
+          {
+            healthy: makeModelProviderConfig({
+              baseUrl: "http://healthy.example/v1",
+            }),
+          },
+          "broken",
+          {
+            enumerable: true,
+            get() {
+              throw new Error("provider row read failed");
+            },
+          },
+        ) as Record<string, ModelProviderConfig>,
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [],
+        },
+      },
+    },
+    {
+      name: "skips providers with unreadable required fields",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          broken: Object.defineProperty(
+            makeModelProviderConfig({
+              baseUrl: "http://broken.example/v1",
+              models: [makeModel("broken-model")],
+            }),
+            "baseUrl",
+            {
+              enumerable: true,
+              get() {
+                throw new Error("provider baseUrl read failed");
+              },
+            },
+          ),
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [makeModel("healthy-model")],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
+    {
+      name: "skips unreadable model rows while preserving healthy siblings",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: Object.defineProperty([makeModel("healthy-model")], "1", {
+              enumerable: true,
+              get() {
+                throw new Error("model row read failed");
+              },
+            }),
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
+    {
+      name: "skips model rows with unreadable required fields",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [
+              Object.defineProperty(makeModel("broken-model"), "id", {
+                enumerable: true,
+                get() {
+                  throw new Error("model id read failed");
+                },
+              }),
+              makeModel("healthy-model"),
+            ],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
+    {
+      name: "keeps minimal model rows with id-only labels",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [{ id: "local-tiny" } as ModelDefinitionConfig],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [{ id: "local-tiny", name: "local-tiny" }],
+        },
+      },
+    },
   ];
 
   it.each(cases)("$name", ({ provider, result, expected }) => {
@@ -396,12 +554,29 @@ describe("runProviderStaticCatalog", () => {
       },
     });
 
-    expect(seenContexts).toEqual([
-      expect.objectContaining({
-        config: {},
-        env: {},
-      }),
-    ]);
+    expect(seenContexts).toHaveLength(1);
+    const sterileContext = seenContexts[0] as {
+      config: Record<string, never>;
+      env: Record<string, never>;
+      resolveProviderApiKey: () => { apiKey: string | undefined };
+      resolveProviderAuth: () => {
+        apiKey: string | undefined;
+        mode: "none";
+        source: "none";
+      };
+    };
+    expect(sterileContext).toEqual({
+      config: {},
+      env: {},
+      resolveProviderApiKey: sterileContext.resolveProviderApiKey,
+      resolveProviderAuth: sterileContext.resolveProviderAuth,
+    });
+    expect(sterileContext.resolveProviderApiKey()).toEqual({ apiKey: undefined });
+    expect(sterileContext.resolveProviderAuth()).toEqual({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    });
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
   });

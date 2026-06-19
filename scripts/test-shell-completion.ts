@@ -26,13 +26,13 @@
 import os from "node:os";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
+import { stylePromptMessage } from "../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { installCompletion } from "../src/cli/completion-cli.js";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../src/commands/doctor-completion.js";
-import { stylePromptMessage } from "../src/terminal/prompt-style.js";
-import { theme } from "../src/terminal/theme.js";
 
 const CLI_NAME = "openclaw";
 
@@ -217,7 +217,7 @@ async function main() {
   await installCompletion(status.shell, false, CLI_NAME);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(theme.error(`Error: ${String(err)}`));
   process.exit(1);
 });

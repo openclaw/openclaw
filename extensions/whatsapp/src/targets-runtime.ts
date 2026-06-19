@@ -1,12 +1,16 @@
+// Whatsapp plugin module implements targets runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-runtime";
-import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const WHATSAPP_FENCE_PLACEHOLDER = "\x00FENCE";
 const WHATSAPP_INLINE_CODE_PLACEHOLDER = "\x00CODE";
+// Terminates the numeric index in a placeholder so the restore regex cannot
+// absorb a digit from adjacent user text (e.g. `code`5) into the index.
+const WHATSAPP_PLACEHOLDER_TERMINATOR = "\x00";
 
 export type WebChannel = "web";
 
@@ -49,6 +53,22 @@ export function toWhatsappJid(number: string): string {
   return `${digits}@s.whatsapp.net`;
 }
 
+// LID-aware outbound JID resolver. When a forward mapping file
+// `lid-mapping-{phone-digits}.json` is present in any candidate dir, prefer
+// the `{lid}@lid` JID over `{phone-digits}@s.whatsapp.net`. This avoids the
+// ghost-chat failure mode where messages route to a sender-only thread that
+// never reaches recipients whose contact is internally LID-based (#67378).
+export function toWhatsappJidWithLid(number: string, opts?: JidToE164Options): string {
+  const stripped = number.replace(/^whatsapp:/i, "").trim();
+  if (stripped.includes("@")) {
+    return stripped;
+  }
+  const e164 = normalizeE164(stripped);
+  const phoneDigits = e164.replace(/\D/g, "");
+  const lid = readLidForwardMapping({ phoneDigits, opts });
+  return lid ? `${lid}@lid` : `${phoneDigits}@s.whatsapp.net`;
+}
+
 export type JidToE164Options = {
   authDir?: string;
   lidMappingDirs?: string[];
@@ -88,6 +108,31 @@ function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options })
         continue;
       }
       return normalizeE164(String(phone));
+    } catch {
+      // next location
+    }
+  }
+  return null;
+}
+
+function readLidForwardMapping(params: {
+  phoneDigits: string;
+  opts?: JidToE164Options;
+}): string | null {
+  const mappingFilename = `lid-mapping-${params.phoneDigits}.json`;
+  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
+  for (const dir of mappingDirs) {
+    const mappingPath = path.join(dir, mappingFilename);
+    try {
+      const data = fs.readFileSync(mappingPath, "utf8");
+      const lid = JSON.parse(data) as string | number | null;
+      if (lid === null || lid === undefined) {
+        continue;
+      }
+      const digits = String(lid).replace(/\D/g, "");
+      if (digits) {
+        return digits;
+      }
     } catch {
       // next location
     }
@@ -155,25 +200,26 @@ export function markdownToWhatsApp(text: string): string {
   const fences: string[] = [];
   let result = text.replace(/```[\s\S]*?```/g, (match) => {
     fences.push(match);
-    return `${WHATSAPP_FENCE_PLACEHOLDER}${fences.length - 1}`;
+    return `${WHATSAPP_FENCE_PLACEHOLDER}${fences.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
 
   const inlineCodes: string[] = [];
   result = result.replace(/`[^`\n]+`/g, (match) => {
     inlineCodes.push(match);
-    return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}`;
+    return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
 
   result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
   result = result.replace(/__(.+?)__/g, "*$1*");
   result = result.replace(/~~(.+?)~~/g, "~$1~");
 
+  const terminator = escapeRegExp(WHATSAPP_PLACEHOLDER_TERMINATOR);
   result = result.replace(
-    new RegExp(`${escapeRegExp(WHATSAPP_INLINE_CODE_PLACEHOLDER)}(\\d+)`, "g"),
+    new RegExp(`${escapeRegExp(WHATSAPP_INLINE_CODE_PLACEHOLDER)}(\\d+)${terminator}`, "g"),
     (_, idx) => inlineCodes[Number(idx)] ?? "",
   );
   result = result.replace(
-    new RegExp(`${escapeRegExp(WHATSAPP_FENCE_PLACEHOLDER)}(\\d+)`, "g"),
+    new RegExp(`${escapeRegExp(WHATSAPP_FENCE_PLACEHOLDER)}(\\d+)${terminator}`, "g"),
     (_, idx) => fences[Number(idx)] ?? "",
   );
   return result;

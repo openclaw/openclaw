@@ -1,9 +1,10 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+// Xai plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
-  createHtmlEntityToolCallArgumentDecodingWrapper,
+  createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 
@@ -41,6 +42,14 @@ function stripUnsupportedStrictFlag(tool: unknown): unknown {
 
 function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
+}
+
+function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknown }): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsReasoningEffort?: unknown })
+      : undefined;
+  return model.reasoning === true && compat?.supportsReasoningEffort !== false;
 }
 
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
@@ -170,9 +179,11 @@ export function createXaiToolPayloadCompatibilityWrapper(
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          delete payloadObj.reasoning;
-          delete payloadObj.reasoningEffort;
-          delete payloadObj.reasoning_effort;
+          if (!supportsReasoningControls(model)) {
+            delete payloadObj.reasoning;
+            delete payloadObj.reasoningEffort;
+            delete payloadObj.reasoning_effort;
+          }
         }
         return originalOnPayload?.(payload, model);
       },
@@ -201,9 +212,6 @@ export function createXaiFastModeWrapper(
   };
 }
 
-export const createXaiToolCallArgumentDecodingWrapper =
-  createHtmlEntityToolCallArgumentDecodingWrapper;
-
 export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
   const fastMode = extraParams?.fastMode;
@@ -213,7 +221,7 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     if (typeof fastMode === "boolean") {
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
     }
-    wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+    wrappedStreamFn = createPlainTextToolCallCompatWrapper(wrappedStreamFn);
     return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
   });
 }

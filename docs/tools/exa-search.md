@@ -11,6 +11,15 @@ OpenClaw supports [Exa AI](https://exa.ai/) as a `web_search` provider. Exa
 offers neural, keyword, and hybrid search modes with built-in content
 extraction (highlights, text, summaries).
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/exa-plugin
+openclaw gateway restart
+```
+
 ## Get an API key
 
 <Steps>
@@ -38,6 +47,7 @@ extraction (highlights, text, summaries).
         config: {
           webSearch: {
             apiKey: "exa-...", // optional if EXA_API_KEY is set
+            baseUrl: "https://api.exa.ai", // optional; OpenClaw appends /search
           },
         },
       },
@@ -55,6 +65,14 @@ extraction (highlights, text, summaries).
 
 **Environment alternative:** set `EXA_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
+
+## Base URL override
+
+Set `plugins.entries.exa.config.webSearch.baseUrl` when Exa search requests
+should go through a compatible proxy or alternate Exa endpoint. OpenClaw
+normalizes bare hosts by prepending `https://` and appends `/search` unless the
+path already ends there. The resolved endpoint is included in the search cache
+key, so results from different Exa endpoints are not shared.
 
 ## Tool parameters
 

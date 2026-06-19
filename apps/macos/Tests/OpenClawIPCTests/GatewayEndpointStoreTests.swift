@@ -61,7 +61,7 @@ struct GatewayEndpointStoreTests {
         #expect(token == nil)
     }
 
-    @Test func resolveGatewayTokenUsesRemoteConfigToken() {
+    @Test func `resolve gateway token uses remote config token`() {
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: true,
             root: [
@@ -76,7 +76,19 @@ struct GatewayEndpointStoreTests {
         #expect(token == "remote-token")
     }
 
-    @Test func resolveGatewayPasswordFallsBackToLaunchd() {
+    @Test func `remote password resolver trims remote config password`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "password": "  remote-pass  ",
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolvePasswordString(root: root) == "remote-pass")
+    }
+
+    @Test func `resolve gateway password falls back to launchd`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
             token: nil,
@@ -214,7 +226,7 @@ struct GatewayEndpointStoreTests {
             launchdSnapshot: snapshot,
             tailscaleIP: "100.64.1.8")
 
-        #expect(config.url.absoluteString == "wss://100.64.1.8:18789")
+        #expect(config.url.absoluteString == "wss://100.64.1.8:\(GatewayEnvironment.gatewayPort())")
         #expect(config.token == "launchd-token")
         #expect(config.password == "launchd-pass")
     }
@@ -272,19 +284,134 @@ struct GatewayEndpointStoreTests {
         #expect(url.query == nil)
     }
 
+    @Test func `dashboard URL can use native auth token override`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: nil,
+            password: "sekret") // pragma: allowlist secret
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/control",
+            authToken: "device-token")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=device-token")
+        #expect(url.query == nil)
+    }
+
     @Test func `normalize gateway url adds default port for loopback ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
         #expect(url?.absoluteString == "ws://127.0.0.1:18789")
     }
 
-    @Test func `normalize gateway url rejects non loopback ws`() {
+    @Test func `normalize gateway url accepts private network ws`() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://192.168.0.202:18789")
+        #expect(url?.absoluteString == "ws://192.168.0.202:18789")
+    }
+
+    @Test func `normalize gateway url accepts tailnet ws`() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://100.123.224.76:18789")
+        #expect(url?.absoluteString == "ws://100.123.224.76:18789")
+    }
+
+    @Test func `missing transport infers direct from private remote URL`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "url": "ws://192.168.0.202:18789",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .direct)
+        #expect(resolution.source == .inferredRemoteURL)
+        #expect(resolution.directURL?.absoluteString == "ws://192.168.0.202:18789")
+    }
+
+    @Test func `legacy loopback URL keeps SSH even with trusted SSH target`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "steipete@192.168.0.202",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .ssh)
+        #expect(resolution.source == .legacySSH)
+        #expect(resolution.directURL == nil)
+    }
+
+    @Test func `explicit ssh keeps legacy tunnel even when target is direct capable`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "steipete@192.168.0.202",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .ssh)
+        #expect(resolution.source == .explicit)
+        #expect(resolution.directURL == nil)
+    }
+
+    @Test func `normalize gateway url rejects public host ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")
         #expect(url == nil)
+    }
+
+    @Test func `normalize gateway url rejects private ipv4 suffix host bypasses`() {
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://192.168.0.202.attacker.example:18789") == nil)
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://100.123.224.76.attacker.example:18789") == nil)
+    }
+
+    @Test func `normalize gateway url rejects ipv6 prefix hostname bypasses`() {
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://fcorp.example:18789") == nil)
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://fd-example.com:18789") == nil)
     }
 
     @Test func `normalize gateway url rejects prefix bypass loopback host`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
         #expect(url == nil)
+    }
+
+    @Test func `resolve tls fingerprint trims remote config value`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": " sha256:ABC123 ",
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: root) == "sha256:ABC123")
+    }
+
+    @Test func `resolve tls fingerprint ignores blank or non string values`() {
+        let blank: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": "   ",
+                ],
+            ],
+        ]
+        let nonString: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": 123,
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: blank) == nil)
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: nonString) == nil)
     }
 }

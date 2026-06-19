@@ -1,7 +1,10 @@
+// Qa Lab plugin module implements cli behavior.
 import { listQaRunnerCliContributions } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { discordQaCliRegistration } from "./discord/cli.js";
 import type { LiveTransportQaCliRegistration } from "./shared/live-transport-cli.js";
+import { slackQaCliRegistration } from "./slack/cli.js";
 import { telegramQaCliRegistration } from "./telegram/cli.js";
+import { whatsappQaCliRegistration } from "./whatsapp/cli.js";
 
 function createBlockedQaRunnerCliRegistration(params: {
   commandName: string;
@@ -35,9 +38,11 @@ function createQaRunnerCliRegistration(
   });
 }
 
-export const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliRegistration[] = [
+const LIVE_TRANSPORT_QA_CLI_REGISTRATIONS: readonly LiveTransportQaCliRegistration[] = [
   telegramQaCliRegistration,
   discordQaCliRegistration,
+  slackQaCliRegistration,
+  whatsappQaCliRegistration,
 ];
 
 export function listLiveTransportQaCliRegistrations(): readonly LiveTransportQaCliRegistration[] {

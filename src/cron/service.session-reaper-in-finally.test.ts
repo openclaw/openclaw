@@ -1,3 +1,4 @@
+// Session reaper finally tests cover cleanup after cron service failures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import {
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
 import { resetReaperThrottle } from "./session-reaper.js";
+import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -50,16 +52,10 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
 
-    // Write a store with a due job that will trigger execution.
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [createDueIsolatedJob({ id: "failing-job", nowMs: now })],
-      }),
-      "utf-8",
-    );
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [createDueIsolatedJob({ id: "failing-job", nowMs: now })],
+    });
 
     // Create a mock sessionStorePath to track if the reaper is called.
     const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
@@ -70,7 +66,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       // This will throw, simulating a failure during job execution.
       runIsolatedAgentJob: vi.fn().mockRejectedValue(new Error("gateway down")),
       sessionStorePath,
@@ -84,7 +80,9 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect(state.running).toBe(false);
 
       // The timer must be re-armed.
-      expect(state.timer).not.toBeNull();
+      if (state.timer === null) {
+        throw new Error("expected timer to be re-armed");
+      }
     });
   });
 
@@ -92,15 +90,10 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [createDueIsolatedJob({ id: "ok-job", nowMs: now })],
-      }),
-      "utf-8",
-    );
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [createDueIsolatedJob({ id: "ok-job", nowMs: now })],
+    });
 
     const resolvedPaths: string[] = [];
     const state = createCronServiceState({
@@ -109,7 +102,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
       resolveSessionStorePath: (agentId) => {
         const p = path.join(path.dirname(store.storePath), `${agentId}-sessions`, "sessions.json");
@@ -128,12 +121,13 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
-  it("prunes expired cron-run sessions even when cron store load throws", async () => {
+  it("prunes expired cron-run sessions while ignoring malformed legacy cron files", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
     const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
 
-    // Force onTimer's try-block to throw before normal execution flow.
+    // Runtime reads SQLite only; malformed legacy JSON is migrated by doctor,
+    // not imported or thrown from the timer path.
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, "{invalid-json", "utf-8");
 
@@ -156,18 +150,18 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       sessionStorePath,
     });
 
     await withCronServiceStateForTest(state, async () => {
-      await expect(onTimer(state)).rejects.toThrow("Failed to parse cron store");
+      await expect(onTimer(state)).resolves.toBeUndefined();
 
       const updatedSessionStore = JSON.parse(
         await fs.readFile(sessionStorePath, "utf-8"),
       ) as Record<string, unknown>;
-      expect(updatedSessionStore).toEqual({});
+      expect(updatedSessionStore).toStrictEqual({});
       expect(state.running).toBe(false);
     });
   });

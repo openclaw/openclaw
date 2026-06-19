@@ -1,13 +1,17 @@
+// Matrix helper module supports config schema behavior.
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
   ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
+import { matrixChannelConfigUiHints } from "./config-ui-hints.js";
 
 const matrixActionSchema = z
   .object({
@@ -26,6 +30,8 @@ const matrixThreadBindingsSchema = z
     enabled: z.boolean().optional(),
     idleHours: z.number().nonnegative().optional(),
     maxAgeHours: z.number().nonnegative().optional(),
+    spawnSessions: z.boolean().optional(),
+    defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
     spawnSubagentSessions: z.boolean().optional(),
     spawnAcpSessions: z.boolean().optional(),
   })
@@ -41,12 +47,23 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
+const botLoopProtectionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxEventsPerWindow: z.number().int().positive().optional(),
+    windowSeconds: z.number().int().positive().optional(),
+    cooldownSeconds: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const matrixRoomSchema = z
   .object({
     account: z.string().optional(),
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: botLoopProtectionSchema,
     tools: ToolPolicySchema,
     autoReply: z.boolean().optional(),
     users: AllowFromListSchema,
@@ -61,6 +78,28 @@ const matrixNetworkSchema = z
   })
   .strict()
   .optional();
+
+const matrixStreamingSchema = z
+  .object({
+    mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
+    progress: z
+      .object({
+        label: z.union([z.string(), z.literal(false)]).optional(),
+        labels: z.array(z.string()).optional(),
+        maxLines: z.number().int().positive().optional(),
+        maxLineChars: z.number().int().positive().optional(),
+        toolProgress: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    preview: z
+      .object({
+        toolProgress: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
@@ -80,11 +119,16 @@ export const MatrixConfigSchema = z.object({
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
+  dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+  botLoopProtection: botLoopProtectionSchema,
   groupPolicy: GroupPolicySchema.optional(),
+  mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),
-  streaming: z.union([z.enum(["partial", "quiet", "off"]), z.boolean()]).optional(),
+  streaming: z
+    .union([z.enum(["partial", "quiet", "progress", "off"]), z.boolean(), matrixStreamingSchema])
+    .optional(),
   replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
@@ -111,4 +155,8 @@ export const MatrixConfigSchema = z.object({
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,
+});
+
+export const MatrixChannelConfigSchema = buildChannelConfigSchema(MatrixConfigSchema, {
+  uiHints: matrixChannelConfigUiHints,
 });

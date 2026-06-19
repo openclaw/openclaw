@@ -1,3 +1,4 @@
+// Venice plugin module implements stream behavior.
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 
@@ -18,7 +19,7 @@ function ensureVeniceDeepSeekV4Replay(payload: Record<string, unknown>): void {
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role === "assistant" && Array.isArray(record.tool_calls)) {
+    if (record.role === "assistant") {
       record.reasoning_content ??= "";
     }
   }

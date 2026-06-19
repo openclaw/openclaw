@@ -1,6 +1,7 @@
+// Mattermost tests cover draft stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -38,6 +39,17 @@ function createMockClient(): {
   return { client, calls, requestMock };
 }
 
+function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected JSON request body");
+  }
+  const parsed: unknown = JSON.parse(init.body);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("expected JSON object request body");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 describe("createMattermostDraftStream", () => {
   it("creates a preview post and updates it on later changes", async () => {
     const { client, calls } = createMockClient();
@@ -56,8 +68,7 @@ describe("createMattermostDraftStream", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.path).toBe("/posts");
 
-    const createBody = JSON.parse((calls[0]?.init?.body as string | undefined) ?? "{}");
-    expect(createBody).toMatchObject({
+    expect(parseRequestJson(calls[0]?.init)).toEqual({
       channel_id: "channel-1",
       root_id: "root-1",
       message: "Running `read`…",
@@ -158,7 +169,8 @@ describe("createMattermostDraftStream", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
     expect(calls[1]?.path).toBe("/posts/post-1");
-    expect(JSON.parse((calls[1]?.init?.body as string | undefined) ?? "{}")).toMatchObject({
+    expect(parseRequestJson(calls[1]?.init)).toEqual({
+      id: "post-1",
       message: "Stale partial",
     });
   });
@@ -239,15 +251,5 @@ describe("createMattermostDraftStream", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
     expect(calls[1]?.path).toBe("/posts/post-1");
-  });
-});
-
-describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the tool name", () => {
-    expect(buildMattermostToolStatusText({ name: "read" })).toBe("Running `read`…");
-  });
-
-  it("falls back to a generic running tool status", () => {
-    expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
   });
 });

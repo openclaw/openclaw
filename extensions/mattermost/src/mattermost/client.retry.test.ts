@@ -1,5 +1,64 @@
+// Mattermost tests cover client.retry plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
+import {
+  createMattermostClient,
+  createMattermostDirectChannelWithRetry,
+  resolveMattermostReplyDeliveryBarrierTimeoutMs,
+} from "./client.js";
+
+describe("resolveMattermostReplyDeliveryBarrierTimeoutMs", () => {
+  it("uses the default barrier for non-DM deliveries", () => {
+    expect(
+      resolveMattermostReplyDeliveryBarrierTimeoutMs({
+        isDirect: false,
+        queuedCounts: { tool: 1, block: 1, final: 1 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses the default barrier when no deliveries were queued", () => {
+    expect(
+      resolveMattermostReplyDeliveryBarrierTimeoutMs({
+        isDirect: true,
+        queuedCounts: { tool: 0, block: 0, final: 0 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("covers the default retry envelope plus scheduling slack", () => {
+    expect(
+      resolveMattermostReplyDeliveryBarrierTimeoutMs({
+        isDirect: true,
+        queuedCounts: { tool: 0, block: 0, final: 1 },
+      }),
+    ).toBe(210_000);
+  });
+
+  it("covers one maximum retry envelope per queued delivery", () => {
+    expect(
+      resolveMattermostReplyDeliveryBarrierTimeoutMs({
+        isDirect: true,
+        dmRetryOptions: {
+          maxRetries: 10,
+          maxDelayMs: 60_000,
+          timeoutMs: 120_000,
+        },
+        queuedCounts: { tool: 1, block: 0, final: 1 },
+      }),
+    ).toBe(3_960_000);
+  });
+
+  it("includes the configured inter-block delay budget", () => {
+    expect(
+      resolveMattermostReplyDeliveryBarrierTimeoutMs({
+        isDirect: true,
+        queuedCounts: { tool: 0, block: 2, final: 0 },
+        humanDelayBudgetMs: 180_000,
+      }),
+    ).toBe(600_000);
+  });
+});
 
 describe("createMattermostDirectChannelWithRetry", () => {
   const mockFetch = vi.fn<typeof fetch>();
@@ -93,10 +152,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(result.id).toBe("dm-channel-456");
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(onRetry).toHaveBeenCalledWith(
-      1,
-      expect.any(Number),
-      expect.objectContaining({ message: expect.stringContaining("429") }),
+    const retryCall = onRetry.mock.calls[0];
+    expect(retryCall?.[0]).toBe(1);
+    expect(retryCall?.[1]).toBeGreaterThanOrEqual(10);
+    expect(retryCall?.[1]).toBeLessThanOrEqual(20);
+    expect(retryCall?.[2]).toBeInstanceOf(Error);
+    expect((retryCall?.[2] as Error | undefined)?.message).toBe(
+      "Mattermost API 429 undefined: Too many requests",
     );
   });
 
@@ -144,7 +206,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 400");
 
     // Should not retry - only called once (400 is a client error, even though message contains "429")
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -299,7 +361,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 503");
 
     expect(mockFetch).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
@@ -339,11 +401,34 @@ describe("createMattermostDirectChannelWithRetry", () => {
         initialDelayMs: 10,
       }),
     );
-    await expect(resolveRetryRun(run)).rejects.toThrow();
+    await expect(resolveRetryRun(run)).rejects.toThrow("AbortError");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(abortSignal).toBeDefined();
+    expect(abortSignal).toBeInstanceOf(AbortSignal);
+    expect(abortSignal?.aborted).toBe(true);
     expect(abortListenerCalled).toBe(true);
+  });
+
+  it("caps oversized request timeouts before scheduling aborts", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ id: "dm-channel-capped" }),
+    } as Response);
+
+    const client = createMockClient();
+
+    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+      maxRetries: 0,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses exponential backoff with jitter between retries", async () => {
@@ -480,8 +565,8 @@ describe("createMattermostDirectChannelWithRetry", () => {
       }),
     );
 
-    expect(capturedSignal).toBeDefined();
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(false);
   });
 
   it("retries on 5xx even if error message contains 4xx substring", async () => {

@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -95,17 +96,41 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
+export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+  if (typeof parameters !== "string" || !parameters.trim()) {
+    return undefined;
+  }
+
+  let lastValue: number | undefined;
+  for (const rawLine of parameters.split(/\r?\n/)) {
+    const match = rawLine.trim().match(/^num_ctx\s+(-?\d+)\b/);
+    if (!match) {
+      continue;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      lastValue = parsed;
+    }
+  }
+  return lastValue;
+}
+
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
+  opts?: { apiKey?: string },
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (opts?.apiKey) {
+      headers.Authorization = `Bearer ${opts.apiKey}`;
+    }
     const { response, release } = await fetchWithSsrFGuard({
       url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
@@ -119,6 +144,7 @@ export async function queryOllamaModelShowInfo(
       const data = (await response.json()) as {
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
+        parameters?: unknown;
       };
 
       let contextWindow: number | undefined;
@@ -136,6 +162,11 @@ export async function queryOllamaModelShowInfo(
             }
           }
         }
+      }
+
+      const paramCtx = parseOllamaNumCtxParameter(data.parameters);
+      if (paramCtx !== undefined && (contextWindow === undefined || paramCtx > contextWindow)) {
+        contextWindow = paramCtx;
       }
 
       const capabilities = Array.isArray(data.capabilities)
@@ -211,6 +242,11 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
 
+function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+}
+
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
@@ -218,14 +254,27 @@ export function buildOllamaModelDefinition(
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
+  const reasoning =
+    isKnownOllamaCloudReasoningModel(modelId) ||
+    (capabilities === undefined
+      ? isReasoningModelHeuristic(modelId)
+      : capabilities.includes("thinking"));
+  const compat =
+    capabilities === undefined
+      ? { supportsTools: true, supportsUsageInStreaming: true }
+      : {
+          supportsTools: capabilities.includes("tools"),
+          supportsUsageInStreaming: true,
+        };
   return {
     id: modelId,
     name: modelId,
-    reasoning: isReasoningModelHeuristic(modelId),
+    reasoning,
     input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    compat,
   };
 }
 

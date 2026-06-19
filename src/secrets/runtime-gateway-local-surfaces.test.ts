@@ -1,7 +1,18 @@
+/** Tests local gateway credential surfaces and their active/inactive SecretRef states. */
 import { describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+
+function expectWarningPaths(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+  expectedPaths: string[],
+): void {
+  const warningPaths = new Set(snapshot.warnings.map((warning) => warning.path));
+  for (const expectedPath of expectedPaths) {
+    expect(warningPaths.has(expectedPath)).toBe(true);
+  }
+}
 
 async function expectInactiveGatewayPassword(config: unknown): Promise<void> {
   const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -17,6 +28,20 @@ async function expectInactiveGatewayPassword(config: unknown): Promise<void> {
     id: "GATEWAY_PASSWORD_REF",
   });
   expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
+}
+
+async function expectActiveGatewayPassword(config: unknown): Promise<void> {
+  const snapshot = await prepareSecretsRuntimeSnapshot({
+    config: asConfig(config),
+    env: {
+      GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+    },
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: () => ({ version: 1, profiles: {} }),
+  });
+
+  expect(snapshot.config.gateway?.auth?.password).toBe("resolved-gateway-password");
+  expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.password");
 }
 
 describe("secrets runtime gateway local surfaces", () => {
@@ -52,9 +77,7 @@ describe("secrets runtime gateway local surfaces", () => {
       provider: "default",
       id: "MISSING_REMOTE_PASSWORD",
     });
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining(["gateway.remote.token", "gateway.remote.password"]),
-    );
+    expectWarningPaths(snapshot, ["gateway.remote.token", "gateway.remote.password"]);
   });
 
   it("treats gateway.auth.password ref as active when mode is unset and no token is configured", async () => {
@@ -139,8 +162,8 @@ describe("secrets runtime gateway local surfaces", () => {
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/);
   });
 
-  it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
-    await expectInactiveGatewayPassword({
+  it("treats gateway.auth.password ref as active when auth mode is trusted-proxy", async () => {
+    await expectActiveGatewayPassword({
       gateway: {
         auth: {
           mode: "trusted-proxy",
@@ -201,9 +224,7 @@ describe("secrets runtime gateway local surfaces", () => {
         provider: "default",
         id: "REMOTE_GATEWAY_PASSWORD_REF",
       });
-      expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-        expect.arrayContaining(["gateway.remote.token", "gateway.remote.password"]),
-      );
+      expectWarningPaths(snapshot, ["gateway.remote.token", "gateway.remote.password"]);
     },
   );
 

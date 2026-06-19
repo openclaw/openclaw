@@ -1,9 +1,18 @@
+/** Tests SecretRef provider resolution for env, file, and exec sources. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import {
+  killPidIfAlive,
+  readPidFile,
+  waitForPidToExit,
+  writeForkingNoOutputScript,
+} from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   resolveSecretRefString,
   resolveSecretRefValue,
@@ -12,18 +21,23 @@ import {
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, "utf8");
-  await fs.chmod(filePath, mode);
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await fs.writeFile(tempPath, content, "utf8");
+    await fs.chmod(tempPath, mode);
+    await fs.rename(tempPath, filePath);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 describe("secret ref resolver", () => {
   const isWindows = process.platform === "win32";
   function itPosix(name: string, fn: () => Promise<void> | void) {
-    if (isWindows) {
-      it.skip(name, fn);
-      return;
-    }
-    it(name, fn);
+    it.skipIf(isWindows)(name, fn);
   }
   let fixtureRoot = "";
   let caseId = 0;
@@ -47,7 +61,10 @@ describe("secret ref resolver", () => {
     jsonOnly?: boolean;
     allowSymlinkCommand?: boolean;
     trustedDirs?: string[];
+    env?: Record<string, string>;
     args?: string[];
+    timeoutMs?: number;
+    noOutputTimeoutMs?: number;
   };
   type FileProviderConfig = {
     source: "file";
@@ -199,6 +216,18 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  itPosix("clamps oversized exec provider timeouts", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const value = await resolveExecSecret(execProtocolV1ScriptPath, {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(value).toBe("value:openai/api-key");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
   itPosix("uses timeoutMs as the default no-output timeout for exec providers", async () => {
     const root = await createCaseDir("exec-delay");
     const scriptPath = path.join(root, "resolver-delay.sh");
@@ -231,6 +260,28 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("ok");
+  });
+
+  itPosix("kills forked exec provider children on no-output timeout", async () => {
+    const root = await createCaseDir("exec-fork-timeout");
+    const scriptPath = await writeForkingNoOutputScript(root);
+    const pidPath = path.join(root, "forked.pid");
+    let childPid: number | undefined;
+
+    try {
+      await expect(
+        resolveExecSecret(scriptPath, {
+          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+          noOutputTimeoutMs: 150,
+          timeoutMs: 2000,
+        }),
+      ).rejects.toThrow('Exec provider "execmain" produced no output');
+
+      childPid = await readPidFile(pidPath);
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    } finally {
+      killPidIfAlive(childPid);
+    }
   });
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {
@@ -391,16 +442,14 @@ describe("secret ref resolver", () => {
       }),
     );
 
-    const originalReadFile = fs.readFile.bind(fs);
-    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(((
-      targetPath: Parameters<typeof fs.readFile>[0],
-      options?: Parameters<typeof fs.readFile>[1],
-    ) => {
-      if (typeof targetPath === "string" && targetPath === filePath) {
-        return new Promise<Buffer>(() => {});
-      }
-      return originalReadFile(targetPath, options);
-    }) as typeof fs.readFile);
+    const sampleHandle = await fs.open(filePath, "r");
+    const fileHandlePrototype = Object.getPrototypeOf(sampleHandle) as {
+      readFile: typeof sampleHandle.readFile;
+    };
+    await sampleHandle.close();
+    const readFileSpy = vi
+      .spyOn(fileHandlePrototype, "readFile")
+      .mockImplementation(() => new Promise<Buffer>(() => {}) as never);
 
     try {
       await expect(
@@ -500,9 +549,7 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -521,15 +568,11 @@ describe("secret ref resolver", () => {
           },
         ),
       ).rejects.toThrow(/ACL verification unavailable on Windows/);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl-opt-out");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -547,20 +590,14 @@ describe("secret ref resolver", () => {
         },
       );
       expect(value).toBe("abc123");
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
         /ACL verification unavailable on Windows/,
       );
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 });

@@ -1,5 +1,8 @@
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+/**
+ * Codex provider plugin and live app-server model catalog discovery.
+ */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeModelCompat,
@@ -24,10 +27,13 @@ import type {
   CodexAppServerModel,
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
+import { buildCodexAppServerUsageSnapshot } from "./src/app-server/rate-limits.js";
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";
 const MODEL_DISCOVERY_PAGE_LIMIT = 100;
+const CODEX_APP_SERVER_SETUP_METHOD_ID = "app-server";
+const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${FALLBACK_CODEX_MODELS[0].id}`;
 const codexCatalogLog = createSubsystemLogger("codex/catalog");
 
 type CodexModelLister = (options: {
@@ -38,9 +44,18 @@ type CodexModelLister = (options: {
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
 
+type CodexRateLimitReader = (options: {
+  timeoutMs: number;
+  agentDir?: string;
+  authProfileId?: string;
+  config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
+  startOptions?: CodexAppServerStartOptions;
+}) => Promise<unknown>;
+
 type BuildCodexProviderOptions = {
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
+  readRateLimits?: CodexRateLimitReader;
 };
 
 type BuildCatalogOptions = {
@@ -50,12 +65,34 @@ type BuildCatalogOptions = {
   onDiscoveryFailure?: (error: unknown) => void;
 };
 
+/**
+ * Builds the Codex provider plugin, including setup metadata, catalog discovery,
+ * dynamic model resolution, and prompt/thinking hooks.
+ */
 export function buildCodexProvider(options: BuildCodexProviderOptions = {}): ProviderPlugin {
   return {
     id: CODEX_PROVIDER_ID,
     label: "Codex",
     docsPath: "/providers/models",
-    auth: [],
+    auth: [
+      {
+        id: CODEX_APP_SERVER_SETUP_METHOD_ID,
+        label: "Codex app-server",
+        hint: "Use the Codex app-server runtime and managed model catalog.",
+        kind: "custom",
+        wizard: {
+          choiceId: CODEX_PROVIDER_ID,
+          choiceLabel: "Codex app-server",
+          choiceHint: "Use the Codex app-server runtime and managed model catalog.",
+          assistantPriority: -40,
+          groupId: CODEX_PROVIDER_ID,
+          groupLabel: "Codex",
+          groupHint: "Codex app-server model provider",
+          onboardingScopes: ["text-inference"],
+        },
+        run: async () => ({ profiles: [], defaultModel: CODEX_DEFAULT_MODEL_REF }),
+      },
+    ],
     catalog: {
       order: "late",
       run: async (ctx) => {
@@ -80,6 +117,22 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       source: "codex-app-server",
       mode: "token",
     }),
+    fetchUsageSnapshot: async (ctx) => {
+      if (ctx.token !== CODEX_APP_SERVER_AUTH_MARKER) {
+        return null;
+      }
+      const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);
+      const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);
+      const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
+        timeoutMs: ctx.timeoutMs,
+        agentDir: ctx.agentDir,
+        ...(ctx.authProfileId ? { authProfileId: ctx.authProfileId } : {}),
+        config: ctx.config,
+        startOptions: appServer.start,
+      });
+      return buildCodexAppServerUsageSnapshot(rateLimits);
+    },
     resolveThinkingProfile: ({ modelId }) => ({
       levels: [
         { id: "off" },
@@ -96,6 +149,10 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
   };
 }
 
+/**
+ * Builds the Codex model catalog from live app-server discovery, falling back
+ * to built-in model records when discovery is disabled or unavailable.
+ */
 export async function buildCodexProviderCatalog(
   options: BuildCatalogOptions = {},
 ): Promise<{ provider: ModelProviderConfig }> {
@@ -146,6 +203,8 @@ async function listModelsBestEffort(params: {
     const models: CodexAppServerModel[] = [];
     let cursor: string | undefined;
     do {
+      // App-server model listing is paginated; collect every visible model so
+      // aliases and picker rows match the current Codex account.
       const result = await params.listModels({
         timeoutMs: params.timeoutMs,
         limit: MODEL_DISCOVERY_PAGE_LIMIT,
@@ -175,6 +234,27 @@ async function listCodexAppServerModelsLazy(options: {
 }): Promise<CodexAppServerModelListResult> {
   const { listCodexAppServerModels } = await import("./src/app-server/models.js");
   return listCodexAppServerModels(options);
+}
+
+async function requestCodexAppServerRateLimitsLazy(options: {
+  timeoutMs: number;
+  agentDir?: string;
+  authProfileId?: string;
+  config?: Parameters<
+    typeof import("./src/app-server/request.js").requestCodexAppServerJson
+  >[0]["config"];
+  startOptions?: CodexAppServerStartOptions;
+}): Promise<unknown> {
+  const { requestCodexAppServerJson } = await import("./src/app-server/request.js");
+  return await requestCodexAppServerJson({
+    method: "account/rateLimits/read",
+    timeoutMs: options.timeoutMs,
+    agentDir: options.agentDir,
+    ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
+    config: options.config,
+    startOptions: options.startOptions,
+    isolated: true,
+  });
 }
 
 function normalizeTimeoutMs(value: unknown): number {
@@ -211,13 +291,16 @@ function isKnownXHighCodexModel(modelId: string): boolean {
   );
 }
 
-// Exported so adapter request paths (thread-lifecycle.resolveReasoningEffort)
-// can branch on model-family enum support: modern Codex models use the
-// none/low/medium/high/xhigh effort enum and reject "minimal", which is the
-// CLI default. (#71946)
+/**
+ * Returns true for Codex models that use the modern reasoning effort enum and
+ * reject the legacy CLI `minimal` default.
+ */
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
-    lower === "gpt-5.5" || lower === "gpt-5.4" || lower === "gpt-5.4-mini" || lower === "gpt-5.2"
+    lower === "gpt-5.5" ||
+    lower === "gpt-5.4" ||
+    lower === "gpt-5.4-mini" ||
+    lower === "gpt-5.3-codex-spark"
   );
 }

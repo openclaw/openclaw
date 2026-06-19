@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+// Codex tests cover transcript repair runtime contract plugin behavior.
 import {
   assistantHistoryMessage,
   currentPromptHistoryMessage,
   mediaOnlyHistoryMessage,
   structuredHistoryMessage,
-} from "../../../../test/helpers/agents/transcript-repair-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { describe, expect, it } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 
 describe("Codex transcript projection runtime contract", () => {

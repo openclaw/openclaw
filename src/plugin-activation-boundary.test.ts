@@ -1,7 +1,24 @@
+// Tests plugin activation boundaries during root package startup.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeModelRef } from "./agents/model-selection-normalize.js";
 import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
 import { parseBrowserMajorVersion } from "./plugin-sdk/browser-host-inspection.js";
+
+const testModelIdNormalization = {
+  providers: {
+    google: {
+      aliases: {
+        "gemini-3.1-pro": "gemini-3.1-pro-preview",
+        "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+      },
+    },
+    xai: {
+      aliases: {
+        "grok-4-fast-reasoning": "grok-4-fast",
+      },
+    },
+  },
+};
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   vi.fn((params: { artifactBasename: string }) => {
@@ -19,7 +36,7 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   }),
 );
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
   vi.fn(() => ({
     diagnostics: [],
     plugins: [
@@ -34,6 +51,7 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
           slack: ["SLACK_BOT_TOKEN"],
           telegram: ["TELEGRAM_BOT_TOKEN"],
         },
+        modelIdNormalization: testModelIdNormalization,
         skills: [],
         hooks: [],
         origin: "bundled",
@@ -64,8 +82,13 @@ const facadeMockHelpers = vi.hoisted(() => {
   return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
 });
 
-vi.mock("./plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("./plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
 }));
 
 vi.mock("./secrets/channel-env-vars.js", () => ({
@@ -90,7 +113,7 @@ vi.mock("./plugin-sdk/facade-loader.js", () => ({
 
 vi.mock("./plugin-sdk/facade-runtime.js", () => ({
   ...facadeMockHelpers,
-  __testing: {},
+  testing: {},
   canLoadActivatedBundledPluginPublicSurface: () => true,
   listImportedBundledPluginFacadeIds: () => [],
   loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
@@ -115,8 +138,15 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    const staticNormalize = { allowPluginNormalization: false };
+    const staticNormalize = {
+      allowPluginNormalization: false,
+      manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
+    };
     expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(normalizeModelRef("google", "gemini-3-pro-preview", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });

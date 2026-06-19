@@ -1,3 +1,4 @@
+// Verifies task imports stay inside allowed runtime and registry boundaries.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   listTaskBoundarySourceFiles,
@@ -61,7 +62,7 @@ describe("task boundaries", () => {
         }
       }
     }
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps direct task-flow-registry imports behind approved task-flow access seams", () => {
@@ -78,5 +79,14 @@ describe("task boundaries", () => {
       .map(({ relative }) => relative);
 
     expect(importers.toSorted()).toEqual([...TASK_REGISTRY_ALLOWED_IMPORTERS].toSorted());
+  });
+
+  it("keeps task registry maintenance chat-type checks on the lightweight parser", () => {
+    const maintenance = sources.find(
+      ({ relative }) => relative === "tasks/task-registry.maintenance.ts",
+    );
+
+    expect(maintenance?.source).toContain("session-chat-type-shared.js");
+    expect(maintenance?.source).not.toContain("session-chat-type.js");
   });
 });

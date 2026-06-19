@@ -1,7 +1,6 @@
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+// Extracts web content public artifacts from plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type {
   PluginWebContentExtractorEntry,
   WebContentExtractorPlugin,
@@ -12,10 +11,7 @@ const WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "web-content-extractor-api.js",
 ] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+/** Checks public artifact exports before adding them to runtime extractor registration. */
 function isWebContentExtractorPlugin(value: unknown): value is WebContentExtractorPlugin {
   return (
     isRecord(value) &&
@@ -48,6 +44,7 @@ function tryLoadBundledPublicArtifactModule(params: {
   return null;
 }
 
+/** Collects zero-arg factory exports in deterministic order for prompt-cache stability. */
 function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtractorPlugin[] {
   const extractors: WebContentExtractorPlugin[] = [];
   for (const [name, exported] of Object.entries(mod).toSorted(([left], [right]) =>
@@ -69,6 +66,7 @@ function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtr
   return extractors;
 }
 
+/** Loads bundled web content extractor entries from public plugin artifacts. */
 export function loadBundledWebContentExtractorEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
@@ -82,10 +80,4 @@ export function loadBundledWebContentExtractorEntriesFromDir(params: {
     return null;
   }
   return extractors.map((extractor) => Object.assign({}, extractor, { pluginId: params.pluginId }));
-}
-
-export function hasBundledWebContentExtractorPublicArtifact(pluginId: string): boolean {
-  return WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: pluginId, artifactBasename })),
-  );
 }

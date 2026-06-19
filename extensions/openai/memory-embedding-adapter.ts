@@ -1,3 +1,4 @@
+// Openai plugin module implements memory embedding adapter behavior.
 import {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
@@ -19,22 +20,27 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
+    const resolvedProvider = options.provider ?? "openai";
     const { provider, client } = await createOpenAiEmbeddingProvider({
       ...options,
-      provider: "openai",
+      provider: resolvedProvider,
       fallback: "none",
     });
     return {
       provider,
       runtime: {
         id: "openai",
+        sourceWideBatchEmbed: true,
         cacheKeyData: {
-          provider: "openai",
+          provider: resolvedProvider,
           baseUrl: client.baseUrl,
           model: client.model,
+          outputDimensionality: client.outputDimensionality,
+          documentInputType: client.documentInputType ?? client.inputType,
           headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
         },
         batchEmbed: async (batch) => {
+          const inputType = client.documentInputType ?? client.inputType;
           const byCustomId = await runOpenAiEmbeddingBatches({
             openAi: client,
             agentId: batch.agentId,
@@ -45,6 +51,10 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               body: {
                 model: client.model,
                 input: chunk.text,
+                ...(typeof client.outputDimensionality === "number"
+                  ? { dimensions: client.outputDimensionality }
+                  : {}),
+                ...(inputType ? { input_type: inputType } : {}),
               },
             })),
             wait: batch.wait,

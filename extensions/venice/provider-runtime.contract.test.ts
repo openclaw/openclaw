@@ -1,3 +1,4 @@
-import { describeVeniceProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
+// Venice tests cover provider runtime.contract plugin behavior.
+import { describeVeniceProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeVeniceProviderRuntimeContract(() => import("./index.js"));

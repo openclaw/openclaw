@@ -1,15 +1,15 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+// Verifies plugin text transforms rewrite prompts and streamed assistant output.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
   type Context,
   type Model,
-} from "@mariozechner/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
-  transformStreamContextText,
   wrapStreamFnTextTransforms,
 } from "./plugin-text-transforms.js";
 
@@ -20,6 +20,7 @@ const model = {
 } as Model<"openai-responses">;
 
 function makeAssistantMessage(text: string): AssistantMessage {
+  // Output transform tests need a complete assistant message with visible text.
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -47,8 +48,13 @@ describe("plugin text transforms", () => {
       { input: [{ from: /paper ticket/g, to: "digital ticket" }] },
     );
 
-    expect(merged?.input).toHaveLength(2);
-    expect(merged?.output).toHaveLength(1);
+    expect(merged).toStrictEqual({
+      input: [
+        { from: /red basket/g, to: "blue basket" },
+        { from: /paper ticket/g, to: "digital ticket" },
+      ],
+      output: [{ from: /blue basket/g, to: "red basket" }],
+    });
     expect(applyPluginTextReplacements("red basket paper ticket", merged?.input)).toBe(
       "blue basket digital ticket",
     );
@@ -64,41 +70,62 @@ describe("plugin text transforms", () => {
     ).toBe("counter receipt on the right shelf");
   });
 
-  it("rewrites system prompt and message text content before transport", () => {
-    const context = transformStreamContextText(
-      {
-        systemPrompt: "Use orchid mailbox inside north tower",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Please use the red basket" },
-              { type: "image", url: "data:image/png;base64,abc" },
-            ],
-          },
-        ],
-      } as Context,
-      [
+  it("rewrites system prompt and message text content before transport", async () => {
+    let capturedContext: Context | undefined;
+    const wrapped = wrapStreamFnTextTransforms({
+      streamFn: (_model, context) => {
+        capturedContext = context;
+        const stream = createAssistantMessageEventStream();
+        stream.end();
+        return stream;
+      },
+      input: [
         {
           from: /orchid mailbox/g,
           to: "pine mailbox",
         },
         { from: /red basket/g, to: "blue basket" },
       ],
-    ) as unknown as { systemPrompt: string; messages: Array<{ content: unknown[] }> };
+    });
+    await Promise.resolve(
+      wrapped(
+        model,
+        {
+          systemPrompt: "Use orchid mailbox inside north tower",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Please use the red basket" },
+                { type: "image", url: "data:image/png;base64,abc" },
+              ],
+            },
+          ],
+        } as Context,
+        undefined,
+      ),
+    );
+
+    const context = capturedContext as unknown as {
+      systemPrompt: string;
+      messages: Array<{ content: unknown[] }>;
+    };
 
     expect(context.systemPrompt).toBe("Use pine mailbox inside north tower");
-    expect(context.messages[0]?.content[0]).toMatchObject({
-      type: "text",
-      text: "Please use the blue basket",
-    });
-    expect(context.messages[0]?.content[1]).toMatchObject({
-      type: "image",
-      url: "data:image/png;base64,abc",
-    });
+    const textContent = context.messages[0]?.content[0] as
+      | { type?: string; text?: string }
+      | undefined;
+    expect(textContent?.type).toBe("text");
+    expect(textContent?.text).toBe("Please use the blue basket");
+    const imageContent = context.messages[0]?.content[1] as
+      | { type?: string; url?: string }
+      | undefined;
+    expect(imageContent?.type).toBe("image");
+    expect(imageContent?.url).toBe("data:image/png;base64,abc");
   });
 
   it("wraps stream functions with inbound and outbound replacements", async () => {
+    // The wrapper mutates text-only blocks while preserving non-text content.
     let capturedContext: Context | undefined;
     const baseStreamFn: StreamFn = (_model, context) => {
       capturedContext = context;
@@ -147,13 +174,10 @@ describe("plugin text transforms", () => {
     const result = await stream.result();
 
     expect(capturedContext?.systemPrompt).toBe("Keep red basket untouched here");
-    expect(capturedContext?.messages).toMatchObject([{ role: "user", content: "Use blue basket" }]);
-    expect(events[0]).toMatchObject({
-      type: "text_delta",
-      delta: "red basket on the left shelf",
-    });
-    expect(result.content).toMatchObject([
-      { type: "text", text: "final red basket on the left shelf" },
-    ]);
+    expect(capturedContext?.messages).toEqual([{ role: "user", content: "Use blue basket" }]);
+    const firstEvent = events[0] as { type?: string; delta?: string } | undefined;
+    expect(firstEvent?.type).toBe("text_delta");
+    expect(firstEvent?.delta).toBe("red basket on the left shelf");
+    expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
   });
 });

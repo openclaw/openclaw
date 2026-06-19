@@ -1,19 +1,18 @@
+// Ios Version script supports OpenClaw repository automation.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { parseReleaseVersion } from "./npm-publish-plan.mjs";
 
-export const IOS_VERSION_FILE = "apps/ios/version.json";
-export const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
-export const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
-export const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
+const IOS_VERSION_FILE = "apps/ios/version.json";
+const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
+const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
+const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
 
-const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})$/u;
-const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:beta\.\d+|\d+))?$/u;
-
-export type IosVersionManifest = {
+type IosVersionManifest = {
   version: string;
 };
 
-export type ResolvedIosVersion = {
+type ResolvedIosVersion = {
   canonicalVersion: string;
   marketingVersion: string;
   buildVersion: string;
@@ -23,10 +22,18 @@ export type ResolvedIosVersion = {
   releaseNotesPath: string;
 };
 
-export type SyncIosVersioningMode = "check" | "write";
+type SyncIosVersioningMode = "check" | "write";
 
 function normalizeTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+function parsePinnedReleaseVersion(rawVersion: string): string | null {
+  const parsed = parseReleaseVersion(rawVersion.trim());
+  if (!parsed || parsed.version !== parsed.baseVersion) {
+    return null;
+  }
+  return parsed.baseVersion;
 }
 
 export function normalizePinnedIosVersion(rawVersion: string): string {
@@ -35,12 +42,14 @@ export function normalizePinnedIosVersion(rawVersion: string): string {
     throw new Error(`Missing iOS version in ${IOS_VERSION_FILE}.`);
   }
 
-  const match = PINNED_IOS_VERSION_PATTERN.exec(trimmed);
-  if (!match) {
-    throw new Error(`Invalid iOS version '${rawVersion}'. Expected pinned CalVer like 2026.4.6.`);
+  const pinnedVersion = parsePinnedReleaseVersion(trimmed);
+  if (!pinnedVersion) {
+    throw new Error(
+      `Invalid iOS version '${rawVersion}'. Expected pinned release version like 2026.6.5.`,
+    );
   }
 
-  return match[1] ?? trimmed;
+  return pinnedVersion;
 }
 
 export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {
@@ -49,17 +58,17 @@ export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): s
     throw new Error("Missing root package.json version.");
   }
 
-  const match = GATEWAY_VERSION_PATTERN.exec(trimmed);
-  if (!match) {
+  const parsed = parseReleaseVersion(trimmed);
+  if (!parsed) {
     throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.D, YYYY.M.D-beta.N, or YYYY.M.D-N.`,
+      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
     );
   }
 
-  return match[1] ?? trimmed;
+  return parsed.baseVersion;
 }
 
-export function readRootPackageVersion(rootDir = path.resolve(".")): string {
+function readRootPackageVersion(rootDir = path.resolve(".")): string {
   const packageJsonPath = path.join(rootDir, "package.json");
   const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
   const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
@@ -80,7 +89,7 @@ export function resolveGatewayVersionForIosRelease(rootDir = path.resolve(".")):
   };
 }
 
-export function readIosVersionManifest(rootDir = path.resolve(".")): IosVersionManifest {
+function readIosVersionManifest(rootDir = path.resolve(".")): IosVersionManifest {
   const versionFilePath = path.join(rootDir, IOS_VERSION_FILE);
   return JSON.parse(readFileSync(versionFilePath, "utf8")) as IosVersionManifest;
 }

@@ -1,3 +1,4 @@
+// Google API module exposes the plugin public contract.
 import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
@@ -7,7 +8,6 @@ export { parseGeminiAuth };
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
-  normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./provider-policy.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
@@ -31,6 +31,8 @@ export {
 export {
   DEFAULT_GOOGLE_API_BASE_URL,
   isGoogleGenerativeAiApi,
+  isGoogleVertexBaseUrl,
+  isGoogleVertexHostname,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
   normalizeGoogleProviderConfig,

@@ -1,14 +1,16 @@
-import { RequestClient } from "@buape/carbon";
-import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord plugin module implements client behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { RequestClient } from "./internal/discord.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
@@ -21,6 +23,8 @@ export type DiscordClientOpts = {
   accountId?: string;
   rest?: RequestClient;
   retry?: RetryConfig;
+  signal?: AbortSignal;
+  timeoutMs?: number;
   verbose?: boolean;
 };
 
@@ -50,21 +54,23 @@ export function resolveDiscordClientAccountContext(
   };
 }
 
-function resolveToken(params: { accountId: string; fallbackToken?: string }) {
+function resolveToken(params: {
+  account: ResolvedDiscordAccount;
+  accountId: string;
+  fallbackToken?: string;
+}) {
   const fallback = normalizeDiscordToken(params.fallbackToken, "channels.discord.token");
   if (!fallback) {
+    if (params.account.tokenStatus === "configured_unavailable") {
+      throw new Error(
+        `Discord bot token configured for account "${params.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
+      );
+    }
     throw new Error(
       `Discord bot token missing for account "${params.accountId}" (set discord.accounts.${params.accountId}.token or DISCORD_BOT_TOKEN for default).`,
     );
   }
   return fallback;
-}
-
-export function resolveDiscordProxyFetch(
-  opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
-  runtime?: Pick<RuntimeEnv, "error">,
-): typeof fetch | undefined {
-  return resolveDiscordClientAccountContext(opts, runtime).proxyFetch;
 }
 
 function resolveRest(
@@ -73,15 +79,18 @@ function resolveRest(
   cfg: OpenClawConfig,
   rest?: RequestClient,
   proxyFetch?: typeof fetch,
+  signal?: AbortSignal,
+  timeoutMs?: number,
 ) {
   if (rest) {
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
-  return createDiscordRequestClient(
-    token,
-    resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined,
-  );
+  return createDiscordRequestClient(token, {
+    ...(resolvedProxyFetch ? { fetch: resolvedProxyFetch } : {}),
+    ...(signal ? { signal } : {}),
+    ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+  });
 }
 
 function resolveAccountWithoutToken(params: {
@@ -98,6 +107,7 @@ function resolveAccountWithoutToken(params: {
     name: normalizeOptionalString(merged.name),
     token: "",
     tokenSource: "none",
+    tokenStatus: "missing",
     config: merged,
   };
 }
@@ -112,10 +122,19 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
   const token =
     explicitToken ??
     resolveToken({
+      account,
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, account, resolvedCfg, opts.rest, proxyContext.proxyFetch);
+  const rest = resolveRest(
+    token,
+    account,
+    resolvedCfg,
+    opts.rest,
+    proxyContext.proxyFetch,
+    opts.signal,
+    opts.timeoutMs,
+  );
   return { token, rest, account };
 }
 

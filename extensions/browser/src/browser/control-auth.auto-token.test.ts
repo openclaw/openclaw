@@ -1,10 +1,34 @@
+// Browser tests cover control auth.auto token plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn<() => OpenClawConfig>(),
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
   writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
+  replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+    await mocks.writeConfigFile(nextConfig);
+  }),
+  mutateConfigFile: vi.fn(
+    async (params: {
+      mutate: (draft: OpenClawConfig, context: { snapshot: { path: string } }) => unknown;
+    }) => {
+      const draft = structuredClone(mocks.getRuntimeConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await mocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        persistedHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  ),
   resolveGatewayAuth: vi.fn(
     ({
       authConfig,
@@ -48,8 +72,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  replaceConfigFile: mocks.replaceConfigFile,
+  mutateConfigFile: mocks.mutateConfigFile,
 }));
 
 vi.mock("../gateway/startup-auth.js", () => ({
@@ -61,7 +86,11 @@ vi.mock("../gateway/auth.js", () => ({
 }));
 
 function readPersistedConfig(): OpenClawConfig {
-  const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0];
+  const [call] = mocks.writeConfigFile.mock.calls;
+  if (!call) {
+    throw new Error("expected persisted config write");
+  }
+  const [persistedCfg] = call;
   if (!persistedCfg) {
     throw new Error("expected persisted config");
   }
@@ -73,7 +102,7 @@ async function expectGeneratedBrowserAuthPersistence(params: {
   mode: "none" | "trusted-proxy";
   generatedAuthField: "token" | "password";
 }) {
-  mocks.loadConfig.mockReturnValue(params.cfg);
+  mocks.getRuntimeConfig.mockReturnValue(params.cfg);
 
   const result = await ensureBrowserControlAuth({ cfg: params.cfg, env: {} as NodeJS.ProcessEnv });
 
@@ -88,7 +117,7 @@ async function expectGeneratedBrowserAuthPersistence(params: {
 }
 
 async function expectUnresolvedBrowserSecretRefSkipsPersistence(cfg: OpenClawConfig) {
-  mocks.loadConfig.mockReturnValue(cfg);
+  mocks.getRuntimeConfig.mockReturnValue(cfg);
 
   const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
@@ -113,7 +142,7 @@ describe("ensureBrowserControlAuth", () => {
 
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
     expect(result).toEqual({ auth: {} });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   };
@@ -137,8 +166,9 @@ describe("ensureBrowserControlAuth", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.loadConfig.mockClear();
+    mocks.getRuntimeConfig.mockClear();
     mocks.writeConfigFile.mockClear();
+    mocks.mutateConfigFile.mockClear();
     mocks.resolveGatewayAuth.mockClear();
     mocks.ensureGatewayStartupAuth.mockClear();
   });
@@ -155,7 +185,7 @@ describe("ensureBrowserControlAuth", () => {
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
     expect(result).toEqual({ auth: { token: "already-set" } });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
@@ -260,7 +290,7 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       browser: {
         enabled: true,
       },
@@ -284,7 +314,7 @@ describe("ensureBrowserControlAuth", () => {
     });
 
     expect(result).toEqual({ auth: {} });
-    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
@@ -401,7 +431,7 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       gateway: {
         auth: {
           token: "latest-token",
@@ -436,7 +466,7 @@ describe("ensureBrowserControlAuth", () => {
         },
       },
     };
-    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
     mocks.ensureGatewayStartupAuth.mockRejectedValueOnce(new Error("MISSING_GW_TOKEN"));
 
     await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(

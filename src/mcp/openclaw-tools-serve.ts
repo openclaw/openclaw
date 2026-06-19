@@ -12,10 +12,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 export function resolveOpenClawToolsForMcp(): AnyAgentTool[] {
-  return [createCronTool()];
+  return [createCronTool({ creatorToolAllowlist: [{ name: "cron" }] })];
 }
 
-export function createOpenClawToolsMcpServer(
+function createOpenClawToolsMcpServer(
   params: {
     tools?: AnyAgentTool[];
   } = {},
@@ -24,13 +24,13 @@ export function createOpenClawToolsMcpServer(
   return createToolsMcpServer({ name: "openclaw-tools", tools });
 }
 
-export async function serveOpenClawToolsMcp(): Promise<void> {
+async function serveOpenClawToolsMcp(): Promise<void> {
   const server = createOpenClawToolsMcpServer();
   await connectToolsMcpServerToStdio(server);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  serveOpenClawToolsMcp().catch((err) => {
+  serveOpenClawToolsMcp().catch((err: unknown) => {
     process.stderr.write(`openclaw-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

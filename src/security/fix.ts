@@ -1,8 +1,10 @@
+// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { createConfigIO } from "../config/config.js";
+import { createConfigIO, replaceConfigFile } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -362,6 +364,9 @@ export async function collectSecurityPermissionTargets(params: {
     targets.push({ path: agentRoot, mode: 0o700, require: "dir" });
     targets.push({ path: agentDir, mode: 0o700, require: "dir" });
 
+    for (const databasePath of resolveAuthProfileDatabaseFilePaths(agentDir)) {
+      targets.push({ path: databasePath, mode: 0o600, require: "file" });
+    }
     const authPath = path.join(agentDir, "auth-profiles.json");
     targets.push({ path: authPath, mode: 0o600, require: "file" });
 
@@ -404,7 +409,7 @@ export async function fixSecurityFootguns(opts?: {
   const errors: string[] = [];
 
   const io = createConfigIO({ env, configPath });
-  const snap = await io.readConfigFileSnapshot();
+  const { snapshot: snap, writeOptions } = await io.readConfigFileSnapshotForWrite();
   if (!snap.valid) {
     errors.push(...snap.issues.map((i) => `${i.path}: ${i.message}`));
   }
@@ -421,10 +426,16 @@ export async function fixSecurityFootguns(opts?: {
 
     if (changes.length > 0) {
       try {
-        await io.writeConfigFile(fixed.cfg);
+        await replaceConfigFile({
+          nextConfig: fixed.cfg,
+          snapshot: snap,
+          writeOptions,
+          io,
+          afterWrite: { mode: "auto" },
+        });
         configWritten = true;
       } catch (err) {
-        errors.push(`writeConfigFile failed: ${String(err)}`);
+        errors.push(`replaceConfigFile failed: ${String(err)}`);
       }
     }
   }
@@ -447,7 +458,7 @@ export async function fixSecurityFootguns(opts?: {
     configPath,
     cfg: snap.config ?? {},
     includePaths,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     errors.push(`collectSecurityPermissionTargets failed: ${String(err)}`);
     return [] as SecurityPermissionTarget[];
   });

@@ -1,15 +1,16 @@
+// Builds the trust plan for exec wrappers before commands are launched.
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   resolveDispatchWrapperTrustPlan,
   unwrapKnownDispatchWrapperInvocation,
 } from "./dispatch-wrapper-resolution.js";
 import {
-  extractShellWrapperInlineCommand,
+  extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
   unwrapKnownShellMultiplexerInvocation,
 } from "./shell-wrapper-resolution.js";
 
-export type ExecWrapperTrustPlan = {
+type ExecWrapperTrustPlan = {
   argv: string[];
   policyArgv: string[];
   wrapperChain: string[];
@@ -46,27 +47,42 @@ function finalizeExecWrapperTrustPlan(
   const rawExecutable = argv[0]?.trim() ?? "";
   const shellWrapperExecutable =
     !policyBlocked && rawExecutable.length > 0 && isShellWrapperExecutable(rawExecutable);
-  return {
+  const plan: ExecWrapperTrustPlan = {
     argv,
     policyArgv,
     wrapperChain,
     policyBlocked,
-    blockedWrapper,
     shellWrapperExecutable,
-    shellInlineCommand: shellWrapperExecutable ? extractShellWrapperInlineCommand(argv) : null,
+    shellInlineCommand: shellWrapperExecutable
+      ? extractBindableShellWrapperInlineCommand(argv)
+      : null,
   };
+  if (blockedWrapper !== undefined) {
+    plan.blockedWrapper = blockedWrapper;
+  }
+  return plan;
 }
 
+/**
+ * Resolves transparent dispatch wrappers into the executable that policy should inspect.
+ * Shell multiplexers keep their original argv as the trust target while exposing the
+ * nested shell command for shell-specific approval checks.
+ */
 export function resolveExecWrapperTrustPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
+  platform: NodeJS.Platform = process.platform,
 ): ExecWrapperTrustPlan {
   let current = argv;
   let policyArgv = argv;
   let sawShellMultiplexer = false;
   const wrapperChain: string[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
-    const dispatchPlan = resolveDispatchWrapperTrustPlan(current, maxDepth - wrapperChain.length);
+    const dispatchPlan = resolveDispatchWrapperTrustPlan(
+      current,
+      maxDepth - wrapperChain.length,
+      platform,
+    );
     if (dispatchPlan.policyBlocked) {
       return blockedExecWrapperTrustPlan({
         argv: dispatchPlan.argv,
@@ -99,7 +115,7 @@ export function resolveExecWrapperTrustPlan(
     if (shellMultiplexerUnwrap.kind === "unwrapped") {
       wrapperChain.push(shellMultiplexerUnwrap.wrapper);
       if (!sawShellMultiplexer) {
-        // Preserve the real executable target for trust checks.
+        // Trust policy must see the multiplexer applet, not only the shell it launches.
         policyArgv = current;
         sawShellMultiplexer = true;
       }
@@ -114,7 +130,7 @@ export function resolveExecWrapperTrustPlan(
   }
 
   if (wrapperChain.length >= maxDepth) {
-    const dispatchOverflow = unwrapKnownDispatchWrapperInvocation(current);
+    const dispatchOverflow = unwrapKnownDispatchWrapperInvocation(current, platform);
     if (dispatchOverflow.kind === "blocked" || dispatchOverflow.kind === "unwrapped") {
       return blockedExecWrapperTrustPlan({
         argv: current,

@@ -1,12 +1,10 @@
 ---
 summary: "Use Kilo Gateway's unified API to access many models in OpenClaw"
-title: "Kilocode"
+title: "Kilo Gateway"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via Kilo Gateway in OpenClaw
 ---
-
-# Kilo Gateway
 
 Kilo Gateway provides a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
@@ -17,6 +15,15 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 | Auth     | `KILOCODE_API_KEY`                 |
 | API      | OpenAI-compatible                  |
 | Base URL | `https://api.kilo.ai/api/gateway/` |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/kilocode-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -62,17 +69,17 @@ OpenClaw dynamically discovers available models from the Kilo Gateway at startup
 
 Any model available on the gateway can be used with the `kilocode/` prefix:
 
-| Model ref                              | Notes                              |
-| -------------------------------------- | ---------------------------------- |
-| `kilocode/kilo/auto`                   | Default — smart routing            |
-| `kilocode/anthropic/claude-sonnet-4`   | Anthropic via Kilo                 |
-| `kilocode/openai/gpt-5.5`              | OpenAI via Kilo                    |
-| `kilocode/google/gemini-3-pro-preview` | Google via Kilo                    |
-| ...and many more                       | Use `/models kilocode` to list all |
+| Model ref                                | Notes                              |
+| ---------------------------------------- | ---------------------------------- |
+| `kilocode/kilo/auto`                     | Default — smart routing            |
+| `kilocode/anthropic/claude-sonnet-4`     | Anthropic via Kilo                 |
+| `kilocode/openai/gpt-5.5`                | OpenAI via Kilo                    |
+| `kilocode/google/gemini-3.1-pro-preview` | Google via Kilo                    |
+| ...and many more                         | Use `/models kilocode` to list all |
 
 <Tip>
 At startup, OpenClaw queries `GET https://api.kilo.ai/api/gateway/models` and merges
-discovered models ahead of the static fallback catalog. The bundled fallback always
+discovered models ahead of the static fallback catalog. The static fallback always
 includes `kilocode/kilo/auto` (`Kilo Auto`) with `input: ["text", "image"]`,
 `reasoning: true`, `contextWindow: 1000000`, and `maxTokens: 128000`.
 </Tip>
@@ -115,9 +122,10 @@ includes `kilocode/kilo/auto` (`Kilo Auto`) with `input: ["text", "image"]`,
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - If model discovery fails at startup, OpenClaw falls back to the bundled static catalog containing `kilocode/kilo/auto`.
+    - If model discovery fails at startup, OpenClaw falls back to the static catalog containing `kilocode/kilo/auto`.
     - Confirm your API key is valid and that your Kilo account has the desired models enabled.
     - When the Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
+
   </Accordion>
 </AccordionGroup>
 

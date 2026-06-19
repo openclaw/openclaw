@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime restart behavior.
 import {
   MATRIX_QA_HOMESERVER_ROOM_KEY,
   MATRIX_QA_RESTART_ROOM_KEY,
@@ -12,8 +13,8 @@ import {
   isMatrixQaExactMarkerReply,
   assertTopLevelReplyArtifact,
   advanceMatrixQaActorCursor,
-  NO_REPLY_WINDOW_MS,
   primeMatrixQaDriverScenarioClient,
+  resolveMatrixQaNoReplyWindowMs,
   runAssertedDriverTopLevelScenario,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
@@ -254,7 +255,7 @@ async function assertNoRestartReplayDuplicate(params: {
         token: params.replayToken,
       }),
     roomId: params.roomId,
-    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, params.context.timeoutMs),
+    timeoutMs: resolveMatrixQaNoReplyWindowMs(params.context.timeoutMs),
   });
   if (duplicate.matched) {
     throw new Error(
@@ -313,7 +314,7 @@ export async function runRestartReplayDedupeScenario(context: MatrixQaScenarioCo
 
   return {
     artifacts: {
-      duplicateWindowMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+      duplicateWindowMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
       firstDriverEventId: replayDriverEventId,
       firstReply,
       firstToken: replayToken,
@@ -328,7 +329,7 @@ export async function runRestartReplayDedupeScenario(context: MatrixQaScenarioCo
       "restart signal: SIGUSR1",
       `first driver event: ${replayDriverEventId}`,
       ...buildMatrixReplyDetails("first reply", firstReply),
-      `duplicate replay window: ${Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs)}ms`,
+      `duplicate replay window: ${resolveMatrixQaNoReplyWindowMs(context.timeoutMs)}ms`,
       `fresh post-restart driver event: ${postRestart.driverEventId}`,
       ...buildMatrixReplyDetails("fresh reply", postRestart.reply),
     ].join("\n"),
@@ -373,6 +374,8 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     await rewriteMatrixSyncStoreCursor({
       cursor: staleCursor,
       pathname: syncStore.pathname,
+      source: syncStore.source,
+      stateKey: syncStore.stateKey,
     });
   });
 
@@ -401,7 +404,7 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
   return {
     artifacts: {
       dedupeCommitObserved: true,
-      duplicateWindowMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+      duplicateWindowMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
       firstDriverEventId: replayDriverEventId,
       firstReply,
       firstToken: replayToken,
@@ -418,7 +421,7 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
       `stale sync cursor: ${staleCursor}`,
       `first driver event: ${replayDriverEventId}`,
       ...buildMatrixReplyDetails("first reply", firstReply),
-      `duplicate replay window: ${Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs)}ms`,
+      `duplicate replay window: ${resolveMatrixQaNoReplyWindowMs(context.timeoutMs)}ms`,
       `fresh post-restart driver event: ${postRestart.driverEventId}`,
       ...buildMatrixReplyDetails("fresh reply", postRestart.reply),
     ].join("\n"),

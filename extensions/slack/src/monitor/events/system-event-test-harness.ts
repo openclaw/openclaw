@@ -1,3 +1,4 @@
+// Slack plugin module implements system event test harness behavior.
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {
@@ -10,6 +11,9 @@ export type SlackSystemEventTestOverrides = {
   allowFrom?: string[];
   channelType?: "im" | "channel";
   channelUsers?: string[];
+  reactionMode?: "off" | "own" | "all" | "allowlist";
+  reactionAllowlist?: Array<string | number>;
+  userNames?: Record<string, string>;
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
@@ -25,6 +29,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     runtime: { error: () => {} },
     botUserId: "U_BOT",
     botId: "B_BOT",
+    teamId: "T_TEST",
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
@@ -39,13 +44,17 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     groupPolicy: "open",
     allowFrom: overrides?.allowFrom ?? [],
     allowNameMatching: false,
+    reactionMode: overrides?.reactionMode ?? "all",
+    reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,
     }),
-    resolveUserName: async () => ({ name: "alice" }),
+    resolveUserName: async (userId: string) => ({
+      name: overrides?.userNames?.[userId] ?? "alice",
+    }),
     resolveSlackSystemEventSessionKey: () => "agent:main:main",
   } as unknown as SlackMonitorContext;
 

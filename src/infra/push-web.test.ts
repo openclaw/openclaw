@@ -1,3 +1,4 @@
+// Tests web push subscription storage and delivery helpers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,10 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
 import {
   broadcastWebPush,
-  clearWebPushSubscription,
   clearWebPushSubscriptionByEndpoint,
   listWebPushSubscriptions,
-  loadWebPushSubscription,
   registerWebPushSubscription,
   resolveVapidKeys,
   sendWebPushNotification,
@@ -23,10 +22,10 @@ vi.mock("../config/paths.js", () => ({
 // Stub web-push so we don't make real HTTP requests.
 vi.mock("web-push", () => ({
   default: {
-    generateVAPIDKeys: () => ({
+    generateVAPIDKeys: vi.fn(() => ({
       publicKey: "test-public-key-base64url",
       privateKey: "test-private-key-base64url",
-    }),
+    })),
     setVapidDetails: vi.fn(),
     sendNotification: vi.fn().mockResolvedValue({ statusCode: 201 }),
   },
@@ -46,12 +45,17 @@ describe("resolveVapidKeys", () => {
     const keys = await resolveVapidKeys(tmpDir);
     expect(keys.publicKey).toBe("test-public-key-base64url");
     expect(keys.privateKey).toBe("test-private-key-base64url");
-    expect(keys.subject).toMatch(/^mailto:/);
+    expect(keys.subject).toBe("https://openclaw.ai");
+    const persistedKeys = JSON.parse(
+      await fs.readFile(path.join(tmpDir, "push", "vapid-keys.json"), "utf8"),
+    ) as { subject?: string };
+    expect(persistedKeys.subject).toBe("https://openclaw.ai");
 
     // Second call returns same keys.
     const keys2 = await resolveVapidKeys(tmpDir);
     expect(keys2.publicKey).toBe(keys.publicKey);
     expect(keys2.privateKey).toBe(keys.privateKey);
+    expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
   });
 
   it("prefers env vars over persisted keys", async () => {
@@ -67,6 +71,7 @@ describe("resolveVapidKeys", () => {
       expect(keys.publicKey).toBe("env-public");
       expect(keys.privateKey).toBe("env-private");
       expect(keys.subject).toBe("mailto:env@test.com");
+      expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     } finally {
       delete process.env.OPENCLAW_VAPID_PUBLIC_KEY;
       delete process.env.OPENCLAW_VAPID_PRIVATE_KEY;
@@ -85,7 +90,7 @@ describe("subscription CRUD", () => {
       keys,
       baseDir: tmpDir,
     });
-    expect(sub.subscriptionId).toBeTruthy();
+    expect(sub.subscriptionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(sub.endpoint).toBe(endpoint);
     expect(sub.keys.p256dh).toBe("p256dh-key");
     expect(sub.keys.auth).toBe("auth-key");
@@ -109,22 +114,6 @@ describe("subscription CRUD", () => {
     expect(sub2.keys.p256dh).toBe("new-p256dh");
   });
 
-  it("loads a subscription by ID", async () => {
-    const sub = await registerWebPushSubscription({
-      endpoint,
-      keys,
-      baseDir: tmpDir,
-    });
-    const loaded = await loadWebPushSubscription(sub.subscriptionId, tmpDir);
-    expect(loaded).not.toBeNull();
-    expect(loaded!.endpoint).toBe(endpoint);
-  });
-
-  it("returns null for unknown subscription ID", async () => {
-    const loaded = await loadWebPushSubscription("nonexistent", tmpDir);
-    expect(loaded).toBeNull();
-  });
-
   it("lists all subscriptions", async () => {
     await registerWebPushSubscription({
       endpoint: "https://push.example.com/a",
@@ -138,19 +127,6 @@ describe("subscription CRUD", () => {
     });
     const list = await listWebPushSubscriptions(tmpDir);
     expect(list).toHaveLength(2);
-  });
-
-  it("clears a subscription by ID", async () => {
-    const sub = await registerWebPushSubscription({
-      endpoint,
-      keys,
-      baseDir: tmpDir,
-    });
-    const removed = await clearWebPushSubscription(sub.subscriptionId, tmpDir);
-    expect(removed).toBe(true);
-
-    const list = await listWebPushSubscriptions(tmpDir);
-    expect(list).toHaveLength(0);
   });
 
   it("clears a subscription by endpoint", async () => {
@@ -198,7 +174,7 @@ describe("sending", () => {
     expect(result.ok).toBe(true);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledWith(
-      "mailto:openclaw@localhost",
+      "https://openclaw.ai",
       "test-public-key-base64url",
       "test-private-key-base64url",
     );

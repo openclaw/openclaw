@@ -1,3 +1,5 @@
+// Venice tests cover models plugin behavior.
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildVeniceModelDefinition,
@@ -110,6 +112,7 @@ function stubVeniceModelsFetch(rows: ModelSpecOverride[]) {
 
 describe("venice-models", () => {
   afterEach(() => {
+    clearLiveCatalogCacheForTests();
     vi.unstubAllGlobals();
     restoreDiscoveryEnv();
   });

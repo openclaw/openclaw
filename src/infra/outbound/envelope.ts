@@ -1,7 +1,10 @@
+// Outbound envelopes wrap payload projections, metadata, and delivery JSON for
+// tool responses while flattening simple delivery-only results.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OutboundDeliveryJson } from "./format.js";
 import { normalizeOutboundPayloadsForJson, type OutboundPayloadJson } from "./payloads.js";
 
+/** Structured result returned by outbound helpers when payloads/meta wrap delivery data. */
 export type OutboundResultEnvelope = {
   payloads?: OutboundPayloadJson[];
   meta?: unknown;
@@ -19,6 +22,7 @@ const isOutboundPayloadJson = (
   payload: ReplyPayload | OutboundPayloadJson,
 ): payload is OutboundPayloadJson => "mediaUrl" in payload;
 
+/** Builds the outbound result envelope, flattening plain delivery-only results by default. */
 export function buildOutboundResultEnvelope(
   params: BuildEnvelopeParams,
 ): OutboundResultEnvelope | OutboundDeliveryJson {

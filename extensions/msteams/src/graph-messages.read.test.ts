@@ -1,3 +1,4 @@
+// Msteams tests cover graph messages.read plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -207,7 +208,7 @@ describe("listPinsMSTeams", () => {
       to: CHAT_ID,
     });
 
-    expect(result.pins).toEqual([]);
+    expect(result.pins).toStrictEqual([]);
   });
 
   it("follows @odata.nextLink pagination", async () => {
@@ -321,7 +322,7 @@ describe("listReactionsMSTeams", () => {
       messageId: "msg-1",
     });
 
-    expect(result.reactions).toEqual([]);
+    expect(result.reactions).toStrictEqual([]);
   });
 
   it("counts reactions from users without an ID", async () => {

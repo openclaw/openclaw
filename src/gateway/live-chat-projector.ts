@@ -1,3 +1,5 @@
+// Gateway live chat projector.
+// Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import {
   SILENT_REPLY_TOKEN,
@@ -11,27 +13,16 @@ import {
   isSuppressedControlReplyText,
 } from "./control-reply-text.js";
 
-export { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
+export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
+function capLiveAssistantBuffer(text: string): string {
+  if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
+    return text;
   }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
+  return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
+/** Merges assistant full-text and delta events into a capped live buffer. */
 export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
@@ -39,22 +30,23 @@ export function resolveMergedAssistantText(params: {
 }): string {
   const { previousText, nextText, nextDelta } = params;
   if (nextText && previousText) {
-    if (nextText.startsWith(previousText)) {
-      return nextText;
+    if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
+      return capLiveAssistantBuffer(nextText);
     }
     if (previousText.startsWith(nextText) && !nextDelta) {
-      return previousText;
+      return capLiveAssistantBuffer(previousText);
     }
   }
   if (nextDelta) {
-    return appendUniqueSuffix(previousText, nextDelta);
+    return capLiveAssistantBuffer(previousText + nextDelta);
   }
   if (nextText) {
-    return nextText;
+    return capLiveAssistantBuffer(nextText);
   }
-  return previousText;
+  return capLiveAssistantBuffer(previousText);
 }
 
+/** Removes runtime-only context/directive tags from live assistant event text. */
 export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
   text: string;
   delta: string;
@@ -68,6 +60,7 @@ export function normalizeLiveAssistantEventText(params: { text: string; delta?: 
   };
 }
 
+/** Projects buffered assistant text into display text or a suppressed/pending state. */
 export function projectLiveAssistantBufferedText(
   rawText: string,
   options?: { suppressLeadFragments?: boolean },
@@ -97,6 +90,7 @@ export function projectLiveAssistantBufferedText(
   return { text, suppress: false, pendingLeadFragment: false };
 }
 
+/** Returns true when an assistant event phase should not appear in live chat. */
 export function shouldSuppressAssistantEventForLiveChat(data: unknown): boolean {
   return resolveAssistantEventPhase(data) === "commentary";
 }

@@ -19,10 +19,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
+/** Foreground service that keeps the Android node connection and voice capture visible to the OS. */
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
-  private var didStartForeground = false
   private var voiceCaptureMode = VoiceCaptureMode.Off
 
   override fun onCreate() {
@@ -36,6 +36,8 @@ class NodeForegroundService : Service() {
       stopSelf()
       return
     }
+    // Split connection and capture flows before combining so notification text
+    // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
         combine(
@@ -140,10 +142,14 @@ class NodeForegroundService : Service() {
     mgr.createNotificationChannel(channel)
   }
 
-  private fun buildNotification(title: String, text: String): Notification {
-    val launchIntent = Intent(this, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
+  private fun buildNotification(
+    title: String,
+    text: String,
+  ): Notification {
+    val launchIntent =
+      Intent(this, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      }
     val launchPending =
       PendingIntent.getActivity(
         this,
@@ -161,7 +167,8 @@ class NodeForegroundService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
 
-    return NotificationCompat.Builder(this, CHANNEL_ID)
+    return NotificationCompat
+      .Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
       .setContentText(text)
@@ -175,12 +182,7 @@ class NodeForegroundService : Service() {
 
   private fun startForegroundWithTypes(notification: Notification) {
     val serviceTypes = foregroundServiceTypesForVoiceMode(voiceCaptureMode)
-    if (didStartForeground) {
-      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
-      return
-    }
     ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
-    didStartForeground = true
   }
 
   companion object {
@@ -210,6 +212,7 @@ class NodeForegroundService : Service() {
           .setAction(ACTION_SET_VOICE_CAPTURE_MODE)
           .putExtra(EXTRA_VOICE_CAPTURE_MODE, mode.name)
       if (mode == VoiceCaptureMode.TalkMode) {
+        // Microphone foreground service type must be declared before Talk capture starts.
         ContextCompat.startForegroundService(context, intent)
       } else {
         context.startService(intent)
@@ -219,11 +222,12 @@ class NodeForegroundService : Service() {
 }
 
 internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
-  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-  return if (mode == VoiceCaptureMode.TalkMode) {
-    base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-  } else {
-    base
+  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+  return when (mode) {
+    VoiceCaptureMode.Off -> base
+    VoiceCaptureMode.ManualMic,
+    VoiceCaptureMode.TalkMode,
+    -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
   }
 }
 
@@ -233,8 +237,8 @@ internal fun voiceNotificationSuffix(
   manualMicListening: Boolean,
   talkListening: Boolean,
   talkSpeaking: Boolean,
-): String {
-  return when (mode) {
+): String =
+  when (mode) {
     VoiceCaptureMode.TalkMode ->
       when {
         talkSpeaking -> " · Talk: Speaking"
@@ -249,12 +253,13 @@ internal fun voiceNotificationSuffix(
       }
     VoiceCaptureMode.Off -> ""
   }
-}
 
-private fun String?.toVoiceCaptureMode(): VoiceCaptureMode {
-  return VoiceCaptureMode.entries.firstOrNull { it.name == this } ?: VoiceCaptureMode.Off
-}
+private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =
+  VoiceCaptureMode.entries.firstOrNull {
+    it.name == this
+  } ?: VoiceCaptureMode.Off
 
+/** Connection fields that drive foreground notification title/body text. */
 private data class VoiceNotificationBase(
   val status: String,
   val server: String?,
@@ -262,6 +267,7 @@ private data class VoiceNotificationBase(
   val mode: VoiceCaptureMode,
 )
 
+/** Voice capture fields that affect foreground-service type and suffix. */
 private data class VoiceNotificationCapture(
   val micEnabled: Boolean,
   val micListening: Boolean,
@@ -269,6 +275,7 @@ private data class VoiceNotificationCapture(
   val talkSpeaking: Boolean,
 )
 
+/** Aggregated notification state from runtime flows. */
 private data class VoiceNotificationState(
   val base: VoiceNotificationBase,
   val capture: VoiceNotificationCapture,

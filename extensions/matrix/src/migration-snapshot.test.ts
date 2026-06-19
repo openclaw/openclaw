@@ -1,7 +1,8 @@
+// Matrix tests cover migration snapshot plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 
 const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
   available: true,
@@ -133,7 +134,7 @@ describe("matrix migration snapshots", () => {
       });
       expect(detection.inspectorAvailable).toBe(true);
       expect(detection.plans).toHaveLength(1);
-      expect(detection.warnings).toEqual([]);
+      expect(detection.warnings).toStrictEqual([]);
       expect(
         hasActionableMatrixMigration({
           cfg,

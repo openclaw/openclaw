@@ -14,6 +14,7 @@ export {
   dispatchInboundMessage,
   dispatchInboundMessageWithBufferedDispatcher,
   dispatchInboundMessageWithDispatcher,
+  settleReplyDispatcher,
 } from "../auto-reply/dispatch.js";
 export {
   normalizeGroupActivation,
@@ -47,14 +48,20 @@ export {
 export type {
   ReplyDispatchKind,
   ReplyDispatcher,
+  ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 export type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
 } from "../auto-reply/reply/reply-dispatcher.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
-export type { GetReplyOptions, BlockReplyContext } from "../auto-reply/get-reply-options.types.js";
+export type {
+  GetReplyOptions,
+  BlockReplyContext,
+  SourceReplyDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
+export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";

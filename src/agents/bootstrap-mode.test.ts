@@ -1,3 +1,4 @@
+/** Tests bootstrap mode selection for primary, cron, heartbeat, and sandboxed runs. */
 import { describe, expect, it } from "vitest";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
 
@@ -74,7 +75,7 @@ describe("resolveBootstrapMode", () => {
     ).toBe("none");
   });
 
-  it("returns none when the run cannot access bootstrap files normally", () => {
+  it("returns limited when the run cannot access bootstrap files normally", () => {
     expect(
       resolveBootstrapMode({
         bootstrapPending: true,
@@ -84,6 +85,6 @@ describe("resolveBootstrapMode", () => {
         isCanonicalWorkspace: true,
         hasBootstrapFileAccess: false,
       }),
-    ).toBe("none");
+    ).toBe("limited");
   });
 });

@@ -1,3 +1,4 @@
+// Control UI module implements chat model helpers behavior.
 import type {
   GatewaySessionRow,
   ModelCatalogEntry,
@@ -63,6 +64,7 @@ export function createSessionsListResult(
     defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
     defaultsThinkingOptions?: string[];
     defaultsThinkingDefault?: string;
+    thinkingDefault?: string;
     omitSessionFromList?: boolean;
   } = {},
 ): SessionsListResult {
@@ -74,6 +76,7 @@ export function createSessionsListResult(
     defaultsThinkingLevels,
     defaultsThinkingOptions,
     defaultsThinkingDefault,
+    thinkingDefault,
     omitSessionFromList = false,
   } = params;
 
@@ -95,6 +98,7 @@ export function createSessionsListResult(
           createMainSessionRow({
             ...(modelProvider ? { modelProvider } : {}),
             ...(model ? { model } : {}),
+            ...(thinkingDefault ? { thinkingDefault } : {}),
           }),
         ],
   };

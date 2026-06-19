@@ -1,9 +1,7 @@
+// Memory Core plugin module implements manager sync control behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createSubsystemLogger,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
@@ -25,6 +23,7 @@ export type MemoryReadonlyRecoveryState = {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
+  closeDatabase: (db: DatabaseSync) => void;
   resetVectorState: () => void;
   ensureSchema: () => void;
   readMeta: () => { vectorDims?: number } | undefined;
@@ -90,7 +89,6 @@ export async function runMemorySyncWithReadonlyRecovery(
 ): Promise<void> {
   try {
     await state.runSync(params);
-    return;
   } catch (err) {
     if (!isMemoryReadonlyDbError(err) || state.closed) {
       throw err;
@@ -100,7 +98,7 @@ export async function runMemorySyncWithReadonlyRecovery(
     state.readonlyRecoveryLastError = reason;
     log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
     try {
-      state.db.close();
+      state.closeDatabase(state.db);
     } catch {}
     const previousVectorDims = state.vector.dims;
     state.db = state.openDatabase();
@@ -164,26 +162,4 @@ export function enqueueMemoryTargetedSessionSync(
     );
   }
   return state.getQueuedSessionSync() ?? Promise.resolve();
-}
-
-export function _createMemorySyncControlConfigForTests(
-  workspaceDir: string,
-  indexPath: string,
-): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-        memorySearch: {
-          provider: "openai",
-          model: "mock-embed",
-          store: { path: indexPath, vector: { enabled: false } },
-          cache: { enabled: false },
-          query: { minScore: 0, hybrid: { enabled: false } },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
-        },
-      },
-      list: [{ id: "main", default: true }],
-    },
-  } as OpenClawConfig;
 }

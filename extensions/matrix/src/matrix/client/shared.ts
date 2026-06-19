@@ -1,3 +1,4 @@
+// Matrix plugin module implements shared behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
@@ -294,7 +295,7 @@ export function stopSharedClientInstance(client: MatrixClient): void {
 
 export async function releaseSharedClientInstance(
   client: MatrixClient,
-  mode: "stop" | "persist" = "stop",
+  mode: "stop" | "persist" | "discard" = "stop",
 ): Promise<boolean> {
   const state = findSharedClientStateByInstance(client);
   if (!state) {
@@ -307,6 +308,8 @@ export async function releaseSharedClientInstance(
   deleteSharedClientState(state);
   if (mode === "persist") {
     await client.stopAndPersist();
+  } else if (mode === "discard") {
+    client.stopWithoutPersist();
   } else {
     client.stop();
   }

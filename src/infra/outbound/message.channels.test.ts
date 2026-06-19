@@ -1,3 +1,5 @@
+// Covers channel-specific outbound adapter behavior for message sends,
+// structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -34,13 +36,27 @@ afterEach(() => {
   setRegistry(emptyRegistry);
 });
 
-const gatewayCall = () =>
-  callGatewayMock.mock.calls[0]?.[0] as {
+function gatewayCall(): {
+  url?: string;
+  token?: string;
+  timeoutMs?: number;
+  params?: Record<string, unknown>;
+} {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected gateway call input to be an object");
+  }
+  return arg as {
     url?: string;
     token?: string;
     timeoutMs?: number;
     params?: Record<string, unknown>;
   };
+}
 
 describe("sendMessage channel normalization", () => {
   it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
@@ -156,11 +172,11 @@ describe("sendMessage channel normalization", () => {
         },
       },
       assertDeps: (deps: { localchat?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.localchat).toHaveBeenCalledWith(
-          "someone@example.com",
-          "hi",
-          expect.any(Object),
-        );
+        expect(deps.localchat).toHaveBeenCalledTimes(1);
+        const [to, text, options] = deps.localchat?.mock.calls[0] ?? [];
+        expect(to).toBe("someone@example.com");
+        expect(text).toBe("hi");
+        expect(typeof options).toBe("object");
       },
       expectedChannel: "localchat",
     },
@@ -321,8 +337,71 @@ describe("gateway url override hardening", () => {
         },
       },
     },
+    {
+      name: "forwards gateway delivery options in send params",
+      params: {
+        threadId: "topic456",
+        forceDocument: true,
+        silent: true,
+        parseMode: "HTML" as const,
+      },
+      expected: {
+        params: {
+          threadId: "topic456",
+          forceDocument: true,
+          silent: true,
+          parseMode: "HTML",
+        },
+      },
+    },
   ])("$name", async ({ params, expected }) => {
-    expect(await sendThreadChatGatewayMessage(params)).toMatchObject(expected);
+    const result = await sendThreadChatGatewayMessage(params);
+    for (const [key, value] of Object.entries(expected)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [nestedKey, nestedValue] of Object.entries(value)) {
+          expect(
+            ((result as Record<string, unknown>)[key] as Record<string, unknown>)[nestedKey],
+          ).toEqual(nestedValue);
+        }
+        continue;
+      }
+      expect((result as Record<string, unknown>)[key]).toEqual(value);
+    }
+  });
+
+  it("forwards buffer metadata for gateway delivery-mode sends", async () => {
+    const buffer = Buffer.from("gateway delivery bytes").toString("base64");
+    const result = await sendThreadChatGatewayMessage({
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer,
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    });
+
+    expect(result.params).toMatchObject({
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer,
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    });
+  });
+
+  it("drops unused buffer metadata when explicit gateway media is present", async () => {
+    const result = await sendThreadChatGatewayMessage({
+      mediaUrl: "https://example.com/photo.png",
+      buffer: Buffer.from("ignored bytes").toString("base64"),
+      filename: "ignored.txt",
+      contentType: "text/plain",
+    });
+
+    expect(result.params).toMatchObject({
+      mediaUrl: "https://example.com/photo.png",
+    });
+    expect(result.params?.buffer).toBeUndefined();
+    expect(result.params?.filename).toBeUndefined();
+    expect(result.params?.contentType).toBeUndefined();
   });
 });
 

@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Qqbot plugin module implements qqbot test support behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export function makeQqbotSecretRefConfig(): OpenClawConfig {
   return {

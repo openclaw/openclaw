@@ -6,12 +6,16 @@
         {
           "properties": {
             "type": {
-              "enum": ["apiKey"],
+              "enum": [
+                "apiKey"
+              ],
               "title": "ApiKeyAccountType",
               "type": "string"
             }
           },
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "title": "ApiKeyAccount",
           "type": "object"
         },
@@ -24,28 +28,53 @@
               "$ref": "#/definitions/PlanType"
             },
             "type": {
-              "enum": ["chatgpt"],
+              "enum": [
+                "chatgpt"
+              ],
               "title": "ChatgptAccountType",
               "type": "string"
             }
           },
-          "required": ["email", "planType", "type"],
+          "required": [
+            "email",
+            "planType",
+            "type"
+          ],
           "title": "ChatgptAccount",
           "type": "object"
         },
         {
           "properties": {
+            "credentialSource": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AmazonBedrockCredentialSource"
+                }
+              ],
+              "default": "awsManaged"
+            },
             "type": {
-              "enum": ["amazonBedrock"],
+              "enum": [
+                "amazonBedrock"
+              ],
               "title": "AmazonBedrockAccountType",
               "type": "string"
             }
           },
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "title": "AmazonBedrockAccount",
           "type": "object"
         }
       ]
+    },
+    "AmazonBedrockCredentialSource": {
+      "enum": [
+        "codexManaged",
+        "awsManaged"
+      ],
+      "type": "string"
     },
     "PlanType": {
       "enum": [
@@ -80,7 +109,9 @@
       "type": "boolean"
     }
   },
-  "required": ["requiresOpenaiAuth"],
+  "required": [
+    "requiresOpenaiAuth"
+  ],
   "title": "GetAccountResponse",
   "type": "object"
 }

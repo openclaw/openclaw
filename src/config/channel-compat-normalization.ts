@@ -1,10 +1,13 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+// Normalizes channel config compatibility fields during config loading.
+import {
+  normalizeLegacyDmAliases,
+  type CompatMutationResult,
+} from "../channels/plugins/dm-access.js";
 
-export type CompatMutationResult = {
-  entry: Record<string, unknown>;
-  changed: boolean;
-};
+export { normalizeLegacyDmAliases };
+export type { CompatMutationResult };
 
+/** Resolved streaming values a channel doctor supplies while migrating legacy aliases. */
 export type LegacyStreamingAliasOptions = {
   resolvedMode: string;
   includePreviewChunk?: boolean;
@@ -12,6 +15,7 @@ export type LegacyStreamingAliasOptions = {
   offModeLegacyNotice?: (pathPrefix: string) => string;
 };
 
+/** Account-level channel config passed to channel-specific doctor migrations. */
 export type NormalizeLegacyChannelAccountParams = {
   account: Record<string, unknown>;
   accountId: string;
@@ -19,12 +23,14 @@ export type NormalizeLegacyChannelAccountParams = {
   changes: string[];
 };
 
+/** Narrows unknown config JSON values to mutable object records. */
 export function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
+/** Checks whether any account entry still carries a channel-specific legacy alias. */
 export function hasLegacyAccountStreamingAliases(
   value: unknown,
   match: (entry: unknown) => boolean,
@@ -39,101 +45,18 @@ export function hasLegacyAccountStreamingAliases(
 function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
   const existing = asObjectRecord(owner[key]);
   if (existing) {
+    // Clone nested records before migration so callers keep immutable before/after snapshots.
     return { ...existing };
   }
   return {};
 }
 
-function allowFromListsMatch(left: unknown, right: unknown): boolean {
-  if (!Array.isArray(left) || !Array.isArray(right)) {
-    return false;
-  }
-  const normalizedLeft = normalizeStringEntries(left);
-  const normalizedRight = normalizeStringEntries(right);
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return false;
-  }
-  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
-}
-
-export function normalizeLegacyDmAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-  promoteAllowFrom?: boolean;
-}): CompatMutationResult {
-  let changed = false;
-  let updated: Record<string, unknown> = params.entry;
-  const rawDm = updated.dm;
-  const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
-  let dmChanged = false;
-
-  const topDmPolicy = updated.dmPolicy;
-  const legacyDmPolicy = dm?.policy;
-  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
-    updated = { ...updated, dmPolicy: legacyDmPolicy };
-    changed = true;
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-    }
-    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
-  } else if (
-    topDmPolicy !== undefined &&
-    legacyDmPolicy !== undefined &&
-    topDmPolicy === legacyDmPolicy
-  ) {
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
-    }
-  }
-
-  if (params.promoteAllowFrom !== false) {
-    const topAllowFrom = updated.allowFrom;
-    const legacyAllowFrom = dm?.allowFrom;
-    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-      updated = { ...updated, allowFrom: legacyAllowFrom };
-      changed = true;
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-      }
-      params.changes.push(
-        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
-      );
-    } else if (
-      topAllowFrom !== undefined &&
-      legacyAllowFrom !== undefined &&
-      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
-    ) {
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-      }
-    }
-  }
-
-  if (dm && asObjectRecord(rawDm) && dmChanged) {
-    const keys = Object.keys(dm);
-    if (keys.length === 0) {
-      if (updated.dm !== undefined) {
-        const { dm: _ignored, ...rest } = updated;
-        updated = rest;
-        changed = true;
-        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
-      }
-    } else {
-      updated = { ...updated, dm };
-      changed = true;
-    }
-  }
-
-  return { entry: updated, changed };
-}
-
+/**
+ * Moves legacy flat streaming aliases into the nested `streaming` config shape.
+ *
+ * Existing nested values win over legacy aliases, matching doctor migration rules
+ * that preserve explicit modern config while removing stale compatibility keys.
+ */
 export function normalizeLegacyStreamingAliases(
   params: {
     entry: Record<string, unknown>;
@@ -158,12 +81,13 @@ export function normalizeLegacyStreamingAliases(
     return { entry: params.entry, changed: false };
   }
 
-  let updated = { ...params.entry };
+  const updated = { ...params.entry };
   let changed = false;
   const streaming = ensureNestedRecord(updated, "streaming");
   const block = ensureNestedRecord(streaming, "block");
   const preview = ensureNestedRecord(streaming, "preview");
 
+  // Only fill `streaming.mode` when the modern nested field is absent.
   if (
     (hadLegacyStreamMode ||
       typeof beforeStreaming === "boolean" ||
@@ -266,6 +190,12 @@ export function normalizeLegacyStreamingAliases(
   return { entry: updated, changed };
 }
 
+/**
+ * Runs generic channel doctor alias migration for the root entry and accounts.
+ *
+ * Channel plugins provide streaming resolution and optional account-specific
+ * migrations so core can keep one compatibility path for all channel shapes.
+ */
 export function normalizeLegacyChannelAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -358,6 +288,7 @@ export function normalizeLegacyChannelAliases(params: {
   return { entry: updated, changed };
 }
 
+/** Detects legacy streaming aliases on one channel or account config entry. */
 export function hasLegacyStreamingAliases(
   value: unknown,
   options?: { includePreviewChunk?: boolean; includeNativeTransport?: boolean },

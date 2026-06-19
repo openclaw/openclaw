@@ -61,10 +61,7 @@ function createDescendantTable(
   };
 }
 
-export function calculateAdaptiveColumnWidths(
-  blocks: FeishuDocxBlock[],
-  tableBlockId: string,
-): number[] {
+function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: string): number[] {
   // Find the table block
   const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
 
@@ -225,7 +222,7 @@ export async function insertTableRow(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  rowIndex: number = -1,
+  rowIndex = -1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -241,7 +238,7 @@ export async function insertTableColumn(
   client: Lark.Client,
   docToken: string,
   blockId: string,
-  columnIndex: number = -1,
+  columnIndex = -1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -258,7 +255,7 @@ export async function deleteTableRows(
   docToken: string,
   blockId: string,
   rowStart: number,
-  rowCount: number = 1,
+  rowCount = 1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -275,7 +272,7 @@ export async function deleteTableColumns(
   docToken: string,
   blockId: string,
   columnStart: number,
-  columnCount: number = 1,
+  columnCount = 1,
 ) {
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },

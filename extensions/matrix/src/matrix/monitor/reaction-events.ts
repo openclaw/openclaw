@@ -1,6 +1,7 @@
+// Matrix plugin module implements reaction events behavior.
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
-  resolveMatrixApprovalReactionTarget,
+  resolveMatrixApprovalReactionTargetWithPersistence,
   unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
@@ -47,7 +48,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
   cfg: CoreConfig;
   accountId: string;
   senderId: string;
-  target: ReturnType<typeof resolveMatrixApprovalReactionTarget>;
+  target: Awaited<ReturnType<typeof resolveMatrixApprovalReactionTargetWithPersistence>>;
   targetEventId: string;
   roomId: string;
   logVerboseMessage: (message: string) => void;
@@ -110,7 +111,7 @@ export async function handleInboundMatrixReaction(params: {
   if (params.senderId === params.selfUserId) {
     return;
   }
-  const approvalTarget = resolveMatrixApprovalReactionTarget({
+  const approvalTarget = await resolveMatrixApprovalReactionTargetWithPersistence({
     roomId: params.roomId,
     eventId: reaction.eventId,
     reactionKey: reaction.key,
@@ -136,12 +137,14 @@ export async function handleInboundMatrixReaction(params: {
     return;
   }
 
-  const targetEvent = await params.client.getEvent(params.roomId, reaction.eventId).catch((err) => {
-    params.logVerboseMessage(
-      `matrix: failed resolving reaction target room=${params.roomId} id=${reaction.eventId}: ${String(err)}`,
-    );
-    return null;
-  });
+  const targetEvent = await params.client
+    .getEvent(params.roomId, reaction.eventId)
+    .catch((err: unknown) => {
+      params.logVerboseMessage(
+        `matrix: failed resolving reaction target room=${params.roomId} id=${reaction.eventId}: ${String(err)}`,
+      );
+      return null;
+    });
   const targetSender =
     targetEvent && typeof targetEvent.sender === "string" ? targetEvent.sender.trim() : "";
   if (!targetSender) {

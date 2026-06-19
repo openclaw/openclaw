@@ -1,3 +1,6 @@
+/**
+ * Browser profile reset operations for local managed profiles.
+ */
 import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserResetUnsupportedError } from "./errors.js";
@@ -18,6 +21,7 @@ type ResetOps = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
 
+/** Builds the reset-profile operation for one resolved browser profile. */
 export function createProfileResetOps({
   profile,
   getProfileState,
@@ -35,6 +39,8 @@ export function createProfileResetOps({
 
     const userDataDir = resolveOpenClawUserDataDir(profile.name);
     const profileState = getProfileState();
+    profileState.managedLaunchFailure = undefined;
+    profileState.ensureBrowserAvailable = null;
     const httpReachable = await isHttpReachable(300);
     if (httpReachable && !profileState.running) {
       // Port in use but not by us - kill it.

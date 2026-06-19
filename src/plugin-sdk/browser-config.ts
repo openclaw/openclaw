@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for browser plugin configuration, CDP URL, and auth helpers.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -15,4 +18,5 @@ export {
 } from "./browser-profiles.js";
 export { parseBrowserHttpUrl, redactCdpUrl } from "./browser-cdp.js";
 export { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./browser-control-auth.js";
+export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 export type { BrowserControlAuth } from "./browser-control-auth.js";

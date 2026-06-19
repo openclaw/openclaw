@@ -1,5 +1,10 @@
+/**
+ * Public TTS runtime barrel exposed to core callers and plugin SDK facades.
+ * Implementation stays in plugin-sdk/tts-runtime so provider surfaces share one contract.
+ */
 export {
-  _test,
+  testApi as _test,
+  testApi,
   buildTtsSystemPromptHint,
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
@@ -25,7 +30,9 @@ export {
   setTtsPersona,
   setTtsProvider,
   synthesizeSpeech,
+  streamSpeech,
   textToSpeech,
+  textToSpeechStream,
   textToSpeechTelephony,
   type ResolvedTtsConfig,
   type ResolvedTtsModelOverrides,
@@ -33,5 +40,7 @@ export {
   type TtsDirectiveParseResult,
   type TtsResult,
   type TtsSynthesisResult,
+  type TtsSynthesisStreamResult,
+  type TtsStreamResult,
   type TtsTelephonyResult,
 } from "../plugin-sdk/tts-runtime.js";

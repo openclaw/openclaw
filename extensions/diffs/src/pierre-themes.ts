@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
+// Diffs plugin module implements pierre themes behavior.
 import { createRequire } from "node:module";
 import type { ThemeRegistrationResolved } from "@pierre/diffs";
 import { RegisteredCustomThemes, ResolvedThemes, ResolvingThemes } from "@pierre/diffs";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 
 type PierreThemeName = "pierre-dark" | "pierre-light";
 const themeRequire = createRequire(import.meta.url);
@@ -20,8 +21,9 @@ function createThemeLoader(
       return cachedTheme;
     }
     const themePath = themeRequire.resolve(themeSpecifier);
+    const { value: theme } = await readJsonFileWithFallback<Record<string, unknown>>(themePath, {});
     cachedTheme = {
-      ...(JSON.parse(await fs.readFile(themePath, "utf8")) as Record<string, unknown>),
+      ...theme,
       name: themeName,
     } as ThemeRegistrationResolved;
     return cachedTheme;

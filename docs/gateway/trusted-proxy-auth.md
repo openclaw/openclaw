@@ -53,18 +53,30 @@ Use `trusted-proxy` auth mode when:
 
 When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, Control UI WebSocket sessions can connect without device pairing identity.
 
+Scope implications:
+
+- Device-less Control UI WebSocket sessions connect but receive no operator scopes by default. OpenClaw clears the requested scope list to `[]` so a session that is not bound to an approved paired device/token cannot self-declare permissions.
+- If methods fail with `missing scope` after a successful WebSocket connect, use HTTPS so the browser can generate device identity and complete pairing. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- Break-glass only: `gateway.controlUi.dangerouslyDisableDeviceAuth=true` preserves requested scopes even without device identity. This is a severe security downgrade; revert quickly. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+
+Reverse-proxy scope capping:
+
+- If your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps the session scopes to the intersection of the requested scopes and the declared scopes. This header does not grant scopes; it only narrows what the session can hold.
+
 Implications:
 
 - Pairing is no longer the primary gate for Control UI access in this mode.
 - Your reverse proxy auth policy and `allowUsers` become the effective access control.
 - Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
+Custom WebSocket clients are not Control UI sessions. `gateway.controlUi.dangerouslyDisableDeviceAuth` does not grant scopes to arbitrary `client.mode: "backend"` or CLI-shaped clients. Custom automation should use device identity/pairing, the reserved direct-local `client.id: "gateway-client"` backend helper path, or the [admin HTTP RPC plugin](/plugins/admin-http-rpc) when an HTTP request/response surface is a better fit.
+
 ## Configuration
 
 ```json5
 {
   gateway: {
-    // Trusted-proxy auth expects requests from a non-loopback trusted proxy source
+    // Trusted-proxy auth expects requests from a non-loopback trusted proxy source by default
     bind: "lan",
 
     // CRITICAL: Only add your proxy's IP(s) here
@@ -81,6 +93,9 @@ Implications:
 
         // Optional: restrict to specific users (empty = allow all)
         allowUsers: ["nick@example.com", "admin@company.org"],
+
+        // Optional: allow a same-host loopback proxy after explicit opt-in
+        allowLoopback: false,
       },
     },
   },
@@ -90,12 +105,14 @@ Implications:
 <Warning>
 **Important runtime rules**
 
-- Trusted-proxy auth rejects loopback-source requests (`127.0.0.1`, `::1`, loopback CIDRs).
-- Same-host loopback reverse proxies do **not** satisfy trusted-proxy auth.
-- For same-host loopback proxy setups, use token/password auth instead, or route through a non-loopback trusted proxy address that OpenClaw can verify.
+- Trusted-proxy auth rejects loopback-source requests (`127.0.0.1`, `::1`, loopback CIDRs) by default.
+- Same-host loopback reverse proxies do **not** satisfy trusted-proxy auth unless you explicitly set `gateway.auth.trustedProxy.allowLoopback = true` and include the loopback address in `gateway.trustedProxies`.
+- `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
+- Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers.
 - Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
-- **Forwarded-header evidence overrides loopback locality.** If a request arrives on loopback but carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers pointing at a non-local origin, that evidence disqualifies the loopback locality claim. The request is treated as remote for pairing, trusted-proxy auth, and Control UI device-identity gating. This prevents a same-host loopback proxy from laundering forwarded-header identity into trusted-proxy auth.
-  </Warning>
+- **Forwarded-header evidence overrides loopback locality for local direct fallback.** If a request arrives on loopback but carries `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header evidence, that evidence disqualifies local-direct password fallback and device-identity gating. With `allowLoopback: true`, trusted-proxy auth can still accept the request as a same-host proxy request, while `requiredHeaders` and `allowUsers` continue to apply.
+
+</Warning>
 
 ### Configuration reference
 
@@ -114,6 +131,13 @@ Implications:
 <ParamField path="gateway.auth.trustedProxy.allowUsers" type="string[]">
   Allowlist of user identities. Empty means allow all authenticated users.
 </ParamField>
+<ParamField path="gateway.auth.trustedProxy.allowLoopback" type="boolean">
+  Opt-in support for same-host loopback reverse proxies. Defaults to `false`.
+</ParamField>
+
+<Warning>
+Only enable `allowLoopback` when the local reverse proxy is the intended trust boundary. Any local process that can connect to the Gateway can try to send proxy identity headers, so keep direct Gateway access private to the host and require proxy-owned headers such as `x-forwarded-proto` or a signed assertion header where your proxy supports one.
+</Warning>
 
 ## TLS termination and HSTS
 
@@ -293,11 +317,13 @@ If you see a `mixed_trusted_proxy_token` error on startup:
 - Remove the shared token when using trusted-proxy mode, or
 - Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
 
-Loopback trusted-proxy auth also fails closed: same-host callers must supply the configured identity headers through a trusted proxy instead of being silently authenticated.
+Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
 
 ## Operator scopes header
 
-Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes`.
+Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes` on HTTP API requests.
+
+Note: WebSocket scopes are determined by the Gateway protocol handshake and device identity binding. On Control UI WebSocket upgrade requests, `x-openclaw-scopes` is only a cap on the negotiated session scopes, not a grant. For WebSocket scope behavior with trusted-proxy, see [Control UI pairing behavior](#control-ui-pairing-behavior).
 
 Examples:
 
@@ -312,6 +338,7 @@ Behavior:
 - When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set.
 - Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write`.
 - Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
+- For Control UI WebSocket sessions, `x-openclaw-scopes` is a scope cap when present on the upgrade request. An empty value yields no scopes.
 
 Practical rule: send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to be narrower than the defaults, or when a gateway-auth plugin route needs something stronger than write scope.
 
@@ -321,12 +348,13 @@ Before enabling trusted-proxy auth, verify:
 
 - [ ] **Proxy is the only path**: The Gateway port is firewalled from everything except your proxy.
 - [ ] **trustedProxies is minimal**: Only your actual proxy IPs, not entire subnets.
-- [ ] **No loopback proxy source**: trusted-proxy auth fails closed for loopback-source requests.
+- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth fails closed for loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
 - [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
+- [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.
 
 ## Security audit
 
@@ -338,6 +366,7 @@ The audit checks for:
 - Missing `trustedProxies` configuration
 - Missing `userHeader` configuration
 - Empty `allowUsers` (allows any authenticated user)
+- Enabled `allowLoopback` for same-host proxy sources
 - Wildcard or missing browser-origin policy on exposed Control UI surfaces
 
 ## Troubleshooting
@@ -361,8 +390,9 @@ The audit checks for:
 
     Fix:
 
-    - Use token/password auth for same-host loopback proxy setups, or
-    - Route through a non-loopback trusted proxy address and keep that IP in `gateway.trustedProxies`.
+    - Prefer token/password auth for internal same-host clients that do not go through the proxy, or
+    - Route through a non-loopback trusted proxy address and keep that IP in `gateway.trustedProxies`, or
+    - For a deliberate same-host reverse proxy, set `gateway.auth.trustedProxy.allowLoopback = true`, keep the loopback address in `gateway.trustedProxies`, and make sure the proxy strips or overwrites identity headers.
 
   </Accordion>
   <Accordion title="trusted_proxy_user_missing">
@@ -391,6 +421,23 @@ The audit checks for:
     - `gateway.controlUi.allowedOrigins` includes the exact browser origin.
     - You are not relying on wildcard origins unless you intentionally want allow-all behavior.
     - If you intentionally use Host-header fallback mode, `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` is set deliberately.
+
+  </Accordion>
+  <Accordion title="Connection succeeds but methods report missing scope">
+    The WebSocket connects, but `chat.history`, `sessions.list`, or
+    `models.list` fails with `missing scope: operator.read`.
+
+    Common causes:
+
+    - Device-less Control UI session: trusted-proxy auth can admit the WebSocket connection without device identity, but OpenClaw clears scopes on device-less sessions by design.
+    - Custom backend client: `gateway.controlUi.dangerouslyDisableDeviceAuth` is Control UI scoped and does not grant scopes to arbitrary backend or CLI-shaped WebSocket clients.
+    - Overly narrow `x-openclaw-scopes`: if your proxy injects this header on the Control UI WebSocket upgrade request, the session scopes are capped to that set. An empty header value yields no scopes.
+
+    Fix:
+
+    - For Control UI, use HTTPS so the browser can generate device identity and complete pairing.
+    - For custom automation, use device identity/pairing, the reserved direct-local `gateway-client` backend helper path, or [admin HTTP RPC](/plugins/admin-http-rpc).
+    - Use `gateway.controlUi.dangerouslyDisableDeviceAuth: true` only as a temporary Control UI break-glass path.
 
   </Accordion>
   <Accordion title="WebSocket still failing">

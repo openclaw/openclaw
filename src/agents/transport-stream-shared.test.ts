@@ -1,8 +1,11 @@
+// Transport stream shared tests cover payload sanitization, header merging, and
+// final/error stream termination helpers used by provider transports.
 import { describe, expect, it, vi } from "vitest";
 import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -14,6 +17,29 @@ describe("transport stream shared helpers", () => {
     expect(sanitizeTransportPayloadText(`left${high}right`)).toBe("leftright");
     expect(sanitizeTransportPayloadText(`left${low}right`)).toBe("leftright");
     expect(sanitizeTransportPayloadText("emoji 🙈 ok")).toBe("emoji 🙈 ok");
+  });
+
+  it("returns empty string for nullish payloads instead of throwing", () => {
+    expect(sanitizeTransportPayloadText(undefined as unknown as string)).toBe("");
+    expect(sanitizeTransportPayloadText(null as unknown as string)).toBe("");
+    expect(sanitizeNonEmptyTransportPayloadText(undefined as unknown as string)).toBe(
+      "(no output)",
+    );
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \n\t "],
+    ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
+  ])("falls back for %s tool payload text", (_label, value) => {
+    expect(sanitizeNonEmptyTransportPayloadText(value)).toBe("(no output)");
+  });
+
+  it("preserves non-empty sanitized tool payload text", () => {
+    expect(sanitizeNonEmptyTransportPayloadText(" ok ")).toBe(" ok ");
+    expect(sanitizeNonEmptyTransportPayloadText(`left${String.fromCharCode(0xd83d)}right`)).toBe(
+      "leftright",
+    );
   });
 
   it("merges transport headers in source order", () => {
@@ -50,6 +76,8 @@ describe("transport stream shared helpers", () => {
   });
 
   it("marks transport stream failures and runs cleanup", () => {
+    // Failure finalization mutates the output message before emitting it so
+    // downstream transcript consumers see the same error state as the stream.
     const push = vi.fn();
     const end = vi.fn();
     const cleanup = vi.fn();

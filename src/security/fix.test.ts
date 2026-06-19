@@ -1,3 +1,4 @@
+// Covers security fixer behavior for supported audit findings.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -122,7 +123,11 @@ describe("security fix", () => {
   ) => {
     const whatsapp = channels.whatsapp;
     const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
-    expect(accounts[accountId]?.groupPolicy).toBe(expectedPolicy);
+    const account = accounts[accountId];
+    if (!account) {
+      throw new Error(`Expected WhatsApp account ${accountId}`);
+    }
+    expect(account.groupPolicy).toBe(expectedPolicy);
     return accounts;
   };
 
@@ -171,16 +176,15 @@ describe("security fix", () => {
       env: process.env,
       channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15551234567"])],
     });
-    expect(fixed.changes).toEqual(
-      expect.arrayContaining([
-        "channels.telegram.groupPolicy=open -> allowlist",
-        "channels.whatsapp.groupPolicy=open -> allowlist",
-        "channels.discord.groupPolicy=open -> allowlist",
-        "channels.signal.groupPolicy=open -> allowlist",
-        "channels.imessage.groupPolicy=open -> allowlist",
-        'logging.redactSensitive=off -> "tools"',
-      ]),
-    );
+    expect(fixed.changes).toEqual([
+      'logging.redactSensitive=off -> "tools"',
+      "channels.telegram.groupPolicy=open -> allowlist",
+      "channels.whatsapp.groupPolicy=open -> allowlist",
+      "channels.discord.groupPolicy=open -> allowlist",
+      "channels.signal.groupPolicy=open -> allowlist",
+      "channels.imessage.groupPolicy=open -> allowlist",
+      "channels.whatsapp.groupAllowFrom=pairing-store",
+    ]);
 
     const channels = fixed.cfg.channels as Record<string, Record<string, unknown>>;
     expect(channels.telegram.groupPolicy).toBe("allowlist");
@@ -264,6 +268,11 @@ describe("security fix", () => {
 
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
+    const authDatabasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    await fs.writeFile(authDatabasePath, "sqlite\n", "utf-8");
+    await fs.writeFile(`${authDatabasePath}-wal`, "wal\n", "utf-8");
+    await fs.writeFile(`${authDatabasePath}-shm`, "shm\n", "utf-8");
+    await fs.writeFile(`${authDatabasePath}-journal`, "journal\n", "utf-8");
     const authProfilesPath = path.join(agentDir, "auth-profiles.json");
     await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
     await fs.chmod(authProfilesPath, 0o644);
@@ -287,17 +296,22 @@ describe("security fix", () => {
       includePaths: [includePath],
     });
 
-    expect(targets).toEqual(
-      expect.arrayContaining([
-        { path: stateDir, mode: 0o700, require: "dir" },
-        { path: configPath, mode: 0o600, require: "file" },
-        { path: credsDir, mode: 0o700, require: "dir" },
-        { path: allowFromPath, mode: 0o600, require: "file" },
-        { path: authProfilesPath, mode: 0o600, require: "file" },
-        { path: sessionsStorePath, mode: 0o600, require: "file" },
-        { path: transcriptPath, mode: 0o600, require: "file" },
-        { path: includePath, mode: 0o600, require: "file" },
-      ]),
-    );
+    expect(targets).toEqual([
+      { path: stateDir, mode: 0o700, require: "dir" },
+      { path: configPath, mode: 0o600, require: "file" },
+      { path: includePath, mode: 0o600, require: "file" },
+      { path: credsDir, mode: 0o700, require: "dir" },
+      { path: allowFromPath, mode: 0o600, require: "file" },
+      { path: path.join(stateDir, "agents", "main"), mode: 0o700, require: "dir" },
+      { path: agentDir, mode: 0o700, require: "dir" },
+      { path: authDatabasePath, mode: 0o600, require: "file" },
+      { path: `${authDatabasePath}-wal`, mode: 0o600, require: "file" },
+      { path: `${authDatabasePath}-shm`, mode: 0o600, require: "file" },
+      { path: `${authDatabasePath}-journal`, mode: 0o600, require: "file" },
+      { path: authProfilesPath, mode: 0o600, require: "file" },
+      { path: sessionsDir, mode: 0o700, require: "dir" },
+      { path: sessionsStorePath, mode: 0o600, require: "file" },
+      { path: transcriptPath, mode: 0o600, require: "file" },
+    ]);
   });
 });

@@ -1,3 +1,4 @@
+// Agent bind Matrix integration tests cover account binding resolution through plugin registry surfaces.
 import { afterEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -26,7 +27,7 @@ describe("agents bind matrix integration", () => {
 
     const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix"], config: {} });
 
-    expect(parsed.errors).toEqual([]);
+    expect(parsed.errors).toStrictEqual([]);
     expect(parsed.bindings).toEqual([
       { type: "route", agentId: "main", match: { channel: "matrix", accountId: "main" } },
     ]);

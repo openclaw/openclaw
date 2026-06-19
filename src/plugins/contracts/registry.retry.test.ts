@@ -1,3 +1,4 @@
+// Registry retry tests cover plugin registry retry behavior after transient failures.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 
@@ -8,6 +9,7 @@ type MockPluginRecord = {
   providerIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  migrationProviderIds: string[];
 };
 
 type MockRuntimeRegistry = {
@@ -52,6 +54,7 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
+            migrationProviderIds: [],
           },
           diagnostics: [{ pluginId: "arcee", message: "transient arcee load failure" }],
         }),
@@ -64,6 +67,7 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: ["arcee"],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
+            migrationProviderIds: [],
           },
           providers: [
             {
@@ -106,6 +110,7 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
+            migrationProviderIds: [],
           },
           diagnostics: [{ pluginId: "searxng", message: "transient searxng load failure" }],
         }),
@@ -118,6 +123,7 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: ["searxng"],
+            migrationProviderIds: [],
           },
           webSearchProviders: [
             {
@@ -170,6 +176,7 @@ describe("plugin contract registry scoped retries", () => {
           providerIds: ["byteplus"],
           webFetchProviderIds: [],
           webSearchProviderIds: [],
+          migrationProviderIds: [],
         },
         providers: [
           {
@@ -222,7 +229,7 @@ describe("plugin contract registry scoped retries", () => {
       {
         pluginId: "openai",
         provider: {
-          id: "openai-codex",
+          id: "openai",
           label: "OpenAI Codex",
           docsPath: "/providers/openai",
           auth: [
@@ -248,7 +255,7 @@ describe("plugin contract registry scoped retries", () => {
 
     expect(
       resolveProviderContractProvidersForPluginIds(["openai"]).map((provider) => provider.id),
-    ).toEqual(["openai", "openai-codex"]);
+    ).toEqual(["openai"]);
     expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
@@ -311,6 +318,7 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
+            migrationProviderIds: [],
           },
           diagnostics: [
             { pluginId: "firecrawl", message: "transient firecrawl fetch load failure" },
@@ -325,6 +333,7 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: ["firecrawl"],
             webSearchProviderIds: ["firecrawl"],
+            migrationProviderIds: [],
           },
           webFetchProviders: [
             {

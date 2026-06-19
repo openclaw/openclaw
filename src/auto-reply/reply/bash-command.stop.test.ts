@@ -1,3 +1,4 @@
+// Tests bash stop command handling and active-process cancellation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
@@ -155,10 +156,11 @@ describe("handleBashChatCommand stop", () => {
         },
       });
 
-    const result = await handleBashChatCommand(buildElevatedDeniedParams("/bash pwd"));
+    const params = buildElevatedDeniedParams("/bash pwd");
+    const result = await handleBashChatCommand(params);
 
     expect(resolveSandboxRuntimeStatusSpy).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
+      cfg: params.cfg,
       sessionKey: "agent:target:telegram:direct:target-session",
     });
     expect(result.text).toContain(

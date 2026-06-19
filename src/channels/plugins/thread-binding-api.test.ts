@@ -1,3 +1,4 @@
+// Thread binding API tests cover channel plugin thread binding contracts and helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
@@ -35,14 +36,12 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
 }));
 
 import {
-  __testing,
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
 } from "./thread-binding-api.js";
 
 describe("bundled channel thread binding fast path", () => {
   beforeEach(() => {
-    __testing.clearThreadBindingApiCache();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
   });
 

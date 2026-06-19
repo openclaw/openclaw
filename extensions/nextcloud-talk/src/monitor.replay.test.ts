@@ -1,5 +1,6 @@
+// Nextcloud Talk tests cover monitor.replay plugin behavior.
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import {
   NextcloudTalkRetryableWebhookError,
   processNextcloudTalkReplayGuardedMessage,
@@ -248,9 +249,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       lastResponse = response;
     }
 
-    expect(firstResponse).toBeDefined();
     expect(firstResponse?.status).toBe(401);
-    expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(429);
     expect(await lastResponse?.text()).toBe("Too Many Requests");
   });
@@ -273,7 +272,6 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       });
     }
 
-    expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(200);
   });
 });

@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for debug proxy capture configuration, storage, and events.
+ */
 export {
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
@@ -12,6 +15,8 @@ export {
 export {
   captureHttpExchange,
   captureWsEvent,
+  finalizeDebugProxyCapture,
+  initializeDebugProxyCapture,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "../proxy-capture/runtime.js";
 export type {

@@ -1,34 +1,41 @@
+// Resolves channel presence policy advertised by plugin metadata.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   hasMeaningfulChannelConfig,
+  listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   hasExplicitManifestOwnerTrust,
   isActivatedManifestOwner,
   isBundledManifestOwner,
   passesManifestOwnerBasePolicy,
+  resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
+/** Source classes that can make a channel appear configured for read-only scopes. */
 export type ConfiguredChannelPresenceSource =
   | "explicit-config"
   | Exclude<ChannelPresenceSignalSource, "config">
   | "manifest-env";
 
+/** Reasons a configured channel signal is not effective. */
 export type ConfiguredChannelBlockedReason =
   | "plugins-disabled"
   | "blocked-by-denylist"
@@ -40,6 +47,7 @@ export type ConfiguredChannelBlockedReason =
   | "no-channel-owner"
   | "not-activated";
 
+/** Policy evaluation row for one configured channel signal. */
 export type ConfiguredChannelPresencePolicyEntry = {
   channelId: string;
   sources: ConfiguredChannelPresenceSource[];
@@ -48,18 +56,13 @@ export type ConfiguredChannelPresencePolicyEntry = {
   blockedReasons: ConfiguredChannelBlockedReason[];
 };
 
-function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
-}
-
 function normalizeChannelIds(channelIds: Iterable<string>): string[] {
-  return Array.from(
-    new Set(
-      [...channelIds]
-        .map((channelId) => normalizeOptionalLowercaseString(channelId))
-        .filter((channelId): channelId is string => Boolean(channelId)),
-    ),
-  ).toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(
+    [...channelIds].flatMap((channelId) => {
+      const normalized = normalizeOptionalLowercaseString(channelId);
+      return normalized ? [normalized] : [];
+    }),
+  );
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
@@ -71,6 +74,7 @@ function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** True when config contains meaningful enabled channel settings. */
 export function hasExplicitChannelConfig(params: {
   config: OpenClawConfig;
   channelId: string;
@@ -90,6 +94,7 @@ export function hasExplicitChannelConfig(params: {
   return enabled === true || hasMeaningfulChannelConfig(entry);
 }
 
+/** Lists explicitly configured channel ids, excluding global channel config keys. */
 export function listExplicitConfiguredChannelIdsForConfig(config: OpenClawConfig): string[] {
   const channels = config.channels;
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
@@ -174,23 +179,7 @@ function resolveBasePolicyBlockedReason(params: {
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
   allowRestrictiveAllowlistBypass?: boolean;
 }): ConfiguredChannelBlockedReason | null {
-  if (!params.normalizedConfig.enabled) {
-    return "plugins-disabled";
-  }
-  if (params.normalizedConfig.deny.includes(params.plugin.id)) {
-    return "blocked-by-denylist";
-  }
-  if (params.normalizedConfig.entries[params.plugin.id]?.enabled === false) {
-    return "plugin-disabled";
-  }
-  if (
-    params.allowRestrictiveAllowlistBypass !== true &&
-    params.normalizedConfig.allow.length > 0 &&
-    !params.normalizedConfig.allow.includes(params.plugin.id)
-  ) {
-    return "not-in-allowlist";
-  }
-  return null;
+  return resolveManifestOwnerBasePolicyBlock(params);
 }
 
 function isChannelPluginEligibleForScopedOwnership(params: {
@@ -199,6 +188,7 @@ function isChannelPluginEligibleForScopedOwnership(params: {
   rootConfig: OpenClawConfig;
   channelId?: string;
 }): boolean {
+  // Explicit config can activate bundled channel owners even under restrictive allowlists.
   const allowRestrictiveAllowlistBypass =
     params.channelId !== undefined &&
     isBundledManifestOwner(params.plugin) &&
@@ -238,6 +228,7 @@ function evaluateEffectiveChannelPlugin(params: {
   config: OpenClawConfig;
   activationSource: ReturnType<typeof createPluginActivationSource>;
 }): { effective: boolean; pluginId: string; blockedReason?: ConfiguredChannelBlockedReason } {
+  // Bundled channels with explicit config are effective before default enablement checks.
   const explicitBundledChannelConfig =
     isBundledManifestOwner(params.plugin) &&
     hasExplicitChannelConfig({
@@ -294,7 +285,7 @@ function evaluateEffectiveChannelPlugin(params: {
     origin: params.plugin.origin,
     config: params.normalizedConfig,
     rootConfig: params.config,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
     activationSource: params.activationSource,
   });
   return activationState.enabled
@@ -323,45 +314,25 @@ function addPolicySignal(
   sources.add(source);
 }
 
-function listDisabledChannelIdsForConfig(config: OpenClawConfig): string[] {
-  const channels = config.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return [];
-  }
-  return Object.entries(channels)
-    .filter(([, value]) => {
-      return (
-        value &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        (value as { enabled?: unknown }).enabled === false
-      );
-    })
-    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
-    .filter((channelId): channelId is string => Boolean(channelId));
-}
-
 function loadInstalledChannelManifestRecords(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  cache?: boolean;
 }): readonly PluginManifestRecord[] {
   return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    cache: params.cache,
     includeDisabled: true,
   }).plugins;
 }
 
+/** Resolves effective configured-channel policy rows from config, auth state, env, and manifests. */
 export function resolveConfiguredChannelPresencePolicy(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  cache?: boolean;
   includePersistedAuthState?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 }): ConfiguredChannelPresencePolicyEntry[] {
@@ -375,10 +346,9 @@ export function resolveConfiguredChannelPresencePolicy(params: {
       config: params.config,
       workspaceDir,
       env,
-      cache: params.cache,
     });
 
-  const disabledChannelIds = new Set(listDisabledChannelIdsForConfig(params.config));
+  const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const entrySources = new Map<string, Set<ConfiguredChannelPresenceSource>>();
   for (const channelId of listExplicitConfiguredChannelIdsForConfig(params.config)) {
     addPolicySignal(entrySources, channelId, "explicit-config");
@@ -438,13 +408,14 @@ export function resolveConfiguredChannelPresencePolicy(params: {
         left.localeCompare(right),
       ),
       effective: effectivePluginIds.length > 0,
-      pluginIds: dedupeSortedPluginIds(effectivePluginIds),
+      pluginIds: sortUniqueStrings(effectivePluginIds),
       blockedReasons,
     });
   }
   return entries;
 }
 
+/** Lists effective channel ids available to read-only scoped discovery. */
 export function listConfiguredChannelIdsForReadOnlyScope(
   params: Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
 ): string[] {
@@ -453,20 +424,21 @@ export function listConfiguredChannelIdsForReadOnlyScope(
     .map((entry) => entry.channelId);
 }
 
+/** True when read-only scoped discovery has any effective configured channel. */
 export function hasConfiguredChannelsForReadOnlyScope(
   params: Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
 ): boolean {
   return listConfiguredChannelIdsForReadOnlyScope(params).length > 0;
 }
 
+/** Lists channel ids that should be announced as configured for operators. */
 export function listConfiguredAnnounceChannelIdsForConfig(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  cache?: boolean;
 }): string[] {
-  const disabledChannelIds = new Set(listDisabledChannelIdsForConfig(params.config));
+  const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   return normalizeChannelIds([
     ...listExplicitConfiguredChannelIdsForConfig(params.config),
     ...listConfiguredChannelIdsForReadOnlyScope({
@@ -474,7 +446,6 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
       activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      cache: params.cache,
       includePersistedAuthState: false,
     }),
   ]).filter((channelId) => !disabledChannelIds.has(channelId));
@@ -486,7 +457,6 @@ function resolveScopedChannelOwnerPluginIds(params: {
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  cache?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 }): string[] {
   const channelIds = normalizeChannelIds(params.channelIds);
@@ -499,11 +469,10 @@ function resolveScopedChannelOwnerPluginIds(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      cache: params.cache,
     });
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
-  const candidateIds = dedupeSortedPluginIds(
+  const candidateIds = sortUniqueStrings(
     channelIds.flatMap((channelId) => {
       return resolveManifestActivationPluginIds({
         trigger: {
@@ -513,8 +482,11 @@ function resolveScopedChannelOwnerPluginIds(params: {
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
-        cache: params.cache,
         manifestRecords: records,
+        allowRestrictiveAllowlistBypass: hasExplicitChannelConfig({
+          config: trustConfig,
+          channelId,
+        }),
       });
     }),
   );
@@ -538,18 +510,19 @@ function resolveScopedChannelOwnerPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Resolves plugin ids discoverable for scoped channel activation. */
 export function resolveDiscoverableScopedChannelPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  cache?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 }): string[] {
   return resolveScopedChannelOwnerPluginIds(params);
 }
 
+/** Resolves plugin ids that own currently configured channels. */
 export function resolveConfiguredChannelPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

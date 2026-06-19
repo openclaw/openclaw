@@ -1,3 +1,6 @@
+/**
+ * Tests channel send result normalization and adapter wrapping helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   attachChannelToResult,
@@ -36,7 +39,7 @@ describe("attachChannelToResult(s)", () => {
 });
 
 describe("buildChannelSendResult", () => {
-  it("normalizes raw send results", () => {
+  it("normalizes raw send results directly", () => {
     const result = buildChannelSendResult("zalo", {
       ok: false,
       messageId: null,
@@ -110,7 +113,7 @@ describe("createAttachedChannelResultAdapter", () => {
 });
 
 describe("createRawChannelSendResultAdapter", () => {
-  it("normalizes raw send results", async () => {
+  it("normalizes raw send results through adapter methods", async () => {
     const adapter = createRawChannelSendResultAdapter({
       channel: "zalo",
       sendText: async () => ({ ok: true, messageId: "m1" }),

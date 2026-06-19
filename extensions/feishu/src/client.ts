@@ -1,3 +1,4 @@
+// Feishu plugin module implements client behavior.
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
@@ -5,6 +6,12 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
+import {
+  FEISHU_HTTP_TIMEOUT_ENV_VAR,
+  FEISHU_HTTP_TIMEOUT_MAX_MS,
+  FEISHU_HTTP_TIMEOUT_MS,
+  resolveConfiguredHttpTimeoutMs,
+} from "./client-timeout.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -14,6 +21,11 @@ export { pluginVersion };
 
 const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
 export { FEISHU_USER_AGENT };
+
+const FEISHU_WS_CONFIG = {
+  PingInterval: 30,
+  PingTimeout: 3,
+} as const;
 
 /** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
@@ -43,39 +55,43 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
 
 let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
-// Override the SDK's default User-Agent interceptor.
-// The Lark SDK registers an axios request interceptor that sets
-// 'oapi-node-sdk/1.0.0'. Axios request interceptors execute in LIFO order
-// (last-registered runs first), so simply appending ours doesn't work — the
-// SDK's interceptor would run last and overwrite our UA. We must clear
-// handlers[] first, then register our own as the sole interceptor.
-//
-// Risk is low: the SDK only registers one interceptor (UA) at init time, and
-// we clear it at module load before any other code can register handlers.
-// If a future SDK version adds more interceptors, the upgrade will need
-// compatibility verification regardless.
-{
-  const inst = Lark.defaultHttpInstance as {
-    interceptors?: {
-      request: { handlers: unknown[]; use: (fn: (req: unknown) => unknown) => void };
-    };
+type RequestInterceptorApi = {
+  use: (fn: (req: unknown) => unknown) => unknown;
+};
+
+type FeishuDefaultHttpInstanceWithInterceptors = {
+  interceptors?: {
+    request?: RequestInterceptorApi;
   };
-  if (inst.interceptors?.request) {
-    inst.interceptors.request.handlers = [];
-    inst.interceptors.request.use((req: unknown) => {
-      const r = req as { headers?: Record<string, string> };
-      if (r.headers) {
-        r.headers["User-Agent"] = getFeishuUserAgent();
-      }
-      return req;
-    });
+};
+
+function setRequestUserAgent(req: unknown) {
+  const request = req as { headers?: unknown };
+  const headers = request.headers;
+  if (!headers) {
+    request.headers = { "User-Agent": getFeishuUserAgent() };
+    return req;
   }
+
+  const maybeAxiosHeaders = headers as { set?: unknown };
+  if (typeof maybeAxiosHeaders.set === "function") {
+    maybeAxiosHeaders.set("User-Agent", getFeishuUserAgent());
+    return req;
+  }
+
+  (headers as Record<string, string>)["User-Agent"] = getFeishuUserAgent();
+  return req;
 }
 
-/** Default HTTP timeout for Feishu API requests (30 seconds). */
-export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
-export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
-export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
+// Override the SDK's default User-Agent through the public interceptor API.
+// The SDK fallback interceptor only fills User-Agent when it is absent, so this
+// interceptor can preserve the rest of the SDK's request interceptor stack.
+{
+  const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors;
+  inst.interceptors?.request?.use(setRequestUserAgent);
+}
+
+export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
 
 type FeishuHttpInstanceLike = Pick<
   typeof feishuClientSdk.defaultHttpInstance,
@@ -142,37 +158,6 @@ export type FeishuClientCredentials = {
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
 
-function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
-  const clampTimeout = (value: number): number => {
-    const rounded = Math.floor(value);
-    return Math.min(Math.max(rounded, 1), FEISHU_HTTP_TIMEOUT_MAX_MS);
-  };
-
-  const fromDirectField = creds.httpTimeoutMs;
-  if (
-    typeof fromDirectField === "number" &&
-    Number.isFinite(fromDirectField) &&
-    fromDirectField > 0
-  ) {
-    return clampTimeout(fromDirectField);
-  }
-
-  const envRaw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  if (envRaw) {
-    const envValue = Number(envRaw);
-    if (Number.isFinite(envValue) && envValue > 0) {
-      return clampTimeout(envValue);
-    }
-  }
-
-  const fromConfig = creds.config?.httpTimeoutMs;
-  const timeout = fromConfig;
-  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
-    return FEISHU_HTTP_TIMEOUT_MS;
-  }
-  return clampTimeout(timeout);
-}
-
 /**
  * Create or get a cached Feishu client for an account.
  * Accepts any object with appId, appSecret, and optional domain/accountId.
@@ -215,11 +200,19 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   return client;
 }
 
+export type FeishuWsClientCallbacks = Pick<
+  ConstructorParameters<typeof feishuClientSdk.WSClient>[0],
+  "onError" | "onReady" | "onReconnected" | "onReconnecting"
+>;
+
 /**
  * Create a Feishu WebSocket client for an account.
  * Note: WSClient is not cached since each call creates a new connection.
  */
-export async function createFeishuWSClient(account: ResolvedFeishuAccount): Promise<Lark.WSClient> {
+export async function createFeishuWSClient(
+  account: ResolvedFeishuAccount,
+  callbacks: FeishuWsClientCallbacks = {},
+): Promise<Lark.WSClient> {
   const { accountId, appId, appSecret, domain } = account;
 
   if (!appId || !appSecret) {
@@ -231,8 +224,12 @@ export async function createFeishuWSClient(account: ResolvedFeishuAccount): Prom
     appId,
     appSecret,
     domain: resolveDomain(domain),
+    ...callbacks,
     loggerLevel: feishuClientSdk.LoggerLevel.info,
+    wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),
+  } as ConstructorParameters<typeof feishuClientSdk.WSClient>[0] & {
+    wsConfig: typeof FEISHU_WS_CONFIG;
   });
 }
 
@@ -244,13 +241,6 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
     encryptKey: account.encryptKey,
     verificationToken: account.verificationToken,
   });
-}
-
-/**
- * Get a cached client for an account (if exists).
- */
-export function getFeishuClient(accountId: string): Lark.Client | null {
-  return clientCache.get(accountId)?.client ?? null;
 }
 
 /**
@@ -270,4 +260,5 @@ export function setFeishuClientRuntimeForTest(overrides?: {
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
+  clearClientCache();
 }

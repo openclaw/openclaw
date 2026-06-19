@@ -1,10 +1,11 @@
+// Ollama provider module implements model/runtime integration.
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
-  hasMeaningfulExplicitOllamaConfig,
   resolveOllamaDiscoveryResult,
+  shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
 import { buildOllamaProvider } from "./src/provider-models.js";
@@ -15,14 +16,14 @@ type OllamaProviderPlugin = {
   docsPath: string;
   envVars: string[];
   auth: [];
-  resolveSyntheticAuth: (ctx: { providerConfig?: ModelProviderConfig }) =>
+  resolveSyntheticAuth: (ctx: { provider?: string; providerConfig?: ModelProviderConfig }) =>
     | {
         apiKey: string;
         source: string;
         mode: "api-key";
       }
     | undefined;
-  discovery: {
+  catalog: {
     order: "late";
     run: (ctx: ProviderCatalogContext) => ReturnType<typeof runOllamaDiscovery>;
   };
@@ -50,17 +51,17 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
   docsPath: "/providers/ollama",
   envVars: ["OLLAMA_API_KEY"],
   auth: [],
-  resolveSyntheticAuth: ({ providerConfig }) => {
-    if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
+  resolveSyntheticAuth: ({ provider, providerConfig }) => {
+    if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
       return undefined;
     }
     return {
       apiKey: OLLAMA_DEFAULT_API_KEY,
-      source: "models.providers.ollama (synthetic local key)",
+      source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
       mode: "api-key",
     };
   },
-  discovery: {
+  catalog: {
     order: "late",
     run: runOllamaDiscovery,
   },

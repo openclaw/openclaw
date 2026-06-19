@@ -1,11 +1,12 @@
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+// Whatsapp plugin module implements message line behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export {
   formatInboundEnvelope,
   type EnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/channel-envelope";
+} from "openclaw/plugin-sdk/channel-inbound";
 
-type WhatsAppMessagePrefixConfig = ReturnType<typeof loadConfig>;
+type WhatsAppMessagePrefixConfig = OpenClawConfig;
 
 function normalizeAgentId(agentId: string): string {
   return agentId.trim().toLowerCase() || "main";

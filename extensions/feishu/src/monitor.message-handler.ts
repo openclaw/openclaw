@@ -1,4 +1,7 @@
+// Feishu plugin module implements monitor.message handler behavior.
+import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
 import {
@@ -8,17 +11,9 @@ import {
 import { createSequentialQueue } from "./sequential-queue.js";
 import type { FeishuChatType } from "./types.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
-  core: PluginRuntime;
+  channelRuntime: PluginRuntime["channel"];
   accountId: string;
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
@@ -29,9 +24,11 @@ type FeishuMessageReceiveHandlerContext = {
     botOpenId?: string;
     botName?: string;
     runtime?: RuntimeEnv;
+    channelRuntime?: PluginRuntime["channel"];
     chatHistories?: Map<string, HistoryEntry[]>;
     accountId?: string;
     processingClaimHeld?: boolean;
+    messageDedupeKey?: string;
   }) => Promise<void>;
   resolveDebounceText: (params: {
     event: FeishuMessageEvent;
@@ -110,21 +107,21 @@ function mergeFeishuDebounceMentions(
   return merged.size > 0 ? Array.from(merged.values()) : undefined;
 }
 
-function dedupeFeishuDebounceEntriesByMessageId(
+function dedupeFeishuDebounceEntriesByDedupeKey(
   entries: FeishuMessageEvent[],
 ): FeishuMessageEvent[] {
   const seen = new Set<string>();
   const deduped: FeishuMessageEvent[] = [];
   for (const entry of entries) {
-    const messageId = entry.message.message_id?.trim();
-    if (!messageId) {
+    const dedupeKey = resolveFeishuMessageDedupeKey(entry);
+    if (!dedupeKey) {
       deduped.push(entry);
       continue;
     }
-    if (seen.has(messageId)) {
+    if (seen.has(dedupeKey)) {
       continue;
     }
-    seen.add(messageId);
+    seen.add(dedupeKey);
     deduped.push(entry);
   }
   return deduped;
@@ -160,7 +157,7 @@ function resolveFeishuDebounceMentions(params: {
 
 export function createFeishuMessageReceiveHandler({
   cfg,
-  core,
+  channelRuntime,
   accountId,
   runtime,
   chatHistories,
@@ -171,18 +168,24 @@ export function createFeishuMessageReceiveHandler({
   recordProcessedMessage,
   getBotOpenId = () => undefined,
   getBotName = () => undefined,
-  resolveSequentialKey = ({ accountId, event }) =>
-    `feishu:${accountId}:${event.message.chat_id?.trim() || "unknown"}`,
+  resolveSequentialKey = ({ accountId: accountIdLocal, event }) =>
+    `feishu:${accountIdLocal}:${event.message.chat_id?.trim() || "unknown"}`,
 }: FeishuMessageReceiveHandlerContext): (data: unknown) => Promise<void> {
-  const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
+  const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
     cfg,
     channel: "feishu",
   });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-  const enqueue = createSequentialQueue();
+  const enqueue = createSequentialQueue({
+    onTaskTimeout: (key, timeoutMs) => {
+      log(
+        `feishu[${accountId}]: per-chat task exceeded ${timeoutMs}ms cap (key=${key}); evicting from queue so later same-key messages can proceed (#70133)`,
+      );
+    },
+  });
 
-  const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
+  const dispatchFeishuMessage = async (event: FeishuMessageEvent, messageDedupeKey?: string) => {
     const sequentialKey = resolveSequentialKey({
       accountId,
       event,
@@ -196,9 +199,11 @@ export function createFeishuMessageReceiveHandler({
         botOpenId: getBotOpenId(accountId),
         botName: getBotName(accountId),
         runtime,
+        channelRuntime,
         chatHistories,
         accountId,
         processingClaimHeld: true,
+        messageDedupeKey,
       });
     await enqueue(sequentialKey, task);
   };
@@ -219,13 +224,13 @@ export function createFeishuMessageReceiveHandler({
 
   const recordSuppressedMessageIds = async (
     entries: FeishuMessageEvent[],
-    dispatchMessageId?: string,
+    dispatchDedupeKey?: string,
   ) => {
-    const keepMessageId = dispatchMessageId?.trim();
+    const keepDedupeKey = dispatchDedupeKey?.trim();
     const suppressedIds = new Set(
       entries
-        .map((entry) => entry.message.message_id?.trim())
-        .filter((id): id is string => Boolean(id) && (!keepMessageId || id !== keepMessageId)),
+        .map((entry) => resolveFeishuMessageDedupeKey(entry))
+        .filter((id): id is string => Boolean(id) && (!keepDedupeKey || id !== keepDedupeKey)),
     );
     for (const messageId of suppressedIds) {
       try {
@@ -238,7 +243,7 @@ export function createFeishuMessageReceiveHandler({
     }
   };
 
-  const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
+  const inboundDebouncer = channelRuntime.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
     buildKey: (event) => {
       const chatId = event.message.chat_id?.trim();
@@ -255,7 +260,7 @@ export function createFeishuMessageReceiveHandler({
         return false;
       }
       const text = resolveDebounceText(event);
-      return Boolean(text) && !core.channel.text.hasControlCommand(text, cfg);
+      return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -263,13 +268,13 @@ export function createFeishuMessageReceiveHandler({
         return;
       }
       if (entries.length === 1) {
-        await dispatchFeishuMessage(last);
+        await dispatchFeishuMessage(last, resolveFeishuMessageDedupeKey(last));
         return;
       }
-      const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
+      const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(entries);
       const freshEntries: FeishuMessageEvent[] = [];
       for (const entry of dedupedEntries) {
-        if (!(await hasProcessedMessage(entry.message.message_id, accountId, log))) {
+        if (!(await hasProcessedMessage(resolveFeishuMessageDedupeKey(entry), accountId, log))) {
           freshEntries.push(entry);
         }
       }
@@ -277,7 +282,8 @@ export function createFeishuMessageReceiveHandler({
       if (!dispatchEntry) {
         return;
       }
-      await recordSuppressedMessageIds(dedupedEntries, dispatchEntry.message.message_id);
+      const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry);
+      await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
       const combinedText = freshEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
@@ -286,23 +292,26 @@ export function createFeishuMessageReceiveHandler({
         entries: freshEntries,
         botOpenId: getBotOpenId(accountId),
       });
-      await dispatchFeishuMessage({
-        ...dispatchEntry,
-        message: {
-          ...dispatchEntry.message,
-          ...(combinedText.trim()
-            ? {
-                message_type: "text",
-                content: JSON.stringify({ text: combinedText }),
-              }
-            : {}),
-          mentions: mergedMentions ?? dispatchEntry.message.mentions,
+      await dispatchFeishuMessage(
+        {
+          ...dispatchEntry,
+          message: {
+            ...dispatchEntry.message,
+            ...(combinedText.trim()
+              ? {
+                  message_type: "text",
+                  content: JSON.stringify({ text: combinedText }),
+                }
+              : {}),
+            mentions: mergedMentions ?? dispatchEntry.message.mentions,
+          },
         },
-      });
+        dispatchDedupeKey,
+      );
     },
     onError: (err, entries) => {
       for (const entry of entries) {
-        releaseFeishuMessageProcessing(entry.message.message_id, accountId);
+        releaseFeishuMessageProcessing(resolveFeishuMessageDedupeKey(entry), accountId);
       }
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
     },
@@ -315,7 +324,16 @@ export function createFeishuMessageReceiveHandler({
       return;
     }
     const messageId = event.message?.message_id?.trim();
-    if (!tryBeginFeishuMessageProcessing(messageId, accountId)) {
+    const botOpenId = getBotOpenId(accountId)?.trim();
+    const senderOpenId = event.sender.sender_id.open_id?.trim();
+    if (botOpenId && senderOpenId === botOpenId) {
+      // Feishu bot receive events identify their sender by open_id. Drop this
+      // account's bot before it can consume a claim or debounce slot.
+      log(`feishu[${accountId}]: dropping self-authored message ${messageId ?? "unknown"}`);
+      return;
+    }
+    const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
+    if (!tryBeginFeishuMessageProcessing(messageDedupeKey, accountId)) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       return;
     }
@@ -323,8 +341,8 @@ export function createFeishuMessageReceiveHandler({
       await inboundDebouncer.enqueue(event);
     };
     if (fireAndForget) {
-      void processMessage().catch((err) => {
-        releaseFeishuMessageProcessing(messageId, accountId);
+      void processMessage().catch((err: unknown) => {
+        releaseFeishuMessageProcessing(messageDedupeKey, accountId);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       });
       return;
@@ -332,7 +350,7 @@ export function createFeishuMessageReceiveHandler({
     try {
       await processMessage();
     } catch (err) {
-      releaseFeishuMessageProcessing(messageId, accountId);
+      releaseFeishuMessageProcessing(messageDedupeKey, accountId);
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
     }
   };

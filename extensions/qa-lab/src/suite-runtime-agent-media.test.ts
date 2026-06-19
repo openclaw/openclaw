@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime agent media plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,20 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
+type PatchConfigCall = {
+  env: unknown;
+  patch: { plugins: { allow: string[] } };
+};
+
+function firstPatchConfigCall(): PatchConfigCall {
+  const calls = patchConfigMock.mock.calls as unknown as Array<[PatchConfigCall]>;
+  const call = calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected patchConfig to be called");
+  }
+  return call;
+}
+
 afterEach(cleanup);
 
 describe("qa suite runtime agent media helpers", () => {
@@ -39,8 +54,19 @@ describe("qa suite runtime agent media helpers", () => {
     waitForTransportReadyMock.mockClear();
   });
 
-  it("extracts media paths from tool output text", () => {
-    expect(extractMediaPathFromText("done\nMEDIA:/tmp/image.png")).toBe("/tmp/image.png");
+  it("extracts media paths from structured tool output details", () => {
+    expect(
+      extractMediaPathFromText(
+        JSON.stringify({ details: { media: { mediaUrls: ["", "/tmp/image.png"] } } }),
+      ),
+    ).toBe("/tmp/image.png");
+    expect(
+      extractMediaPathFromText(
+        JSON.stringify({
+          details: { media: { attachments: [{ path: "/tmp/from-attachment.png" }] } },
+        }),
+      ),
+    ).toBe("/tmp/from-attachment.png");
     expect(extractMediaPathFromText("done")).toBeUndefined();
   });
 
@@ -48,11 +74,11 @@ describe("qa suite runtime agent media helpers", () => {
     fetchJsonMock.mockResolvedValue([
       {
         allInputText: "irrelevant",
-        toolOutput: "MEDIA:/tmp/other.png",
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/other.png"] } } }),
       },
       {
         allInputText: "prompt snippet",
-        toolOutput: "done\nMEDIA:/tmp/generated.png",
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/generated.png"] } } }),
       },
     ]);
 
@@ -90,23 +116,26 @@ describe("qa suite runtime agent media helpers", () => {
   });
 
   it("applies provider image generation config with transport-required plugins", async () => {
-    await ensureImageGenerationConfigured({
+    const env = {
       providerMode: "mock-openai",
       mock: { baseUrl: "http://127.0.0.1:9999" },
       transport: { requiredPluginIds: ["qa-channel", "browser"] },
-    } as never);
+    } as never;
 
-    expect(patchConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        patch: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(["memory-core", "qa-channel", "browser"]),
-          }),
-        }),
-      }),
-    );
+    await ensureImageGenerationConfigured(env);
+
+    expect(patchConfigMock).toHaveBeenCalledTimes(1);
+    const patchCall = firstPatchConfigCall();
+    expect(patchCall.env).toBe(env);
+    expect(patchCall.patch.plugins.allow).toStrictEqual([
+      "acpx",
+      "memory-core",
+      "openai",
+      "qa-channel",
+      "browser",
+    ]);
     expect(waitForGatewayHealthyMock).toHaveBeenCalled();
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(expect.anything(), 60_000);
+    expect(waitForTransportReadyMock).toHaveBeenCalledWith(env, 60_000);
   });
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({
@@ -120,14 +149,14 @@ describe("qa suite runtime agent media helpers", () => {
       transport: { requiredPluginIds: ["qa-channel"] },
     } as never);
 
-    expect(patchConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        patch: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["acpx", "memory-core", "openai", "anthropic", "qa-channel"],
-          }),
-        }),
-      }),
-    );
+    expect(patchConfigMock).toHaveBeenCalledTimes(1);
+    const patchCall = firstPatchConfigCall();
+    expect(patchCall.patch.plugins.allow).toStrictEqual([
+      "acpx",
+      "memory-core",
+      "openai",
+      "anthropic",
+      "qa-channel",
+    ]);
   });
 });

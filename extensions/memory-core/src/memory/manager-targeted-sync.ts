@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager targeted sync behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
@@ -22,35 +23,37 @@ export function clearMemorySyncedSessionFiles(params: {
   return params.sessionsDirtyFiles.size > 0;
 }
 
+export function markMemoryTargetSessionFilesDirty(params: {
+  sessionsDirtyFiles: Set<string>;
+  targetSessionFiles?: Iterable<string> | null;
+}): boolean {
+  if (params.targetSessionFiles) {
+    for (const targetSessionFile of params.targetSessionFiles) {
+      params.sessionsDirtyFiles.add(targetSessionFile);
+    }
+  }
+  return params.sessionsDirtyFiles.size > 0;
+}
+
 export async function runMemoryTargetedSessionSync(params: {
   hasSessionSource: boolean;
   targetSessionFiles: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
-  useUnsafeReindex: boolean;
+  sessionsFullRetryDirty?: boolean;
   sessionsDirtyFiles: Set<string>;
   syncSessionFiles: (params: {
     needsFullReindex: boolean;
     targetSessionFiles?: string[];
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
-  shouldFallbackOnError: (message: string) => boolean;
+  shouldFallbackOnError: (err: unknown) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
-  runSafeReindex: (params: {
-    reason?: string;
-    force?: boolean;
-    progress?: TargetedSyncProgress;
-  }) => Promise<void>;
-  runUnsafeReindex: (params: {
-    reason?: string;
-    force?: boolean;
-    progress?: TargetedSyncProgress;
-  }) => Promise<void>;
 }): Promise<{ handled: boolean; sessionsDirty: boolean }> {
   if (!params.hasSessionSource || !params.targetSessionFiles) {
     return {
       handled: false,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || params.sessionsDirtyFiles.size > 0,
     };
   }
 
@@ -60,33 +63,28 @@ export async function runMemoryTargetedSessionSync(params: {
       targetSessionFiles: Array.from(params.targetSessionFiles),
       progress: params.progress,
     });
+    const remainingSessionsDirty = clearMemorySyncedSessionFiles({
+      sessionsDirtyFiles: params.sessionsDirtyFiles,
+      targetSessionFiles: params.targetSessionFiles,
+    });
     return {
       handled: true,
-      sessionsDirty: clearMemorySyncedSessionFiles({
-        sessionsDirtyFiles: params.sessionsDirtyFiles,
-        targetSessionFiles: params.targetSessionFiles,
-      }),
+      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || remainingSessionsDirty,
     };
   } catch (err) {
     const reason = formatErrorMessage(err);
     const activated =
-      params.shouldFallbackOnError(reason) && (await params.activateFallbackProvider(reason));
+      params.shouldFallbackOnError(err) && (await params.activateFallbackProvider(reason));
     if (!activated) {
       throw err;
     }
-    const reindexParams = {
-      reason: params.reason,
-      force: true,
-      progress: params.progress,
-    };
-    if (params.useUnsafeReindex) {
-      await params.runUnsafeReindex(reindexParams);
-    } else {
-      await params.runSafeReindex(reindexParams);
-    }
+    const remainingSessionsDirty = markMemoryTargetSessionFilesDirty({
+      sessionsDirtyFiles: params.sessionsDirtyFiles,
+      targetSessionFiles: params.targetSessionFiles,
+    });
     return {
       handled: true,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || remainingSessionsDirty,
     };
   }
 }

@@ -5,7 +5,7 @@ import OpenClawKit
 import WebKit
 
 @MainActor
-final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NSWindowDelegate {
+final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let sessionKey: String
     private let root: URL
     private let sessionDir: URL
@@ -159,6 +159,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         }
 
         self.webView.navigationDelegate = self
+        self.webView.uiDelegate = self
         self.window?.delegate = self
         self.container.onClose = { [weak self] in
             self?.hideCanvas()
@@ -319,12 +320,14 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.sessionDir.path
     }
 
-    func shouldAutoNavigateToA2UI(lastAutoTarget: String?) -> Bool {
-        let trimmed = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "/" { return true }
+    func shouldAutoNavigateToA2UI(lastAutoTarget: String?, candidateTarget: String) -> Bool {
+        let current = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = candidateTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty || current == "/" { return true }
+        if !candidate.isEmpty, current == candidate { return false }
         if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
            !lastAuto.isEmpty,
-           trimmed == lastAuto
+           current == lastAuto
         {
             return true
         }

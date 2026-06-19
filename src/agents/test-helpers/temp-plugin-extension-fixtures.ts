@@ -1,3 +1,8 @@
+/**
+ * Temporary plugin/extension fixtures.
+ *
+ * Creates disposable plugin directories and resets loader/registry state for tests.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +12,14 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
-export function createTempPluginDir(tempDirs: string[], prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+export function createTempPluginDir(
+  tempDirs: string[],
+  prefix: string,
+  options?: { parentDir?: string },
+): string {
+  const parentDir = options?.parentDir ?? os.tmpdir();
+  fs.mkdirSync(parentDir, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(parentDir, prefix));
   tempDirs.push(dir);
   return dir;
 }
@@ -43,6 +54,7 @@ export function writeTempPlugin(params: {
 export function cleanupTempPluginTestEnvironment(
   tempDirs: string[],
   originalBundledPluginsDir: string | undefined,
+  originalDisableBundledPlugins?: string,
 ) {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -53,6 +65,11 @@ export function cleanupTempPluginTestEnvironment(
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
+  if (originalDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
   }
 }
 

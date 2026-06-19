@@ -1,3 +1,4 @@
+// Status scan overview tests cover overview collection and gateway/runtime summary inputs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
@@ -5,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   hasPotentialConfiguredChannels: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
-  readBestEffortConfig: vi.fn(),
+  readBestEffortConfigSnapshot: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
   callGateway: vi.fn(),
@@ -26,7 +27,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfig: mocks.readBestEffortConfig,
+  readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
 }));
 
 vi.mock("../infra/os-summary.js", () => ({
@@ -48,13 +49,41 @@ vi.mock("./status.scan.runtime.js", () => ({
   },
 }));
 
+function firstGatewayRequest(): { method?: string; url?: string; token?: string } {
+  const call = mocks.callGateway.mock.calls[0];
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  return call[0] as { method?: string; url?: string; token?: string };
+}
+
+type ChannelsTableCall = [
+  unknown,
+  {
+    includeSetupFallbackPlugins?: boolean;
+    showSecrets?: boolean;
+    sourceConfig?: unknown;
+  },
+];
+
+function firstChannelsTableCall(): ChannelsTableCall {
+  const call = mocks.buildChannelsTable.mock.calls[0];
+  if (!call) {
+    throw new Error("expected channels table call");
+  }
+  return call as ChannelsTableCall;
+}
+
 describe("collectStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
-    mocks.readBestEffortConfig.mockResolvedValue({ session: {} });
+    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
+      config: { session: {} },
+      sourceConfig: { session: { raw: true } },
+    });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },
       diagnostics: ["secret warning"],
@@ -103,21 +132,37 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "channels.status",
-        url: "ws://127.0.0.1:18789",
-        token: "tok",
-      }),
-    );
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        showSecrets: false,
-        sourceConfig: { session: {} },
-      }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    const gatewayRequest = firstGatewayRequest();
+    expect(gatewayRequest?.method).toBe("channels.status");
+    expect(gatewayRequest?.url).toBe("ws://127.0.0.1:18789");
+    expect(gatewayRequest?.token).toBe("tok");
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    const channelTableCall = firstChannelsTableCall();
+    expect(typeof channelTableCall?.[0]).toBe("object");
+    expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(true);
+    expect(channelTableCall?.[1]?.showSecrets).toBe(false);
+    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
+  });
+
+  it("can keep channel overview on metadata-only status paths", async () => {
+    const result = await collectStatusScanOverview({
+      commandName: "status",
+      opts: { timeoutMs: 1234 },
+      showSecrets: false,
+      includeLiveChannelStatus: false,
+      includeChannelSetupRuntimeFallback: false,
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    const channelTableCall = firstChannelsTableCall();
+    expect(typeof channelTableCall?.[0]).toBe("object");
+    expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(false);
+    expect(channelTableCall?.[1]?.showSecrets).toBe(false);
+    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
+    expect(result.channelIssues).toStrictEqual([]);
   });
 
   it("skips channels.status when the gateway is unreachable", async () => {
@@ -155,6 +200,6 @@ describe("collectStatusScanOverview", () => {
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.channelsStatus).toBeNull();
-    expect(result.channelIssues).toEqual([]);
+    expect(result.channelIssues).toStrictEqual([]);
   });
 });

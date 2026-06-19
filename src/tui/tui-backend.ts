@@ -1,12 +1,19 @@
+// Defines the TUI backend contract and backend event shapes.
 import type {
+  CommandEntry,
+  CommandsListParams,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
-} from "../gateway/protocol/index.js";
+} from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
+// Transport-agnostic backend contract consumed by the TUI runtime.
+/** Options for sending one chat turn through a TUI backend. */
 export type ChatSendOptions = {
   sessionKey: string;
+  agentId?: string;
+  sessionId?: string | null;
   message: string;
   thinking?: string;
   deliver?: boolean;
@@ -14,25 +21,39 @@ export type ChatSendOptions = {
   runId?: string;
 };
 
+/** Options for forwarding a goal command to a backend session. */
+export type TuiGoalCommandOptions = {
+  sessionKey: string;
+  agentId?: string;
+  command: string;
+};
+
+/** Event envelope delivered from Gateway or the embedded backend into the TUI. */
 export type TuiEvent = {
   event: string;
   payload?: unknown;
   seq?: number;
 };
 
+/** Session-list payload rendered by session pickers and status surfaces. */
 export type TuiSessionList = {
   ts: number;
   path: string;
   count: number;
+  totalCount?: number;
+  limitApplied?: number;
+  hasMore?: boolean;
   defaults?: {
     model?: string | null;
     modelProvider?: string | null;
     contextTokens?: number | null;
+    thinkingLevels?: Array<{ id: string; label: string }>;
   };
   sessions: Array<
     Pick<
       SessionInfo,
       | "thinkingLevel"
+      | "thinkingLevels"
       | "fastMode"
       | "verboseLevel"
       | "reasoningLevel"
@@ -41,6 +62,8 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensFresh"
+      | "goal"
       | "modelProvider"
       | "displayName"
     > & {
@@ -56,6 +79,12 @@ export type TuiSessionList = {
       space?: string;
       subject?: string;
       chatType?: string;
+      origin?: {
+        label?: string;
+        provider?: string;
+        surface?: string;
+      };
+      lastChannel?: string;
       lastProvider?: string;
       lastTo?: string;
       lastAccountId?: string;
@@ -65,6 +94,7 @@ export type TuiSessionList = {
   >;
 };
 
+/** Agent-list payload used by TUI agent switching. */
 export type TuiAgentsList = {
   defaultId: string;
   mainKey: string;
@@ -75,6 +105,7 @@ export type TuiAgentsList = {
   }>;
 };
 
+/** Model choice payload shown by TUI model pickers. */
 export type TuiModelChoice = {
   id: string;
   name: string;
@@ -83,6 +114,21 @@ export type TuiModelChoice = {
   reasoning?: boolean;
 };
 
+/** Result shape returned by session mutation commands. */
+export type TuiSessionMutationResult = {
+  ok?: boolean;
+  key?: string;
+  entry?: Partial<SessionInfo> & {
+    sessionId?: string;
+    updatedAt?: number | null;
+  };
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
+  };
+};
+
+/** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
     url: string;
@@ -94,17 +140,25 @@ export type TuiBackend = {
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
-  stop: () => void;
+  stop: () => void | Promise<void>;
+  subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
   abortChat: (opts: {
     sessionKey: string;
+    agentId?: string;
     runId: string;
   }) => Promise<{ ok: boolean; aborted: boolean }>;
-  loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<unknown>;
+  loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
-  resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
+  resetSession: (
+    key: string,
+    reason?: "new" | "reset",
+    opts?: { agentId?: string },
+  ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
+  listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
+  runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
 };

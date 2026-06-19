@@ -1,4 +1,7 @@
+// Local media root helpers normalize and match allowed local media roots.
 import path from "node:path";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
@@ -8,10 +11,8 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { type LocalMediaRoot, resolveLocalMediaRootPath } from "./local-media-root.js";
-import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
@@ -34,11 +35,14 @@ const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 
 function resolveCachedPreferredTmpDir(): string {
   if (!cachedPreferredTmpDir) {
+    // Temp-root discovery can hit platform/env state; keep one process-local
+    // snapshot so media root lists stay stable during a run.
     cachedPreferredTmpDir = resolvePreferredOpenClawTmpDir();
   }
   return cachedPreferredTmpDir;
 }
 
+/** Builds the baseline local media root allowlist from state/config directories. */
 export function buildMediaLocalRoots(
   stateDir: string,
   configDir: string,
@@ -59,10 +63,12 @@ export function buildMediaLocalRoots(
   );
 }
 
+/** Returns the process default roots where local media reads may resolve generated/cache files. */
 export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
+/** Adds the active agent workspace to the default media roots without exposing all agent state. */
 function getAgentScopedMediaLocalRootsInternal(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -130,6 +136,7 @@ function resolveLocalMediaPath(source: string): string | undefined {
   return undefined;
 }
 
+/** Adds only concrete local source parent directories to an existing root allowlist. */
 export function appendLocalMediaParentRoots(
   roots: readonly string[],
   mediaSources?: readonly string[],
@@ -144,6 +151,7 @@ function normalizeLocalMediaRoot(root: LocalMediaRoot): LocalMediaRoot {
   return { ...root, path: path.resolve(root.path) };
 }
 
+/** Adds only concrete local source parent directories to an existing root entry allowlist. */
 export function appendLocalMediaParentRootEntries(
   roots: readonly LocalMediaRoot[],
   mediaSources?: readonly string[],
@@ -177,6 +185,7 @@ export function appendLocalMediaParentRootEntries(
   return appended;
 }
 
+/** Resolves outbound media root entries, expanding for local sources only when filesystem policy allows it. */
 export function getAgentScopedMediaLocalRootEntriesForSources(
   params: AgentScopedMediaRootsForSourcesParams,
 ): readonly LocalMediaRoot[] {
@@ -184,11 +193,12 @@ export function getAgentScopedMediaLocalRootEntriesForSources(
   const roots = getAgentScopedMediaLocalRootsInternal(params.cfg, params.agentId, {
     ignoreConfiguredRoots: params.ignoreConfiguredRoots,
   });
+  // Configured tools.fs.roots are an explicit allowlist: don't widen them with media parents.
   if (fsConfig.roots !== undefined && !params.ignoreConfiguredRoots) {
     return roots;
   }
   const fallbackRoots = [...roots];
-  if (fsConfig.workspaceOnly) {
+  if (fsConfig.workspaceOnly === true) {
     return fallbackRoots;
   }
   if (!resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })) {

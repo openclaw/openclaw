@@ -1,3 +1,4 @@
+// Mcp Channels Seed script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,10 +48,12 @@ async function main() {
           sessionId: "sess-main",
           sessionFile,
           updatedAt: now,
-          lastChannel: "imessage",
-          lastTo: "+15551234567",
-          lastAccountId: "imessage-default",
-          lastThreadId: "thread-42",
+          deliveryContext: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
           displayName: "Docker MCP Channel Smoke",
           derivedTitle: "Docker MCP Channel Smoke",
           lastMessagePreview: "seeded transcript",

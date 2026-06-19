@@ -1,5 +1,6 @@
+// Signal tests cover inbound context.contract plugin behavior.
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { describe, it } from "vitest";
 
 describe("Signal inbound context contract", () => {

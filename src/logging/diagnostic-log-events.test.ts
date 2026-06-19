@@ -1,9 +1,16 @@
+// Diagnostic log event tests cover structured events written to diagnostic logs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -11,7 +18,9 @@ const SPAN_ID = "00f067aa0ba902b7";
 const PROTO_KEY = "__proto__";
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 beforeEach(() => {
@@ -22,16 +31,20 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
+  resetDiagnosticTraceContextForTest();
   setLoggerOverride(null);
   resetLogger();
 });
 
 describe("diagnostic log events", () => {
   it("emits structured log records through diagnostics", async () => {
-    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+    const received: Array<{
+      event: Extract<DiagnosticEventPayload, { type: "log.record" }>;
+      metadata: DiagnosticEventMetadata;
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt, metadata) => {
       if (evt.type === "log.record") {
-        received.push(evt);
+        received.push({ event: evt, metadata });
       }
     });
 
@@ -44,19 +57,52 @@ describe("diagnostic log events", () => {
     unsubscribe();
 
     expect(received).toHaveLength(1);
-    expect(received[0]).toMatchObject({
-      type: "log.record",
-      level: "INFO",
-      message: "hello diagnostic logs",
-      attributes: {
-        subsystem: "diagnostic",
-        runId: "run-1",
-      },
-      trace: {
-        traceId: TRACE_ID,
-        spanId: SPAN_ID,
-      },
+    const [record] = received;
+    if (!record) {
+      throw new Error("missing diagnostic log event");
+    }
+    const { event, metadata } = record;
+    expect(event.type).toBe("log.record");
+    expect(event.level).toBe("INFO");
+    expect(event.message).toBe("hello diagnostic logs");
+    expect(event.attributes).toStrictEqual({
+      subsystem: "diagnostic",
+      runId: "run-1",
     });
+    expect(event.trace).toStrictEqual({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+    });
+    expect(metadata.trusted).toBe(false);
+    expect(metadata.trustedTraceContext).toBeUndefined();
+  });
+
+  it("uses active request trace context for unbound log records", async () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+    });
+    const received: Array<{
+      event: Extract<DiagnosticEventPayload, { type: "log.record" }>;
+      metadata: DiagnosticEventMetadata;
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt, metadata) => {
+      if (evt.type === "log.record") {
+        received.push({ event: evt, metadata });
+      }
+    });
+
+    runWithDiagnosticTraceContext(trace, () => {
+      const logger = getChildLogger({ subsystem: "diagnostic" });
+      logger.info({ runId: "run-1" }, "request-scoped diagnostic log");
+    });
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.event.trace).toEqual(trace);
+    expect(received[0]?.metadata.trusted).toBe(false);
+    expect(received[0]?.metadata.trustedTraceContext).toBe(true);
   });
 
   it("redacts and bounds internal log records before diagnostic emission", async () => {
@@ -92,17 +138,9 @@ describe("diagnostic log events", () => {
     expect(event.attributes?.token).not.toBe(secret);
     expect(String(event.attributes?.token)).toContain("…");
     expect(String(event.attributes?.longValue).length).toBeLessThanOrEqual(2100);
-    expect(event.attributes).toEqual(
-      expect.not.objectContaining({
-        nested: expect.anything(),
-        "bad key": expect.anything(),
-      }),
-    );
-    expect(event).toEqual(
-      expect.not.objectContaining({
-        argsJson: expect.anything(),
-      }),
-    );
+    expect(Object.hasOwn(event.attributes ?? {}, "nested")).toBe(false);
+    expect(Object.hasOwn(event.attributes ?? {}, "bad key")).toBe(false);
+    expect(Object.hasOwn(event, "argsJson")).toBe(false);
   });
 
   it("drops sensitive, blocked, and excess log attribute keys without copying large objects", async () => {

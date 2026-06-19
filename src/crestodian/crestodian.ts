@@ -1,3 +1,4 @@
+// Crestodian CLI runner selects JSON, one-shot, or interactive setup-helper mode.
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -8,13 +9,24 @@ import {
   isPersistentCrestodianOperation,
   type CrestodianCommandDeps,
 } from "./operations.js";
-import { formatCrestodianOverview, loadCrestodianOverview } from "./overview.js";
+import {
+  formatCrestodianOverview,
+  loadCrestodianOverview,
+  type CrestodianOverview,
+} from "./overview.js";
 
+/**
+ * CLI entry point for Crestodian.
+ *
+ * This module chooses JSON, one-shot, or interactive TUI mode and delegates all
+ * command parsing/execution to dialogue and operation modules.
+ */
 type CrestodianInteractiveRunner = (
   opts: RunCrestodianOptions,
   runtime: RuntimeEnv,
 ) => Promise<void>;
 
+/** Options accepted by the Crestodian command runner. */
 export type RunCrestodianOptions = {
   message?: string;
   yes?: boolean;
@@ -22,11 +34,26 @@ export type RunCrestodianOptions = {
   interactive?: boolean;
   onReady?: () => void;
   deps?: CrestodianCommandDeps;
+  formatOverview?: (overview: CrestodianOverview) => string;
+  loadOverview?: typeof loadCrestodianOverview;
   planWithAssistant?: CrestodianAssistantPlanner;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
   runInteractiveTui?: CrestodianInteractiveRunner;
 };
+
+function crestodianCommandDepsFromOptions(
+  opts: RunCrestodianOptions,
+): CrestodianCommandDeps | undefined {
+  if (!opts.deps && !opts.formatOverview && !opts.loadOverview) {
+    return undefined;
+  }
+  return {
+    ...opts.deps,
+    ...(opts.formatOverview ? { formatOverview: opts.formatOverview } : {}),
+    ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
+  };
+}
 
 async function runOneShot(
   input: string,
@@ -36,21 +63,23 @@ async function runOneShot(
   const operation = await resolveCrestodianOperation(input, runtime, opts);
   await executeCrestodianOperation(operation, runtime, {
     approved: opts.yes === true || !isPersistentCrestodianOperation(operation),
-    deps: opts.deps,
+    deps: crestodianCommandDepsFromOptions(opts),
   });
 }
 
+/** Run Crestodian in JSON, one-shot message, or interactive TUI mode. */
 export async function runCrestodian(
   opts: RunCrestodianOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   if (opts.json) {
-    const overview = await loadCrestodianOverview();
+    const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
     writeRuntimeJson(runtime, overview);
     return;
   }
 
   if (opts.message?.trim()) {
+    // One-shot mode always shows the overview first so planned changes have local context.
     const overview = await withProgress(
       {
         label: "Loading Crestodian overview…",
@@ -58,9 +87,9 @@ export async function runCrestodian(
         delayMs: 0,
         fallback: "none",
       },
-      async () => await loadCrestodianOverview(),
+      async () => await (opts.loadOverview ?? loadCrestodianOverview)(),
     );
-    runtime.log(formatCrestodianOverview(overview));
+    runtime.log((opts.formatOverview ?? formatCrestodianOverview)(overview));
     runtime.log("");
     await runOneShot(opts.message, runtime, opts);
     return;
@@ -72,7 +101,9 @@ export async function runCrestodian(
   const inputIsTty = (input as { isTTY?: boolean }).isTTY === true;
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
   if (!interactive || !inputIsTty || !outputIsTty) {
+    // Without a TTY, Crestodian cannot safely ask for confirmation; require --message instead.
     runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
+    runtime.exit(1);
     return;
   }
 

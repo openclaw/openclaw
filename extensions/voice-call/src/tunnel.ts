@@ -1,10 +1,18 @@
+// Voice Call plugin module implements tunnel behavior.
 import { spawn } from "node:child_process";
+import {
+  appendBoundedChildOutput,
+  emptyBoundedChildOutput,
+  formatBoundedChildOutput,
+} from "./bounded-child-output.js";
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
+
+const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 
 /**
  * Tunnel configuration for exposing the webhook server.
  */
-export interface TunnelConfig {
+interface TunnelConfig {
   /** Tunnel provider: ngrok, tailscale-serve, or tailscale-funnel */
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
   /** Local port to tunnel */
@@ -117,9 +125,11 @@ export async function startNgrokTunnel(config: {
     };
 
     proc.stdout.on("data", (data: Buffer) => {
-      outputBuffer += data.toString();
-      const lines = outputBuffer.split("\n");
+      const lines = (outputBuffer + data.toString()).split("\n");
       outputBuffer = lines.pop() || "";
+      if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
+        outputBuffer = outputBuffer.slice(-NGROK_LOG_BUFFER_MAX_CHARS);
+      }
 
       for (const line of lines) {
         if (line.trim()) {
@@ -135,7 +145,8 @@ export async function startNgrokTunnel(config: {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
-          reject(new Error(`ngrok error: ${msg}`));
+          const output = appendBoundedChildOutput(emptyBoundedChildOutput(), msg);
+          reject(new Error(`ngrok error: ${formatBoundedChildOutput(output)}`));
         }
       }
     });
@@ -167,44 +178,26 @@ async function runNgrokCommand(args: string[]): Promise<string> {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = emptyBoundedChildOutput();
+    let stderr = emptyBoundedChildOutput();
 
     proc.stdout.on("data", (data) => {
-      stdout += data.toString();
+      stdout = appendBoundedChildOutput(stdout, data.toString());
     });
     proc.stderr.on("data", (data) => {
-      stderr += data.toString();
+      stderr = appendBoundedChildOutput(stderr, data.toString());
     });
 
     proc.on("close", (code) => {
       if (code === 0) {
-        resolve(stdout);
+        resolve(stdout.text);
       } else {
-        reject(new Error(`ngrok command failed: ${stderr || stdout}`));
+        const output = stderr.text ? stderr : stdout;
+        reject(new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`));
       }
     });
 
     proc.on("error", reject);
-  });
-}
-
-/**
- * Check if ngrok is installed and available.
- */
-export async function isNgrokAvailable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn("ngrok", ["version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    proc.on("close", (code) => {
-      resolve(code === 0);
-    });
-
-    proc.on("error", () => {
-      resolve(false);
-    });
   });
 }
 
@@ -229,11 +222,20 @@ export async function startTailscaleTunnel(config: {
     const proc = spawn("tailscale", [config.mode, "--bg", "--yes", "--set-path", path, localUrl], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let stdout = emptyBoundedChildOutput();
+    let stderr = emptyBoundedChildOutput();
 
     const timeout = setTimeout(() => {
       proc.kill("SIGKILL");
       reject(new Error(`Tailscale ${config.mode} timed out`));
     }, 10000);
+
+    proc.stdout.on("data", (data) => {
+      stdout = appendBoundedChildOutput(stdout, data.toString());
+    });
+    proc.stderr.on("data", (data) => {
+      stderr = appendBoundedChildOutput(stderr, data.toString());
+    });
 
     proc.on("close", (code) => {
       clearTimeout(timeout);
@@ -249,7 +251,9 @@ export async function startTailscaleTunnel(config: {
           },
         });
       } else {
-        reject(new Error(`Tailscale ${config.mode} failed with code ${code}`));
+        const output = stderr.text ? stderr : stdout;
+        const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
+        reject(new Error(`Tailscale ${config.mode} failed with code ${code}${detail}`));
       }
     });
 

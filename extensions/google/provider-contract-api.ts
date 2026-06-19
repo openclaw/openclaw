@@ -1,3 +1,4 @@
+// Google API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
@@ -25,6 +26,22 @@ export function createGoogleProvider(): ProviderPlugin {
         },
       },
     ],
+  };
+}
+
+export function createGoogleVertexProvider(): ProviderPlugin {
+  return {
+    id: "google-vertex",
+    label: "Google Vertex AI",
+    docsPath: "/providers/models",
+    envVars: [
+      "GOOGLE_CLOUD_API_KEY",
+      "GOOGLE_CLOUD_PROJECT",
+      "GCLOUD_PROJECT",
+      "GOOGLE_CLOUD_LOCATION",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+    ],
+    auth: [],
   };
 }
 

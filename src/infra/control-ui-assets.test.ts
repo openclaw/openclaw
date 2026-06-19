@@ -1,3 +1,4 @@
+// Tests Control UI asset discovery and expected bundled files.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -191,7 +192,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
     expect(resolveControlUiRootOverrideSync(path.join(uiDir, "missing.html"))).toBeNull();
   });
 
-  it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", async () => {
+  it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", () => {
     const pkgRoot = abs("fixtures/openclaw-bundle");
     (
       openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>

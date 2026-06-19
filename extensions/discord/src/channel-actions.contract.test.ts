@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord tests cover channel actions.contract plugin behavior.
+import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe } from "vitest";
-import { installChannelActionsContractSuite } from "../../../test/helpers/channels/registry-contract-suites.js";
 import { discordPlugin } from "../api.js";
 
 describe("discord actions contract", () => {

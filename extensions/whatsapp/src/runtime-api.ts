@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
@@ -14,8 +15,8 @@ export {
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -27,7 +28,6 @@ export {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
 } from "./group-intro.js";
-export { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 export { createWhatsAppOutboundBase } from "./outbound-base.js";
 export {
   isWhatsAppGroupJid,
@@ -55,8 +55,8 @@ function loadChannelRuntime() {
 export async function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  const { monitorWebChannel } = await loadChannelRuntime();
-  return await monitorWebChannel(...args);
+  const { monitorWebChannel: monitorWebChannelLocal } = await loadChannelRuntime();
+  return await monitorWebChannelLocal(...args);
 }
 
 export async function loadOutboundMediaFromUrl(

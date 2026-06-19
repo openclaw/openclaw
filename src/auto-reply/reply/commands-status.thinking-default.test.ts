@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+// Tests status command defaults for thinking and reasoning display.
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -26,10 +27,14 @@ vi.mock("../group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value,
 }));
 
-vi.mock("./queue.js", () => ({
-  getFollowupQueueDepth: () => 0,
-  resolveQueueSettings: () => ({ mode: "interrupt" }),
-}));
+vi.mock("./queue.js", async () => {
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  return {
+    ...actual,
+    getFollowupQueueDepth: () => 0,
+    resolveQueueSettings: () => ({ mode: "interrupt" }),
+  };
+});
 
 const { buildStatusReply } = await import("./commands-status.js");
 
@@ -53,6 +58,20 @@ async function buildKiraStatusReply(cfg: OpenClawConfig) {
 }
 
 describe("buildStatusReply", () => {
+  beforeAll(async () => {
+    await buildKiraStatusReply({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig);
+  });
+
   it("shows per-agent thinkingDefault in the status card", async () => {
     const cfg = {
       session: { mainKey: "main", scope: "per-sender" },
@@ -109,7 +128,33 @@ describe("buildStatusReply", () => {
     expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
   });
 
-  it("keeps default fallback config when the agent has no explicit fallback override", async () => {
+  it("keeps default fallback config when the agent has no explicit model", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps agent primary strict when the agent has no explicit fallback override", async () => {
     const cfg = {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
@@ -135,7 +180,7 @@ describe("buildStatusReply", () => {
 
     const reply = await buildKiraStatusReply(cfg);
 
-    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+    expect(reply?.text).not.toContain("Fallbacks:");
   });
 
   it("treats an explicit empty per-agent fallback override as disabling inherited fallbacks", async () => {

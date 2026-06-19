@@ -1,9 +1,9 @@
 package ai.openclaw.app.node
 
-import android.content.Context
-import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -16,9 +16,14 @@ import kotlinx.serialization.json.put
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
 
-internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean =
-  rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
+/**
+ * Raw MP4 size guard before base64 encoding the clip into a node.invoke response.
+ */
+internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean = rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
+/**
+ * Gateway camera command adapter that adds HUD feedback and payload-size enforcement.
+ */
 class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
@@ -27,8 +32,9 @@ class CameraHandler(
   private val triggerCameraFlash: () -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
-  suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult {
-    return try {
+  /** Handles camera.list by exposing CameraX devices through gateway metadata. */
+  suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
+    try {
       val devices = camera.listDevices()
       val payload =
         buildJsonObject {
@@ -53,10 +59,11 @@ class CameraHandler(
       val (code, message) = invokeErrorFromThrowable(err)
       GatewaySession.InvokeResult.error(code = code, message = message)
     }
-  }
 
+  /** Handles camera.snap with HUD progress, flash feedback, and normalized invoke errors. */
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
+
     fun camLog(msg: String) {
       if (!BuildConfig.DEBUG) return
       val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
@@ -93,8 +100,10 @@ class CameraHandler(
     }
   }
 
+  /** Handles camera.clip and keeps external audio capture paused while camera audio is active. */
   suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
     val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
+
     fun clipLog(msg: String) {
       if (!BuildConfig.DEBUG) return
       val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
@@ -124,6 +133,7 @@ class CameraHandler(
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
         clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
+        // Delete oversized clips before returning so cache files do not accumulate after failed invokes.
         withContext(Dispatchers.IO) { filePayload.file.delete() }
         showCameraHud("Clip too large", CameraHudKind.Error, 2400)
         return GatewaySession.InvokeResult.error(
@@ -133,24 +143,26 @@ class CameraHandler(
         )
       }
 
-      val bytes = withContext(Dispatchers.IO) {
-        try {
-          filePayload.file.readBytes()
-        } finally {
-          filePayload.file.delete()
+      val bytes =
+        withContext(Dispatchers.IO) {
+          try {
+            filePayload.file.readBytes()
+          } finally {
+            filePayload.file.delete()
+          }
         }
-      }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
       clipLog("returning base64 payload")
       showCameraHud("Clip captured", CameraHudKind.Success, 1800)
       return GatewaySession.InvokeResult.ok(
-        """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}"""
+        """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}""",
       )
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")
       clipLog("stack: ${err.stackTraceToString().take(2000)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
+      // Prevent talk/transcription capture from competing with camera audio after every exit path.
       if (includeAudio) externalAudioCaptureActive.value = false
     }
   }

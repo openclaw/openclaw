@@ -1,7 +1,7 @@
+// Qa Lab plugin module implements model selection behavior.
 import {
   DEFAULT_QA_LIVE_PROVIDER_MODE,
   getQaProvider,
-  type QaProviderMode,
   type QaProviderModeInput,
 } from "./providers/index.js";
 

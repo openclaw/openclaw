@@ -1,4 +1,5 @@
-import { SsrFBlockedError } from "openclaw/plugin-sdk/browser-security-runtime";
+// Tlon tests cover auth.ssrf plugin behavior.
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";

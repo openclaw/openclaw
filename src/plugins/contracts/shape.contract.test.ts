@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+// Plugin shape contract tests cover manifest, API, and runtime export shapes.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
-} from "../../../test/helpers/plugins/contracts-testkit.js";
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describe, expect, it } from "vitest";
 import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {

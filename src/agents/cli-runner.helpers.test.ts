@@ -1,24 +1,29 @@
+/** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { MAX_IMAGE_BYTES } from "../media/constants.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildCliArgs,
+  buildClaudeOwnerKey,
   loadPromptRefImages,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
   writeCliImages,
   writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
-import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
+import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
   beforeEach(() => {
+    // Restore spies because these helpers use real modules with per-test mocks.
     vi.restoreAllMocks();
   });
 
@@ -31,8 +36,25 @@ describe("loadPromptRefImages", () => {
         prompt: "just text",
         workspaceDir: "/workspace",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
+    expect(loadImageFromRefSpy).not.toHaveBeenCalled();
+    expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not reload OpenClaw CLI image cache paths from prior prompt text", async () => {
+    const loadImageFromRefSpy = vi.spyOn(promptImageUtils, "loadImageFromRef");
+    const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
+
+    await expect(
+      loadPromptRefImages({
+        prompt:
+          'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
+        workspaceDir: "/workspace",
+      }),
+    ).resolves.toStrictEqual([]);
+
+    // Cached image paths are generated output, not fresh user references.
     expect(loadImageFromRefSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
@@ -68,7 +90,8 @@ describe("loadPromptRefImages", () => {
     });
 
     const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
-    expect(ref).toMatchObject({ resolved: "/tmp/photo.png", type: "path" });
+    expect(ref?.resolved).toBe("/tmp/photo.png");
+    expect(ref?.type).toBe("path");
     expect(workspaceDir).toBe("/workspace");
     expect(options).toEqual({
       maxBytes: MAX_IMAGE_BYTES,
@@ -130,6 +153,8 @@ describe("buildCliArgs", () => {
   });
 
   it("strips the internal cache boundary from CLI system prompt args", () => {
+    // The boundary is internal prompt-cache metadata and must never reach the
+    // downstream CLI as literal text.
     expect(
       buildCliArgs({
         backend: {
@@ -223,10 +248,14 @@ describe("writeCliImages", () => {
     });
 
     try {
-      expect(first.paths).toHaveLength(1);
+      expect(first.paths).toStrictEqual([
+        expect.stringMatching(
+          new RegExp(
+            `^${escapeRegExp(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`)}.*\\.png$`,
+          ),
+        ),
+      ]);
       expect(second.paths).toEqual(first.paths);
-      expect(first.paths[0]).toContain(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`);
-      expect(first.paths[0]).toMatch(/\.png$/);
       await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
       await fs.rm(first.paths[0], { force: true });
@@ -263,13 +292,7 @@ describe("writeCliImages", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
     );
     const sourceImage = path.join(tempDir, "bb-image.png");
-    await fs.writeFile(
-      sourceImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
 
     try {
       const prepared = await prepareCliPromptImagePayload({
@@ -295,13 +318,14 @@ describe("writeCliImages", () => {
         useResume: false,
       });
 
-      const imageArgIndex = argv.indexOf("--image");
-      const promptIndex = argv.indexOf("describe the attached image");
-      expect(imageArgIndex).toBeGreaterThanOrEqual(0);
-      expect(promptIndex).toBeGreaterThanOrEqual(0);
-      expect(imageArgIndex).toBeGreaterThan(promptIndex);
-      expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
-      expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
+      expect(argv).toStrictEqual([
+        "exec",
+        "--json",
+        "describe the attached image",
+        "--image",
+        expect.stringContaining("openclaw-cli-images"),
+      ]);
+      expect(argv[4]).not.toBe(sourceImage);
 
       await prepared.cleanupImages?.();
     } finally {
@@ -314,13 +338,7 @@ describe("writeCliImages", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
     );
     const sourceImage = path.join(tempDir, "claude-image.png");
-    await fs.writeFile(
-      sourceImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
 
     try {
       const prompt = `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`;
@@ -400,13 +418,7 @@ describe("writeCliImages", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
     );
     const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
-    await fs.writeFile(
-      sourceImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
     const explicitImage: ImageContent = {
       type: "image",
       data: "c29tZS1leHBsaWNpdC1pbWFnZQ==",
@@ -437,7 +449,7 @@ describe("writeCliImages", () => {
         useResume: false,
       });
 
-      expect(argv.filter((arg) => arg === "--image")).toHaveLength(1);
+      expect(argv.reduce((count, arg) => count + (arg === "--image" ? 1 : 0), 0)).toBe(1);
       expect(argv[argv.indexOf("--image") + 1]).toContain("openclaw-cli-images");
       await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(
         Buffer.from(explicitImage.data, "base64"),
@@ -468,12 +480,19 @@ describe("writeCliSystemPromptFile", () => {
     } finally {
       await written.cleanup();
     }
-    await expect(fs.access(written.filePath ?? "")).rejects.toMatchObject({ code: "ENOENT" });
+    let err: unknown;
+    try {
+      await fs.access(written.filePath ?? "");
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 });
 
 describe("resolveCliRunQueueKey", () => {
-  it("scopes Claude CLI serialization to the workspace for fresh runs", () => {
+  it("falls back to workspaceDir when no ownerKey is supplied (legacy)", () => {
     expect(
       resolveCliRunQueueKey({
         backendId: "claude-cli",
@@ -484,6 +503,18 @@ describe("resolveCliRunQueueKey", () => {
     ).toBe("claude-cli:workspace:/tmp/project-a");
   });
 
+  it("scopes Claude CLI serialization to the owner identity for fresh runs", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-1b",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+
   it("scopes Claude CLI serialization to the resumed CLI session id", () => {
     expect(
       resolveCliRunQueueKey({
@@ -492,6 +523,19 @@ describe("resolveCliRunQueueKey", () => {
         runId: "run-2",
         workspaceDir: "/tmp/project-a",
         cliSessionId: "claude-session-123",
+      }),
+    ).toBe("claude-cli:session:claude-session-123");
+  });
+
+  it("prefers cliSessionId over ownerKey when resuming", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-2b",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+        ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:session:claude-session-123");
   });
@@ -517,5 +561,61 @@ describe("resolveCliRunQueueKey", () => {
         workspaceDir: "/tmp/project-a",
       }),
     ).toBe("claude-cli:run-4");
+  });
+
+  it("keeps Claude live sessions serialized when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+
+  it("keeps resumed Claude live sessions on the owner lane", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        liveSession: "claude-stdio",
+        serialize: true,
+        runId: "run-live-resumed",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+});
+
+describe("buildClaudeOwnerKey", () => {
+  it("is deterministic and distinguishes session keys", () => {
+    const base = {
+      agentAccountId: "acct-1",
+      agentId: "agent-main",
+      authProfileId: "profile-a",
+      sessionId: "sess-1",
+      sessionKey: "key-a",
+    };
+    const a1 = buildClaudeOwnerKey(base);
+    const a2 = buildClaudeOwnerKey(base);
+    expect(a1).toBe(a2);
+    const b = buildClaudeOwnerKey({ ...base, sessionKey: "key-b" });
+    expect(a1).not.toBe(b);
+  });
+
+  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — splits queue from live-session map)", () => {
+    expect(
+      buildClaudeOwnerKey({
+        agentAccountId: "acct-1",
+        agentId: "agent-main",
+        authProfileId: "profile-a",
+        sessionId: "sess-1",
+        sessionKey: "key-a",
+      }),
+    ).toBe("718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800");
   });
 });

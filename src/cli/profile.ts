@@ -1,20 +1,22 @@
+// Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
-export type CliProfileParseResult =
+type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+  // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
 
@@ -33,11 +35,19 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
+      const next = args[index + 1];
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
+      const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+      if (primary === "qa" && secondary === "matrix") {
+        out.push(arg);
+        if (consumedNext) {
+          out.push(next);
+        }
+        return { kind: "handled", consumedNext };
+      }
       if (sawDev) {
         return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
-      const next = args[index + 1];
-      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (!value) {
         return { kind: "error", error: "--profile requires a value" };
       }

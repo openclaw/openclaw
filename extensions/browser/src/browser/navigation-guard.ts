@@ -1,14 +1,17 @@
+/**
+ * Browser navigation SSRF guard.
+ *
+ * Validates page navigation URLs and redirect chains before or after browser
+ * navigation while accounting for browser proxy routing.
+ */
 import { isIP } from "node:net";
-import {
-  matchesHostnameAllowlist,
-  normalizeHostname,
-} from "openclaw/plugin-sdk/browser-security-runtime";
 import {
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
@@ -22,6 +25,7 @@ function normalizeNavigationUrl(url: string): string {
   return url.trim();
 }
 
+/** Raised when a browser navigation URL fails syntax or policy validation. */
 export class InvalidBrowserNavigationUrlError extends Error {
   constructor(message: string) {
     super(message);
@@ -29,18 +33,22 @@ export class InvalidBrowserNavigationUrlError extends Error {
   }
 }
 
+/** Policy inputs applied to browser page navigation checks. */
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
 };
 
+/** Describes whether the browser itself is routing page traffic through a proxy. */
 export type BrowserNavigationProxyMode = "direct" | "explicit-browser-proxy";
 
+/** Minimal request shape used to walk browser redirect chains. */
 export type BrowserNavigationRequestLike = {
   url(): string;
   redirectedFrom(): BrowserNavigationRequestLike | null;
 };
 
+/** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
   opts?: { browserProxyMode?: BrowserNavigationProxyMode },
@@ -53,10 +61,12 @@ export function withBrowserNavigationPolicy(
   };
 }
 
+/** Return true when strict policy requires redirect-chain inspection. */
 export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
   return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 
+/** Return true when a URL needs redirect inspection under strict policy. */
 export function requiresInspectableBrowserNavigationRedirectsForUrl(
   url: string,
   ssrfPolicy?: SsrFPolicy,
@@ -90,6 +100,7 @@ function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFP
     : false;
 }
 
+/** Assert that a requested browser navigation URL is policy-allowed. */
 export async function assertBrowserNavigationAllowed(
   opts: {
     url: string;
@@ -181,6 +192,7 @@ export async function assertBrowserNavigationResultAllowed(
   }
 }
 
+/** Assert that every URL in a browser redirect chain is policy-allowed. */
 export async function assertBrowserNavigationRedirectChainAllowed(
   opts: {
     request?: BrowserNavigationRequestLike | null;

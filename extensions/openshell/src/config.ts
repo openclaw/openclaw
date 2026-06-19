@@ -1,12 +1,14 @@
+// Openshell helper module supports config behavior.
 import path from "node:path";
 import { buildPluginConfigSchema, type OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import {
   formatPluginConfigIssue,
   mapPluginConfigIssues,
 } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "openclaw/plugin-sdk/zod";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
+import { z } from "zod";
 
-export type OpenShellPluginConfig = {
+type OpenShellPluginConfig = {
   mode?: "mirror" | "remote";
   command?: string;
   gateway?: string;
@@ -90,8 +92,13 @@ const OpenShellPluginConfigSchema = z.strictObject({
     "remoteAgentWorkspaceDir must be a non-empty string",
   ).optional(),
   timeoutSeconds: z
-    .number({ error: "timeoutSeconds must be a number >= 1" })
+    .number({
+      error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
     .min(1, { error: "timeoutSeconds must be a number >= 1" })
+    .max(MAX_TIMER_TIMEOUT_SECONDS, {
+      error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
     .optional(),
 });
 
@@ -101,7 +108,7 @@ function isManagedOpenShellRemotePath(value: string): boolean {
   );
 }
 
-export function normalizeOpenShellRemotePath(
+function normalizeOpenShellRemotePath(
   value: string | undefined,
   fallback: string,
   fieldName = "remote path",

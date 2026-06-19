@@ -1,3 +1,4 @@
+// Extracts provider diagnostic metadata from error objects and text.
 import crypto from "node:crypto";
 
 const HTTP_STATUS_MIN = 100;
@@ -15,6 +16,13 @@ const PROVIDER_REQUEST_ID_TEXT_PATTERNS = [
   /\((?:request_id|trace_id)\s*:\s*([A-Za-z0-9._:-]{1,128})\)/i,
 ] as const;
 
+type DiagnosticErrorFailureKind =
+  | "aborted"
+  | "connection_closed"
+  | "connection_reset"
+  | "terminated"
+  | "timeout";
+
 function isObjectLike(value: unknown): value is object {
   return (typeof value === "object" || typeof value === "function") && value !== null;
 }
@@ -24,6 +32,7 @@ function readOwnDataProperty(value: unknown, key: string): unknown {
     return undefined;
   }
   try {
+    // Read only own data properties; diagnostic extraction must not trigger userland getters.
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && "value" in descriptor ? descriptor.value : undefined;
   } catch {
@@ -101,6 +110,11 @@ function readDirectMessage(err: unknown): string | undefined {
   return typeof message === "string" ? message : undefined;
 }
 
+function readDirectCode(err: unknown): string | undefined {
+  const code = readOwnDataProperty(err, "code");
+  return typeof code === "string" ? code : undefined;
+}
+
 function extractProviderRequestIdFromText(text: string | undefined): string | undefined {
   if (!text) {
     return undefined;
@@ -114,6 +128,7 @@ function extractProviderRequestIdFromText(text: string | undefined): string | un
   return undefined;
 }
 
+/** Returns a low-cardinality error category without trusting mutable `Error.name`. */
 export function diagnosticErrorCategory(err: unknown): string {
   try {
     if (err instanceof TypeError) {
@@ -146,6 +161,7 @@ export function diagnosticErrorCategory(err: unknown): string {
   return typeof err;
 }
 
+/** Extracts a safe HTTP status code from own `status` or `statusCode` data properties. */
 export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   const status = readOwnDataProperty(err, "status");
   if (isHttpStatusCode(status)) {
@@ -158,6 +174,49 @@ export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   return undefined;
 }
 
+/** Classifies transport-style failures without exposing raw error messages. */
+export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailureKind | undefined {
+  const code = findDiagnosticErrorProperty(err, readDirectCode)?.trim().toUpperCase();
+  switch (code) {
+    case undefined:
+      break;
+    case "ABORT_ERR":
+    case "ECONNABORTED":
+    case "ERR_ABORTED":
+      return "aborted";
+    case "ECONNRESET":
+      return "connection_reset";
+    case "ERR_STREAM_PREMATURE_CLOSE":
+    case "UND_ERR_SOCKET":
+      return "connection_closed";
+    case "ETIMEDOUT":
+    case "ERR_SOCKET_CONNECTION_TIMEOUT":
+      return "timeout";
+  }
+
+  const message = findDiagnosticErrorProperty(err, readDirectMessage);
+  if (!message) {
+    return undefined;
+  }
+  if (/\b(?:terminated|sigkill|sigterm)\b/i.test(message)) {
+    return "terminated";
+  }
+  if (/\b(?:econnreset|connection reset)\b/i.test(message)) {
+    return "connection_reset";
+  }
+  if (/\b(?:socket hang up|premature close|connection closed|other side closed)\b/i.test(message)) {
+    return "connection_closed";
+  }
+  if (/\b(?:timed out|timeout|etimedout)\b/i.test(message)) {
+    return "timeout";
+  }
+  if (/\b(?:aborted|abort_err|operation was aborted)\b/i.test(message)) {
+    return "aborted";
+  }
+  return undefined;
+}
+
+/** Extracts and hashes bounded provider request ids so diagnostics never expose raw ids. */
 export function diagnosticProviderRequestIdHash(err: unknown): string | undefined {
   const fromProperty = findDiagnosticErrorProperty(err, readDirectProviderRequestId);
   if (fromProperty) {

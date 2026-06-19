@@ -43,14 +43,14 @@ This makes core aware of native UI shapes, weakens plugin runtime laziness, and 
 - Unsupported presentation features auto-degrade to the best text representation.
 - Delivery behavior such as pinning a sent message is generic delivery metadata, not presentation.
 
-## Non Goals
+## Non goals
 
 - No backwards compatibility shim for `buildCrossContextComponents`.
 - No public native escape hatches for `components`, `blocks`, `buttons`, or `card`.
 - No core imports of channel-native UI libraries.
 - No provider-specific SDK seams for bundled channels.
 
-## Target Model
+## Target model
 
 Add a core-owned `presentation` field to `ReplyPayload`.
 
@@ -90,8 +90,11 @@ type MessagePresentationOption = {
 - `interactive` select block maps to `presentation.blocks[].type = "select"`.
 
 The external agent and CLI schemas now use `presentation`; `interactive` remains an internal legacy parser/rendering helper for existing reply producers.
+The public producer-facing API treats `interactive` as deprecated. Runtime
+support remains so existing approval helpers and older plugins continue to
+work while new code emits `presentation`.
 
-## Delivery Metadata
+## Delivery metadata
 
 Add a core-owned `delivery` field for send behavior that is not UI.
 
@@ -116,7 +119,7 @@ Semantics:
 
 Current Telegram ACP topic binding should move from `channelData.telegram.pin = true` to `delivery.pin = true`.
 
-## Runtime Capability Contract
+## Runtime capability contract
 
 Add presentation and delivery render hooks to the runtime outbound adapter, not the control-plane channel plugin.
 
@@ -128,6 +131,29 @@ type ChannelPresentationCapabilities = {
   context?: boolean;
   divider?: boolean;
   tones?: MessagePresentationTone[];
+  limits?: {
+    actions?: {
+      maxActions?: number;
+      maxActionsPerRow?: number;
+      maxRows?: number;
+      maxLabelLength?: number;
+      maxValueBytes?: number;
+      supportsStyles?: boolean;
+      supportsDisabled?: boolean;
+      supportsLayoutHints?: boolean;
+    };
+    selects?: {
+      maxOptions?: number;
+      maxLabelLength?: number;
+      maxValueBytes?: number;
+    };
+    text?: {
+      maxLength?: number;
+      encoding?: "characters" | "utf8-bytes" | "utf16-units";
+      markdownDialect?: "plain" | "markdown" | "html" | "slack-mrkdwn" | "discord-markdown";
+      supportsEdit?: boolean;
+    };
+  };
 };
 
 type ChannelDeliveryCapabilities = {
@@ -160,12 +186,13 @@ Core behavior:
 
 - Resolve target channel and runtime adapter.
 - Ask for presentation capabilities.
-- Degrade unsupported blocks before rendering.
+- Degrade unsupported blocks and apply generic capability limits before
+  rendering.
 - Call `renderPresentation`.
 - If no renderer exists, convert presentation to text fallback.
 - After successful send, call `pinDeliveredMessage` when `delivery.pin` is requested and supported.
 
-## Channel Mapping
+## Channel mapping
 
 Discord:
 
@@ -212,7 +239,7 @@ Plain or limited channels:
 
 - Convert presentation to text with conservative formatting.
 
-## Refactor Steps
+## Refactor steps
 
 1. Reapply the Discord release fix that splits `ui-colors.ts` from Carbon-backed UI and removes `DiscordUiContainer` from `extensions/discord/src/channel.ts`.
 2. Add `presentation` and `delivery` to `ReplyPayload`, outbound payload normalization, delivery summaries, and hook payloads.
@@ -245,7 +272,7 @@ Add or update:
 - Discord entrypoint import-laziness regression covering Carbon.
 - Delivery pin tests covering Telegram and generic fallback.
 
-## Open Questions
+## Open questions
 
 - Should `delivery.pin` be implemented for Discord, Slack, MS Teams, and Feishu in the first pass, or only Telegram first?
 - Should `delivery` eventually absorb existing fields such as `replyToId`, `replyToCurrent`, `silent`, and `audioAsVoice`, or stay focused on post-send behaviors?

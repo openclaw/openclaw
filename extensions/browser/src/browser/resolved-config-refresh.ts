@@ -1,3 +1,7 @@
+/**
+ * Runtime config refresh helpers for Browser profiles that can be hot-reloaded
+ * without restarting the whole Browser plugin server.
+ */
 import { loadBrowserConfigForRuntimeRefresh } from "./config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
@@ -82,6 +86,7 @@ function applyResolvedConfig(
   }
 }
 
+/** Refreshes the Browser runtime's resolved config from disk when hot reload is enabled. */
 export function refreshResolvedBrowserConfigFromDisk(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;
@@ -91,14 +96,14 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
     return;
   }
 
-  // Route-level browser config hot reload should observe on-disk changes immediately.
-  // The shared loadConfig() helper may return a cached snapshot for the configured TTL,
-  // which can leave request-time browser guards stale (for example evaluateEnabled).
+  // Route-level refresh should use the shared runtime config. Config mutations
+  // refresh that snapshot and decide whether the wider runtime should restart.
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
 }
 
+/** Resolves a profile after an optional cached/fresh config reload. */
 export function resolveBrowserProfileWithHotReload(params: {
   current: BrowserServerState;
   refreshConfigFromDisk: boolean;

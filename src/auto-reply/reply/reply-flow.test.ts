@@ -1,8 +1,17 @@
+// Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher, waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
+
+type DeliverPayload = Parameters<Parameters<typeof createReplyDispatcher>[0]["deliver"]>[0];
+type DeliverMock = { mock: { calls: unknown[][] } };
+
+function deliveredText(deliver: DeliverMock, index = 0) {
+  const payload = deliver.mock.calls[index]?.[0] as DeliverPayload | undefined;
+  return payload?.text;
+}
 
 describe("createReplyDispatcher", () => {
   it("drops empty payloads and exact silent tokens without media", async () => {
@@ -17,22 +26,18 @@ describe("createReplyDispatcher", () => {
 
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliver.mock.calls[0]?.[0]?.text).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
-    expect(deliver.mock.calls[1]?.[0]?.text).toBe(`interject.${SILENT_REPLY_TOKEN}`);
+    expect(deliveredText(deliver)).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
+    expect(deliveredText(deliver, 1)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
-  it("rewrites exact NO_REPLY final payloads for direct sessions where rewrite is enabled", async () => {
+  it("drops exact NO_REPLY final payloads for direct sessions", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           silentReply: {
-            direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -46,44 +51,10 @@ describe("createReplyDispatcher", () => {
       },
     });
 
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
 
     await dispatcher.waitForIdle();
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]?.text).not.toBe(SILENT_REPLY_TOKEN);
-    expect(deliver.mock.calls[0]?.[0]?.text).toBeTruthy();
-  });
-
-  it("preserves exact NO_REPLY final payloads for direct sessions where rewrite is disabled", async () => {
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          silentReply: {
-            direct: "disallow",
-            group: "allow",
-            internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: false,
-          },
-        },
-      },
-    };
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      silentReplyContext: {
-        cfg,
-        sessionKey: "agent:main:telegram:direct:123",
-        surface: "telegram",
-      },
-    });
-
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
-
-    await dispatcher.waitForIdle();
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {
@@ -92,12 +63,8 @@ describe("createReplyDispatcher", () => {
       agents: {
         defaults: {
           silentReply: {
-            direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -131,7 +98,7 @@ describe("createReplyDispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0][0].text).toBe("PFX hello");
+    expect(deliveredText(deliver)).toBe("PFX hello");
     expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
   });
 
@@ -164,9 +131,9 @@ describe("createReplyDispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(deliver).toHaveBeenCalledTimes(3);
-    expect(deliver.mock.calls[0][0].text).toBe("PFX already");
-    expect(deliver.mock.calls[1][0].text).toBe("");
-    expect(deliver.mock.calls[2][0].text).toBe(`PFX ${SILENT_REPLY_TOKEN} -- explanation`);
+    expect(deliveredText(deliver)).toBe("PFX already");
+    expect(deliveredText(deliver, 1)).toBe("");
+    expect(deliveredText(deliver, 2)).toBe(`PFX ${SILENT_REPLY_TOKEN} -- explanation`);
   });
 
   it("preserves ordering across tool, block, and final replies", async () => {
@@ -200,6 +167,51 @@ describe("createReplyDispatcher", () => {
     dispatcher.markComplete();
     await Promise.resolve();
     expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves an owner-declared follow-up admission barrier policy from queued deliveries", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispatcher = createReplyDispatcher({
+        deliver: async () => {},
+        resolveFollowupAdmissionBarrierTimeoutPolicy: ({ queuedCounts, humanDelayBudgetMs }) => ({
+          maxTimeoutMs:
+            Object.values(queuedCounts).reduce((sum, count) => sum + count, 0) * 35 * 60_000 +
+            humanDelayBudgetMs,
+          shouldExtend: () => true,
+        }),
+        humanDelay: { mode: "custom", minMs: 10_000, maxMs: 20_000 },
+      });
+      dispatcher.sendToolResult({ text: "tool" });
+      dispatcher.sendBlockReply({ text: "block one" });
+      dispatcher.sendBlockReply({ text: "block two" });
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+
+      const policy = dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.();
+      expect(policy?.maxTimeoutMs).toBe(140 * 60_000 + 20_000);
+      expect(policy?.shouldExtend()).toBe(true);
+      await vi.runAllTimersAsync();
+      await dispatcher.waitForIdle();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports each queued delivery settlement", async () => {
+    const onDeliverySettled = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn().mockRejectedValueOnce(new Error("send failed")).mockResolvedValue(undefined),
+      onDeliverySettled,
+    });
+    dispatcher.sendToolResult({ text: "tool" });
+    dispatcher.sendFinalReply({ text: "final" });
+    dispatcher.markComplete();
+
+    await dispatcher.waitForIdle();
+    expect(onDeliverySettled).toHaveBeenCalledTimes(2);
+    expect(onDeliverySettled).toHaveBeenNthCalledWith(1, { kind: "tool" });
+    expect(onDeliverySettled).toHaveBeenNthCalledWith(2, { kind: "final" });
   });
 
   it("delays block replies after the first when humanDelay is natural", async () => {
@@ -248,6 +260,32 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+});
+
+describe("waitForReplyDispatcherIdle", () => {
+  it("returns when the abort signal fires before the dispatcher becomes idle", async () => {
+    const controller = new AbortController();
+    const waitForIdle = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          // Keep the dispatcher busy until the abort path wins.
+        }),
+    );
+
+    let settled = false;
+    const waitPromise = waitForReplyDispatcherIdle({ waitForIdle }, controller.signal).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    controller.abort();
+    await waitPromise;
+
+    expect(settled).toBe(true);
+    expect(waitForIdle).toHaveBeenCalledTimes(1);
   });
 });
 

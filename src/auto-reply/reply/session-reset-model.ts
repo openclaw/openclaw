@@ -1,21 +1,25 @@
+/** Applies model override tokens embedded in reset/new command text. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { modelKey, normalizeProviderId } from "../../agents/model-selection-normalize.js";
 import {
   buildAllowedModelSetWithFallbacks,
-  resolveModelRefFromString,
-  type ModelAliasIndex,
+  isModelKeyAllowedBySet,
 } from "../../agents/model-selection-shared.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
+  modelKey,
   resolveModelDirectiveSelection,
+  resolveModelRefFromDirectiveString,
+  type ModelAliasIndex,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
 
+/** Result of applying a reset-message model override. */
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
   cleanedBody?: string;
@@ -50,6 +54,29 @@ async function resolveResetFallbackModels(params: {
   return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
 }
 
+async function buildResetAllowedModelKeys(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  defaultProvider: string;
+  defaultModel?: string;
+  fallbackModels: readonly string[];
+}): Promise<Set<string>> {
+  const rawAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {});
+  if (rawAllowlist.length > 0 || params.cfg.models?.providers) {
+    return buildAllowedModelSetWithFallbacks(params).allowedKeys;
+  }
+
+  const allowedKeys = new Set<string>();
+  for (const entry of params.catalog) {
+    allowedKeys.add(modelKey(entry.provider, entry.id));
+  }
+  const defaultModel = params.defaultModel?.trim();
+  if (defaultModel) {
+    allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
+  }
+  return allowedKeys;
+}
+
 function buildSelectionFromExplicit(params: {
   raw: string;
   defaultProvider: string;
@@ -57,7 +84,7 @@ function buildSelectionFromExplicit(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
 }): ModelDirectiveSelection | undefined {
-  const resolved = resolveModelRefFromString({
+  const resolved = resolveModelRefFromDirectiveString({
     raw: params.raw,
     defaultProvider: params.defaultProvider,
     aliasIndex: params.aliasIndex,
@@ -66,7 +93,7 @@ function buildSelectionFromExplicit(params: {
     return undefined;
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(key)) {
+  if (params.allowedModelKeys.size > 0 && !isModelKeyAllowedBySet(params.allowedModelKeys, key)) {
     return undefined;
   }
   const isDefault =
@@ -99,11 +126,9 @@ function applySelectionToSession(params: {
   }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    void import("../../config/sessions.js")
-      .then(({ updateSessionStore }) =>
-        updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        }),
+    void import("../../config/sessions/session-accessor.js")
+      .then(({ replaceSessionEntry }) =>
+        replaceSessionEntry({ storePath, sessionKey }, sessionEntry),
       )
       .catch(() => {
         // Ignore persistence errors; session still proceeds.
@@ -111,6 +136,8 @@ function applySelectionToSession(params: {
   }
 }
 
+/** Applies a model override embedded in a reset command body. */
+/** Applies a valid reset model override to session state and returns the cleaned body. */
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -141,7 +168,7 @@ export async function applyResetModelOverride(params: {
   }
 
   const catalog = params.modelCatalog ?? (await loadResetModelCatalog(params.cfg));
-  const allowed = buildAllowedModelSetWithFallbacks({
+  const allowedModelKeys = await buildResetAllowedModelKeys({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
@@ -151,7 +178,6 @@ export async function applyResetModelOverride(params: {
       agentId: params.agentId,
     }),
   });
-  const allowedModelKeys = allowed.allowedKeys;
   if (allowedModelKeys.size === 0) {
     return {};
   }
@@ -178,6 +204,7 @@ export async function applyResetModelOverride(params: {
   let consumed = 0;
 
   if (providers.has(normalizeProviderId(first)) && second) {
+    // Support reset bodies like `openai gpt-5.5 rest of prompt`.
     const composite = `${normalizeProviderId(first)}/${second}`;
     const resolved = resolveSelection(composite);
     if (resolved.selection) {

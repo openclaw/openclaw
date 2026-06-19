@@ -1,4 +1,15 @@
-import { loadConfig } from "../../config/config.js";
+// Push gateway methods send APNs/web-push test notifications and manage web
+// push subscriptions/VAPID public-key access for UI clients.
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  validatePushTestParams,
+  validateWebPushSubscribeParams,
+  validateWebPushTestParams,
+  validateWebPushUnsubscribeParams,
+  validateWebPushVapidPublicKeyParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -14,22 +25,12 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "../../infra/push-web.js";
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validatePushTestParams,
-  validateWebPushSubscribeParams,
-  validateWebPushTestParams,
-  validateWebPushUnsubscribeParams,
-  validateWebPushVapidPublicKeyParams,
-} from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const pushHandlers: GatewayRequestHandlers = {
-  "push.test": async ({ params, respond }) => {
+  "push.test": async ({ params, respond, context }) => {
     if (!validatePushTestParams(params)) {
       respondInvalidParams({
         respond,
@@ -66,6 +67,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       const result =
         registration.transport === "direct"
           ? await (async () => {
+              // Direct registrations require local APNs signing material at
+              // send time; relay registrations must not touch those secrets.
               const auth = await resolveApnsAuthConfigFromEnv(process.env);
               if (!auth.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
@@ -83,7 +86,13 @@ export const pushHandlers: GatewayRequestHandlers = {
               });
             })()
           : await (async () => {
-              const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+              // Relay registrations carry a grant from the node, so the gateway
+              // only needs relay config plus the origin bound at registration.
+              const relay = resolveApnsRelayConfigFromEnv(
+                process.env,
+                context.getRuntimeConfig().gateway,
+                { registrationRelayOrigin: registration.relayOrigin },
+              );
               if (!relay.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
                 return null;
@@ -106,6 +115,8 @@ export const pushHandlers: GatewayRequestHandlers = {
           overrideEnvironment,
         })
       ) {
+        // Clear only the exact registration we tested; a reconnect may have
+        // written a newer token while the push request was in flight.
         await clearApnsRegistrationIfCurrent({
           nodeId,
           registration,

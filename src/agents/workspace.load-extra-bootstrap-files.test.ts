@@ -1,10 +1,12 @@
+// Extra bootstrap file tests cover glob/literal path loading, workspace
+// containment checks, symlink handling, and diagnostics for skipped files.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadExtraBootstrapFiles, loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
+import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
-describe("loadExtraBootstrapFiles", () => {
+describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
 
@@ -24,6 +26,11 @@ describe("loadExtraBootstrapFiles", () => {
     }
   });
 
+  async function loadExtraBootstrapFileList(dir: string, extraPatterns: string[]) {
+    const { files } = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
+    return files;
+  }
+
   it("loads recognized bootstrap files from glob patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
@@ -31,11 +38,52 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/*"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("TOOLS.md");
-    expect(files[0]?.content).toBe("tools");
+    expect(files).toStrictEqual([
+      {
+        name: "TOOLS.md",
+        path: path.join(packageDir, "TOOLS.md"),
+        content: "tools",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("loads glob patterns with explicit current-directory prefixes", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-current-dir");
+    const packageDir = path.join(workspaceDir, "packages", "core");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["./packages/*/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("loads literal bootstrap paths with square brackets", async () => {
+    const workspaceDir = await createWorkspaceDir("literal-brackets");
+    const packageDir = path.join(workspaceDir, "pkg[1]");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal agents", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["pkg[1]/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "literal agents",
+        missing: false,
+      },
+    ]);
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
@@ -46,7 +94,7 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["../outside/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["../outside/AGENTS.md"]);
 
     expect(files).toHaveLength(0);
   });
@@ -63,14 +111,21 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.writeFile(path.join(realWorkspace, "AGENTS.md"), "linked agents", "utf-8");
     await fs.symlink(realWorkspace, linkedWorkspace, "dir");
 
-    const files = await loadExtraBootstrapFiles(linkedWorkspace, ["AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(linkedWorkspace, ["AGENTS.md"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("AGENTS.md");
-    expect(files[0]?.content).toBe("linked agents");
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(linkedWorkspace, "AGENTS.md"),
+        content: "linked agents",
+        missing: false,
+      },
+    ]);
   });
 
   it("rejects hardlinked aliases to files outside workspace", async () => {
+    // Hardlinks can look like in-workspace files by path; inode/realpath checks
+    // keep outside bootstrap content from entering the prompt.
     if (process.platform === "win32") {
       return;
     }
@@ -92,7 +147,7 @@ describe("loadExtraBootstrapFiles", () => {
       throw err;
     }
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["AGENTS.md"]);
     expect(files).toHaveLength(0);
   });
 
@@ -106,6 +161,6 @@ describe("loadExtraBootstrapFiles", () => {
     ]);
 
     expect(files).toHaveLength(0);
-    expect(diagnostics.some((d) => d.reason === "security")).toBe(true);
+    expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("security");
   });
 });

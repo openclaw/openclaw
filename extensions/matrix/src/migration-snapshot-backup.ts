@@ -1,3 +1,4 @@
+// Matrix plugin module implements migration snapshot backup behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +15,7 @@ type MatrixMigrationSnapshotMarker = {
   includeWorkspace: boolean;
 };
 
-export type MatrixMigrationSnapshotResult = {
+type MatrixMigrationSnapshotResult = {
   created: boolean;
   archivePath: string;
   markerPath: string;

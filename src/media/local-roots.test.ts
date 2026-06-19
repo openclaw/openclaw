@@ -1,6 +1,8 @@
+// Local media root tests cover allowed root normalization and matching.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   appendLocalMediaParentRoots,
   buildMediaLocalRoots,
@@ -21,8 +23,7 @@ function normalizeRootEntryPaths(roots: readonly (string | { path: string })[]):
 
 describe("local media roots", () => {
   function withStateDir<T>(stateDir: string, run: () => T): T {
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    return run();
+    return withEnv({ OPENCLAW_STATE_DIR: stateDir }, run);
   }
 
   function expectNormalizedRootsContain(
@@ -77,10 +78,6 @@ describe("local media roots", () => {
       expect(roots.length).toBeGreaterThanOrEqual(params.minLength);
     }
   }
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
 
   it.each([
     {
@@ -171,18 +168,19 @@ describe("local media roots", () => {
       ],
     );
 
-    expect(roots.map(normalizeHostPath)).toEqual(
-      expect.arrayContaining([
-        normalizeHostPath("/tmp/base"),
-        normalizeHostPath(picturesDir),
-        normalizeHostPath(moviesDir),
-      ]),
-    );
+    expect(roots.map(normalizeHostPath)).toStrictEqual([
+      normalizeHostPath("/tmp/base"),
+      normalizeHostPath(picturesDir),
+      normalizeHostPath(moviesDir),
+    ]);
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
   });
 
-  it("does not widen local roots for pass-through remote media schemes", () => {
-    const roots = appendLocalMediaParentRoots(["/tmp/base"], ["mxc://matrix.org/abc123def456"]);
+  it("does not widen local roots for pass-through media schemes", () => {
+    const roots = appendLocalMediaParentRoots(
+      ["/tmp/base"],
+      ["mxc://matrix.org/abc123def456", "buffer://message-send/attachment"],
+    );
 
     expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/tmp/base")]);
   });
@@ -207,11 +205,23 @@ describe("local media roots", () => {
       shouldContainPictures: false,
     },
     {
-      name: "widens media roots again when messaging-profile agents explicitly enable filesystem tools",
+      name: "does not widen media roots when messaging-profile agents only configure filesystem guards",
       stateDir: path.join("/tmp", "openclaw-messaging-fs-media-roots-state"),
       cfg: {
         tools: {
           profile: "messaging",
+          fs: { workspaceOnly: false },
+        },
+      },
+      shouldContainPictures: false,
+    },
+    {
+      name: "widens media roots when messaging-profile agents explicitly allow reads",
+      stateDir: path.join("/tmp", "openclaw-messaging-read-media-roots-state"),
+      cfg: {
+        tools: {
+          profile: "messaging",
+          alsoAllow: ["read"] as string[],
           fs: { workspaceOnly: false },
         },
       },

@@ -1,26 +1,19 @@
+// Verifies config IO compatibility loading and migration behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
+import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-
-async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
-  try {
-    await run(home);
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
 
 async function writeConfig(
   home: string,
   dirname: ".openclaw",
   port: number,
-  filename: string = "openclaw.json",
+  filename = "openclaw.json",
 ) {
   const dir = path.join(home, dirname);
   await fs.mkdir(dir, { recursive: true });
@@ -31,12 +24,35 @@ async function writeConfig(
 
 function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv) {
   return createConfigIO({
-    env,
+    env: { HOME: home, ...env },
     homedir: () => home,
   });
 }
 
 describe("config io paths", () => {
+  let whatsappSharedAccessDefaults: unknown;
+
+  beforeAll(() => {
+    const migrated = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    whatsappSharedAccessDefaults = migrated.config.channels?.whatsapp?.accounts?.default;
+  });
+
   it("uses ~/.openclaw/openclaw.json when config exists", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeConfig(home, ".openclaw", 19001);
@@ -98,18 +114,90 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: {} as NodeJS.ProcessEnv,
+        env: { HOME: home } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
       io.loadConfig();
 
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/^Config warnings:\n- /));
-      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("Config warnings:\\n"));
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith("Config warnings:\\n");
     });
   });
 
-  it("normalizes safe-bin config entries at config load time", async () => {
+  it("explains what to check when config was written by a newer OpenClaw", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: { HOME: home } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        [
+          `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.`,
+          "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+          "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ].join("\n"),
+      );
+    });
+  });
+
+  it("does not warn about newer config during internal update handoff reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: { HOME: home, OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("normalizes safe-bin config entries at config load time", () => {
     const cfg = {
       tools: {
         exec: {
@@ -155,25 +243,7 @@ describe("config io paths", () => {
   });
 
   it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
-    const migrated = applyRuntimeLegacyConfigMigrations({
-      channels: {
-        whatsapp: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["+15550001111"],
-          groupPolicy: "open",
-          groupAllowFrom: [],
-          accounts: {
-            work: {
-              enabled: true,
-              authDir: "/tmp/wa-work",
-            },
-          },
-        },
-      },
-    });
-    const next = migrated.next as OpenClawConfig | null;
-    expect(next?.channels?.whatsapp?.accounts?.default).toMatchObject({
+    expect(whatsappSharedAccessDefaults).toEqual({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",

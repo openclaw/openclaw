@@ -1,7 +1,9 @@
+// Verifies shell command display strings for exec approval prompts.
 import { describe, expect, it } from "vitest";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
 } from "./exec-approval-command-display.js";
 
 describe("sanitizeExecApprovalDisplayText", () => {
@@ -102,6 +104,21 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("https://api.example.com");
   });
 
+  it("masks newly added vendor token prefixes through the default redaction path", () => {
+    const token = "glpat-abcdefghijklmnopqrstuv";
+    const result = sanitizeExecApprovalDisplayText(`deploy --with ${token}`);
+    expect(result).not.toContain(token);
+  });
+
+  it("does not let contextual secret matches hide split-token bypass detection", () => {
+    const discordToken = `${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`;
+    const cmd = `discord sk-abc123\u200B456789012345678 ${discordToken}`;
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).not.toContain(discordToken);
+  });
+
   it("keeps PEM private-key context visible when raw redaction already covers the key (not a bypass)", () => {
     const cmd =
       "echo -----BEGIN RSA PRIVATE KEY-----\nABCDEF0123456789abcdef\n-----END RSA PRIVATE KEY----- > key.pem";
@@ -154,6 +171,67 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).not.toContain("sk-abc123");
     expect(result).not.toContain("456789012345678");
     expect(result).toContain("remainder");
+  });
+
+  it("masks form body values whose sensitive key is spliced with an invisible character", () => {
+    const cmd = "client_id=visible&app_se\u200Bcret=opaque-app-secret&safe=value";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("opaque-app-secret");
+    expect(result).toContain("client_id=visible");
+    expect(result).toContain("safe=value");
+  });
+
+  it("masks form body values whose encoded sensitive key is spliced with an invisible character", () => {
+    const cmd = "client_id=visible&client%5Fse\u200Bcret=oauth-secret&safe=value";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("oauth-secret");
+    expect(result).toContain("client_id=visible");
+    expect(result).toContain("safe=value");
+  });
+
+  it("masks form body values whose sensitive key is spliced with a plus separator", () => {
+    const cmd = "client_id=visible&client_se+cret=oauth-secret&safe=value";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("oauth-secret");
+    expect(result).toContain("client_id=visible");
+    expect(result).toContain("safe=value");
+  });
+
+  it("keeps parsed form-body secrets masked when a separate spliced token triggers bypass rendering", () => {
+    const cmd =
+      "client_id=visible&client%5Fsecret=oauth,secret&safe=1 echo sk-abc123\u200B456789012345678";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("oauth,secret");
+    expect(result).not.toContain(",secret");
+    expect(result).not.toContain("456789012345678");
+    expect(result).toContain("client_id=visible");
+    expect(result).toContain("safe=1");
+  });
+});
+
+describe("sanitizeExecApprovalWarningText", () => {
+  it("keeps approval warning prose line breaks readable", () => {
+    const warning =
+      "Diagnostics can include sensitive local logs.\n\nOpenAI Codex harness:\nApproving diagnostics will also send Codex feedback.";
+
+    expect(sanitizeExecApprovalWarningText(warning)).toBe(warning);
+  });
+
+  it("normalizes escaped line separators while still escaping hidden spoofing characters", () => {
+    const warning = "Line one\r\nLine two\u2028Line three\u200B";
+
+    expect(sanitizeExecApprovalWarningText(warning)).toBe(
+      "Line one\nLine two\nLine three\\u{200B}",
+    );
+  });
+
+  it("redacts secrets in warning prose without escaping newlines", () => {
+    const warning = "Token:\nsk-abc123456789012345678";
+    const result = sanitizeExecApprovalWarningText(warning);
+
+    expect(result).toContain("Token:\n");
+    expect(result).not.toContain("sk-abc123456789012345678");
+    expect(result).not.toContain("\\u{A}");
   });
 });
 

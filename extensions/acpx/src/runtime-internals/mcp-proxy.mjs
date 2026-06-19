@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 
+/**
+ * Stdio MCP proxy used by ACPX wrappers. It injects OpenClaw-provided MCP
+ * servers into session creation/load/fork requests before forwarding to target.
+ */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { formatErrorMessage } from "./error-format.mjs";
 import { splitCommandLine } from "./mcp-command-line.mjs";
+
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message || error.name || "Error";
+  }
+  return String(error);
+}
 
 function decodePayload(argv) {
   const payloadIndex = argv.indexOf("--payload");
@@ -64,6 +74,18 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
+/** Build spawn options for the proxied MCP target process. */
+export function createTargetSpawnOptions(platform = process.platform) {
+  const options = {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  };
+  if (platform === "win32") {
+    options.windowsHide = true;
+  }
+  return options;
+}
+
 function isMainModule() {
   const mainPath = process.argv[1];
   if (!mainPath) {
@@ -75,10 +97,7 @@ function isMainModule() {
 function main() {
   const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
   const target = splitCommandLine(targetCommand);
-  const child = spawn(target.command, target.args, {
-    stdio: ["pipe", "pipe", "inherit"],
-    env: process.env,
-  });
+  const child = spawn(target.command, target.args, createTargetSpawnOptions());
 
   if (!child.stdin || !child.stdout) {
     throw new Error("Failed to create MCP proxy stdio pipes");

@@ -1,8 +1,13 @@
+/**
+ * Browser route context factory that wires profile-scoped runtime operations for
+ * the Browser control server.
+ */
 import {
   resolveCdpControlPolicy,
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import { listChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -36,6 +41,7 @@ export type {
   ProfileStatus,
 } from "./server-context.types.js";
 
+/** Lists configured and runtime-known Browser profile names without duplicates. */
 export function listKnownProfileNames(state: BrowserServerState): string[] {
   const names = new Set(Object.keys(state.resolved.profiles));
   for (const name of state.profiles.keys()) {
@@ -128,6 +134,7 @@ function createProfileContext(
   };
 }
 
+/** Creates the Browser route context used by control-server route handlers. */
 export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
   const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
 
@@ -226,7 +233,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         name,
         transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
-        cdpUrl: capabilities.usesChromeMcp ? null : profile.cdpUrl,
+        cdpUrl: profile.cdpUrl ? (redactCdpUrl(profile.cdpUrl) ?? null) : null,
         color: profile.color,
         driver: profile.driver,
         running,
@@ -258,12 +265,13 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     listProfiles,
     // Legacy methods delegate to default profile
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
-    ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
+    ensureTabAvailable: (targetId, options) =>
+      getDefaultContext().ensureTabAvailable(targetId, options),
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
-    isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
+    isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),
     listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url, opts) => getDefaultContext().openTab(url, opts),
+    openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
     labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
     focusTab: (targetId) => getDefaultContext().focusTab(targetId),
     closeTab: (targetId) => getDefaultContext().closeTab(targetId),

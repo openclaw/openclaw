@@ -1,7 +1,7 @@
-import OpenClawKit
 import Foundation
 import Network
 import Observation
+import OpenClawKit
 
 @MainActor
 @Observable
@@ -13,7 +13,10 @@ final class GatewayDiscoveryModel {
     }
 
     struct DiscoveredGateway: Identifiable, Equatable {
-        var id: String { self.stableID }
+        var id: String {
+            self.stableID
+        }
+
         var name: String
         var endpoint: NWEndpoint
         var stableID: String
@@ -56,7 +59,7 @@ final class GatewayDiscoveryModel {
             let browser = GatewayDiscoveryBrowserSupport.makeBrowser(
                 serviceType: OpenClawBonjour.gatewayServiceType,
                 domain: domain,
-                queueLabelPrefix: "ai.openclaw.ios.gateway-discovery",
+                queueLabelPrefix: "ai.openclawfoundation.app.gateway-discovery",
                 onState: { [weak self] state in
                     guard let self else { return }
                     self.statesByDomain[domain] = state

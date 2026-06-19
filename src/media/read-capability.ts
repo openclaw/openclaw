@@ -1,8 +1,13 @@
-import fs from "node:fs/promises";
+// Media read capability helpers gate file reads by configured media access rules.
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  type FsRootResolved,
+  resolveRoots,
+  resolveRootScopedPath,
+} from "../agents/agent-tools.fs-roots.js";
+import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
-import { resolveGroupToolPolicy } from "../agents/pi-tools.policy.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
@@ -10,11 +15,9 @@ import {
 } from "../agents/tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { FsRoot } from "../config/types.tools.js";
-import { readLocalFileSafely, readPathWithinRoot, SafeOpenError } from "../infra/fs-safe.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { readFileWithinRoot, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import {
   getAgentScopedMediaLocalRoots,
@@ -56,10 +59,10 @@ function isAgentScopedHostMediaReadAllowed(
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.accountId,
-    senderId: normalizeOptionalString(params.requesterSenderId),
-    senderName: normalizeOptionalString(params.requesterSenderName),
-    senderUsername: normalizeOptionalString(params.requesterSenderUsername),
-    senderE164: normalizeOptionalString(params.requesterSenderE164),
+    senderId: params.requesterSenderId,
+    senderName: params.requesterSenderName,
+    senderUsername: params.requesterSenderUsername,
+    senderE164: params.requesterSenderE164,
   });
   if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {
     return false;
@@ -84,6 +87,7 @@ function shouldIgnoreConfiguredRootsForHostMedia(params: {
   }).sandboxed;
 }
 
+/** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
 export function createAgentScopedHostMediaReadFile(
   params: {
     cfg: OpenClawConfig;
@@ -118,68 +122,50 @@ export function createAgentScopedHostMediaReadFile(
   };
 }
 
+// Builds a host reader scoped to configured tools.fs.roots. resolveRootScopedPath
+// selects the most-specific matching root (file roots require an exact path match,
+// dir roots match descendants), so reads outside every configured root are denied
+// while reads inside a root flow through the alias/hardlink-safe readFileWithinRoot.
 function createRootScopedReadFile(roots: FsRoot[], workspaceDir?: string): OutboundMediaReadFile {
   const workspaceRoot = resolveWorkspaceRoot(workspaceDir);
+  const resolvedRoots: FsRootResolved[] = resolveRoots(roots);
   return async (filePath: string) => {
     const resolvedPath = path.resolve(resolvePathFromInput(filePath, workspaceRoot));
-    // Try each configured root — use readPathWithinRoot for dir roots (alias-safe,
-    // validates canonical path after symlink resolution) and exact match for file roots.
-    for (const root of roots) {
-      const rootPath = path.resolve(root.path);
-      if (root.kind === "file") {
-        const match =
-          process.platform === "win32"
-            ? resolvedPath.toLowerCase() === rootPath.toLowerCase()
-            : resolvedPath === rootPath;
-        if (match) {
-          // Use readPathWithinRoot with the parent dir as root to reject hardlinks
-          // and validate the canonical path, same as dir roots.
-          const parentDir = path.dirname(rootPath);
-          try {
-            const result = await readPathWithinRoot({ rootDir: parentDir, filePath: resolvedPath });
-            return result.buffer;
-          } catch {
-            throw new Error(
-              `Access denied: media file root '${filePath}' failed alias/hardlink validation`,
-            );
-          }
-        }
-        continue;
-      }
-      try {
-        const result = await readPathWithinRoot({ rootDir: rootPath, filePath: resolvedPath });
-        return result.buffer;
-      } catch (err) {
-        // Only continue to next root if the path is outside this root.
-        // Preserve real in-root errors (permission, not-found, alias escape).
-        if (err instanceof SafeOpenError && err.code === "outside-workspace") {
-          continue;
-        }
-        if (
-          err instanceof SafeOpenError &&
-          err.code === "not-found" &&
-          (await isConfiguredDirRootMissing(rootPath))
-        ) {
-          continue;
-        }
-        throw err;
-      }
+    let target: ReturnType<typeof resolveRootScopedPath>;
+    try {
+      target = resolveRootScopedPath(resolvedPath, "read", resolvedRoots);
+    } catch {
+      throw new Error(
+        `Access denied: media path '${filePath}' is outside configured filesystem roots`,
+      );
     }
-    throw new Error(
-      `Access denied: media path '${filePath}' is outside configured filesystem roots`,
-    );
+    const safeRead = await readFileWithinRoot({
+      rootDir: target.rootDir,
+      relativePath: target.relativePath,
+      rejectHardlinks: true,
+    });
+    return safeRead.buffer;
   };
 }
 
-async function isConfiguredDirRootMissing(rootPath: string): Promise<boolean> {
-  try {
-    await fs.stat(rootPath);
-    return false;
-  } catch (err) {
-    return isNotFoundPathError(err);
+function appendWorkspaceDirToLocalRoots(
+  roots: readonly string[] | undefined,
+  workspaceDir?: string,
+): readonly string[] | undefined {
+  if (!workspaceDir) {
+    return roots;
   }
+  const resolvedWorkspaceDir = path.resolve(workspaceDir);
+  if (!roots?.length) {
+    return [resolvedWorkspaceDir];
+  }
+  if (roots.some((root) => path.resolve(root) === resolvedWorkspaceDir)) {
+    return roots;
+  }
+  return [...roots, resolvedWorkspaceDir];
 }
 
+/** Resolves roots and optional host read capability for outbound media in an agent context. */
 export function resolveAgentScopedOutboundMediaAccess(
   params: {
     cfg: OpenClawConfig;
@@ -191,9 +177,14 @@ export function resolveAgentScopedOutboundMediaAccess(
     ignoreConfiguredRoots?: boolean;
   } & OutboundHostMediaPolicyContext,
 ): OutboundMediaAccess {
+  const resolvedWorkspaceDir =
+    params.workspaceDir ??
+    params.mediaAccess?.workspaceDir ??
+    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const hostMediaReadAllowed = isAgentScopedHostMediaReadAllowed(params);
   const ignoreConfiguredRoots = shouldIgnoreConfiguredRootsForHostMedia(params);
-  const localRoots =
+  // Even when host reads are denied, keep base roots so generated media remains addressable.
+  const baseLocalRoots =
     params.mediaAccess?.localRoots ??
     (hostMediaReadAllowed
       ? getAgentScopedMediaLocalRootsForSources({
@@ -209,10 +200,7 @@ export function resolveAgentScopedOutboundMediaAccess(
             ignoreConfiguredRoots: true,
           })
         : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
-  const resolvedWorkspaceDir =
-    params.workspaceDir ??
-    params.mediaAccess?.workspaceDir ??
-    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
+  const localRoots = appendWorkspaceDirToLocalRoots(baseLocalRoots, resolvedWorkspaceDir);
   const readFile =
     params.mediaAccess?.readFile ??
     params.mediaReadFile ??

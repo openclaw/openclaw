@@ -1,6 +1,7 @@
-import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements runtime.presence behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 import {
   type ActionGate,

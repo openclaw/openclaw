@@ -1,3 +1,5 @@
+// Auth modes suite covers password, token, none, Tailscale, and control-UI
+// origin behavior across gateway WebSocket authentication modes.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   connectReq,
@@ -150,12 +152,15 @@ export function registerAuthModesSuite(): void {
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
       testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
-      const { writeConfigFile } = await import("../config/config.js");
-      await writeConfigFile({
-        gateway: {
-          auth: testState.gatewayAuth,
-          controlUi: testState.gatewayControlUi,
+      const { replaceConfigFile } = await import("../config/config.js");
+      await replaceConfigFile({
+        nextConfig: {
+          gateway: {
+            auth: testState.gatewayAuth,
+            controlUi: testState.gatewayControlUi,
+          },
         },
+        afterWrite: { mode: "auto" },
       });
       port = await getFreePort();
       server = await startGatewayServer(port);

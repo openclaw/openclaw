@@ -1,8 +1,16 @@
+/**
+ * Browser control client transport.
+ *
+ * Sends requests to either an absolute HTTP browser-control URL or the local
+ * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
+ */
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
@@ -19,7 +27,7 @@ class BrowserServiceError extends Error {
 }
 
 type LoopbackBrowserAuthDeps = {
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
   getBridgeAuthForPort: typeof getBridgeAuthForPort;
 };
@@ -50,7 +58,7 @@ function withLoopbackBrowserAuthImpl(
   }
 
   try {
-    const cfg = deps.loadConfig();
+    const cfg = deps.getRuntimeConfig();
     const auth = deps.resolveBrowserControlAuth(cfg);
     if (auth.token) {
       headers.set("Authorization", `Bearer ${auth.token}`);
@@ -67,13 +75,7 @@ function withLoopbackBrowserAuthImpl(
   // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
   // Fall back to the in-memory registry if config auth is not available.
   try {
-    const parsed = new URL(url);
-    const port =
-      parsed.port && Number.parseInt(parsed.port, 10) > 0
-        ? Number.parseInt(parsed.port, 10)
-        : parsed.protocol === "https:"
-          ? 443
-          : 80;
+    const { port } = parseBrowserHttpUrl(url, "browser control URL");
     const bridgeAuth = deps.getBridgeAuthForPort(port);
     if (bridgeAuth?.token) {
       headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
@@ -92,7 +94,7 @@ function withLoopbackBrowserAuth(
   init: (RequestInit & { timeoutMs?: number }) | undefined,
 ): RequestInit & { timeoutMs?: number } {
   return withLoopbackBrowserAuthImpl(url, init, {
-    loadConfig,
+    getRuntimeConfig,
     resolveBrowserControlAuth,
     getBridgeAuthForPort,
   });
@@ -113,7 +115,7 @@ function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOw
     return "unknown";
   }
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg?.browser, cfg);
     const parsed = new URL(url, "http://localhost");
     const requestedProfile = parsed.searchParams.get("profile")?.trim();
@@ -161,6 +163,10 @@ function appendBrowserToolModelHint(message: string): string {
 }
 
 type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
+
+function resolveBrowserFetchTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveTimerTimeoutMs(timeoutMs, 5000);
+}
 
 function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
   const msg = normalizeErrorMessage(err);
@@ -228,7 +234,7 @@ async function fetchHttpJson<T>(
   url: string,
   init: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const timeoutMs = init.timeoutMs ?? 5000;
+  const timeoutMs = resolveBrowserFetchTimeoutMs(init.timeoutMs);
   const ctrl = new AbortController();
   const upstreamSignal = init.signal;
   let upstreamAbortListener: (() => void) | undefined;
@@ -274,11 +280,12 @@ async function fetchHttpJson<T>(
   }
 }
 
+/** Fetch JSON from browser control over HTTP or local dispatcher transport. */
 export async function fetchBrowserJson<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const timeoutMs = init?.timeoutMs ?? 5000;
+  const timeoutMs = resolveBrowserFetchTimeoutMs(init?.timeoutMs);
   let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
@@ -315,9 +322,17 @@ export async function fetchBrowserJson<T>(
 
     let abortListener: (() => void) | undefined;
     const abortPromise: Promise<never> = abortCtrl.signal.aborted
-      ? Promise.reject(abortCtrl.signal.reason ?? new Error("aborted"))
+      ? Promise.reject(
+          toLintErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+        )
       : new Promise((_, reject) => {
-          abortListener = () => reject(abortCtrl.signal.reason ?? new Error("aborted"));
+          abortListener = () =>
+            reject(
+              toLintErrorObject(
+                abortCtrl.signal.reason ?? new Error("aborted"),
+                "Non-Error rejection",
+              ),
+            );
           abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
         });
 
@@ -378,6 +393,22 @@ export async function fetchBrowserJson<T>(
   }
 }
 
-export const __test = {
+/** Focused test hooks for browser client transport internals. */
+export const testApi = {
   withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
 };
+export { testApi as __test };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

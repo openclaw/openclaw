@@ -1,36 +1,48 @@
+// Emits reset hooks and cleanup work around session reset commands.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 
 function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
+  return routeReplyRuntimeLoader.load();
 }
 
 export type ResetCommandAction = "new" | "reset";
 
 function parseTranscriptMessages(content: string): unknown[] {
-  const messages: unknown[] = [];
+  const entries: unknown[] = [];
   for (const line of content.split("\n")) {
     if (!line.trim()) {
       continue;
     }
     try {
       const entry = JSON.parse(line);
-      if (entry.type === "message" && entry.message) {
-        messages.push(entry.message);
-      }
+      entries.push(entry);
     } catch {
       // Skip malformed lines from partially-written transcripts.
     }
   }
-  return messages;
+  const selectedEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
+  return selectedEntries.flatMap((entry) => {
+    if (
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      (entry as { type?: unknown }).type === "message" &&
+      (entry as { message?: unknown }).message
+    ) {
+      return [(entry as { message: unknown }).message];
+    }
+    return [];
+  });
 }
 
 async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
@@ -104,7 +116,7 @@ export async function emitResetCommandHooks(params: {
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   workspaceDir: string;
-}): Promise<void> {
+}): Promise<{ routedReply: boolean }> {
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
@@ -116,6 +128,7 @@ export async function emitResetCommandHooks(params: {
   await triggerInternalHook(hookEvent);
   params.command.resetHookTriggered = true;
 
+  let routedReply = false;
   if (hookEvent.messages.length > 0) {
     const channel = params.ctx.OriginatingChannel || params.command.channel;
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
@@ -133,7 +146,9 @@ export async function emitResetCommandHooks(params: {
         requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
+        replyKind: "final",
       });
+      routedReply = true;
     }
   }
 
@@ -160,4 +175,5 @@ export async function emitResetCommandHooks(params: {
       }
     })();
   }
+  return { routedReply };
 }

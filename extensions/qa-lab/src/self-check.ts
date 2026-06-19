@@ -1,9 +1,10 @@
+// Qa Lab plugin module implements self check behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
-import { renderQaMarkdownReport } from "./report.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 
@@ -13,6 +14,13 @@ export type QaSelfCheckResult = {
   checks: Array<{ name: string; status: "pass" | "fail"; details?: string }>;
   scenarioResult: QaScenarioResult;
 };
+
+export function isQaSelfCheckSuccessful(result: QaSelfCheckResult): boolean {
+  return (
+    result.scenarioResult.status === "pass" &&
+    result.checks.every((check) => check.status === "pass")
+  );
+}
 
 export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
   if (params?.outputPath) {
@@ -29,6 +37,7 @@ export async function runQaSelfCheckAgainstState(params: {
   outputPath?: string;
   repoRoot?: string;
   notes?: string[];
+  waitTimeoutMs?: number;
 }): Promise<QaSelfCheckResult> {
   const startedAt = new Date();
   const transport = createQaTransportAdapter({
@@ -36,16 +45,19 @@ export async function runQaSelfCheckAgainstState(params: {
     state: params.state,
   });
   params.state.reset();
-  const scenarioResult = await runQaScenario(createQaSelfCheckScenario(), {
-    state: params.state,
-    performAction: async (action, args) =>
-      await transport.handleAction({
-        action,
-        args,
-        cfg: params.cfg,
-        accountId: transport.accountId,
-      }),
-  });
+  const scenarioResult = await runQaScenario(
+    createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
+    {
+      state: params.state,
+      performAction: async (action, args) =>
+        await transport.handleAction({
+          action,
+          args,
+          cfg: params.cfg,
+          accountId: transport.accountId,
+        }),
+    },
+  );
   const checks = [
     {
       name: "QA self-check scenario",

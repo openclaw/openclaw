@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
+// Deepgram tests cover audio plugin behavior.
 import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
-} from "../../test/helpers/stt-live-audio.js";
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import { transcribeDeepgramAudio } from "./audio.js";
 import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
@@ -60,6 +61,7 @@ describeLive("deepgram live", () => {
       outputFormat: "ulaw_8000",
       timeoutMs: 30_000,
     });
+    expect(speech.byteLength).toBeGreaterThan(0);
 
     await runRealtimeSttLiveTest({
       provider,

@@ -31,12 +31,7 @@ protocol LocationServicing: Sendable {
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
-    func startLocationUpdates(
-        desiredAccuracy: OpenClawLocationAccuracy,
-        significantChangesOnly: Bool) -> AsyncStream<CLLocation>
-    func stopLocationUpdates()
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
-    func stopMonitoringSignificantLocationChanges()
 }
 
 @MainActor
@@ -69,7 +64,7 @@ protocol MotionServicing: Sendable {
     func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload
 }
 
-struct WatchMessagingStatus: Sendable, Equatable {
+struct WatchMessagingStatus: Equatable {
     var supported: Bool
     var paired: Bool
     var appInstalled: Bool
@@ -77,7 +72,7 @@ struct WatchMessagingStatus: Sendable, Equatable {
     var activationState: String
 }
 
-struct WatchQuickReplyEvent: Sendable, Equatable {
+struct WatchQuickReplyEvent: Equatable {
     var replyId: String
     var promptId: String
     var actionId: String
@@ -88,7 +83,7 @@ struct WatchQuickReplyEvent: Sendable, Equatable {
     var transport: String
 }
 
-struct WatchExecApprovalResolveEvent: Sendable, Equatable {
+struct WatchExecApprovalResolveEvent: Equatable {
     var replyId: String
     var approvalId: String
     var decision: OpenClawWatchExecApprovalDecision
@@ -96,13 +91,29 @@ struct WatchExecApprovalResolveEvent: Sendable, Equatable {
     var transport: String
 }
 
-struct WatchExecApprovalSnapshotRequestEvent: Sendable, Equatable {
+struct WatchExecApprovalSnapshotRequestEvent: Equatable {
     var requestId: String
     var sentAtMs: Int?
     var transport: String
 }
 
-struct WatchNotificationSendResult: Sendable, Equatable {
+struct WatchAppSnapshotRequestEvent: Equatable {
+    var requestId: String
+    var sentAtMs: Int?
+    var transport: String
+}
+
+struct WatchAppCommandEvent: Codable, Equatable {
+    var commandId: String
+    var command: OpenClawWatchAppCommand
+    var sessionKey: String?
+    var gatewayStableID: String?
+    var text: String?
+    var sentAtMs: Int?
+    var transport: String
+}
+
+struct WatchNotificationSendResult: Equatable {
     var deliveredImmediately: Bool
     var queuedForDelivery: Bool
     var transport: String
@@ -115,6 +126,8 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
     func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?)
     func setExecApprovalSnapshotRequestHandler(
         _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
+    func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?)
+    func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?)
     func sendNotification(
         id: String,
         params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
@@ -126,6 +139,8 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
         _ message: OpenClawWatchExecApprovalExpiredMessage) async throws -> WatchNotificationSendResult
     func syncExecApprovalSnapshot(
         _ message: OpenClawWatchExecApprovalSnapshotMessage) async throws -> WatchNotificationSendResult
+    func syncAppSnapshot(
+        _ message: OpenClawWatchAppSnapshotMessage) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

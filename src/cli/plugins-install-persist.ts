@@ -1,6 +1,19 @@
+// Persistence helpers for plugin and hook-pack installs plus related config mutation.
+import fs from "node:fs";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { replaceConfigFile } from "../config/config.js";
+import {
+  hashConfigIncludeRaw,
+  readConfigIncludeFileWithGuards,
+  resolveConfigIncludeWritePath,
+} from "../config/includes.js";
+import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -8,8 +21,16 @@ import {
   withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
-import { defaultRuntime } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
+import { buildPluginSnapshotReport } from "../plugins/status.js";
+import {
+  applyPluginUninstallDirectoryRemoval,
+  planPluginUninstall,
+  type PluginUninstallDirectoryRemoval,
+} from "../plugins/uninstall.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   applySlotSelectionForPlugin,
   enableInternalHookEntries,
@@ -28,7 +49,9 @@ function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): O
     ...cfg,
     plugins: {
       ...cfg.plugins,
-      allow: [...allow, pluginId].toSorted(),
+      // Preserve authored allowlist order so env-backed entries remain aligned
+      // with the write-time env restoration snapshot.
+      allow: [...allow, pluginId],
     },
   };
 }
@@ -55,47 +78,450 @@ function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string
 export type ConfigSnapshotForInstallPersist = {
   config: OpenClawConfig;
   baseHash: string | undefined;
+  writeOptions: Pick<
+    ConfigWriteOptions,
+    | "assertConfigPathForWrite"
+    | "expectedConfigPath"
+    | "ownedConfigPathForWrite"
+    | "envSnapshotForRestore"
+    | "includeFileHashesForWrite"
+    | "includeFileTargetsForWrite"
+  >;
 };
+
+type ConfigMutationSection = "hooks" | "plugins";
+
+export type ConfigMutationPreflight =
+  | { mode: "allowed" }
+  | { mode: "blocked"; scope: "config" | ConfigMutationSection; reason: string };
+
+const CONFIG_MUTATION_ALLOWED = { mode: "allowed" } as const;
+
+export function containsConfigIncludeDirective(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsConfigIncludeDirective(entry));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    Object.hasOwn(value, "$include") ||
+    Object.values(value).some((entry) => containsConfigIncludeDirective(entry))
+  );
+}
+
+export function supportsInstallConfigSingleTopLevelIncludeShape(authoredSection: unknown): boolean {
+  if (!containsConfigIncludeDirective(authoredSection)) {
+    return true;
+  }
+  return (
+    isRecord(authoredSection) &&
+    Object.keys(authoredSection).length === 1 &&
+    typeof authoredSection.$include === "string"
+  );
+}
+
+function resolveSingleTopLevelIncludePath(
+  parsed: Record<string, unknown>,
+  configPath: string,
+  section: ConfigMutationSection,
+): string | null {
+  const authoredSection = parsed[section];
+  if (
+    !isRecord(authoredSection) ||
+    Object.keys(authoredSection).length !== 1 ||
+    typeof authoredSection.$include !== "string"
+  ) {
+    return null;
+  }
+  return path.normalize(
+    path.isAbsolute(authoredSection.$include)
+      ? authoredSection.$include
+      : path.resolve(path.dirname(configPath), authoredSection.$include),
+  );
+}
+
+function resolveConfigMutationPreflight(params: {
+  parsed: Record<string, unknown>;
+  section: ConfigMutationSection;
+  snapshotPath: string;
+  writeOptions: ConfigSnapshotForInstallPersist["writeOptions"];
+}): ConfigMutationPreflight {
+  if (Object.hasOwn(params.parsed, "$include")) {
+    return {
+      mode: "blocked",
+      scope: "config",
+      reason: `Config ${params.section} are stored through an unsupported $include shape at the root; edit the included file directly or move ${params.section} into the root config before installing.`,
+    };
+  }
+  if (!supportsInstallConfigSingleTopLevelIncludeShape(params.parsed[params.section])) {
+    return {
+      mode: "blocked",
+      scope: params.section,
+      reason: `Config ${params.section} are stored through an unsupported $include shape; edit the included file directly or move ${params.section} to a single-file top-level include before installing.`,
+    };
+  }
+  const includePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    params.section,
+  );
+  if (!includePath) {
+    return CONFIG_MUTATION_ALLOWED;
+  }
+  const expectedTarget = params.writeOptions.includeFileTargetsForWrite?.[includePath];
+  let resolvedTarget: string | null = null;
+  try {
+    resolvedTarget = resolveConfigIncludeWritePath({
+      configPath: params.snapshotPath,
+      includePath,
+      allowedRoots: [],
+    });
+  } catch {
+    // The persistence path rejects includes that are no longer root-bound too.
+  }
+  if (
+    expectedTarget &&
+    resolvedTarget &&
+    path.normalize(expectedTarget) === path.normalize(resolvedTarget)
+  ) {
+    const expectedHash = params.writeOptions.includeFileHashesForWrite?.[includePath];
+    try {
+      const raw = readConfigIncludeFileWithGuards({
+        includePath,
+        resolvedPath: resolvedTarget,
+        rootRealDir: fs.realpathSync(path.dirname(params.snapshotPath)),
+      });
+      if (expectedHash !== hashConfigIncludeRaw(raw)) {
+        return {
+          mode: "blocked",
+          scope: params.section,
+          reason: `Config ${params.section} include changed since the config was read; rerun the install after reloading the config.`,
+        };
+      }
+      if (containsConfigIncludeDirective(parseJsonWithJson5Fallback(raw))) {
+        return {
+          mode: "blocked",
+          scope: params.section,
+          reason: `Config ${params.section} are stored through a nested $include; edit the included file directly or remove the nested $include before installing.`,
+        };
+      }
+      return CONFIG_MUTATION_ALLOWED;
+    } catch {
+      return {
+        mode: "blocked",
+        scope: params.section,
+        reason: `Config ${params.section} include could not be inspected at its snapshot target; rerun the install after repairing or reloading the config.`,
+      };
+    }
+  }
+  return {
+    mode: "blocked",
+    scope: params.section,
+    reason: `Config ${params.section} are stored in an external or unresolved top-level $include; edit the included file directly or move it under the config directory before installing.`,
+  };
+}
+
+export function resolveInstallConfigMutationPreflights(params: {
+  parsed: Record<string, unknown>;
+  snapshotPath: string;
+  writeOptions: ConfigSnapshotForInstallPersist["writeOptions"];
+}): {
+  hookMutation: ConfigMutationPreflight;
+  pluginMutation: ConfigMutationPreflight;
+} {
+  const pluginMutation = resolveConfigMutationPreflight({
+    ...params,
+    section: "plugins",
+  });
+  const hookMutation = resolveConfigMutationPreflight({
+    ...params,
+    section: "hooks",
+  });
+  const pluginIncludePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    "plugins",
+  );
+  const hookIncludePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    "hooks",
+  );
+  const pluginTarget = pluginIncludePath
+    ? params.writeOptions.includeFileTargetsForWrite?.[pluginIncludePath]
+    : undefined;
+  const hookTarget = hookIncludePath
+    ? params.writeOptions.includeFileTargetsForWrite?.[hookIncludePath]
+    : undefined;
+  if (pluginTarget && hookTarget && path.normalize(pluginTarget) === path.normalize(hookTarget)) {
+    const blocked = {
+      mode: "blocked",
+      scope: "config",
+      reason:
+        "Config plugins and hooks share the same top-level $include target; split them into separate include files before installing.",
+    } as const;
+    return { hookMutation: blocked, pluginMutation: blocked };
+  }
+  return { hookMutation, pluginMutation };
+}
+
+export function resolveCombinedPluginAndHookConfigMutationPreflight(params: {
+  parsed: Record<string, unknown>;
+  snapshotPath: string;
+}): ConfigMutationPreflight {
+  const pluginIncludePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    "plugins",
+  );
+  const hookIncludePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    "hooks",
+  );
+  if (!pluginIncludePath && !hookIncludePath) {
+    return CONFIG_MUTATION_ALLOWED;
+  }
+  return {
+    mode: "blocked",
+    scope: "config",
+    reason:
+      "Config plugins and hooks cannot be updated together while either section uses a top-level $include; update them separately.",
+  };
+}
+
+export function selectInstallMutationWriteOptions(
+  writeOptions: ConfigWriteOptions,
+): ConfigSnapshotForInstallPersist["writeOptions"] {
+  // Install work may outlive its config read. Keep only mutation-start ownership
+  // and conflict facts; plugin metadata must come from the commit-time read.
+  return {
+    ...(writeOptions.assertConfigPathForWrite
+      ? { assertConfigPathForWrite: writeOptions.assertConfigPathForWrite }
+      : {}),
+    expectedConfigPath: writeOptions.expectedConfigPath,
+    ownedConfigPathForWrite: writeOptions.ownedConfigPathForWrite,
+    envSnapshotForRestore: writeOptions.envSnapshotForRestore,
+    includeFileHashesForWrite: writeOptions.includeFileHashesForWrite,
+    includeFileTargetsForWrite: writeOptions.includeFileTargetsForWrite,
+  };
+}
+
+function sourceMatchesInstalledPath(params: {
+  activeSource: string;
+  installedSource: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const activeSource = resolveUserPath(params.activeSource, params.env);
+  const installedSource = resolveUserPath(params.installedSource, params.env);
+  return activeSource === installedSource || isPathInside(installedSource, activeSource);
+}
+
+function logShadowedNpmInstallWarning(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  install: Omit<PluginInstallUpdate, "pluginId">;
+  runtime: RuntimeEnv;
+}): void {
+  // Warn when a newly installed npm plugin is shadowed by an explicit config source.
+  if (params.install.source !== "npm") {
+    return;
+  }
+  const installedSource = params.install.installPath ?? params.install.sourcePath;
+  if (!installedSource) {
+    return;
+  }
+  const report = buildPluginSnapshotReport({
+    config: params.config,
+    effectiveOnly: true,
+    onlyPluginIds: [params.pluginId],
+  });
+  const active = report.plugins.find((plugin) => plugin.id === params.pluginId);
+  if (
+    !active ||
+    active.origin !== "config" ||
+    sourceMatchesInstalledPath({ activeSource: active.source, installedSource })
+  ) {
+    return;
+  }
+
+  params.runtime.log(
+    theme.warn(
+      [
+        `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
+        `  active config source: ${shortenHomePath(active.source)}`,
+        `  installed npm source: ${shortenHomePath(installedSource)}`,
+        "Run `openclaw plugins doctor` for repair options.",
+      ].join("\n"),
+    ),
+  );
+}
+
+function resolveComparableInstallPath(
+  install: Pick<PluginInstallRecord, "installPath" | "sourcePath">,
+) {
+  return install.installPath ?? install.sourcePath;
+}
+
+function shouldPreserveReplacedInstallPath(params: {
+  removalTarget: string;
+  nextInstallPath: string;
+}) {
+  const removalTarget = resolveUserPath(params.removalTarget);
+  const nextInstallPath = resolveUserPath(params.nextInstallPath);
+  return (
+    isPathInside(removalTarget, nextInstallPath) || isPathInside(nextInstallPath, removalTarget)
+  );
+}
+
+function resolveReplacedManagedInstallRemoval(params: {
+  pluginId: string;
+  previousInstall?: PluginInstallRecord;
+  nextInstall: Omit<PluginInstallUpdate, "pluginId">;
+}): PluginUninstallDirectoryRemoval | null {
+  if (!params.previousInstall) {
+    return null;
+  }
+  const previousInstallPath = resolveComparableInstallPath(params.previousInstall);
+  const nextInstallPath = resolveComparableInstallPath(params.nextInstall);
+  if (!previousInstallPath || !nextInstallPath) {
+    return null;
+  }
+  if (
+    shouldPreserveReplacedInstallPath({
+      removalTarget: previousInstallPath,
+      nextInstallPath,
+    })
+  ) {
+    return null;
+  }
+  const plan = planPluginUninstall({
+    config: {
+      plugins: {
+        installs: {
+          [params.pluginId]: params.previousInstall,
+        },
+      },
+    } as OpenClawConfig,
+    pluginId: params.pluginId,
+    deleteFiles: true,
+  });
+  if (!plan.ok || !plan.directoryRemoval) {
+    return null;
+  }
+  if (
+    shouldPreserveReplacedInstallPath({
+      removalTarget: plan.directoryRemoval.target,
+      nextInstallPath,
+    })
+  ) {
+    return null;
+  }
+  return plan.directoryRemoval;
+}
 
 export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
+  enable?: boolean;
+  invalidateRuntimeCache?: boolean;
   successMessage?: string;
   warningMessage?: string;
+  runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
-  const installConfig = removeInstalledPluginFromDenylist(
-    addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
-    params.pluginId,
+  const runtime = params.runtime ?? defaultRuntime;
+  const installConfig =
+    params.enable === false
+      ? params.snapshot.config
+      : removeInstalledPluginFromDenylist(
+          addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
+          params.pluginId,
+        );
+  let next =
+    params.enable === false
+      ? installConfig
+      : enablePluginInConfig(installConfig, params.pluginId, {
+          updateChannelConfig: false,
+        }).config;
+  const installRecords = await tracePluginLifecyclePhaseAsync(
+    "install records load",
+    () => loadInstalledPluginIndexInstallRecords(),
+    { command: "install" },
   );
-  let next = enablePluginInConfig(installConfig, params.pluginId).config;
-  const installRecords = await loadInstalledPluginIndexInstallRecords();
+  const replacedInstallRemoval = resolveReplacedManagedInstallRemoval({
+    pluginId: params.pluginId,
+    previousInstall: installRecords[params.pluginId],
+    nextInstall: params.install,
+  });
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
+  const slotResult =
+    params.enable === false
+      ? { config: next, warnings: [] }
+      : await tracePluginLifecyclePhaseAsync(
+          "slot selection",
+          async () => applySlotSelectionForPlugin(next, params.pluginId),
+          { command: "install", pluginId: params.pluginId },
+        );
   next = withoutPluginInstallRecords(slotResult.config);
-  await commitPluginInstallRecordsWithConfig({
-    previousInstallRecords: installRecords,
-    nextInstallRecords,
-    nextConfig: next,
-    baseHash: params.snapshot.baseHash,
-  });
+  await tracePluginLifecyclePhaseAsync(
+    "config mutation",
+    () =>
+      commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: installRecords,
+        nextInstallRecords,
+        nextConfig: next,
+        baseHash: params.snapshot.baseHash,
+        writeOptions: {
+          ...params.snapshot.writeOptions,
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
+      }),
+    { command: "install" },
+  );
+  if (replacedInstallRemoval) {
+    const removalResult = await tracePluginLifecyclePhaseAsync(
+      "replaced install cleanup",
+      () => applyPluginUninstallDirectoryRemoval(replacedInstallRemoval),
+      { command: "install", pluginId: params.pluginId },
+    );
+    for (const warning of removalResult.warnings) {
+      runtime.log(theme.warn(warning));
+    }
+    if (removalResult.directoryRemoved) {
+      runtime.log(
+        theme.muted(
+          `Removed previous plugin install directory: ${shortenHomePath(replacedInstallRemoval.target)}`,
+        ),
+      );
+    }
+  }
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
+    traceCommand: "install",
     logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
+      warn: (message) => runtime.log(theme.warn(message)),
     },
   });
-  logSlotWarnings(slotResult.warnings);
+  logSlotWarnings(slotResult.warnings, runtime);
   if (params.warningMessage) {
-    defaultRuntime.log(theme.warn(params.warningMessage));
+    runtime.log(theme.warn(params.warningMessage));
   }
-  defaultRuntime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
-  defaultRuntime.log("Restart the gateway to load plugins.");
+  runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
+  logShadowedNpmInstallWarning({
+    config: next,
+    pluginId: params.pluginId,
+    install: params.install,
+    runtime,
+  });
+  runtime.log("Restart the gateway to load plugins.");
   return next;
 }
 
@@ -105,7 +531,9 @@ export async function persistHookPackInstall(params: {
   hooks: string[];
   install: Omit<HookInstallUpdate, "hookId" | "hooks">;
   successMessage?: string;
+  runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
+  const runtime = params.runtime ?? defaultRuntime;
   let next = enableInternalHookEntries(params.snapshot.config, params.hooks);
   next = recordHookInstall(next, {
     hookId: params.hookPackId,
@@ -115,8 +543,9 @@ export async function persistHookPackInstall(params: {
   await replaceConfigFile({
     nextConfig: next,
     baseHash: params.snapshot.baseHash,
+    writeOptions: params.snapshot.writeOptions,
   });
-  defaultRuntime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
-  logHookPackRestartHint();
+  runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
+  logHookPackRestartHint(runtime);
   return next;
 }

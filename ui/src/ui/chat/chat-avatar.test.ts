@@ -1,36 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderChatAvatar } from "./chat-avatar.ts";
-
-vi.mock("../views/agents-utils.ts", () => ({
-  isRenderableControlUiAvatarUrl: (value: string) =>
-    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
-  assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
-  resolveAssistantTextAvatar: (value: string | null | undefined) => {
-    if (!value) {
-      return null;
-    }
-    return value.length <= 3 ? value : null;
-  },
-  resolveChatAvatarRenderUrl: (
-    candidate: string | null | undefined,
-    agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  ) => {
-    const isRenderableControlUiAvatarUrl = (value: string) =>
-      /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
-    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
-      return candidate;
-    }
-    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
-      if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
-        return value;
-      }
-    }
-    return null;
-  },
-}));
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");
@@ -41,14 +13,13 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
 describe("renderChatAvatar", () => {
   it("renders assistant fallback, blob image, and text avatars", () => {
     const defaultAvatar = renderAvatar(["assistant"]);
-    expect(defaultAvatar).not.toBeNull();
-    expect(defaultAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+    expect(defaultAvatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
 
     const remoteAvatar = renderAvatar([
       "assistant",
       { avatar: "https://example.com/avatar.png", name: "Val" },
     ]);
-    expect(remoteAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+    expect(remoteAvatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
 
     const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
     expect(blobAvatar?.tagName).toBe("IMG");
@@ -56,7 +27,7 @@ describe("renderChatAvatar", () => {
 
     const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
     expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("VC");
+    expect(textAvatar?.textContent?.trim()).toBe("VC");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
   });
 
@@ -69,7 +40,7 @@ describe("renderChatAvatar", () => {
       "session-token",
     ]);
 
-    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+    expect(avatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
   });
 
   it("renders local user image and text avatars", () => {
@@ -79,6 +50,6 @@ describe("renderChatAvatar", () => {
 
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("AB");
+    expect(textAvatar?.textContent?.trim()).toBe("AB");
   });
 });

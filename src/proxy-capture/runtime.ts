@@ -1,5 +1,7 @@
+// Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
+import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import {
   closeDebugProxyCaptureStore,
@@ -39,6 +41,8 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
+// Runtime capture records HTTP/fetch and websocket events into the SQLite store,
+// redacting sensitive headers and persisting bodies in capture_blobs.
 type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
 };
@@ -46,6 +50,35 @@ type GlobalFetchPatchedState = {
 type GlobalFetchPatchTarget = typeof globalThis & {
   [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
 };
+
+type DebugProxyCaptureStoreLike = Pick<
+  ReturnType<typeof getDebugProxyCaptureStore>,
+  "upsertSession" | "endSession" | "recordEvent"
+>;
+
+export type DebugProxyCaptureRuntimeDeps = {
+  getStore?: () => DebugProxyCaptureStoreLike;
+  closeStore?: typeof closeDebugProxyCaptureStore;
+  persistEventPayload?: (
+    store: DebugProxyCaptureStoreLike,
+    payload: Parameters<typeof persistEventPayload>[1],
+  ) => ReturnType<typeof persistEventPayload>;
+  safeJsonString?: typeof safeJsonString;
+  fetchTarget?: typeof globalThis;
+};
+
+function resolveRuntimeDeps(deps: DebugProxyCaptureRuntimeDeps = {}) {
+  return {
+    getStore: deps.getStore ?? getDebugProxyCaptureStore,
+    closeStore: deps.closeStore ?? closeDebugProxyCaptureStore,
+    persistEventPayload:
+      deps.persistEventPayload ??
+      ((store, payload) =>
+        persistEventPayload(store as ReturnType<typeof getDebugProxyCaptureStore>, payload)),
+    safeJsonString: deps.safeJsonString ?? safeJsonString,
+    fetchTarget: deps.fetchTarget ?? globalThis,
+  };
+}
 
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
   try {
@@ -99,6 +132,8 @@ function redactedCaptureHeaders(
     headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
   const redacted: Record<string, string> = {};
   for (const [name, value] of entries) {
+    // Header names are matched exactly and by sensitive fragments because
+    // providers use many token/key naming variants.
     redacted[name] = isSensitiveCaptureHeaderName(name) ? REDACTED_CAPTURE_HEADER_VALUE : value;
   }
   return redacted;
@@ -129,51 +164,64 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
-  if (typeof globalThis.fetch !== "function") {
+function installDebugProxyGlobalFetchPatch(
+  settings: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
+  const runtime = resolveRuntimeDeps(deps);
+  const fetchTarget = runtime.fetchTarget as GlobalFetchPatchTarget;
+  if (typeof fetchTarget.fetch !== "function") {
     return;
   }
-  const patched = globalThis as GlobalFetchPatchTarget;
-  if (patched[DEBUG_PROXY_FETCH_PATCH_KEY]) {
+  if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
-  const originalFetch = globalThis.fetch.bind(globalThis);
-  patched[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  // Patch only once per target and keep the original fetch for deterministic
+  // teardown in tests and nested capture sessions.
+  const fetchImpl = fetchTarget.fetch;
+  const originalFetch = fetchImpl.bind(fetchTarget);
+  fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
+  const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
+    const normalizedInit = normalizeRequestInitHeadersForFetch(init);
     try {
-      const response = await originalFetch(input, init);
+      const response = await originalFetch(input, normalizedInit);
       if (url && /^https?:/i.test(url)) {
-        captureHttpExchange({
-          url,
-          method:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? input.method
-              : undefined) ??
-            init?.method ??
-            "GET",
-          requestHeaders:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? input.headers
-              : undefined) ?? (init?.headers as Headers | Record<string, string> | undefined),
-          requestBody:
-            (typeof Request !== "undefined" && input instanceof Request
-              ? (input as Request & { body?: BodyInit | null }).body
-              : undefined) ??
-            (init as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
-            null,
-          response,
-          transport: "http",
-          meta: {
-            captureOrigin: "global-fetch",
-            source: settings.sourceProcess,
+        captureHttpExchange(
+          {
+            url,
+            method:
+              (typeof Request !== "undefined" && input instanceof Request
+                ? input.method
+                : undefined) ??
+              normalizedInit?.method ??
+              "GET",
+            requestHeaders:
+              (typeof Request !== "undefined" && input instanceof Request
+                ? input.headers
+                : undefined) ??
+              (normalizedInit?.headers as Headers | Record<string, string> | undefined),
+            requestBody:
+              (typeof Request !== "undefined" && input instanceof Request
+                ? (input as Request & { body?: BodyInit | null }).body
+                : undefined) ??
+              (normalizedInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ??
+              null,
+            response,
+            transport: "http",
+            meta: {
+              captureOrigin: "global-fetch",
+              source: settings.sourceProcess,
+            },
           },
-        });
+          settings,
+          deps,
+        );
       }
       return response;
     } catch (error) {
       if (url && /^https?:/i.test(url)) {
-        const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+        const store = runtime.getStore();
         const parsed = new URL(url);
         store.recordEvent({
           sessionId: settings.sessionId,
@@ -188,83 +236,102 @@ function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
             (typeof Request !== "undefined" && input instanceof Request
               ? input.method
               : undefined) ??
-            init?.method ??
+            normalizedInit?.method ??
             "GET",
           host: parsed.host,
           path: `${parsed.pathname}${parsed.search}`,
           errorText: error instanceof Error ? error.message : String(error),
-          metaJson: safeJsonString({ captureOrigin: "global-fetch" }),
+          metaJson: runtime.safeJsonString({ captureOrigin: "global-fetch" }),
         });
       }
       throw error;
     }
-  }) as typeof globalThis.fetch;
+  };
+  const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
+  if (typeof mockState === "object" && mockState !== null) {
+    // Preserve Vitest mock metadata when patching mocked fetch targets.
+    (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
+  }
+  fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
 }
 
-function uninstallDebugProxyGlobalFetchPatch(): void {
-  const patched = globalThis as GlobalFetchPatchTarget;
-  const state = patched[DEBUG_PROXY_FETCH_PATCH_KEY];
+function uninstallDebugProxyGlobalFetchPatch(deps: DebugProxyCaptureRuntimeDeps = {}): void {
+  const fetchTarget = resolveRuntimeDeps(deps).fetchTarget as GlobalFetchPatchTarget;
+  const state = fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
   if (!state) {
     return;
   }
-  globalThis.fetch = state.originalFetch;
-  delete patched[DEBUG_PROXY_FETCH_PATCH_KEY];
+  fetchTarget.fetch = state.originalFetch;
+  delete fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
 }
 
 export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
   return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
 }
 
-export function initializeDebugProxyCapture(mode: string, resolved?: DebugProxySettings): void {
+export function initializeDebugProxyCapture(
+  mode: string,
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
   const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).upsertSession({
+  resolveRuntimeDeps(deps).getStore().upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
     sourceScope: "openclaw",
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
-    dbPath: settings.dbPath,
-    blobDir: settings.blobDir,
   });
-  installDebugProxyGlobalFetchPatch(settings);
+  installDebugProxyGlobalFetchPatch(settings, deps);
 }
 
-export function finalizeDebugProxyCapture(resolved?: DebugProxySettings): void {
+// Finalization closes the session and restores the fetch patch before closing
+// the cached store, preventing later normal requests from being captured.
+export function finalizeDebugProxyCapture(
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
   const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
-  uninstallDebugProxyGlobalFetchPatch();
-  closeDebugProxyCaptureStore();
+  const runtime = resolveRuntimeDeps(deps);
+  runtime.getStore().endSession(settings.sessionId);
+  uninstallDebugProxyGlobalFetchPatch(deps);
+  runtime.closeStore();
 }
 
-export function captureHttpExchange(params: {
-  url: string;
-  method: string;
-  requestHeaders?: Headers | Record<string, string> | undefined;
-  requestBody?: BodyInit | Buffer | string | null;
-  response: Response;
-  transport?: "http" | "sse";
-  flowId?: string;
-  meta?: Record<string, unknown>;
-}): void {
-  const settings = resolveDebugProxySettings();
+export function captureHttpExchange(
+  params: {
+    url: string;
+    method: string;
+    requestHeaders?: Headers | Record<string, string> | undefined;
+    requestBody?: BodyInit | Buffer | string | null;
+    response: Response;
+    transport?: "http" | "sse";
+    flowId?: string;
+    meta?: Record<string, unknown>;
+  },
+  resolved?: DebugProxySettings,
+  deps: DebugProxyCaptureRuntimeDeps = {},
+): void {
+  const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  const runtime = resolveRuntimeDeps(deps);
+  const store = runtime.getStore();
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
   const requestBody =
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
       : null;
-  const requestPayload = persistEventPayload(store, {
+  const requestPayload = runtime.persistEventPayload(store, {
     data: requestBody,
     contentType:
       params.requestHeaders instanceof Headers
@@ -286,8 +353,8 @@ export function captureHttpExchange(params: {
       params.requestHeaders instanceof Headers
         ? (params.requestHeaders.get("content-type") ?? undefined)
         : params.requestHeaders?.["content-type"],
-    headersJson: safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
-    metaJson: safeJsonString(params.meta),
+    headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
+    metaJson: runtime.safeJsonString(params.meta),
     ...requestPayload,
   });
   const cloneable =
@@ -295,6 +362,8 @@ export function captureHttpExchange(params: {
     typeof params.response.clone === "function" &&
     typeof params.response.arrayBuffer === "function";
   if (!cloneable) {
+    // Some Response-like objects cannot be cloned. Still record status/headers
+    // rather than forcing capture to consume or mutate the original response.
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,
@@ -313,9 +382,9 @@ export function captureHttpExchange(params: {
           : undefined,
       headersJson:
         params.response.headers && typeof params.response.headers.entries === "function"
-          ? safeJsonString(redactedCaptureHeaders(params.response.headers))
+          ? runtime.safeJsonString(redactedCaptureHeaders(params.response.headers))
           : undefined,
-      metaJson: safeJsonString({ ...params.meta, bodyCapture: "unavailable" }),
+      metaJson: runtime.safeJsonString({ ...params.meta, bodyCapture: "unavailable" }),
     });
     return;
   }
@@ -323,7 +392,7 @@ export function captureHttpExchange(params: {
     .clone()
     .arrayBuffer()
     .then((buffer) => {
-      const responsePayload = persistEventPayload(store, {
+      const responsePayload = runtime.persistEventPayload(store, {
         data: Buffer.from(buffer),
         contentType: params.response.headers.get("content-type") ?? undefined,
       });
@@ -340,12 +409,12 @@ export function captureHttpExchange(params: {
         }),
         status: params.response.status,
         contentType: params.response.headers.get("content-type") ?? undefined,
-        headersJson: safeJsonString(redactedCaptureHeaders(params.response.headers)),
-        metaJson: safeJsonString(params.meta),
+        headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.response.headers)),
+        metaJson: runtime.safeJsonString(params.meta),
         ...responsePayload,
       });
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       store.recordEvent({
         ...createHttpCaptureEventBase({
           settings,
@@ -362,6 +431,8 @@ export function captureHttpExchange(params: {
     });
 }
 
+// Websocket seams call this directly because Node fetch patching cannot observe
+// frame traffic.
 export function captureWsEvent(params: {
   url: string;
   direction: "outbound" | "inbound" | "local";
@@ -376,7 +447,7 @@ export function captureWsEvent(params: {
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  const store = getDebugProxyCaptureStore();
   const url = new URL(params.url);
   const payload = persistEventPayload(store, {
     data: params.payload,

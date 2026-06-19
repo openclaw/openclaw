@@ -1,3 +1,4 @@
+// Registry tests cover channel plugin registry installation, lookup, and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
@@ -29,7 +30,7 @@ describe("listChannelPlugins", () => {
     const malformedRegistry = withMalformedChannels(createEmptyPluginRegistry());
     setActivePluginRegistry(malformedRegistry);
 
-    expect(listChannelPlugins()).toEqual([]);
+    expect(listChannelPlugins()).toStrictEqual([]);
   });
 
   it("falls back to bundled channel plugins for direct lookups before registry bootstrap", () => {

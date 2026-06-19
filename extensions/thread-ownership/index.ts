@@ -1,5 +1,7 @@
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Thread Ownership plugin entrypoint registers its OpenClaw integration.
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
@@ -27,10 +29,6 @@ function isThreadOwnershipConfig(value: unknown): value is ThreadOwnershipConfig
 
 function resolveThreadToken(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function resolveSlackConversationId(value: unknown): string {
@@ -83,9 +81,11 @@ export default definePluginEntry({
   description: "Slack thread claim coordination for multi-agent setups",
   register(api: OpenClawPluginApi) {
     const resolveCurrentState = () => {
-      const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
+      const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
       const livePluginCfg = resolveLivePluginConfigObject(
-        api.runtime.config?.loadConfig,
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
         "thread-ownership",
         isThreadOwnershipConfig(api.pluginConfig)
           ? (api.pluginConfig as Record<string, unknown>)

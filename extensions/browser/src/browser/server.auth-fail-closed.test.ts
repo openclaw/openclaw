@@ -1,3 +1,4 @@
+// Browser tests cover server.auth fail closed plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "../server.js";
 import { getFreePort } from "./test-port.js";
@@ -27,16 +28,18 @@ vi.mock("../config/config.js", async () => {
   const browserConfig = {
     enabled: true,
   };
+  const loadConfig = () => {
+    return {
+      browser: browserConfig,
+      ...(mocks.gatewayAuthMode || mocks.gatewayAuthToken
+        ? { gateway: { auth: { mode: mocks.gatewayAuthMode, token: mocks.gatewayAuthToken } } }
+        : {}),
+    };
+  };
   return {
     ...actual,
-    loadConfig: () => {
-      return {
-        browser: browserConfig,
-        ...(mocks.gatewayAuthMode || mocks.gatewayAuthToken
-          ? { gateway: { auth: { mode: mocks.gatewayAuthMode, token: mocks.gatewayAuthToken } } }
-          : {}),
-      };
-    },
+    getRuntimeConfig: loadConfig,
+    loadConfig,
   };
 });
 

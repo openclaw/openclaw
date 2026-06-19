@@ -1,6 +1,13 @@
+/**
+ * Channel config schema helpers.
+ *
+ * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
+ */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { DmPolicySchema } from "../../config/zod-schema.core.js";
+import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
+import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
 import type {
   ChannelConfigRuntimeIssue,
   ChannelConfigRuntimeParseResult,
@@ -16,9 +23,12 @@ type ExtendableZodObject = ZodTypeAny & {
   extend: (shape: Record<string, ZodTypeAny>) => ZodTypeAny;
 };
 
+/** Shared allowlist entry shape for channel sender/user ids. */
 export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
+/** Optional allowlist array used by channel config schema builders. */
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
+/** Build the common nested DM config block used by channel account schemas. */
 export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   const baseShape = {
     enabled: z.boolean().optional(),
@@ -28,6 +38,7 @@ export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   return z.object(extraShape ? { ...baseShape, ...extraShape } : baseShape).optional();
 }
 
+/** Add `accounts` catchall and `defaultAccount` fields to a channel account schema. */
 export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodObject>(
   accountSchema: T,
 ): T {
@@ -39,6 +50,12 @@ export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodOb
 
 type BuildChannelConfigSchemaOptions = {
   uiHints?: Record<string, ChannelConfigUiHint>;
+};
+
+type BuildJsonChannelConfigSchemaOptions = {
+  cacheKey?: string;
+  uiHints?: Record<string, ChannelConfigUiHint>;
+  runtime?: ChannelConfigSchema["runtime"];
 };
 
 function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
@@ -72,6 +89,54 @@ function safeParseRuntimeSchema(
   };
 }
 
+function toIssuePath(path: string): Array<string | number> {
+  if (!path || path === "<root>") {
+    return [];
+  }
+  return path.split(".").map((segment) => {
+    return parseConfigPathArrayIndex(segment) ?? segment;
+  });
+}
+
+function safeParseJsonSchema(
+  schema: JsonSchemaObject,
+  cacheKey: string,
+  value: unknown,
+): ChannelConfigRuntimeParseResult {
+  const result = validateJsonSchemaValue({
+    schema,
+    cacheKey,
+    value,
+    applyDefaults: true,
+  });
+  if (result.ok) {
+    return { success: true, data: result.value };
+  }
+  return {
+    success: false,
+    issues: result.errors.map((issue) => ({
+      path: toIssuePath(issue.path),
+      message: issue.message,
+    })),
+  };
+}
+
+/** Build a channel config schema from JSON Schema with runtime validation/default support. */
+export function buildJsonChannelConfigSchema(
+  schema: JsonSchemaObject,
+  options?: BuildJsonChannelConfigSchemaOptions,
+): ChannelConfigSchema {
+  return {
+    schema,
+    ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
+    runtime: options?.runtime ?? {
+      safeParse: (value) =>
+        safeParseJsonSchema(schema, options?.cacheKey ?? "channel-config-schema:json", value),
+    },
+  };
+}
+
+/** Build a channel config schema from Zod, exporting JSON Schema when available. */
 export function buildChannelConfigSchema(
   schema: ZodTypeAny,
   options?: BuildChannelConfigSchemaOptions,
@@ -104,6 +169,7 @@ export function buildChannelConfigSchema(
   };
 }
 
+/** Return a channel config schema for channels that intentionally accept no config keys. */
 export function emptyChannelConfigSchema(): ChannelConfigSchema {
   return {
     schema: {

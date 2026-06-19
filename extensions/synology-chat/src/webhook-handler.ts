@@ -5,6 +5,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
@@ -13,12 +14,13 @@ import {
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import * as synologyClient from "./client.js";
-import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
+import {
+  validateToken,
+  authorizeUserForDmWithIngress,
+  sanitizeInput,
+  RateLimiter,
+} from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
@@ -128,10 +130,6 @@ export function clearSynologyWebhookRateLimiterStateForTest(): void {
   webhookInFlightLimiter.clear();
 }
 
-export function getSynologyWebhookRateLimiterCountForTest(): number {
-  return rateLimiters.size + invalidTokenRateLimiters.size;
-}
-
 function getSynologyWebhookInvalidTokenRateLimitKey(req: IncomingMessage): string {
   return req.socket?.remoteAddress ?? "unknown";
 }
@@ -226,7 +224,12 @@ function parseJsonBody(body: string): Record<string, unknown> {
   if (!body.trim()) {
     return {};
   }
-  const parsed = JSON.parse(body);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body) as unknown;
+  } catch {
+    throw new Error("Invalid JSON body");
+  }
   if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
     throw new Error("Invalid JSON body");
   }
@@ -273,7 +276,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
 function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
   const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
 
-  let bodyFields: Record<string, unknown> = {};
+  let bodyFields: Record<string, unknown>;
   if (contentType.includes("application/json")) {
     bodyFields = parseJsonBody(body);
   } else if (contentType.includes("application/x-www-form-urlencoded")) {
@@ -387,7 +390,7 @@ async function parseWebhookPayloadRequest(params: {
     return { ok: false };
   }
 
-  let payload: SynologyWebhookPayload | null = null;
+  let payload: SynologyWebhookPayload | null;
   try {
     payload = parsePayload(params.req, bodyResult.body);
   } catch (err) {
@@ -402,14 +405,14 @@ async function parseWebhookPayloadRequest(params: {
   return { ok: true, payload };
 }
 
-function authorizeSynologyWebhook(params: {
+async function authorizeSynologyWebhook(params: {
   req: IncomingMessage;
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
   invalidTokenRateLimiter: InvalidTokenRateLimiter;
   rateLimiter: RateLimiter;
   log?: WebhookHandlerDeps["log"];
-}): SynologyWebhookAuthorization {
+}): Promise<SynologyWebhookAuthorization> {
   const invalidTokenRateLimitKey = getSynologyWebhookInvalidTokenRateLimitKey(params.req);
   // Once a source has exhausted its invalid-token budget, reject all requests in the window.
   if (params.invalidTokenRateLimiter.isLocked(invalidTokenRateLimitKey)) {
@@ -426,23 +429,25 @@ function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 401, error: "Invalid token" };
   }
 
-  const auth = authorizeUserForDm(
-    params.payload.user_id,
-    params.account.dmPolicy,
-    params.account.allowedUserIds,
-  );
-  if (!auth.allowed) {
-    if (auth.reason === "disabled") {
+  const auth = await authorizeUserForDmWithIngress({
+    accountId: params.account.accountId,
+    userId: params.payload.user_id,
+    dmPolicy: params.account.dmPolicy,
+    allowedUserIds: params.account.allowedUserIds,
+  });
+  if (!auth.senderAccess.allowed) {
+    if (auth.senderAccess.reasonCode === "dm_policy_disabled") {
       return { ok: false, statusCode: 403, error: "DMs are disabled" };
     }
-    if (auth.reason === "allowlist-empty") {
+    if (params.account.dmPolicy === "allowlist" && params.account.allowedUserIds.length === 0) {
       params.log?.warn(
         "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
       );
       return {
         ok: false,
         statusCode: 403,
-        error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+        error:
+          'Allowlist is empty. Configure allowedUserIds or use dmPolicy=open with allowedUserIds=["*"].',
       };
     }
     params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);
@@ -455,7 +460,7 @@ function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
   }
 
-  return { ok: true, commandAuthorized: auth.allowed };
+  return { ok: true, commandAuthorized: auth.senderAccess.allowed };
 }
 
 function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
@@ -480,7 +485,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
     return { ok: false };
   }
 
-  const authorized = authorizeSynologyWebhook({
+  const authorized = await authorizeSynologyWebhook({
     req: params.req,
     account: params.account,
     payload: parsed.payload,
@@ -559,9 +564,9 @@ async function processAuthorizedSynologyWebhook(params: {
       commandAuthorized: params.message.commandAuthorized,
       chatUserId: deliveryUserId,
     });
-    const timeoutPromise = new Promise<null>((_, reject) =>
-      setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000),
-    );
+    const timeoutPromise = new Promise<null>((_, reject) => {
+      setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000);
+    });
     const reply = await Promise.race([deliverPromise, timeoutPromise]);
     if (!reply) {
       return;

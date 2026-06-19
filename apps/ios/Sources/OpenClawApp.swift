@@ -1,9 +1,9 @@
-import SwiftUI
+import BackgroundTasks
 import Foundation
 import OpenClawKit
 import os
+import SwiftUI
 import UIKit
-import BackgroundTasks
 @preconcurrency import UserNotifications
 
 private struct PendingWatchPromptAction {
@@ -22,9 +22,22 @@ enum OpenClawAppModelRegistry {
 
 @MainActor
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
-    private let backgroundWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "BackgroundWake")
-    private static let wakeRefreshTaskIdentifier = "ai.openclaw.ios.bgrefresh"
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "Push")
+    private let backgroundWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "BackgroundWake")
+    private static var wakeRefreshTaskIdentifier: String {
+        "\(appBundleIdentifier).bgrefresh"
+    }
+
+    private static var appBundleIdentifier: String {
+        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleId.isEmpty
+        else {
+            return "ai.openclawfoundation.app"
+        }
+
+        return bundleId
+    }
+
     private var backgroundWakeTask: Task<Bool, Never>?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
@@ -88,16 +101,19 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.appModel ?? OpenClawAppModelRegistry.appModel
     }
 
-#if DEBUG
+    #if DEBUG
     func _test_resolvedAppModel() -> NodeAppModel? {
         self.resolvedAppModel()
     }
-#endif
+
+    func _test_wakeRefreshTaskIdentifier() -> String {
+        Self.wakeRefreshTaskIdentifier
+    }
+    #endif
 
     func application(
         _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
-    ) -> Bool
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
     {
         GatewayDiagnostics.log("app delegate: didFinishLaunching")
         if self.appModel == nil {
@@ -151,7 +167,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             guard let appModel = self.resolvedAppModel() else {
                 if ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo)
                     == ExecApprovalNotificationBridge.requestedKind,
-                   let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
+                    let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
                 {
                     self.pendingExecApprovalRequestedPushIDs.append(approvalId)
                 }
@@ -179,8 +195,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private func registerBackgroundWakeRefreshTask() {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.wakeRefreshTaskIdentifier,
-            using: nil
-        ) { [weak self] task in
+            using: nil)
+        { [weak self] task in
             guard let refreshTask = task as? BGAppRefreshTask else {
                 task.setTaskCompleted(success: false)
                 return
@@ -196,17 +212,15 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             try BGTaskScheduler.shared.submit(request)
             let scheduledLogMessage =
                 "Scheduled background wake refresh reason=\(reason) "
-                + "delaySeconds=\(max(60, delay))"
+                    + "delaySeconds=\(max(60, delay))"
             self.backgroundWakeLogger.info(
-                "\(scheduledLogMessage, privacy: .public)"
-            )
+                "\(scheduledLogMessage, privacy: .public)")
         } catch {
             let failedLogMessage =
                 "Failed scheduling background wake refresh reason=\(reason) "
-                + "error=\(error.localizedDescription)"
+                    + "error=\(error.localizedDescription)"
             self.backgroundWakeLogger.error(
-                "\(failedLogMessage, privacy: .public)"
-            )
+                "\(failedLogMessage, privacy: .public)")
         }
     }
 
@@ -475,14 +489,13 @@ enum WatchPromptNotificationBridge {
 
     private static func categoryActions(_ actions: [OpenClawWatchAction]) -> [UNNotificationAction] {
         actions.enumerated().map { index, action in
-            let identifier: String
-            switch index {
+            let identifier: String = switch index {
             case 0:
-                identifier = self.actionPrimaryIdentifier
+                self.actionPrimaryIdentifier
             case 1:
-                identifier = self.actionSecondaryIdentifier
+                self.actionSecondaryIdentifier
             default:
-                identifier = "\(self.actionIdentifierPrefix)\(index)"
+                "\(self.actionIdentifierPrefix)\(index)"
             }
             return UNNotificationAction(
                 identifier: identifier,
@@ -494,12 +507,12 @@ enum WatchPromptNotificationBridge {
     private static func notificationActionOptions(style: String?) -> UNNotificationActionOptions {
         switch style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "destructive":
-            return [.destructive]
+            [.destructive]
         case "foreground":
             // For mirrored watch actions, keep handling in background when possible.
-            return []
+            []
         default:
-            return []
+            []
         }
     }
 
@@ -510,7 +523,7 @@ enum WatchPromptNotificationBridge {
         case .authorized, .provisional, .ephemeral:
             return true
         case .notDetermined:
-            let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+            let granted = await (try? center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             if !granted { return false }
             let updatedStatus = await self.notificationAuthorizationStatus(center: center)
             if self.isAuthorizationStatusAllowed(updatedStatus) {
@@ -540,8 +553,8 @@ enum WatchPromptNotificationBridge {
     }
 
     private static func notificationAuthorizationStatus(
-        center: UNUserNotificationCenter
-    ) async -> UNAuthorizationStatus {
+        center: UNUserNotificationCenter) async -> UNAuthorizationStatus
+    {
         await withCheckedContinuation { continuation in
             center.getNotificationSettings { settings in
                 continuation.resume(returning: settings.authorizationStatus)
@@ -565,8 +578,8 @@ enum WatchPromptNotificationBridge {
 
     private static func addNotificationRequest(
         _ request: UNNotificationRequest,
-        center: UNUserNotificationCenter
-    ) async throws {
+        center: UNUserNotificationCenter) async throws
+    {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             center.add(request) { error in
                 ThrowingContinuationSupport.resumeVoid(continuation, error: error)
@@ -606,6 +619,8 @@ extension NodeAppModel {
 struct OpenClawApp: App {
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
+        AppAppearancePreference.system.rawValue
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -613,33 +628,89 @@ struct OpenClawApp: App {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
+        #if DEBUG
+        if Self.screenshotModeEnabled {
+            UIView.setAnimationsEnabled(false)
+            UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
+            UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
+            UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
+            appModel.enterScreenshotFixtureMode()
+        }
+        #endif
         OpenClawAppModelRegistry.appModel = appModel
         _appModel = State(initialValue: appModel)
-        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+        _gatewayController = State(
+            initialValue: GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: !Self.screenshotModeEnabled))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootCanvas()
+            RootTabs()
+                .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
                     self.appDelegate.appModel = self.appModel
+                    self.applyAppearancePreference()
+                    self.gatewayController.setScenePhase(self.scenePhase)
                 }
                 .onOpenURL { url in
-                    Task { await self.appModel.handleDeepLink(url: url) }
+                    Task { await self.handleOpenURL(url) }
+                }
+                .onChange(of: self.appearancePreferenceRaw) { _, _ in
+                    self.applyAppearancePreference()
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
+                    self.applyAppearancePreference()
                 }
         }
+    }
+
+    private var appearancePreference: AppAppearancePreference {
+        AppAppearancePreference.launchArgumentPreference
+            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
+            ?? .system
+    }
+
+    private static var screenshotModeEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")
+        #else
+        false
+        #endif
+    }
+
+    @MainActor
+    private func applyAppearancePreference() {
+        let style = self.appearancePreference.userInterfaceStyle
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { window in
+                window.overrideUserInterfaceStyle = style
+            }
     }
 }
 
 extension OpenClawApp {
+    @MainActor
+    private func handleOpenURL(_ url: URL) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case .agent, .dashboard:
+            await self.appModel.handleDeepLink(url: url)
+        case let .gateway(link):
+            self.appModel.stageGatewaySetupLink(link)
+        }
+    }
+
     private static func installUncaughtExceptionLogger() {
         NSLog("OpenClaw: installing uncaught exception handler")
         NSSetUncaughtExceptionHandler { exception in

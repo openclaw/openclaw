@@ -1,8 +1,12 @@
+/**
+ * Tests for text-to-speech gateway methods and provider error envelopes.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../protocol/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(() => ({})),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -14,7 +18,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig as typeof import("../../config/config.js").loadConfig,
+  getRuntimeConfig:
+    mocks.getRuntimeConfig as typeof import("../../config/config.js").getRuntimeConfig,
 }));
 
 vi.mock("../../tts/provider-registry.js", () => ({
@@ -44,8 +49,8 @@ vi.mock("../../tts/tts.js", () => ({
 
 describe("ttsHandlers", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockReset();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReset();
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveExplicitTtsOverrides.mockReset();
     mocks.resolveExplicitTtsOverrides.mockReturnValue({});
     mocks.textToSpeech.mockReset();
@@ -72,16 +77,13 @@ describe("ttsHandlers", () => {
         provider: "bad",
       },
       respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Error: Unknown TTS provider "bad".',
-      }),
-    );
+    expectGatewayErrorResponse(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: 'Error: Unknown TTS provider "bad".',
+    });
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
   });
 });

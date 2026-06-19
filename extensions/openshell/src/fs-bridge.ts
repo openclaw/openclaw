@@ -1,22 +1,24 @@
-import fs from "node:fs";
+// Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { writeFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
   writable: boolean;
-  source: "workspace" | "agent";
+  source: "workspace" | "agent" | "protectedSkill";
 };
+
+const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
@@ -52,15 +54,28 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    const handle = await openPinnedReadableFile({
-      absolutePath: hostPath,
-      rootPath: target.mountHostRoot,
-      containerPath: target.containerPath,
-    });
+    let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
     try {
-      return (await handle.readFile()) as Buffer;
-    } finally {
-      await handle.close();
+      await assertLocalPathSafety({
+        target,
+        root: target.mountHostRoot,
+        allowMissingLeaf: false,
+        allowFinalSymlinkForUnlink: false,
+      });
+      const root = await fsRoot(target.mountHostRoot);
+      opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
+        hardlinks: "reject",
+      });
+      try {
+        return (await opened.handle.readFile()) as Buffer;
+      } finally {
+        await opened.handle.close();
+      }
+    } catch (err) {
+      throw new Error(
+        `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
+        { cause: err },
+      );
     }
   }
 
@@ -84,10 +99,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    await writeFileWithinRoot({
-      rootDir: target.mountHostRoot,
-      relativePath: path.relative(target.mountHostRoot, hostPath),
-      data: buffer,
+    const root = await fsRoot(target.mountHostRoot);
+    await root.write(path.relative(target.mountHostRoot, hostPath), buffer, {
       mkdir: params.mkdir,
     });
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
@@ -103,12 +116,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
     await fsPromises.mkdir(hostPath, { recursive: true });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$1"',
-      args: [target.containerPath],
-      signal: params.signal,
-    });
   }
 
   async remove(params: {
@@ -127,17 +136,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: params.force !== false,
       allowFinalSymlinkForUnlink: true,
     });
+    await this.backend.removeRemotePath(target.containerPath, {
+      recursive: params.recursive ?? false,
+      signal: params.signal,
+      ignoreMissing: params.force !== false,
+    });
     await fsPromises.rm(hostPath, {
       recursive: params.recursive ?? false,
       force: params.force !== false,
-    });
-    await this.backend.runRemoteShellScript({
-      script: params.recursive
-        ? 'rm -rf -- "$1"'
-        : 'if [ -d "$1" ] && [ ! -L "$1" ]; then rmdir -- "$1"; elif [ -e "$1" ] || [ -L "$1" ]; then rm -f -- "$1"; fi',
-      args: [target.containerPath],
-      signal: params.signal,
-      allowFailure: params.force !== false,
     });
   }
 
@@ -162,13 +168,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
     await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
     await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$(dirname -- "$2")" && mv -- "$1" "$2"',
-      args: [from.containerPath, to.containerPath],
-      signal: params.signal,
-    });
   }
 
   async stat(params: {
@@ -219,7 +221,29 @@ class OpenShellFsBridge implements SandboxFsBridge {
       "/",
     );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
+    const skillsRoot = this.sandbox.skillsWorkspaceDir
+      ? path.resolve(this.sandbox.skillsWorkspaceDir, "skills")
+      : undefined;
+    const skillsContainerRoot = path.posix.join(
+      workspaceContainerRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
+    const workspaceSkillsShadowRoot = path.resolve(
+      workspaceRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
     const input = params.filePath.trim();
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillTarget = resolveProtectedSkillTarget({
+        input,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillTarget) {
+        return protectedSkillTarget;
+      }
+    }
 
     if (input.startsWith(`${workspaceContainerRoot}/`) || input === workspaceContainerRoot) {
       const relative = path.posix.relative(workspaceContainerRoot, input) || "";
@@ -259,6 +283,18 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
     const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
 
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillShadowTarget = resolveProtectedSkillShadowTarget({
+        hostPath,
+        workspaceSkillsShadowRoot,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillShadowTarget) {
+        return protectedSkillShadowTarget;
+      }
+    }
+
     if (isPathInside(workspaceRoot, hostPath)) {
       const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
       return {
@@ -270,6 +306,22 @@ class OpenShellFsBridge implements SandboxFsBridge {
         mountHostRoot: workspaceRoot,
         writable: this.sandbox.workspaceAccess === "rw",
         source: "workspace",
+      };
+    }
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw" && isPathInside(skillsRoot, hostPath)) {
+      const relative = path.relative(skillsRoot, hostPath).split(path.sep).join(path.posix.sep);
+      return {
+        hostPath,
+        relativePath: relative
+          ? path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS, relative)
+          : path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS),
+        containerPath: relative
+          ? path.posix.join(skillsContainerRoot, relative)
+          : skillsContainerRoot,
+        mountHostRoot: skillsRoot,
+        writable: false,
+        source: "protectedSkill",
       };
     }
 
@@ -291,9 +343,70 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }
 }
 
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+function resolveProtectedSkillTarget(params: {
+  input: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
+  const normalizedInput = path.posix.normalize(params.input.replace(/\\/g, "/"));
+  const isAbsoluteContainer =
+    normalizedInput === params.skillsContainerRoot ||
+    normalizedInput.startsWith(`${params.skillsContainerRoot}/`);
+  const isRelativeContainer =
+    normalizedInput === relativeRoot || normalizedInput.startsWith(`${relativeRoot}/`);
+  if (!isAbsoluteContainer && !isRelativeContainer) {
+    return null;
+  }
+
+  const relative = isAbsoluteContainer
+    ? path.posix.relative(params.skillsContainerRoot, normalizedInput)
+    : path.posix.relative(relativeRoot, normalizedInput);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
+}
+
+function resolveProtectedSkillShadowTarget(params: {
+  hostPath: string;
+  workspaceSkillsShadowRoot: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  if (!isPathInside(params.workspaceSkillsShadowRoot, params.hostPath)) {
+    return null;
+  }
+
+  const relative = path
+    .relative(params.workspaceSkillsShadowRoot, params.hostPath)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
 }
 
 async function assertLocalPathSafety(params: {
@@ -356,201 +469,4 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
     missing.unshift(path.basename(cursor));
     cursor = parent;
   }
-}
-
-async function openPinnedReadableFile(params: {
-  absolutePath: string;
-  rootPath: string;
-  containerPath: string;
-}): Promise<FileHandle> {
-  // The literal root is what `resolveTarget` joins caller-provided relative
-  // paths against, so pre-open containment must be checked in literal form.
-  // The canonical root is derived separately and used for the post-open
-  // path checks (fd-path readlink and realpath cross-check), so a workspace
-  // that is itself configured as a symlink still works.
-  const literalRoot = path.resolve(params.rootPath);
-  const canonicalRoot = await fsPromises.realpath(literalRoot).catch(() => literalRoot);
-  const literalPath = path.resolve(params.absolutePath);
-  // Cheap string-prefix check on the caller-provided absolute path; no
-  // filesystem state is read here, so there is no TOCTOU window. Deeper
-  // checks run after the fd is pinned.
-  if (!isPathInside(literalRoot, literalPath)) {
-    throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`);
-  }
-  const { flags: openReadFlags, supportsNoFollow } = resolveOpenReadFlags();
-  // Open first so every later check runs against an fd that is already pinned
-  // to one specific inode. `O_NOFOLLOW` prevents the final path component from
-  // being a symlink; the ancestor walk below handles parent-directory symlink
-  // swaps on platforms where fd-path readlink is not available.
-  const handle = await fsPromises.open(literalPath, openReadFlags);
-  try {
-    const openedStat = await handle.stat();
-    if (!openedStat.isFile()) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
-    }
-    if (openedStat.nlink > 1) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
-    }
-    const resolvedPath = await resolveOpenedReadablePath(handle.fd);
-    if (resolvedPath !== null) {
-      // Primary guarantee on Linux: the fd's resolved path is derived from the
-      // kernel, so a parent-directory swap cannot make this return a stale path.
-      if (!isPathInside(canonicalRoot, resolvedPath)) {
-        throw new Error(
-          `Sandbox boundary checks failed; cannot read files: ${params.containerPath}`,
-        );
-      }
-      return handle;
-    }
-    // Fallback for platforms where fd-path readlink is unavailable. On macOS,
-    // `/dev/fd/N` is a character device so readlink returns EINVAL; on Windows
-    // there is no `/proc` equivalent. With no kernel-backed path readback we
-    // must prove the pinned fd is in-root without trusting a separate
-    // `realpath` + `lstat` pair that would race between the two awaits. Walk
-    // every ancestor between `literalRoot` and `literalPath` — the actual
-    // on-disk chain — and reject if any ancestor is a symlink, then use a
-    // single `stat` call to confirm that the path still resolves to the
-    // same file the fd has pinned. `fs.promises.stat` resolves the path and
-    // returns the final file's identity in one syscall, so there is no
-    // between-await window for an attacker to race.
-    await assertAncestorChainHasNoSymlinks(literalRoot, literalPath, params.containerPath, {
-      // On platforms where `O_NOFOLLOW` is unavailable (Windows), the open
-      // call would have transparently followed a final-component symlink, so
-      // the ancestor walk has to lstat the leaf as well.
-      includeLeaf: !supportsNoFollow,
-    });
-    const currentResolvedStat = await fsPromises.stat(literalPath);
-    if (!sameFileIdentity(currentResolvedStat, openedStat)) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
-    }
-    // Belt-and-suspenders: re-fstat the pinned fd after the identity check and
-    // confirm the file type and link count are still trustworthy. A hardlink
-    // that appeared between the initial fstat and here is not exploitable for
-    // the read (the fd is already pinned to the original inode), but failing
-    // closed here keeps the guarantee simple: the bytes we return always come
-    // from a file that was a single-linked regular file at verification time.
-    const postCheckStat = await handle.stat();
-    if (!postCheckStat.isFile() || postCheckStat.nlink > 1) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${params.containerPath}`);
-    }
-    return handle;
-  } catch (error) {
-    await handle.close();
-    throw error;
-  }
-}
-
-// Walks each directory between canonicalRoot (exclusive) and
-// targetAbsolutePath, `lstat`'ing each segment. Rejects if any intermediate
-// segment is a symlink or a non-directory. By default the final component is
-// not walked because `O_NOFOLLOW` already protects it on the open call. Pass
-// `includeLeaf: true` on platforms where `O_NOFOLLOW` is unavailable
-// (Windows) so a symlinked leaf cannot be followed silently by `open`.
-async function assertAncestorChainHasNoSymlinks(
-  canonicalRoot: string,
-  targetAbsolutePath: string,
-  containerPath: string,
-  options: { includeLeaf?: boolean } = {},
-): Promise<void> {
-  const relative = path.relative(canonicalRoot, targetAbsolutePath);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return;
-  }
-  const segments = relative.split(path.sep).filter((segment) => segment.length > 0);
-  const lastIndex = options.includeLeaf ? segments.length : segments.length - 1;
-  let cursor = canonicalRoot;
-  for (let i = 0; i < lastIndex; i += 1) {
-    cursor = path.join(cursor, segments[i]);
-    const stat = await fsPromises.lstat(cursor).catch(() => null);
-    if (!stat) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
-    }
-    const isLeaf = i === segments.length - 1;
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
-    }
-    if (!isLeaf && !stat.isDirectory()) {
-      throw new Error(`Sandbox boundary checks failed; cannot read files: ${containerPath}`);
-    }
-  }
-}
-
-type ReadOpenFlagsResolution = { flags: number; supportsNoFollow: boolean };
-
-let readOpenFlagsResolverForTest: (() => ReadOpenFlagsResolution) | undefined;
-
-function resolveOpenReadFlags(): ReadOpenFlagsResolution {
-  if (readOpenFlagsResolverForTest) {
-    return readOpenFlagsResolverForTest();
-  }
-  const closeOnExec = (fs.constants as Record<string, number>).O_CLOEXEC ?? 0;
-  const supportsNoFollow = typeof fs.constants.O_NOFOLLOW === "number";
-  const noFollow = supportsNoFollow ? fs.constants.O_NOFOLLOW : 0;
-  return {
-    flags: fs.constants.O_RDONLY | noFollow | closeOnExec,
-    supportsNoFollow,
-  };
-}
-
-/**
- * Test-only seam for forcing the open-flag/`O_NOFOLLOW` resolution. Used to
- * exercise the Windows-style fallback (no `O_NOFOLLOW`, ancestor walk
- * includes the leaf) on platforms where `fs.constants.O_NOFOLLOW` is a
- * non-configurable native data property and cannot be patched directly.
- *
- * @internal
- */
-export function setReadOpenFlagsResolverForTest(
-  resolver: (() => ReadOpenFlagsResolution) | undefined,
-): void {
-  readOpenFlagsResolverForTest = resolver;
-}
-
-// Resolves the absolute path associated with an open fd via the kernel-backed
-// `/proc/self/fd/<fd>` (Linux) or `/dev/fd/<fd>` (some BSDs). Returns null
-// when no fd-path endpoint is available. Note: on macOS `/dev/fd/N` is a
-// character device rather than a symlink, so `readlink` fails with EINVAL
-// there and the caller must use the ancestor-walk fallback instead.
-async function resolveOpenedReadablePath(fd: number): Promise<string | null> {
-  for (const fdPath of [`/proc/self/fd/${fd}`, `/dev/fd/${fd}`]) {
-    try {
-      const openedPath = await fsPromises.readlink(fdPath);
-      return normalizeOpenedReadablePath(openedPath);
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function normalizeOpenedReadablePath(openedPath: string): string {
-  const deletedSuffix = " (deleted)";
-  const withoutDeletedSuffix = openedPath.endsWith(deletedSuffix)
-    ? openedPath.slice(0, -deletedSuffix.length)
-    : openedPath;
-  return path.resolve(withoutDeletedSuffix);
-}
-
-// File identity comparison with win32-aware `dev=0` handling, matching the
-// shared `src/infra/file-identity.ts` contract. Kept local because extension
-// production code is not allowed to reach into core `src/**` by relative
-// import, and this helper is not yet part of the `openclaw/plugin-sdk/*`
-// public surface. Stats here come from `FileHandle.stat()` / `fs.promises.stat()`
-// with no `{ bigint: true }` option, so all fields are numbers.
-function sameFileIdentity(
-  left: { dev: number; ino: number },
-  right: { dev: number; ino: number },
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (left.ino !== right.ino) {
-    return false;
-  }
-  if (left.dev === right.dev) {
-    return true;
-  }
-  // On Windows, path-based stat can report `dev=0` while fd-based stat reports
-  // a real volume serial. Treat either side `dev=0` as "unknown device"
-  // rather than a mismatch so legitimate Windows fallback reads are not
-  // rejected.
-  return platform === "win32" && (left.dev === 0 || right.dev === 0);
 }

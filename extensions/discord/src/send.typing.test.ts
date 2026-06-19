@@ -1,6 +1,7 @@
-import type { RequestClient } from "@buape/carbon";
+// Discord tests cover send.typing plugin behavior.
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RequestClient } from "./internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
 
 const resolveDiscordRestMock = vi.hoisted(() => vi.fn());

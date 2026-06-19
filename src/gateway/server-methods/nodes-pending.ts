@@ -1,15 +1,17 @@
+// Node pending methods queue and drain work for paired nodes that may reconnect
+// later, with optional APNs wake nudges.
+import {
+  ErrorCodes,
+  errorShape,
+  validateNodePendingDrainParams,
+  validateNodePendingEnqueueParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   drainNodePendingWork,
   enqueueNodePendingWork,
   type NodePendingWorkPriority,
   type NodePendingWorkType,
 } from "../node-pending-work.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validateNodePendingDrainParams,
-  validateNodePendingEnqueueParams,
-} from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import {
   maybeSendNodeWakeNudge,
@@ -28,6 +30,7 @@ function resolveClientNodeId(
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client }) => {
     if (!validateNodePendingDrainParams(params)) {
@@ -86,7 +89,11 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         context.logGateway.info(
           `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,
         );
-        const wake = await maybeWakeNodeWithApns(p.nodeId, { wakeReason: "node.pending" });
+        const cfg = context.getRuntimeConfig();
+        const wake = await maybeWakeNodeWithApns(p.nodeId, {
+          wakeReason: "node.pending",
+          cfg,
+        });
         context.logGateway.info(
           `node pending wake stage=wake1 node=${p.nodeId} req=${wakeReqId} ` +
             `available=${wake.available} throttled=${wake.throttled} ` +
@@ -95,6 +102,8 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         );
         wakeTriggered = wake.available;
         if (wake.available) {
+          // Give the first wake a short reconnect window before forcing a
+          // second wake; this keeps normal APNs delivery cheap and quiet.
           const reconnected = await waitForNodeReconnect({
             nodeId: p.nodeId,
             context,
@@ -106,9 +115,12 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           );
         }
         if (!context.nodeRegistry.get(p.nodeId) && wake.available) {
+          // A forced retry is only useful after the first wake was deliverable
+          // but the node still has not reattached to the Gateway.
           const retryWake = await maybeWakeNodeWithApns(p.nodeId, {
             force: true,
             wakeReason: "node.pending",
+            cfg,
           });
           context.logGateway.info(
             `node pending wake stage=wake2 node=${p.nodeId} req=${wakeReqId} force=true ` +
@@ -129,7 +141,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           }
         }
         if (!context.nodeRegistry.get(p.nodeId)) {
-          const nudge = await maybeSendNodeWakeNudge(p.nodeId);
+          const nudge = await maybeSendNodeWakeNudge(p.nodeId, { cfg });
           context.logGateway.info(
             `node pending wake nudge node=${p.nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
               `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +

@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -56,6 +57,9 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "matrix",
     description: "Run the Docker-backed Matrix live QA lane against a disposable homeserver",
     outputDirHelp: "Matrix QA artifact directory",
+    profileHelp:
+      "Matrix QA profile: all, fast, transport, media, e2ee-smoke, e2ee-deep, or e2ee-cli (default: all)",
+    failFastHelp: "Stop after the first failed Matrix check or scenario",
     scenarioHelp: "Run only the named Matrix QA scenario (repeatable)",
     sutAccountHelp: "Temporary Matrix account id inside the QA gateway config",
     run: runQaMatrix,

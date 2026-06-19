@@ -1,3 +1,4 @@
+// Matrix tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MatrixConfigSchema } from "./config-schema.js";
 
@@ -43,6 +44,15 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts the Matrix name matching compatibility flag", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dangerouslyAllowNameMatching: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts room-level account assignments", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
@@ -84,6 +94,34 @@ describe("MatrixConfigSchema SecretInput", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "token",
       streaming: "quiet",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts scalar progress Matrix streaming mode", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: "progress",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts Matrix streaming preview tool progress config", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Shelling",
+          maxLines: 4,
+          toolProgress: false,
+        },
+        preview: {
+          toolProgress: true,
+        },
+      },
     });
     expect(result.success).toBe(true);
   });
