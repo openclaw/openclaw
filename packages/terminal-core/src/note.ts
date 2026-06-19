@@ -207,8 +207,13 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
-    output: createNoteOutput(columns),
+  const wrapped = wrapNoteMessage(message, { columns });
+  // Use a wide virtual stream so clack's internal wrap (which runs after our
+  // format callback) does not re-break copy-sensitive tokens that
+  // wrapNoteMessage intentionally kept intact.
+  const wideOutput = createNoteOutput(Math.max(columns, visibleWidth(wrapped) + 12));
+  clackNote(wrapped, stylePromptTitle(title), {
+    output: wideOutput,
     format: (line) => line,
   });
 }
