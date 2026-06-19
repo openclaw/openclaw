@@ -128,25 +128,32 @@ describe("subscribeEmbeddedAgentSession", () => {
       runId: "run",
       onPartialReply,
     });
+    const receiptText = `I sent the SMS. Status: accepted/queued. Message ID: 6655442331193344`;
 
     emitAssistantTextDelta({
       emit,
-      delta: `Sent to Jiva. To: +13522815065
-From: +14155201316
-Status: accepted/queued
-Message ID: 6655442331193344`,
+      delta: "I sent the SMS.",
+    });
+    emitAssistantTextEnd({
+      emit,
+      content: receiptText,
     });
     await Promise.resolve();
 
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    const payload = onPartialReply.mock.calls[0]?.[0] as PartialReplyPayload | undefined;
-    expect(payload).toMatchObject({
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    const provisional = onPartialReply.mock.calls[0]?.[0] as PartialReplyPayload | undefined;
+    expect(provisional).toMatchObject({
+      text: "I sent the SMS.",
+      delta: "I sent the SMS.",
+    });
+    const finalPayload = onPartialReply.mock.calls[1]?.[0] as PartialReplyPayload | undefined;
+    expect(finalPayload).toMatchObject({
       text: "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
       delta:
         "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
       replace: true,
     });
-    expect(payload?.text).not.toContain("Message ID: 6655442331193344");
+    expect(finalPayload?.text).not.toContain("Message ID: 6655442331193344");
   });
 
   it("replaces unsupported SMS receipt claims before streamed block replies", async () => {
@@ -243,6 +250,74 @@ Message ID: 6655442331193344`,
       onBlockReply,
       subscription,
       text: deliveryText,
+    });
+  });
+
+  it("does not replace verified SMS receipt claims that stream across partial chunks", async () => {
+    const onPartialReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onPartialReply,
+    });
+    const deliveryText = "I sent the SMS. Status: accepted/queued. Message ID: SM_split_proof";
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "redacted proof body",
+      },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "{}",
+          },
+        ],
+        details: {
+          channel: "sms",
+          to: "+15551234567",
+          result: {
+            channel: "sms",
+            messageId: "SM_split_proof",
+            toJid: "+15551234567",
+            status: "queued",
+          },
+        },
+      },
+    });
+
+    emitAssistantTextDelta({
+      emit,
+      delta: "I sent the SMS.",
+    });
+    emitAssistantTextEnd({
+      emit,
+      content: deliveryText,
+    });
+    await Promise.resolve();
+
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "I sent the SMS.",
+      delta: "I sent the SMS.",
+    });
+    expect(onPartialReply.mock.calls[1]?.[0]).toMatchObject({
+      text: deliveryText,
+      delta: " Status: accepted/queued. Message ID: SM_split_proof",
+    });
+    expect(onPartialReply.mock.calls[1]?.[0]).not.toMatchObject({
+      text: expect.stringContaining("cannot verify"),
     });
   });
 

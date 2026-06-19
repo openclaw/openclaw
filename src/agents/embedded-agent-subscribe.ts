@@ -271,7 +271,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const guardAssistantStreamData = (
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
+    options?: { enabled?: boolean },
   ): EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"] => {
+    if (options?.enabled !== true) {
+      return data;
+    }
     const receiptGuard = guardMessageDeliveryReceiptText({
       text: data.text,
       evidence: state.messageDeliveryEvidence,
@@ -289,7 +293,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const emitAssistantStreamDataSafely = (
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
-    const data = guardAssistantStreamData(delivery.data);
+    const data = guardAssistantStreamData(delivery.data, {
+      enabled: delivery.guardMessageDeliveryReceipt,
+    });
     emitAgentEvent({
       runId: params.runId,
       stream: "assistant",
@@ -305,9 +311,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
   const emitAssistantStreamData = (
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
-    options?: { emitPartialReply?: boolean },
+    options?: { emitPartialReply?: boolean; guardMessageDeliveryReceipt?: boolean },
   ) => {
-    const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
+    const delivery = {
+      data,
+      emitPartialReply: options?.emitPartialReply === true,
+      guardMessageDeliveryReceipt: options?.guardMessageDeliveryReceipt === true,
+    };
     if (state.deferBlockReplyDelivery) {
       state.deferredAssistantEvents.push(delivery);
       return;

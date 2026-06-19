@@ -888,7 +888,10 @@ export function handleMessageUpdate(
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
+      ctx.emitAssistantStreamData(data, {
+        emitPartialReply: true,
+        guardMessageDeliveryReceipt: evtType === "text_end",
+      });
       ctx.state.emittedAssistantUpdate = true;
     }
   } else if (shouldPersistRawStreamText) {
@@ -1038,7 +1041,7 @@ export function handleMessageEnd(
       mediaUrls,
       phase: assistantPhase,
     });
-    ctx.emitAssistantStreamData(data);
+    ctx.emitAssistantStreamData(data, { guardMessageDeliveryReceipt: true });
     ctx.state.emittedAssistantUpdate = true;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
