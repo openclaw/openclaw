@@ -41,16 +41,26 @@ export function resolveMaterializedSandboxSkillsWorkspaceDir(rootDir: string): s
   return path.join(rootDir, ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS);
 }
 
-/** Returns true when a skill mount source exists inside the canonical mount root. */
+/** Returns true when a skill mount source exists inside the canonical mount root.
+ *  When the host directory does not exist yet (first agent creation), it is
+ *  created so the read-only mount is not silently skipped. (#94425) */
 export function isExistingWorkspaceSkillMountSource(params: {
   rootDir: string;
   hostPath: string;
 }): boolean {
+  let stat: fs.Stats | undefined;
   try {
-    if (!fs.lstatSync(params.hostPath).isDirectory()) {
+    stat = fs.lstatSync(params.hostPath);
+  } catch {
+    // Directory does not exist yet — create it so the read-only mount applies.
+    try {
+      fs.mkdirSync(params.hostPath, { recursive: true });
+      return true;
+    } catch {
       return false;
     }
-  } catch {
+  }
+  if (!stat.isDirectory()) {
     return false;
   }
 
