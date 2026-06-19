@@ -26,7 +26,7 @@ function parseJsonCommand(command, args, options = {}) {
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      const retryable = /HTTP 5\d\d|Server Error|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u.test(message);
+      const retryable = isRetryableGhJsonErrorMessage(message);
       if (!retryable || attempt === GH_JSON_RETRY_DELAYS_MS.length) {
         throw error;
       }
@@ -34,6 +34,12 @@ function parseJsonCommand(command, args, options = {}) {
     }
   }
   throw lastError;
+}
+
+export function isRetryableGhJsonErrorMessage(message) {
+  return /HTTP 5\d\d|HTTP 429|Server Error|secondary rate limit|abuse detection|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu.test(
+    message,
+  );
 }
 
 function normalizeRunJob(job) {
