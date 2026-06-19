@@ -158,6 +158,7 @@ const MAX_STDOUT_DIAGNOSTIC_LINE_BYTES = readPositiveIntegerEnv(
   "OPENCLAW_QA_OTEL_MAX_STDOUT_DIAGNOSTIC_LINE_BYTES",
   512 * 1024,
 );
+const GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES = 64 * 1024;
 
 function readPositiveIntegerEnv(
   name: string,
@@ -1075,8 +1076,10 @@ async function appendGatewayStdoutArtifactLogs(params: {
     "gateway.stdout.log",
   );
   try {
-    params.capture.append(
-      await readUtf8FileTail(gatewayStdoutPath, MAX_STDOUT_DIAGNOSTIC_LINE_BYTES),
+    await appendUtf8FileToStdoutDiagnosticCapture(
+      gatewayStdoutPath,
+      params.capture,
+      GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES,
     );
     params.capture.flush();
   } catch (error) {
@@ -1086,22 +1089,21 @@ async function appendGatewayStdoutArtifactLogs(params: {
   }
 }
 
-async function readUtf8FileTail(filePath: string, maxBytes: number): Promise<string> {
+async function appendUtf8FileToStdoutDiagnosticCapture(
+  filePath: string,
+  capture: ReturnType<typeof createStdoutDiagnosticLogCapture>,
+  chunkBytes = GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES,
+): Promise<void> {
   const file = await open(filePath, "r");
   try {
-    const stats = await file.stat();
-    const bytesToRead = Math.min(stats.size, Math.max(1, maxBytes));
-    const buffer = Buffer.alloc(bytesToRead);
-    const start = stats.size - bytesToRead;
-    let offset = 0;
-    while (offset < bytesToRead) {
-      const { bytesRead } = await file.read(buffer, offset, bytesToRead - offset, start + offset);
+    const buffer = Buffer.alloc(Math.max(1, chunkBytes));
+    for (;;) {
+      const { bytesRead } = await file.read(buffer, 0, buffer.length);
       if (bytesRead === 0) {
         break;
       }
-      offset += bytesRead;
+      capture.append(buffer.subarray(0, bytesRead));
     }
-    return buffer.subarray(0, offset).toString("utf8");
   } finally {
     await file.close();
   }
@@ -1909,12 +1911,13 @@ export const testing = {
   appendCapturedBodyText,
   assertSmoke,
   createBoundedTextAccumulator,
+  createStdoutDiagnosticLogCapture,
   decodeRequestBody,
   parseArgs,
   parseStdoutDiagnosticLogLine,
   readPositiveIntegerEnv,
   readRequestBody,
-  readUtf8FileTail,
+  appendUtf8FileToStdoutDiagnosticCapture,
   startLocalOtlpReceiver,
   startDockerOtelCollector,
   terminateChildTree,
