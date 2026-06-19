@@ -389,11 +389,16 @@ describe("registerSlackMessageEvents", () => {
     expect(handleSlackMessage).not.toHaveBeenCalled();
   });
 
-  it("routes app_mention events from channels to the message handler", async () => {
+  it("routes app_mention events from channels to the message handler with INFO receipt log", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "app_mention",
       overrides: { dmPolicy: "open" },
-      event: makeAppMentionEvent({ channel: "C123", channelType: "channel", ts: "123.789" }),
+      event: makeAppMentionEvent({
+        channel: "C123",
+        channelType: "channel",
+        ts: "123.789",
+        text: "hello bot",
+      }),
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);

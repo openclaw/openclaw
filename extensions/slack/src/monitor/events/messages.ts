@@ -1,7 +1,12 @@
 // Slack plugin module implements messages behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createSubsystemLogger,
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString as asString,
@@ -14,6 +19,21 @@ import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+
+const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
+
+function formatSlackInboundLogLine(params: {
+  source: string;
+  channel: string;
+  user?: string;
+  body?: string;
+  workspaceId?: string;
+}): string {
+  const userLabel = params.user ? ` user=${params.user}` : "";
+  const wsLabel = params.workspaceId ? ` slack:${params.workspaceId}` : "";
+  const bodyChars = params.body?.length ?? 0;
+  return `Inbound ${params.source}${wsLabel}:channel:${params.channel}${userLabel} (channel, ${bodyChars} chars)`;
+}
 
 type SlackAssistantMessageRecord = {
   bot_id?: unknown;
@@ -216,6 +236,16 @@ export function registerSlackMessageEvents(params: {
       if (channelType === "im" || channelType === "mpim") {
         return;
       }
+
+      slackInboundLog.info(
+        formatSlackInboundLogLine({
+          source: "app_mention",
+          channel: mention.channel,
+          user: mention.user,
+          body: mention.text,
+          workspaceId: ctx.teamId,
+        }),
+      );
 
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
