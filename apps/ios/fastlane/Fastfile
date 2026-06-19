@@ -293,6 +293,8 @@ def capture_watch_screenshot
   Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
   FileUtils.rm_rf(derived_data_path)
 
+  # Single-target watch apps only expose generic simulator build destinations in Xcode.
+  # Keep the selected UDID for install/launch/screenshot below.
   sh(
     xcodebuild_shell_join([
       "xcodebuild",
@@ -303,7 +305,7 @@ def capture_watch_screenshot
       "-configuration",
       "Debug",
       "-destination",
-      "platform=watchOS Simulator,id=#{udid}",
+      "generic/platform=watchOS Simulator",
       "-derivedDataPath",
       derived_data_path,
       "build",
