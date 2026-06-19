@@ -28,6 +28,8 @@ export {
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+// Channel plugins use these helpers before dispatch starts so transports can
+// suppress preview-only UI when visible replies must come from the message tool.
 export { resolveHarnessSourceVisibleRepliesDefault } from "../auto-reply/reply/harness-source-visible-replies.js";
 export type { HarnessSourceVisibleRepliesDefault } from "../auto-reply/reply/harness-source-visible-replies.js";
 export { resolveSourceReplyMessageToolAvailable } from "../auto-reply/reply/source-reply-message-tool-availability.js";

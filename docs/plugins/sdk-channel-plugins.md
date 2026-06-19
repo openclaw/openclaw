@@ -202,6 +202,12 @@ Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
 `openclaw/plugin-sdk/reply-chunking` when you do not need the broader umbrella
 surface.
 
+Use `openclaw/plugin-sdk/reply-runtime` source-visible reply policy helpers
+when a channel must decide whether to start transport previews before handing
+the turn to core dispatch. For example, a transport with transient draft or
+reasoning bubbles can suppress those previews when the resolved source reply
+mode is message-tool-only, while durable message-tool sends remain visible.
+
 For setup specifically:
 
 - `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
