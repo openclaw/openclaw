@@ -2163,6 +2163,10 @@ async function agentCommandInternal(
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       }
 
+      const payloads = result.payloads ?? [];
+      const hasDeliverableCliReply = payloads.some(
+        (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
+      );
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
       const embeddedAssistantGapFill =
         transcriptPersistenceRunner === "embedded" ||
@@ -2236,6 +2240,9 @@ async function agentCommandInternal(
               extraSystemPrompt: opts.extraSystemPrompt,
             });
           } catch (error) {
+            if (!hasDeliverableCliReply) {
+              throw error;
+            }
             log.warn(
               `Post-turn CLI transcript compaction failed after reply persistence for ${sessionKey ?? effectiveSessionId}: ${error instanceof Error ? error.message : String(error)}`,
             );
@@ -2243,7 +2250,6 @@ async function agentCommandInternal(
         }
       }
 
-      const payloads = result.payloads ?? [];
       let pendingFinalDeliveryTextForThisRun: string | undefined;
 
       // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
