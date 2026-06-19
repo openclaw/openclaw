@@ -1,6 +1,7 @@
 /** Command-registry facade for native specs, text aliases, argument parsing, and menus. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -287,6 +288,16 @@ function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
 
 export type ResolvedCommandArgChoice = { value: string; label: string };
 
+function toModelCatalogEntries(catalog: readonly ThinkingCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.map((entry) => ({
+    provider: entry.provider,
+    id: entry.id,
+    name: entry.name?.trim() || entry.id,
+    ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
+    ...(entry.params ? { params: entry.params } : {}),
+  }));
+}
+
 /** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(params: {
   command: ChatCommandDefinition;
@@ -310,7 +321,7 @@ export function resolveCommandArgChoices(params: {
           cfg && command.key === "model"
             ? buildAllowedModelSet({
                 cfg,
-                catalog: catalog ?? [],
+                catalog: toModelCatalogEntries(catalog ?? []),
                 defaultProvider: defaults.provider,
                 defaultModel: defaults.model,
               }).allowedCatalog
