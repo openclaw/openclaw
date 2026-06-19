@@ -92,7 +92,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
-  OPENCLAW_CI_OPENAI_FALLBACK_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_FALLBACK_MODEL || 'openai/gpt-5.4' }}
 
 jobs:
   resolve_target:
@@ -819,8 +818,6 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
 
@@ -830,12 +827,6 @@ jobs:
           pnpm openclaw qa run \
             --repo-root . \
             --qa-profile release \
-            --provider-mode live-frontier \
-            --evidence-mode full \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
-            --concurrency 1 \
-            --fast \
             --output-dir "${output_dir}"
 
       - name: Upload release QA profile evidence
