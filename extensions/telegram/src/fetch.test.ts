@@ -1365,15 +1365,36 @@ describe("shouldRetryTelegramTransportFallback", () => {
     expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
   });
 
-  it("does not trigger IP-rotation fallback for EAFNOSUPPORT embedded only in the message", () => {
-    // EAFNOSUPPORT is also a local address-family failure — the kernel cannot
-    // assign a source address for the requested family. Like EADDRNOTAVAIL,
-    // rotating to an alternative Telegram IP cannot fix it.
+  it("still retries for EAFNOSUPPORT via the sticky IPv4 fallback dispatcher (message-only)", () => {
+    // EAFNOSUPPORT signals a family-mismatch failure (e.g. IPv6 address-family
+    // not supported). The Telegram transport fallback chain first promotes to a
+    // forced-IPv4 dispatcher (dnsResultOrder=ipv4first, autoSelectFamily=false,
+    // forceIpv4=true), so EAFNOSUPPORT on the IPv6 path is recoverable via IPv4.
+    // EAFNOSUPPORT is NOT in the local-socket-failure set because blocking it
+    // from fallback would preempt the IPv4 recovery path, making a recoverable
+    // family-mismatch error unrecoverable. Since EAFNOSUPPORT is not matched
+    // by the message errno parser, this code-less `fetch failed` envelope falls
+    // through to the `hasFetchFailedEnvelope && ctx.codes.size === 0` branch,
+    // which correctly triggers IP-rotation fallback.
     const err = new TypeError("fetch failed: connect EAFNOSUPPORT 149.154.167.220:443 - Local (:::0)");
 
-    expect(shouldRetryTelegramTransportFallback(err)).toBe(false);
-    expectNoLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
-    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(true);
+    expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+  });
+
+  it("still retries for EAFNOSUPPORT exposed via cause.code (IPv4 dispatcher can recover)", () => {
+    // When EAFNOSUPPORT propagates via `.code` on the cause chain, it is now
+    // in FALLBACK_RETRY_ERROR_CODES, so `hasKnownNetworkCode` returns true and
+    // the transport fallback chain runs — giving the sticky IPv4 dispatcher a
+    // chance to recover the family-mismatch connection.
+    const err = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect EAFNOSUPPORT 149.154.167.220:443 - Local (:::0)"), {
+        code: "EAFNOSUPPORT",
+      }),
+    });
+
+    expect(shouldRetryTelegramTransportFallback(err)).toBe(true);
+    expectNoLoggerMessageContaining(loggerWarn, "local socket allocation failure");
   });
 
   it("still retries for remote-reachability errnos that IP rotation can fix", () => {

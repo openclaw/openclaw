@@ -117,11 +117,19 @@ type LookupFunction = (
   callback: LookupCallback,
 ) => void;
 
+// Error codes that should trigger the Telegram transport fallback chain.
+// When these errors appear in the cause chain's `.code`, the sticky IPv4
+// dispatcher or IP-rotation loop may recover the connection.
 const FALLBACK_RETRY_ERROR_CODES = [
   "ETIMEDOUT",
   "ENETDOWN",
   "ENETUNREACH",
   "EHOSTUNREACH",
+  // EAFNOSUPPORT signals an address-family mismatch (e.g. IPv6 family not
+  // supported on this host). The sticky IPv4 dispatcher (forceIpv4=true,
+  // dnsResultOrder=ipv4first) can recover from this by forcing IPv4, so
+  // EAFNOSUPPORT should trigger fallback rather than fail-fast.
+  "EAFNOSUPPORT",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_SOCKET",
 ] as const;
@@ -131,7 +139,14 @@ const FALLBACK_RETRY_ERROR_CODES = [
 // IP cannot fix these (the kernel cannot assign a source address/port for any
 // destination), so falling back through the pinned-IP dispatcher is dead code
 // that only produces misleading "Telegram is down" log noise during an incident.
-const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL", "EAFNOSUPPORT"] as const;
+//
+// EAFNOSUPPORT is intentionally NOT in this set: the Telegram transport fallback
+// chain first promotes to a forced-IPv4 dispatcher (dnsResultOrder=ipv4first,
+// autoSelectFamily=false, forceIpv4=true), so a mixed-family autoselection
+// failure producing EAFNOSUPPORT on the IPv6 path can recover through the IPv4
+// dispatcher. Blocking EAFNOSUPPORT from fallback would preempt that IPv4
+// recovery path, making a recoverable family-mismatch error unrecoverable.
+const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL"] as const;
 
 // Errno tokens may appear only inside the error `message` when undici wraps a
 // connect failure as `fetch failed` without propagating `.code` onto the cause
@@ -141,7 +156,10 @@ const LOCAL_SOCKET_FAILURE_ERROR_CODES = ["EADDRNOTAVAIL", "EAFNOSUPPORT"] as co
 // IP-rotation behavior. The fallback-retry codes already match via `.code` on
 // the cause chain; matching them from message text too would change the
 // classification for envelopes where undici omits `.code`.
-const LOCAL_SOCKET_FAILURE_MESSAGE_PATTERN = /\b(EADDRNOTAVAIL|EAFNOSUPPORT)\b/i;
+// EAFNOSUPPORT is intentionally excluded from this pattern for the same reason
+// it is excluded from LOCAL_SOCKET_FAILURE_ERROR_CODES: the sticky IPv4
+// dispatcher can recover from family-mismatch failures.
+const LOCAL_SOCKET_FAILURE_MESSAGE_PATTERN = /\b(EADDRNOTAVAIL)\b/i;
 
 type TelegramTransportFallbackContext = {
   message: string;
@@ -502,6 +520,9 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
   // reachability problem. Retrying against an alternative Telegram API IP will
   // hit the same errno on every attempt, so skip the pinned-IP fallback and
   // surface the real cause instead of misattributing it to Telegram downtime.
+  // Note: EAFNOSUPPORT is intentionally NOT in the fail-fast set because the
+  // sticky IPv4 dispatcher can recover from family-mismatch failures; see
+  // LOCAL_SOCKET_FAILURE_ERROR_CODES for details.
   const hasLocalSocketFailureCode = LOCAL_SOCKET_FAILURE_ERROR_CODES.some((code) =>
     ctx.codes.has(code),
   );
