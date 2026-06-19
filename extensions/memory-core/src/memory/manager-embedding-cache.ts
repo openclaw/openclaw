@@ -4,8 +4,43 @@ import {
   parseEmbedding,
   type MemoryChunk,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { vectorToBlob } from "./manager-vector-write.js";
 
 type EmbeddingCacheDb = Pick<DatabaseSync, "prepare">;
+
+// Backward-compat invariant for `memory_embedding_cache.embedding`:
+//
+// New rows are written as a packed Float32 BLOB (via `vectorToBlob`) instead of
+// JSON TEXT. This is ~9x cheaper to write and ~5x smaller on disk than
+// `JSON.stringify` of a 1536-dim vector (JSON serialization was ~95% of the
+// upsert CPU). The vec0 vector path already stores embeddings this way, so the
+// round-trip is well-proven in this codebase.
+//
+// The cache column has TEXT affinity, but SQLite affinity is a storage
+// *preference*, not a constraint: a BLOB value is stored (and round-tripped) as
+// a BLOB even in a TEXT-affinity column, and `NOT NULL` is still satisfied. The
+// `node:sqlite` driver returns such a value as a `Uint8Array`, so reads detect
+// the value type:
+//   - `Uint8Array` (covers Node `Buffer`, which extends it) -> packed Float32 BLOB
+//   - `string` -> legacy JSON TEXT row, decoded with `parseEmbedding`
+// Legacy TEXT rows therefore keep working with NO re-embed and NO migration, and
+// because this table is a rebuildable provider-response cache (not the durable
+// index), even a fully cold cache is safe — entries are re-fetched on demand.
+function decodeCachedEmbedding(value: unknown): number[] {
+  if (value instanceof Uint8Array) {
+    // Zero-copy view over the stored bytes; Array.from materializes the floats.
+    const floats = new Float32Array(
+      value.buffer,
+      value.byteOffset,
+      Math.floor(value.byteLength / 4),
+    );
+    return Array.from(floats);
+  }
+  if (typeof value === "string") {
+    return parseEmbedding(value);
+  }
+  return [];
+}
 
 type EmbeddingProviderIdentity = {
   provider: string;
@@ -49,10 +84,13 @@ export function loadMemoryEmbeddingCache(params: {
           `SELECT hash, embedding FROM ${tableName}\n` +
             ` WHERE provider = ? AND model = ? AND provider_key = ? AND hash IN (${placeholders})`,
         )
-        .all(...baseParams, ...batch) as Array<{ hash: string; embedding: string }>;
+        .all(...baseParams, ...batch) as Array<{
+        hash: string;
+        embedding: string | Uint8Array;
+      }>;
       for (const row of rows) {
         if (!out.has(row.hash)) {
-          out.set(row.hash, parseEmbedding(row.embedding));
+          out.set(row.hash, decodeCachedEmbedding(row.embedding));
         }
       }
     }
@@ -90,7 +128,10 @@ export function upsertMemoryEmbeddingCache(params: {
       provider.model,
       params.providerKey,
       entry.hash,
-      JSON.stringify(embedding),
+      // Packed Float32 BLOB (see decodeCachedEmbedding for the read-side
+      // backward-compat contract). Replaces JSON.stringify, which dominated
+      // upsert CPU for high-dimensional vectors.
+      vectorToBlob(embedding),
       embedding.length,
       now,
     );
