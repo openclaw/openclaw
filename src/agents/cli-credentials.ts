@@ -3,9 +3,13 @@
  * Claude Code, Codex, Gemini, and MiniMax.
  */
 import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+const execAsync = promisify(exec);
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -197,6 +201,45 @@ function readCachedCliCredential<T>(options: {
   return value;
 }
 
+async function readCachedCliCredentialAsync<T>(options: {
+  ttlMs: number;
+  cache: CachedValue<T> | null;
+  cacheKey: string;
+  read: () => Promise<T | null>;
+  setCache: (next: CachedValue<T> | null) => void;
+  readSourceFingerprint?: () => number | string | null;
+}): Promise<T | null> {
+  const { ttlMs, cache, cacheKey, read, setCache, readSourceFingerprint } = options;
+  if (ttlMs <= 0) {
+    return await read();
+  }
+
+  const now = Date.now();
+  const sourceFingerprint = readSourceFingerprint?.();
+  if (
+    cache &&
+    cache.cacheKey === cacheKey &&
+    cache.sourceFingerprint === sourceFingerprint &&
+    now - cache.readAt < ttlMs
+  ) {
+    return cache.value;
+  }
+
+  const value = await read();
+  const cachedSourceFingerprint = readSourceFingerprint?.();
+  if (!readSourceFingerprint || cachedSourceFingerprint === sourceFingerprint) {
+    setCache({
+      value,
+      readAt: now,
+      cacheKey,
+      sourceFingerprint: cachedSourceFingerprint,
+    });
+  } else {
+    setCache(null);
+  }
+  return value;
+}
+
 function computeCodexKeychainAccount(codexHome: string) {
   const hash = createHash("sha256").update(codexHome).digest("hex");
   return `cli|${hash.slice(0, 16)}`;
@@ -276,6 +319,32 @@ function readCodexKeychainAuthRecord(options?: {
   }
 }
 
+async function readCodexKeychainAuthRecordAsync(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  allowKeychainPrompt?: boolean;
+}): Promise<Record<string, unknown> | null> {
+  const { platform, codexHome } = resolveCodexKeychainParams(options);
+  if (platform !== "darwin" || options?.allowKeychainPrompt === false) {
+    return null;
+  }
+  const account = computeCodexKeychainAccount(codexHome);
+
+  try {
+    const { stdout } = await execAsync(
+      `security find-generic-password -s "Codex Auth" -a "${account}" -w`,
+      {
+        timeout: 5000,
+      },
+    );
+
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function resolveCodexFallbackExpiryMs(nowMs?: number): number | undefined {
   const baseMs = nowMs === undefined ? undefined : Math.floor(nowMs);
   return resolveExpiresAtMsFromDurationMs(CODEX_CLI_FALLBACK_EXPIRY_MS, { nowMs: baseMs });
@@ -303,6 +372,59 @@ function readCodexKeychainCredentials(options?: {
     }
 
     // No explicit expiry stored; treat as fresh for an hour from last_refresh or now.
+    const lastRefreshRaw = parsed.last_refresh;
+    const lastRefresh =
+      typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
+        ? new Date(lastRefreshRaw).getTime()
+        : Date.now();
+    const fallbackExpiry =
+      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs();
+    const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+    if (expires === undefined) {
+      return null;
+    }
+    const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
+
+    log.info("read codex credentials from keychain", {
+      source: "keychain",
+      expires: timestampMsToIsoString(expires),
+    });
+
+    return {
+      type: "oauth",
+      provider: "openai" as OAuthProvider,
+      access: accessToken,
+      refresh: refreshToken,
+      expires,
+      accountId,
+      idToken,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readCodexKeychainCredentialsAsync(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  allowKeychainPrompt?: boolean;
+}): Promise<CodexCliCredential | null> {
+  const parsed = await readCodexKeychainAuthRecordAsync(options);
+  if (!parsed) {
+    return null;
+  }
+  const tokens = parsed.tokens as Record<string, unknown> | undefined;
+  try {
+    const accessToken = tokens?.access_token;
+    const refreshToken = tokens?.refresh_token;
+    if (typeof accessToken !== "string" || !accessToken) {
+      return null;
+    }
+    if (typeof refreshToken !== "string" || !refreshToken) {
+      return null;
+    }
+
     const lastRefreshRaw = parsed.last_refresh;
     const lastRefresh =
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
@@ -432,6 +554,20 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+async function readClaudeCliKeychainCredentialsAsync(): Promise<ClaudeCliCredential | null> {
+  try {
+    const { stdout } = await execAsync(
+      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w`,
+      { timeout: 5000 },
+    );
+
+    const data = JSON.parse(stdout.trim());
+    return parseClaudeCliOauthCredential(data?.claudeAiOauth);
+  } catch {
+    return null;
+  }
+}
+
 /** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
@@ -442,6 +578,33 @@ export function readClaudeCliCredentials(options?: {
   const platform = options?.platform ?? process.platform;
   if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
+    if (keychainCreds) {
+      log.info("read anthropic credentials from claude cli keychain", {
+        type: keychainCreds.type,
+      });
+      return keychainCreds;
+    }
+  }
+
+  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const data = raw as Record<string, unknown>;
+  return parseClaudeCliOauthCredential(data.claudeAiOauth);
+}
+
+/** Reads Claude CLI credentials from macOS Keychain or the CLI credential file (async). */
+export async function readClaudeCliCredentialsAsync(options?: {
+  allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+}): Promise<ClaudeCliCredential | null> {
+  const platform = options?.platform ?? process.platform;
+  if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
+    const keychainCreds = await readClaudeCliKeychainCredentialsAsync();
     if (keychainCreds) {
       log.info("read anthropic credentials from claude cli keychain", {
         type: keychainCreds.type,
@@ -490,6 +653,34 @@ export function readClaudeCliCredentialsCached(options?: {
   });
 }
 
+/** @deprecated Anthropic provider-owned CLI credential helper (async). */
+export async function readClaudeCliCredentialsCachedAsync(options?: {
+  allowKeychainPrompt?: boolean;
+  ttlMs?: number;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+}): Promise<ClaudeCliCredential | null> {
+  const platform = options?.platform ?? process.platform;
+  const ttlMs = options?.ttlMs ?? 0;
+  const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+  const keychainIntent =
+    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
+  return readCachedCliCredentialAsync({
+    ttlMs,
+    cache: claudeCliCache,
+    cacheKey: `${credentialsPath}:${keychainIntent}`,
+    read: () =>
+      readClaudeCliCredentialsAsync({
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+        platform,
+        homeDir: options?.homeDir,
+      }),
+    setCache: (next) => {
+      claudeCliCache = next;
+    },
+  });
+}
+
 /** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
 export function readCodexCliCredentials(options?: {
   codexHome?: string;
@@ -502,6 +693,66 @@ export function readCodexCliCredentials(options?: {
     allowKeychainPrompt: options?.allowKeychainPrompt,
     platform: options?.platform,
     execSync: options?.execSync,
+  });
+  if (keychain) {
+    return keychain;
+  }
+
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const raw = loadJsonFile(authPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const data = raw as Record<string, unknown>;
+  const tokens = data.tokens as Record<string, unknown> | undefined;
+  if (!tokens || typeof tokens !== "object") {
+    return null;
+  }
+
+  const accessToken = tokens.access_token;
+  const refreshToken = tokens.refresh_token;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+
+  let fallbackExpiry: number | undefined;
+  try {
+    const stat = fs.statSync(authPath);
+    fallbackExpiry = resolveCodexFallbackExpiryMs(stat.mtimeMs);
+  } catch {
+    fallbackExpiry = resolveCodexFallbackExpiryMs();
+  }
+  const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+  if (expires === undefined) {
+    return null;
+  }
+
+  return {
+    type: "oauth",
+    provider: "openai" as OAuthProvider,
+    access: accessToken,
+    refresh: refreshToken,
+    expires,
+    accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
+  };
+}
+
+/** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json (async). */
+export async function readCodexCliCredentialsAsync(options?: {
+  codexHome?: string;
+  allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+}): Promise<CodexCliCredential | null> {
+  const keychain = await readCodexKeychainCredentialsAsync({
+    codexHome: options?.codexHome,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
+    platform: options?.platform,
   });
   if (keychain) {
     return keychain;
@@ -575,6 +826,35 @@ export function readCodexCliCredentialsCached(options?: {
         allowKeychainPrompt: options?.allowKeychainPrompt,
         platform: options?.platform,
         execSync: options?.execSync,
+      }),
+    setCache: (next) => {
+      codexCliCache = next;
+    },
+    readSourceFingerprint: () => readFileMtimeMs(authPath),
+  });
+}
+
+/** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting (async). */
+export async function readCodexCliCredentialsCachedAsync(options?: {
+  codexHome?: string;
+  allowKeychainPrompt?: boolean;
+  ttlMs?: number;
+  platform?: NodeJS.Platform;
+}): Promise<CodexCliCredential | null> {
+  const platform = options?.platform ?? process.platform;
+  const ttlMs = options?.ttlMs ?? 0;
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const keychainIntent =
+    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
+  return readCachedCliCredentialAsync({
+    ttlMs,
+    cache: codexCliCache,
+    cacheKey: `${platform}|${authPath}:${keychainIntent}`,
+    read: () =>
+      readCodexCliCredentialsAsync({
+        codexHome: options?.codexHome,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+        platform: options?.platform,
       }),
     setCache: (next) => {
       codexCliCache = next;

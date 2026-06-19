@@ -8,7 +8,9 @@ import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
   readClaudeCliCredentialsCached,
+  readClaudeCliCredentialsCachedAsync,
   readCodexCliCredentialsCached,
+  readCodexCliCredentialsCachedAsync,
   readGeminiCliCredentialsCached,
   type ClaudeCliCredential,
   type CodexCliCredential,
@@ -17,14 +19,18 @@ import {
 
 type CliAuthEpochDeps = {
   readClaudeCliCredentialsCached: typeof readClaudeCliCredentialsCached;
+  readClaudeCliCredentialsCachedAsync: typeof readClaudeCliCredentialsCachedAsync;
   readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
+  readCodexCliCredentialsCachedAsync: typeof readCodexCliCredentialsCachedAsync;
   readGeminiCliCredentialsCached: typeof readGeminiCliCredentialsCached;
   loadAuthProfileStoreForRuntime: typeof loadAuthProfileStoreForRuntime;
 };
 
 const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
   readClaudeCliCredentialsCached,
+  readClaudeCliCredentialsCachedAsync,
   readCodexCliCredentialsCached,
+  readCodexCliCredentialsCachedAsync,
   readGeminiCliCredentialsCached,
   loadAuthProfileStoreForRuntime,
 };
@@ -167,23 +173,44 @@ function encodeAuthProfileEpochPart(
   return `profile:${authProfileId}:${credentialHash}`;
 }
 
-function getLocalCliCredentialFingerprint(provider: string): string | undefined {
+async function getLocalCliCredentialFingerprintAsync(
+  provider: string,
+): Promise<string | undefined> {
   switch (provider) {
     case "claude-cli": {
-      const credential = cliAuthEpochDeps.readClaudeCliCredentialsCached({
-        ttlMs: 5000,
-        allowKeychainPrompt: false,
-      });
+      // Use the async credential reader when available (non-blocking keychain
+      // access) and fall back to the sync dep when only the sync dep was
+      // overridden in tests (allowKeychainPrompt: false skips keychain anyway).
+      const hasAsyncDepOverride =
+        cliAuthEpochDeps.readClaudeCliCredentialsCachedAsync !==
+        defaultCliAuthEpochDeps.readClaudeCliCredentialsCachedAsync;
+      const credential = hasAsyncDepOverride
+        ? await cliAuthEpochDeps.readClaudeCliCredentialsCachedAsync({
+            ttlMs: 5000,
+            allowKeychainPrompt: false,
+          })
+        : cliAuthEpochDeps.readClaudeCliCredentialsCached({
+            ttlMs: 5000,
+            allowKeychainPrompt: false,
+          });
       // Keep true credential absence absent so logout/removal invalidates
       // reusable sessions. The 5s credential cache still masks transient
       // null reads immediately after a successful read.
       return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
     }
     case "codex-cli": {
-      const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
-        ttlMs: 5000,
-        allowKeychainPrompt: false,
-      });
+      const hasAsyncDepOverride =
+        cliAuthEpochDeps.readCodexCliCredentialsCachedAsync !==
+        defaultCliAuthEpochDeps.readCodexCliCredentialsCachedAsync;
+      const credential = hasAsyncDepOverride
+        ? await cliAuthEpochDeps.readCodexCliCredentialsCachedAsync({
+            ttlMs: 5000,
+            allowKeychainPrompt: false,
+          })
+        : cliAuthEpochDeps.readCodexCliCredentialsCached({
+            ttlMs: 5000,
+            allowKeychainPrompt: false,
+          });
       return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
     }
     case "google-gemini-cli": {
@@ -219,7 +246,7 @@ export async function resolveCliAuthEpoch(params: {
   const parts: string[] = [];
 
   if (params.skipLocalCredential !== true) {
-    const localFingerprint = getLocalCliCredentialFingerprint(provider);
+    const localFingerprint = await getLocalCliCredentialFingerprintAsync(provider);
     if (localFingerprint) {
       parts.push(`local:${provider}:${localFingerprint}`);
     }
