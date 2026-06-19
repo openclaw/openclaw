@@ -6,8 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Policy doctor: split registration into scope-owned modules while preserving the existing check catalog and metadata exports. (#94314) Thanks @giodl73-repo.
-
 ## 2026.6.9
 
 ### Highlights
