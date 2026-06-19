@@ -376,7 +376,7 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it("runs generic compaction hooks for successful Copilot SDK compactions", async () => {
+  it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
     initializeGlobalHookRunner(
@@ -385,17 +385,29 @@ describe("runCopilotAttempt", () => {
         { hookName: "after_compaction", handler: afterCompaction },
       ]),
     );
+    let activeSession: FakeSession | undefined;
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
+        activeSession = session;
         session.sendAndWait.mockImplementationOnce(async () => {
           session.emit("session.compaction_start", {});
-          session.emit("session.compaction_complete", { success: true });
           return makeAssistantMessageEvent("done");
         });
       },
     });
 
-    await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    await vi.waitFor(() => {
+      expect(activeSession?.sendAndWait).toHaveBeenCalled();
+    });
+
+    if (!activeSession) {
+      throw new Error("expected Copilot session");
+    }
+    expect(activeSession.disconnect).not.toHaveBeenCalled();
+    activeSession.emit("session.compaction_complete", { messagesRemoved: 4, success: true });
+
+    await attempt;
 
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -406,13 +418,40 @@ describe("runCopilotAttempt", () => {
     );
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        compactedCount: -1,
+        compactedCount: 4,
         messageCount: -1,
         sessionFile: "session.json",
       }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
     );
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
+  });
+
+  it("cancels cleanup when SDK compaction has no completion event", async () => {
+    const controller = new AbortController();
+    let activeSession: FakeSession | undefined;
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        activeSession = session;
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+
+    const attempt = runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
+      pool: makeFakePool(sdk),
+    });
+    await vi.waitFor(() => {
+      expect(activeSession?.sendAndWait).toHaveBeenCalled();
+    });
+    controller.abort();
+
+    const result = await attempt;
+
+    expect(result.aborted).toBe(true);
+    expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
   });
 
   it("reports the native prompt hook's effective input through llm_input", async () => {

@@ -36,7 +36,10 @@ export interface SessionLike {
 
 export interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
-  onCompactionComplete?: (payload: { success: boolean }) => void | Promise<void>;
+  onCompactionComplete?: (payload: {
+    messagesRemoved?: number;
+    success: boolean;
+  }) => void | Promise<void>;
   onCompactionStart?: () => void | Promise<void>;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
@@ -60,6 +63,7 @@ export interface BuildAssistantMessageArgs {
 export interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
   awaitCompactionChain(): Promise<void>;
+  awaitCompactionCompletion(): Promise<void>;
   awaitDeltaChain(): Promise<void>;
   isCompacting(): boolean;
   snapshot(): EventBridgeSnapshot;
@@ -90,6 +94,8 @@ export function attachEventBridge(
   let deltaQueue = Promise.resolve();
   let deltaChain = Promise.resolve();
   let compactionChain = Promise.resolve();
+  let compactionIdle = Promise.resolve();
+  let resolveCompactionIdle: (() => void) | undefined;
   let firstDeltaError: unknown;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
@@ -171,6 +177,11 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.compaction_start", () => {
+    if (activeCompactionCount === 0) {
+      compactionIdle = new Promise<void>((resolve) => {
+        resolveCompactionIdle = resolve;
+      });
+    }
     activeCompactionCount += 1;
     enqueueCompactionCallback(options.onCompactionStart);
   });
@@ -178,8 +189,17 @@ export function attachEventBridge(
   registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
     activeCompactionCount = Math.max(0, activeCompactionCount - 1);
     enqueueCompactionCallback(() =>
-      options.onCompactionComplete?.({ success: event.data.success }),
+      options.onCompactionComplete?.({
+        ...(event.data.messagesRemoved !== undefined
+          ? { messagesRemoved: event.data.messagesRemoved }
+          : {}),
+        success: event.data.success,
+      }),
     );
+    if (activeCompactionCount === 0) {
+      resolveCompactionIdle?.();
+      resolveCompactionIdle = undefined;
+    }
   });
 
   registerListener(session, unsubscribeFns, "session.error", (event) => {
@@ -210,6 +230,14 @@ export function attachEventBridge(
     },
     awaitCompactionChain() {
       return compactionChain;
+    },
+    async awaitCompactionCompletion() {
+      // Background compaction can outlive session.idle. Keep the observer
+      // attached until its completion callback has run before releasing the session.
+      while (activeCompactionCount > 0) {
+        await compactionIdle;
+      }
+      await compactionChain;
     },
     awaitDeltaChain() {
       return deltaChain;

@@ -637,6 +637,30 @@ describe("attachEventBridge", () => {
     expect(bridge.isCompacting()).toBe(false);
   });
 
+  it("waits for an active compaction and its completion callback", async () => {
+    const session = createFakeSession();
+    const complete = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onCompactionComplete: complete,
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    const completion = bridge.awaitCompactionCompletion();
+    await flushAsync();
+
+    expect(complete).not.toHaveBeenCalled();
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { messagesRemoved: 3, success: true }),
+    );
+    await completion;
+
+    expect(complete).toHaveBeenCalledWith({ messagesRemoved: 3, success: true });
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
     const activeSession = createFakeSession();
     const activeBridge = attachEventBridge(activeSession, {

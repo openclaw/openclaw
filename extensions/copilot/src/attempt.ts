@@ -174,6 +174,29 @@ async function finalizeCopilotAttempt(
   return result;
 }
 
+async function awaitCompactionCompletionOrAbort(
+  bridge: ReturnType<typeof attachEventBridge>,
+  abortSignal: AbortSignal | undefined,
+): Promise<void> {
+  if (!abortSignal) {
+    await bridge.awaitCompactionCompletion();
+    return;
+  }
+  if (abortSignal.aborted) {
+    return;
+  }
+  let resolveAbort: () => void = () => undefined;
+  const aborted = new Promise<void>((resolve) => {
+    resolveAbort = resolve;
+  });
+  abortSignal.addEventListener("abort", resolveAbort, { once: true });
+  try {
+    await Promise.race([bridge.awaitCompactionCompletion(), aborted]);
+  } finally {
+    abortSignal.removeEventListener("abort", resolveAbort);
+  }
+}
+
 export async function runCopilotAttempt(
   params: AgentHarnessAttemptParams,
   deps: CopilotAttemptDeps,
@@ -259,6 +282,7 @@ export async function runCopilotAttempt(
   let externalAbort = false;
   let settled = false;
   let sentTurnStarted = false;
+  let waitForCompactionCompletion = false;
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
@@ -597,14 +621,14 @@ export async function runCopilotAttempt(
           ctx: hookContext,
         });
       },
-      onCompactionComplete: ({ success }) => {
+      onCompactionComplete: ({ messagesRemoved, success }) => {
         const sessionFile = readString(input.sessionFile);
         if (!success || !sessionFile) {
           return;
         }
         return runAgentHarnessAfterCompactionHook({
           sessionFile,
-          compactedCount: -1,
+          compactedCount: messagesRemoved ?? -1,
           ctx: hookContext,
         });
       },
@@ -630,7 +654,9 @@ export async function runCopilotAttempt(
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
       await bridge.awaitCompactionChain();
-      if (!bridge.recordSendResult(result) && !aborted) {
+      if (bridge.recordSendResult(result)) {
+        waitForCompactionCompletion = true;
+      } else if (!aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
         // resume the in-flight SDK session on the next attempt.
@@ -669,7 +695,11 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    await bridge?.awaitCompactionChain();
+    if (waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted) {
+      await awaitCompactionCompletionOrAbort(bridge!, params.abortSignal);
+    } else {
+      await bridge?.awaitCompactionChain();
+    }
     bridge?.detach();
     params.abortSignal?.removeEventListener("abort", onAbort);
 
