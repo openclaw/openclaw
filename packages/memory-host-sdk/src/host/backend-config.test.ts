@@ -197,6 +197,20 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("\\\\server\\share\\qmd\\qmd.js");
   });
 
+  it("preserves windows absolute qmd command paths with spaces", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "C:\\workspace\\root" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "C:\\Program Files\\qmd\\bin\\qmd.js",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("C:\\Program Files\\qmd\\bin\\qmd.js");
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {

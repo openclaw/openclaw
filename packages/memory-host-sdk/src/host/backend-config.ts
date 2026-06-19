@@ -39,8 +39,7 @@ function isWindowsAbsoluteCommandPath(raw: string): boolean {
 
 function extractQmdCommandToken(rawCommand: string): string {
   if (isWindowsAbsoluteCommandPath(rawCommand)) {
-    const firstSpace = rawCommand.search(/\s/);
-    return firstSpace >= 0 ? rawCommand.slice(0, firstSpace) : rawCommand;
+    return rawCommand;
   }
   const parsedCommand = splitShellArgs(rawCommand);
   return parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
