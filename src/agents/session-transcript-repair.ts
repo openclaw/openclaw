@@ -600,6 +600,37 @@ export function repairToolUseResultPairing(
   let moved = false;
   let changed = false;
 
+  // Pre-process: deduplicate tool_use blocks across assistant messages.
+  // Legacy transcript replay/import rows (transcript_entry_id IS NULL)
+  // can produce duplicate tool_call_id groups that inflate context and
+  // trigger spurious duplicate warnings on every assembly cycle.
+  // Track seen tool_call_ids globally; skip assistant messages whose
+  // every tool_call_id was already produced by an earlier turn.
+  {
+    const seenToolCallIds = new Set<string>();
+    const deduped: AgentMessage[] = [];
+    for (const msg of messages) {
+      if (msg && typeof msg === "object" && msg.role === "assistant") {
+        const toolCalls = extractToolCallsFromAssistant(
+          msg as Extract<AgentMessage, { role: "assistant" }>,
+        );
+        if (toolCalls.length > 0 && toolCalls.every((tc) => seenToolCallIds.has(tc.id))) {
+          // Every tool_call_id in this turn has already been produced by an
+          // earlier assistant message (legacy null-transcript duplication).
+          changed = true;
+          continue;
+        }
+        for (const tc of toolCalls) {
+          seenToolCallIds.add(tc.id);
+        }
+      }
+      deduped.push(msg);
+    }
+    if (deduped.length !== messages.length) {
+      messages = deduped;
+    }
+  }
+
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
     if (id && seenToolResultIds.has(id)) {

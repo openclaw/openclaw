@@ -666,6 +666,78 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(result.messages).not.toBe(input);
     expect(result.droppedDuplicateCount).toBeGreaterThan(0);
   });
+
+  // #94829 — legacy null-transcript rows produce duplicate assistant messages
+  // with the same tool_call_id. The repair function should deduplicate these.
+  it("deduplicates legacy assistant messages with duplicate tool_call_ids", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      // Legacy duplicate: another assistant with the same tool_call_id
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "output" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    // The duplicate assistant message should be dropped, leaving
+    // one assistant + its matched tool result.
+    const assistantMsgs = result.messages.filter((m) => m.role === "assistant");
+    expect(assistantMsgs).toHaveLength(1);
+    expect(assistantMsgs[0]?.content?.[0]).toMatchObject({ id: "call_1" });
+
+    const resultMsgs = result.messages.filter((m) => m.role === "toolResult");
+    expect(resultMsgs).toHaveLength(1);
+    expect((resultMsgs[0] as { toolCallId?: string }).toolCallId).toBe("call_1");
+  });
+
+  it("deduplicates unchanged when all tool_call_ids are unique", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_2", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "read output" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "exec output" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.messages.filter((m) => m.role === "assistant")).toHaveLength(2);
+    expect(result.messages.filter((m) => m.role === "toolResult")).toHaveLength(2);
+    expect(result.added).toHaveLength(0);
+  });
 });
 
 describe("sanitizeToolCallInputs legacy block filtering", () => {
