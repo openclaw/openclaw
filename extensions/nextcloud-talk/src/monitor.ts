@@ -1,6 +1,6 @@
 // Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
@@ -110,8 +110,25 @@ function formatError(err: unknown): string {
   return typeof err === "string" ? err : JSON.stringify(err);
 }
 
-function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
+function parseWebhookPayload(value: unknown): NextcloudTalkWebhookPayload | null {
+  return safeParseWithSchema(NextcloudTalkWebhookPayloadSchema, value);
+}
+
+/**
+ * Returns true when a JSON value has the ActivityStreams shape of a Talk
+ * message (object.type === "Note") but failed strict schema validation.
+ * This distinguishes a malformed message (HTTP 400) from an event type the
+ * bot does not handle, such as file shares or reaction approvals (HTTP 200).
+ */
+function looksLikeMessagePayload(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const objectField = (value as Record<string, unknown>).object;
+  if (typeof objectField !== "object" || objectField === null) {
+    return false;
+  }
+  return (objectField as Record<string, unknown>).type === "Note";
 }
 
 function writeJsonResponse(
@@ -184,10 +201,25 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
-  const payload = parseWebhookPayload(params.body);
-  if (!payload) {
+  // Parse JSON first to distinguish genuinely malformed requests (HTTP 400)
+  // from valid-JSON payloads the bot does not handle (HTTP 200). Without this
+  // split, file-share events and other non-Note ActivityStreams objects cause
+  // Nextcloud Talk to log stack traces and increment the bot error counter.
+  let jsonValue: unknown;
+  try {
+    jsonValue = JSON.parse(params.body);
+  } catch {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
+  }
+
+  const payload = parseWebhookPayload(jsonValue);
+  if (!payload) {
+    if (looksLikeMessagePayload(jsonValue)) {
+      writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+      return { kind: "invalid" };
+    }
+    return { kind: "ignore" };
   }
   if (payload.type !== "Create") {
     return { kind: "ignore" };
