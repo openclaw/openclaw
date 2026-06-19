@@ -175,13 +175,8 @@ describe("parseAbsoluteTimeMs", () => {
       expect(parseAbsoluteTimeMs("")).toBeNull();
     });
 
-    it("accepts lenient ISO date formats that JavaScript supports", () => {
-      // JavaScript Date.parse accepts some non-standard but unambiguous formats
-      // "2024-1-15" with single-digit month is parsed successfully
-      const result = parseAbsoluteTimeMs("2024-1-15");
-      expect(result).not.toBeNull();
-      // Should normalize to standard ISO format behavior
-      expect(result).toBeGreaterThan(0);
+    it("rejects non-padded ISO-like date formats", () => {
+      expect(parseAbsoluteTimeMs("2024-1-15")).toBeNull();
     });
 
     it("rejects incomplete datetime strings", () => {
