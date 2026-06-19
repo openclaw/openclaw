@@ -347,7 +347,9 @@ async function listFolder(
   let pageToken = opts?.pageToken;
   let hasMore = true;
   let lastHasMore = false;
-  while (hasMore) {
+  let pageCount = 0;
+  const MAX_LIST_PAGES = 100;
+  while (hasMore && pageCount < MAX_LIST_PAGES) {
     const params: Record<string, string | number> = {};
     if (validFolderToken) {
       params.folder_token = validFolderToken;
@@ -372,6 +374,7 @@ async function listFolder(
       owner_id: f.owner_id,
     }));
     allFiles.push(...files);
+    pageCount += 1;
     lastHasMore = res.data?.has_more === true;
     hasMore = lastHasMore && opts?.all === true;
     pageToken = res.data?.next_page_token ?? undefined;
