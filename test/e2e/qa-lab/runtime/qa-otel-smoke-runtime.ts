@@ -3,7 +3,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -1075,12 +1075,35 @@ async function appendGatewayStdoutArtifactLogs(params: {
     "gateway.stdout.log",
   );
   try {
-    params.capture.append(await readFile(gatewayStdoutPath, "utf8"));
+    params.capture.append(
+      await readUtf8FileTail(gatewayStdoutPath, MAX_STDOUT_DIAGNOSTIC_LINE_BYTES),
+    );
     params.capture.flush();
   } catch (error) {
     if (!isErrnoCode(error, "ENOENT")) {
       throw error;
     }
+  }
+}
+
+async function readUtf8FileTail(filePath: string, maxBytes: number): Promise<string> {
+  const file = await open(filePath, "r");
+  try {
+    const stats = await file.stat();
+    const bytesToRead = Math.min(stats.size, Math.max(1, maxBytes));
+    const buffer = Buffer.alloc(bytesToRead);
+    const start = stats.size - bytesToRead;
+    let offset = 0;
+    while (offset < bytesToRead) {
+      const { bytesRead } = await file.read(buffer, offset, bytesToRead - offset, start + offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    return buffer.subarray(0, offset).toString("utf8");
+  } finally {
+    await file.close();
   }
 }
 
@@ -1882,6 +1905,7 @@ async function main() {
 }
 
 export const testing = {
+  appendGatewayStdoutArtifactLogs,
   appendCapturedBodyText,
   assertSmoke,
   createBoundedTextAccumulator,
@@ -1890,6 +1914,7 @@ export const testing = {
   parseStdoutDiagnosticLogLine,
   readPositiveIntegerEnv,
   readRequestBody,
+  readUtf8FileTail,
   startLocalOtlpReceiver,
   startDockerOtelCollector,
   terminateChildTree,
