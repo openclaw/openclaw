@@ -944,7 +944,8 @@ export function buildBuiltinChatCommands(
           name: "model",
           description: "Model id (provider/model or id)",
           type: "string",
-          choices: ({ catalog }) => listModelSwitchChoices(catalog),
+          choices: ({ allowedModelCatalog, catalog }) =>
+            listModelSwitchChoices(allowedModelCatalog ?? catalog),
         },
       ],
       argsMenu: {

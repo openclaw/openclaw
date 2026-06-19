@@ -846,6 +846,47 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu })).toBe("Choose a model for /model.");
   });
 
+  it("filters /model arg menus through the configured model allowlist", () => {
+    const command = requireNativeCommand("model");
+
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": {},
+              "anthropic/claude-sonnet-4.6": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [
+                { id: "gpt-5.5", name: "GPT-5.5" },
+                { id: "gpt-hidden", name: "Hidden GPT" },
+              ],
+            },
+            anthropic: {
+              models: [
+                { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+                { id: "claude-hidden", name: "Hidden Claude" },
+              ],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(menu.choices).toEqual([
+      { label: "anthropic/Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4.6" },
+      { label: "openai/GPT-5.5", value: "openai/gpt-5.5" },
+    ]);
+  });
+
   it("keeps bare /model status dispatch when no configured model choices exist", () => {
     const command = requireNativeCommand("model");
 

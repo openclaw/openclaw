@@ -34,6 +34,7 @@ export type CommandArgChoiceContext = {
   provider?: string;
   model?: string;
   catalog?: ThinkingCatalogEntry[];
+  allowedModelCatalog?: ThinkingCatalogEntry[];
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
 };

@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
+  buildAllowedModelSet,
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
@@ -304,11 +305,22 @@ export function resolveCommandArgChoices(params: {
     ? provided
     : (() => {
         const defaults = resolveDefaultCommandContext(cfg);
+        const catalog = params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
+        const allowedModelCatalog =
+          cfg && command.key === "model"
+            ? buildAllowedModelSet({
+                cfg,
+                catalog: catalog ?? [],
+                defaultProvider: defaults.provider,
+                defaultModel: defaults.model,
+              }).allowedCatalog
+            : undefined;
         const context: CommandArgChoiceContext = {
           cfg,
           provider: params.provider ?? defaults.provider,
           model: params.model ?? defaults.model,
-          catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
+          catalog,
+          allowedModelCatalog,
           command,
           arg,
         };
