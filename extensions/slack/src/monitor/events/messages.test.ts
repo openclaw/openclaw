@@ -134,13 +134,14 @@ function makeAppMentionEvent(overrides?: {
   channel?: string;
   channelType?: "channel" | "group" | "im" | "mpim";
   ts?: string;
+  text?: string;
 }) {
   return {
     type: "app_mention",
     channel: overrides?.channel ?? "C123",
     channel_type: overrides?.channelType ?? "channel",
     user: "U1",
-    text: "<@U_BOT> hello",
+    text: overrides?.text ?? "<@U_BOT> hello",
     ts: overrides?.ts ?? "123.456",
   };
 }
