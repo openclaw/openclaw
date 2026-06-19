@@ -163,6 +163,17 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
     }
   });
 
+  it("keeps full profile exports out of the Docker build phase", () => {
+    const runner = readFileSync(dockerRunnerPath, "utf8");
+    const preflightSourceIndex = runner.indexOf('source "$profile_file"');
+    const buildIndex = runner.indexOf("docker_e2e_build_or_reuse");
+    const fullProfileSourceIndex = runner.indexOf('source "$PROFILE_FILE"', buildIndex);
+
+    expect(preflightSourceIndex).toBeGreaterThanOrEqual(0);
+    expect(buildIndex).toBeGreaterThan(preflightSourceIndex);
+    expect(fullProfileSourceIndex).toBeGreaterThan(buildIndex);
+  });
+
   it("fails auth preflight before Docker build work starts", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
     try {
