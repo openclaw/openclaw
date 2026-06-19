@@ -259,6 +259,24 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("gateway timeout after 8000ms");
   });
 
+  it("does not warn when local provider probe was skipped (skipped: true)", async () => {
+    // When `openclaw doctor` runs without --deep, the probe is skipped and returns
+    // { checked: false, ready: false, skipped: true }. This must NOT produce a
+    // false-positive warning for the local provider — it means readiness was
+    // never checked, not that local embeddings are unavailable.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("warns when local provider has an explicit hf: modelPath but readiness was not confirmed", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
