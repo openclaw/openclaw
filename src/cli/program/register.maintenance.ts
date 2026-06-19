@@ -107,6 +107,11 @@ export function registerMaintenanceCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
     )
     .option("--no-open", "Print URL but do not launch a browser")
+    .option(
+      "--print-token",
+      "Copy the resolved gateway token to clipboard (for SecretRef-managed tokens)",
+      false,
+    )
     .option("--yes", "Start/install the gateway without prompting when needed", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -114,6 +119,7 @@ export function registerMaintenanceCommands(program: Command) {
         await dashboardCommand(defaultRuntime, {
           noOpen: opts.open === false,
           yes: Boolean(opts.yes),
+          printToken: Boolean(opts.printToken),
         });
       });
     });

@@ -15,6 +15,7 @@ import {
 type DashboardOptions = {
   noOpen?: boolean;
   yes?: boolean;
+  printToken?: boolean;
 };
 
 async function resolveDashboardTarget() {
@@ -83,9 +84,23 @@ export async function dashboardCommand(
     runtime.log("Token auto-auth included in browser/clipboard URL.");
   }
   if (resolvedToken.secretRefConfigured && token) {
-    runtime.log(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
-    );
+    if (options.printToken) {
+      const copiedToken = await copyToClipboard(token).catch(() => false);
+      if (copiedToken) {
+        runtime.log(
+          "Gateway token copied to clipboard. Paste it into the Control UI login prompt.",
+        );
+      } else {
+        runtime.log(
+          "Gateway token is SecretRef-managed. Use `openclaw config get gateway.auth.token` to view the reference,\n" +
+            "then retrieve the plaintext from your configured secret provider (e.g. the local file provider path in secrets.providers.*.path).",
+        );
+      }
+    } else {
+      runtime.log(
+        "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+      );
+    }
   }
   if (resolvedToken.unresolvedRefReason) {
     runtime.log(`Token auto-auth unavailable: ${resolvedToken.unresolvedRefReason}`);
