@@ -13,6 +13,7 @@ const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordInboundSessionMock = vi.fn(async () => undefined);
+const recordSlackThreadParticipationMock = vi.fn();
 const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
@@ -830,7 +831,7 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
-  recordSlackThreadParticipation: () => {},
+  recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
 vi.mock("../../stream-mode.js", () => ({
@@ -1228,6 +1229,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     postMessageMock.mockClear();
     chatUpdateMock.mockClear();
     recordInboundSessionMock.mockReset();
+    recordSlackThreadParticipationMock.mockReset();
     updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
@@ -3559,6 +3561,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expectDeliverReplyCall(0, "buffered tail");
+    expect(recordSlackThreadParticipationMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "C123",
+      THREAD_TS,
+      expect.any(Object),
+    );
   });
 
   it("routes all pending native stream text through chunked sender when an append flush fails", async () => {

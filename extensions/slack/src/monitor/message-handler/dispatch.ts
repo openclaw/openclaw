@@ -2111,10 +2111,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  if (dispatchError) {
-    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
-  }
-
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
@@ -2123,6 +2119,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
     });
+  }
+  if (dispatchError) {
+    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
   }
   if (!anyReplyDelivered && !draftPreviewCommitted) {
     await draftStream?.clear();
