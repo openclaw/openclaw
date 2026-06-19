@@ -261,47 +261,49 @@ export async function monitorLineProvider(
                         })
                       : null;
 
-                  const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
-                    payload,
-                    lineData,
-                    to: ctxPayload.From,
-                    replyToken,
-                    replyTokenUsed,
-                    accountId: ctx.accountId,
-                    cfg: config,
-                    textLimit,
-                    deps: {
-                      buildTemplateMessageFromPayload,
-                      processLineMessage,
-                      chunkMarkdownText,
-                      sendLineReplyChunks,
-                      replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
-                      createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
-                      pushMessagesLine,
-                      createFlexMessage,
-                      createImageMessage,
-                      createLocationMessage,
-                      onReplyError: (replyErr) => {
-                        logVerbose(
-                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                        );
+                  try {
+                    const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
+                      payload,
+                      lineData,
+                      to: ctxPayload.From,
+                      replyToken,
+                      replyTokenUsed,
+                      accountId: ctx.accountId,
+                      cfg: config,
+                      textLimit,
+                      deps: {
+                        buildTemplateMessageFromPayload,
+                        processLineMessage,
+                        chunkMarkdownText,
+                        sendLineReplyChunks,
+                        replyMessageLine,
+                        pushMessageLine,
+                        pushTextMessageWithQuickReplies,
+                        createQuickReplyItems,
+                        createTextMessageWithQuickReplies,
+                        pushMessagesLine,
+                        createFlexMessage,
+                        createImageMessage,
+                        createLocationMessage,
+                        onReplyError: (replyErr) => {
+                          logVerbose(
+                            `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                          );
+                        },
                       },
-                    },
-                  });
-                  replyTokenUsed = nextReplyTokenUsed;
+                    });
+                    replyTokenUsed = nextReplyTokenUsed;
 
-                  recordChannelRuntimeState({
-                    channel: "line",
-                    accountId: resolvedAccountId,
-                    state: {
-                      lastOutboundAt: Date.now(),
-                    },
-                  });
-
-                  stopDeliveryLoading?.();
+                    recordChannelRuntimeState({
+                      channel: "line",
+                      accountId: resolvedAccountId,
+                      state: {
+                        lastOutboundAt: Date.now(),
+                      },
+                    });
+                  } finally {
+                    stopDeliveryLoading?.();
+                  }
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));

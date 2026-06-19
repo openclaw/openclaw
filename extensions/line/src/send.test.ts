@@ -15,8 +15,6 @@ const {
   recordChannelActivityMock,
   logVerboseMock,
   resolvePinnedHostnameWithPolicyMock,
-  getMessageQuotaMock,
-  getMessageQuotaConsumptionMock,
 } = vi.hoisted(() => {
   const pushMessageMockLocal = vi.fn();
   const replyMessageMockLocal = vi.fn();
