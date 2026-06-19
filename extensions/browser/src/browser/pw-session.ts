@@ -143,6 +143,7 @@ type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
   onDisconnected?: () => void;
+  lastUsedAt?: number;
 };
 
 type PageState = {
@@ -197,6 +198,7 @@ const MAX_RECENT_DIALOGS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
+const CDP_IDLE_TTL_MS = 30000;
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
@@ -226,7 +228,7 @@ function buildManagedDownloadPath(fileName: string): string {
   return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
 }
 
-function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
+export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
 }
 
@@ -921,7 +923,19 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
-    return cached;
+    // Per-turn keepalive: reuse a cached connection only within the idle TTL.
+    // After an idle gap longer than CDP_IDLE_TTL_MS, force a fresh reconnect so
+    // a silently-dead CDP socket doesn't get handed back to a new turn.
+    if (Date.now() - (cached.lastUsedAt ?? 0) <= CDP_IDLE_TTL_MS) {
+      cached.lastUsedAt = Date.now();
+      return cached;
+    }
+    cachedByCdpUrl.delete(normalized);
+    if (cached.onDisconnected) {
+      cached.browser.off?.("disconnected", cached.onDisconnected);
+    }
+    void cached.browser.close().catch(() => {});
+    // Fall through to a fresh connect.
   }
   // Run SSRF policy check only on cache miss so transient DNS failures
   // do not break active sessions that already hold a live CDP connection.
@@ -962,7 +976,12 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
             cachedByCdpUrl.delete(normalized);
           }
         };
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          lastUsedAt: Date.now(),
+        };
         cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);

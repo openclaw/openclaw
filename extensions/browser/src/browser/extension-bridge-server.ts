@@ -319,10 +319,22 @@ export function startExtensionBridgeServer(opts: {
           const sid: ExtSessionId = inner.params?.sessionId;
           const ti: TargetInfo = inner.params?.targetInfo || {};
           const tid: TargetId = ti.targetId || sid;
-          const known = targets.has(tid);
-          targets.set(tid, { sessionId: sid, targetInfo: ti });
-          if (!known) log("tab attached: " + (ti.url || ""));
-          for (const pw of pwSockets) announceTo(pw, tid);
+          // Only real PAGE targets become Playwright pages. Workers, service-
+          // workers, blob: docs and cross-origin iframes arrive as child
+          // Target.attachedToTarget too; announcing them makes Playwright treat
+          // each as a phantom page and the next snapshot hangs (~47s) on heavy
+          // flows. Same-origin iframes are reached via the page's frame tree, so
+          // skipping non-page targets loses nothing.
+          const ttype = String(ti.type || "page");
+          const turl = String(ti.url || "");
+          if (ttype === "page" && !turl.startsWith("blob:")) {
+            const known = targets.has(tid);
+            targets.set(tid, { sessionId: sid, targetInfo: ti });
+            if (!known) log("tab attached: " + (ti.url || ""));
+            for (const pw of pwSockets) announceTo(pw, tid);
+          } else {
+            log("skip non-page target: " + ttype + " " + turl.slice(0, 40));
+          }
         } else if (
           inner.method === "Target.detachedFromTarget" ||
           inner.method === "detachedFromTarget"

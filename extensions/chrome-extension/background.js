@@ -903,6 +903,14 @@ async function handleForwardCdpCommand(msg) {
 // ---------------------------------------------------------------------------
 
 async function attachTab(tabId, opts = {}) {
+  // Idempotency guard: re-attaching an already-connected tab would crash
+  // Playwright on the gateway side with a Duplicate target error. If this tab
+  // is already fully connected, return its existing connection unchanged.
+  const existing = tabs.get(tabId);
+  if (existing && existing.state === "connected" && existing.sessionId && existing.targetId) {
+    return { sessionId: existing.sessionId, targetId: existing.targetId };
+  }
+
   const debuggee = { tabId };
   await chrome.debugger.attach(debuggee, "1.3");
   await chrome.debugger.sendCommand(debuggee, "Page.enable").catch(() => {});
@@ -1483,6 +1491,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    return true;
+  }
+
+  // Side panel: resolve a tab's CDP targetId (used to focus the pinned tab).
+  if (msg.type === "getTargetId") {
+    const entry = tabs.get(msg.tabId);
+    sendResponse({
+      targetId: entry && entry.state === "connected" ? entry.targetId || null : null,
+    });
     return true;
   }
 

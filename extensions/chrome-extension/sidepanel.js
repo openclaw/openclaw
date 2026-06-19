@@ -90,6 +90,11 @@ let pendingReqs = new Map();
 let currentRunId = null;
 let streamingEl = null;
 let streamingText = "";
+// Offset into the gateway's authoritative full text where the CURRENT bubble's
+// segment begins (advanced at each tool-call boundary), and the last full text
+// seen (to detect the gateway resetting/replacing its buffer).
+let segStart = 0;
+let lastFull = "";
 let gatewayToken = "";
 let reconnectTimer = null;
 let reconnectAttempt = 0;
@@ -155,6 +160,9 @@ function renderText(text) {
   s = s.replace(/```([\s\S]*?)```/g, (_, code) => "<pre>" + code.trim() + "</pre>");
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Preserve the model's line/paragraph breaks instead of collapsing them into
+  // one stacked block.
+  s = s.replace(/\n/g, "<br>");
   return s;
 }
 
@@ -261,7 +269,9 @@ async function handleChallenge(payload) {
       client: { id: CLIENT_ID, version: "1.0.0", platform: "chrome-extension", mode: CLIENT_MODE },
       role: ROLE,
       scopes: SCOPES,
-      caps: [],
+      // Opt in to tool-call events so the panel can show each browser step and
+      // split inter-tool commentary into its own message.
+      caps: ["tool-events"],
       commands: [],
       device,
       auth: gatewayToken ? { token: gatewayToken } : undefined,
@@ -333,15 +343,77 @@ function handleMessage(msg) {
     handleChatEvent(msg.payload);
     return;
   }
+
+  if (msg.type === "event" && msg.event === "agent") {
+    handleAgentEvent(msg.payload);
+    return;
+  }
 }
 
 let mainSessionKey = null;
+
+// Per-tab session isolation: each attached tab gets its OWN agent conversation
+// session, keyed DETERMINISTICALLY off the tab id so reattaching the same tab
+// (or reloading the panel) resumes the same thread. The gateway rejects an
+// unknown key on send ("session not found"), so before a tab's first send we
+// ensure the keyed session exists via sessions.create (a no-op resume if it
+// already does). No client-side storage is needed — the key IS the identity.
+function baseSessionKey() {
+  if (!mainSessionKey) return null;
+  // Thread off the base agent key, stripping any existing :thread:... suffix.
+  const i = mainSessionKey.indexOf(":thread:");
+  return i === -1 ? mainSessionKey : mainSessionKey.slice(0, i);
+}
+
+function perTabSessionKey() {
+  const base = baseSessionKey();
+  if (!base || !pinnedTabId) return base;
+  return base + ":thread:tab-" + pinnedTabId;
+}
+
+// Bind this panel to its pinned tab's deterministic session (when both the
+// gateway hello and the pinned tab are known — either can arrive first).
+function bindTabSession() {
+  const key = perTabSessionKey();
+  if (key && pinnedTabId) sessionKey = key;
+}
+
+// Idempotently ensure the keyed session exists on the gateway before sending to
+// it. sessions.create with an explicit key creates it, or resumes if present
+// (we swallow an "already exists" style error either way).
+async function ensureSession(key) {
+  if (!key) return;
+  try {
+    await sendReq("sessions.create", { key });
+  } catch (e) {
+    if (!/exist|in use|already/i.test(e?.message || "")) throw e;
+  }
+}
+
+// Bind the gateway's "current tab" to THIS panel's pinned tab right before a
+// turn, so the agent's browser tool drives this tab — not whichever tab the
+// profile happened to touch last. Uses a no-op tab focus (sets
+// profileState.lastTargetId without navigating). The pinned tab's CDP targetId
+// is resolved by the background relay (which owns the attached-tabs map).
+async function focusPinnedTab() {
+  if (!pinnedTabId) return;
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "getTargetId", tabId: pinnedTabId });
+    const targetId = r && r.targetId;
+    if (targetId) {
+      await sendReq("browser.request", { method: "POST", path: "/tabs/focus", body: { targetId } });
+    }
+  } catch {
+    // Best-effort: if focus fails, the turn still runs against the default tab.
+  }
+}
 
 async function handleHelloOk(payload) {
   const snapshot = payload.snapshot || {};
   const sd = snapshot.sessionDefaults || {};
   mainSessionKey = sd.mainSessionKey || null;
-  sessionKey = mainSessionKey;
+  // Default this panel to its pinned tab's own (deterministic) session.
+  bindTabSession();
 
   try {
     const result = await sendReq("sessions.list", {});
@@ -369,32 +441,110 @@ async function handleHelloOk(payload) {
     }
   }
 
-  addMessage("system", "Connected. Select a session or start a new one.");
+  addMessage(
+    "system",
+    pinnedTabId && sessionKey
+      ? "Connected — this tab has its own session (" + sessionKey.split(":").pop() + ")."
+      : "Connected. Select a session or start a new one.",
+  );
 }
 
-sessionPicker.addEventListener("change", () => {
-  sessionKey = sessionPicker.value === "new" ? mainSessionKey : sessionPicker.value;
+sessionPicker.addEventListener("change", async () => {
+  if (sessionPicker.value === "new") {
+    // "+ New session" = a fresh start for THIS tab: keep the deterministic
+    // per-tab key but clear its thread history on the gateway (best-effort).
+    sessionKey = perTabSessionKey();
+    try {
+      await sendReq("sessions.reset", { key: sessionKey });
+    } catch {}
+  } else {
+    sessionKey = sessionPicker.value;
+  }
   messagesEl.innerHTML = "";
-  addMessage("system", sessionKey ? "Switched to session." : "Ready.");
+  addMessage("system", sessionKey ? "Session ready." : "Ready.");
 });
+
+function friendlyToolName(name) {
+  if (!name) return "tool";
+  let n = String(name).replace(/^mcp__openclaw__/, "").replace(/^mcp__[^_]+__/, "");
+  return n.replace(/_/g, " ");
+}
+
+function addStep(label) {
+  const el = document.createElement("div");
+  el.className = "msg step";
+  el.textContent = "→ " + label;
+  el.style.cssText =
+    "font-size:11px;color:#888;font-style:italic;margin:3px 0 3px 4px;";
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// Tool-call events arrive on the "agent" channel (we opt in via the
+// `tool-events` cap). Each tool "start" is a boundary: finalize the current
+// commentary bubble and show a step line, so the assistant's pre-tool and
+// post-tool commentary become separate, persisted messages instead of one
+// run-together blob.
+function handleAgentEvent(payload) {
+  if (!payload || payload.stream !== "tool") return;
+  const data = payload.data || {};
+  if (data.phase !== "start") return;
+  if (streamingEl) streamingEl.classList.remove("streaming");
+  streamingEl = null;
+  // Post-tool commentary begins a fresh segment/bubble after this boundary.
+  segStart = lastFull.length;
+  addStep(friendlyToolName(data.toolName || data.name || (data.tool && data.tool.name)));
+}
 
 function handleChatEvent(payload) {
   if (!payload) return;
   const state = payload.state;
 
   if (state === "delta") {
-    const text = payload.deltaText || "";
-    if (!text) return;
+    // Render from the gateway's AUTHORITATIVE full text (message.content[0].text)
+    // sliced from segStart — this is idempotent, so the gateway re-flushing a
+    // cumulative delta at a tool boundary can't duplicate text. The current
+    // bubble shows full.slice(segStart); tool boundaries (handleAgentEvent)
+    // advance segStart so post-tool commentary becomes a new bubble.
+    const full =
+      payload.message && payload.message.content && payload.message.content[0]
+        ? payload.message.content[0].text
+        : null;
+    if (full == null) return;
 
-    if (!streamingEl || currentRunId !== payload.runId) {
+    if (currentRunId !== payload.runId) {
+      if (streamingEl) streamingEl.classList.remove("streaming");
       currentRunId = payload.runId;
-      streamingText = "";
+      segStart = 0;
+      lastFull = "";
+      streamingEl = null;
+    }
+
+    // The gateway reset its buffer (a `replace` / non-monotonic restart) when
+    // the new full no longer extends what we last saw.
+    if (!full.startsWith(lastFull)) {
+      const curSeg = lastFull.slice(segStart);
+      if (curSeg && full.startsWith(curSeg)) {
+        // New buffer is a continuation of the CURRENT segment → keep the bubble,
+        // rebase the offset to the start of this buffer.
+        segStart = 0;
+      } else {
+        // Genuinely different content → finalize and start a fresh bubble.
+        if (streamingEl) streamingEl.classList.remove("streaming");
+        streamingEl = null;
+        segStart = 0;
+      }
+    }
+    lastFull = full;
+
+    const segText = full.slice(segStart);
+    if (!segText) return;
+    if (!streamingEl) {
       streamingEl = addMessage("assistant", "");
       streamingEl.classList.add("streaming");
     }
-
-    streamingText += text;
-    streamingEl.innerHTML = renderText(streamingText);
+    streamingText = segText;
+    streamingEl.innerHTML = renderText(segText);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
@@ -409,9 +559,64 @@ function handleChatEvent(payload) {
     streamingEl = null;
     streamingText = "";
     currentRunId = null;
+    segStart = 0;
+    lastFull = "";
     sendBtn.disabled = false;
     msgInput.disabled = false;
     msgInput.focus();
+  }
+}
+
+// Live context for the model: which page the pinned tab is on RIGHT NOW. Sent
+// as a preamble on every turn so the agent knows the current URL without a
+// browser-tool round-trip — and so it won't re-navigate (reload) a page it is
+// already on. Not shown in the chat bubble (the user's own text is).
+async function tabContextPreamble() {
+  if (!pinnedTabId) return "";
+  try {
+    const tab = await chrome.tabs.get(pinnedTabId);
+    if (!tab || !tab.url) return "";
+    const title = (tab.title || "").trim();
+    return (
+      "[Browser context: the active tab is currently on " +
+      tab.url +
+      (title ? " (" + title + ")" : "") +
+      ". If the request is about this page, act on it directly — do NOT re-navigate to it (that reloads and loses state). Navigate only when a different page is needed.]\n\n"
+    );
+  } catch {
+    return "";
+  }
+}
+
+async function deliverTurn(text) {
+  // Bind to this tab's deterministic session and make sure it exists on the
+  // gateway before sending (idempotent create / resume).
+  if (!sessionKey) bindTabSession();
+  await ensureSession(sessionKey);
+  // Bind the gateway's current tab to this panel's pinned tab so the turn drives
+  // THIS tab rather than the profile-global last-touched tab.
+  await focusPinnedTab();
+  // Force-feed the live tab context so the agent knows where it already is.
+  const sendText = (await tabContextPreamble()) + text;
+  // Prefer routing THROUGH the node (node-originated agent.request) so the
+  // gateway confines this turn's tools to the hosting node's policy
+  // (gateway.tools.byNode). The reply streams back over this panel's gateway
+  // subscription on the same sessionKey. Fall back to a direct gateway turn if
+  // no node is hosting the bridge.
+  let routedThroughNode = false;
+  try {
+    const nodeRes = await chrome.runtime.sendMessage({ type: "nodeTurn", message: sendText, sessionKey });
+    routedThroughNode = !!(nodeRes && nodeRes.ok);
+  } catch {
+    // background/relay unavailable — fall through to a direct gateway turn.
+  }
+  if (!routedThroughNode) {
+    const result = await sendReq("sessions.send", {
+      message: sendText,
+      idempotencyKey: generateId(),
+      key: sessionKey,
+    });
+    if (result?.runId) currentRunId = result.runId;
   }
 }
 
@@ -427,40 +632,20 @@ async function sendMessage() {
   msgInput.disabled = true;
 
   try {
-    // Prefer routing the turn THROUGH the node (node-originated agent.request),
-    // so the gateway confines this turn's tools to the hosting node's policy
-    // (gateway.tools.byNode). The reply streams back over this panel's existing
-    // gateway subscription on the same sessionKey. If no node is hosting the
-    // bridge, fall back to a direct gateway turn.
-    let routedThroughNode = false;
-    try {
-      const nodeRes = await chrome.runtime.sendMessage({
-        type: "nodeTurn",
-        message: text,
-        sessionKey: sessionKey || undefined,
-      });
-      routedThroughNode = !!(nodeRes && nodeRes.ok);
-    } catch {
-      // background/relay unavailable — fall through to a direct gateway turn.
-    }
-    if (!routedThroughNode) {
-      const params = { message: text, idempotencyKey: generateId() };
-      if (sessionKey) {
-        params.key = sessionKey;
-      }
-      const result = await sendReq("sessions.send", params);
-      if (result?.runId) currentRunId = result.runId;
-      if (result?.sessionKey && !sessionKey) {
-        sessionKey = result.sessionKey;
-        const opt = document.createElement("option");
-        opt.value = sessionKey;
-        opt.textContent = sessionKey.split(":").pop();
-        sessionPicker.appendChild(opt);
-        sessionPicker.value = sessionKey;
-      }
-    }
+    await deliverTurn(text);
   } catch (err) {
-    addMessage("system", "Send failed: " + err.message);
+    // Self-heal: if the keyed session went missing (e.g. the gateway was
+    // restarted), ensureSession will recreate it — retry the turn once.
+    if (/session not found/i.test(err?.message || "")) {
+      try {
+        await ensureSession(perTabSessionKey());
+        await deliverTurn(text);
+        return;
+      } catch (err2) {
+        err = err2;
+      }
+    }
+    addMessage("system", "Send failed: " + (err?.message || err));
     sendBtn.disabled = false;
     msgInput.disabled = false;
   }
@@ -520,6 +705,9 @@ async function pinToCurrentTab() {
       pinnedTabId = tab.id;
       tabDot.className = "dot ok";
       tabLbl.textContent = (tab.title || "").slice(0, 25) || new URL(tab.url).hostname;
+      // Bind this tab's deterministic session (no-op until the gateway hello has
+      // set mainSessionKey; handleHelloOk also calls bindTabSession).
+      bindTabSession();
     }
   } catch {}
 }

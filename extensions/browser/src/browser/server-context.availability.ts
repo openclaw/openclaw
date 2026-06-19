@@ -24,6 +24,7 @@ import {
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { hasCachedPlaywrightBrowserConnection } from "./pw-session.js";
 import {
   CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
@@ -181,6 +182,12 @@ export function createProfileAvailability({
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
+    // A live cached Playwright connection means the bridge is already healthy; skip the
+    // per-op throwaway CDP health-probe, which churns the bridge and times out on heavy
+    // multi-target pages. If the cached socket is dead, the op self-heals downstream.
+    if (hasCachedPlaywrightBrowserConnection(profile.cdpUrl)) {
+      return true;
+    }
     return await isChromeCdpReady(
       profile.cdpUrl,
       httpTimeoutMs,
