@@ -718,6 +718,14 @@ export function createCopilotAgentHarness(
           reason: "missing-required-params",
         };
       }
+      if (deferredCompactionCleanups.has(openclawSessionId)) {
+        return {
+          ok: false,
+          compacted: false,
+          reason: "background-compaction-pending",
+          failure: { reason: "background-compaction-pending" },
+        };
+      }
       const tracked = trackedSessions.get(openclawSessionId);
       const currentCompactKey = computeSessionCompactKey(params);
       const { resolvePoolAcquire } = await import("./src/attempt.js");

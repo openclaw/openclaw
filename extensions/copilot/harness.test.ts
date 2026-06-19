@@ -1313,6 +1313,38 @@ describe("createCopilotAgentHarness", () => {
       });
     });
 
+    it("does not resume a session while deferred background compaction is pending", async () => {
+      const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
+      const pool = makePoolMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-background",
+          pooledClient: { key: {} as any, client: {} as any },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        deps.onDeferredCompaction?.({
+          abort: () => undefined,
+          cleanup: cleanup.promise,
+          sdkSessionId: "sdk-sess-background",
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await harness.runAttempt(makeCompactParams());
+      const result = await harness.compact?.(makeCompactParams());
+
+      expect(pool.acquire).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        ok: false,
+        compacted: false,
+        reason: "background-compaction-pending",
+        failure: { reason: "background-compaction-pending" },
+      });
+      cleanup.resolve("completed");
+      await flushAsyncWork();
+    });
+
     it("calls the SDK history compaction RPC without requiring a workspace sidecar", async () => {
       const beforeCompaction = vi.fn();
       const afterCompaction = vi.fn();

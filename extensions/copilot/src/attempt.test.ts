@@ -441,7 +441,7 @@ describe("runCopilotAttempt", () => {
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
 
-  it("bounds successful background compaction when the SDK omits completion", async () => {
+  it("returns a successful turn while background compaction remains observed", async () => {
     vi.useFakeTimers();
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
@@ -454,19 +454,22 @@ describe("runCopilotAttempt", () => {
     const pool = makeFakePool(sdk);
 
     const attempt = runCopilotAttempt(makeParams(), { pool });
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(180_000);
     const result = await attempt;
 
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeUndefined();
+    expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
+    expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(180_000);
+
     expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
     expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
     expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
     expect(pool.release).toHaveBeenCalledTimes(1);
   });
 
-  it("defers and cancels compaction when the caller aborts after a turn result", async () => {
+  it("cancels retained compaction when the caller aborts after a turn result", async () => {
     const controller = new AbortController();
     const onDeferredCompaction = vi.fn();
     let activeSession: FakeSession | undefined;
@@ -488,10 +491,12 @@ describe("runCopilotAttempt", () => {
 
     const result = await attempt;
 
-    expect(result.aborted).toBe(true);
+    expect(result.aborted).toBe(false);
     expect(activeSession?.abort).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(activeSession?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+    });
     expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
-    expect(activeSession?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
     expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
     expect(onDeferredCompaction).toHaveBeenCalledWith(
       expect.objectContaining({

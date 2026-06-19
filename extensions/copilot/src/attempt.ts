@@ -365,7 +365,6 @@ export async function runCopilotAttempt(
   let externalAbort = false;
   let settled = false;
   let sentTurnStarted = false;
-  let waitForCompactionCompletion = false;
   let timedOutDuringCompaction = false;
   let timedOut = false;
   let promptError: Error | undefined;
@@ -738,9 +737,7 @@ export async function runCopilotAttempt(
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
       await bridge.awaitCompactionChain();
-      if (bridge.recordSendResult(result)) {
-        waitForCompactionCompletion = true;
-      } else if (!aborted) {
+      if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
         // resume the in-flight SDK session on the next attempt.
@@ -781,27 +778,11 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    const compactionCompletionOutcome =
-      waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted
-        ? await awaitCompactionCompletionBeforeDeadline({
-            abortSignal: params.abortSignal,
-            bridge: bridge!,
-            timeoutMs: resolveCompactionTimeoutMs(input.config),
-          })
-        : undefined;
-    const deferCompactionCleanup =
-      bridge?.isCompacting() &&
-      session &&
-      handle &&
-      (timedOut ||
-        compactionCompletionOutcome === "aborted" ||
-        compactionCompletionOutcome === "deadline" ||
-        params.abortSignal?.aborted === true);
-    if (deferCompactionCleanup && bridge && session && handle) {
+    if (bridge?.isCompacting() && session && handle) {
       timedOutDuringCompaction ||= timedOut;
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
-      if (params.abortSignal?.aborted || compactionCompletionOutcome === "deadline") {
+      if (params.abortSignal?.aborted) {
         abortCleanup();
       } else {
         params.abortSignal?.addEventListener("abort", abortCleanup, { once: true });
@@ -833,9 +814,7 @@ export async function runCopilotAttempt(
       }
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
-      if (compactionCompletionOutcome === undefined) {
-        await bridge?.awaitCompactionChain();
-      }
+      await bridge?.awaitCompactionChain();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
 
