@@ -42,6 +42,7 @@ vi.mock("./chat/slash-command-executor.ts", async (importOriginal) => {
 });
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let handleChatDraftChange: typeof import("./app-chat.ts").handleChatDraftChange;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
 let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
@@ -58,6 +59,7 @@ let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAs
 async function loadChatHelpers(): Promise<void> {
   ({
     handleSendChat,
+    handleChatDraftChange,
     steerQueuedChatMessage,
     navigateChatInputHistory,
     handleAbortChat,
@@ -3011,6 +3013,56 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
+  });
+
+  it("ignores a stale draft change replaying submitted text after the composer is cleared", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send once",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatMessage).toBe("");
+
+    handleChatDraftChange(host, "send once");
+
+    expect(host.chatMessage).toBe("");
+
+    sent.resolve({ runId: "run-1", status: "started" });
+    await send;
+  });
+
+  it("accepts a legitimate new draft after the composer is cleared", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "first message",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatMessage).toBe("");
+
+    handleChatDraftChange(host, "different text");
+
+    expect(host.chatMessage).toBe("different text");
+
+    sent.resolve({ runId: "run-2", status: "started" });
+    await send;
   });
 });
 
