@@ -8,7 +8,7 @@ type ToolCallShapedTextDetection = {
 };
 
 const TOOL_TEXT_PREFILTER_RE =
-  /(?:tool[_\s-]?calls?|function[_\s-]?call|["'](?:name|tool_name|function|arguments|args|input|parameters|tool_calls)["']|<\s*tool_call\b|Action\s*:|\[END_TOOL_REQUEST\])/i;
+  /(?:tool[_\s-]?calls?|function[_\s-]?call|["'](?:name|tool_name|function|arguments|args|input|parameters|tool_calls)["']|<\s*(?:tool_call\b|invoke\b)|Action\s*:|\[END_TOOL_REQUEST\])/i;
 const MAX_SCAN_CHARS = 20_000;
 const MAX_JSON_CANDIDATES = 20;
 const MAX_JSON_CANDIDATE_CHARS = 8_000;
@@ -178,14 +178,19 @@ function detectJsonToolCall(text: string): ToolCallShapedTextDetection | null {
 }
 
 function detectXmlToolCall(text: string): ToolCallShapedTextDetection | null {
-  if (!/<\s*tool_call\b/i.test(text)) {
+  if (!/<\s*(?:tool_call\b|invoke\b)/i.test(text)) {
     return null;
   }
-  if (!/<\s*function=/i.test(text) && !/["']name["']\s*:\s*["'][^"']{1,120}["']/i.test(text)) {
+  if (
+    !/<\s*function=/i.test(text) &&
+    !/<\s*invoke\s+name=/i.test(text) &&
+    !/["']name["']\s*:\s*["'][^"']{1,120}["']/i.test(text)
+  ) {
     return null;
   }
   const toolName =
     /<\s*function=([A-Za-z0-9_.:-]{1,120})\b/i.exec(text)?.[1] ??
+    /<\s*invoke\s+name=["']([^"']{1,120})["']/i.exec(text)?.[1]?.trim() ??
     /["']name["']\s*:\s*["']([^"']{1,120})["']/i.exec(text)?.[1]?.trim();
   return { kind: "xml_tool_call", ...(toolName ? { toolName } : {}) };
 }

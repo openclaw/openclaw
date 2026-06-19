@@ -205,17 +205,25 @@ export function findXmlishToolCallEnd(text: string): number | null {
   if (xmlFunction) {
     cursor = xmlFunction[0].length;
   } else {
-    const bracketed = /^\[(?:tool:)?[A-Za-z0-9_-]+\]/.exec(text);
-    if (!bracketed) {
-      return null;
+    const xmlInvoke = /^<invoke\s+name=["'][A-Za-z0-9_.:-]+["']\s*>/i.exec(text);
+    if (xmlInvoke) {
+      cursor = xmlInvoke[0].length;
+    } else {
+      const bracketed = /^\[(?:tool:)?[A-Za-z0-9_-]+\]/.exec(text);
+      if (!bracketed) {
+        return null;
+      }
+      cursor = bracketed[0].length;
+      cursor = skipHorizontalWhitespace(text, cursor);
+      cursor = skipSerializedToolCallTrailingLineBreak(text, cursor);
     }
-    cursor = bracketed[0].length;
-    cursor = skipHorizontalWhitespace(text, cursor);
-    cursor = skipSerializedToolCallTrailingLineBreak(text, cursor);
   }
 
   cursor = skipWhitespace(text, cursor);
-  if (!startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=")) {
+  if (
+    !startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=") &&
+    !startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter ")
+  ) {
     return null;
   }
 
@@ -228,7 +236,13 @@ export function findXmlishToolCallEnd(text: string): number | null {
     if (startsWithAsciiMarkerIgnoreCase(text, cursor, "</function>")) {
       return skipSerializedToolCallTrailingLineBreak(text, cursor + "</function>".length);
     }
-    if (!startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=")) {
+    if (startsWithAsciiMarkerIgnoreCase(text, cursor, "</invoke>")) {
+      return skipSerializedToolCallTrailingLineBreak(text, cursor + "</invoke>".length);
+    }
+    if (
+      !startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=") &&
+      !startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter ")
+    ) {
       return skipSerializedToolCallTrailingLineBreak(text, cursor);
     }
   }

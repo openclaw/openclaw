@@ -69,7 +69,8 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
   if (cursor >= text.length) {
     return true;
   }
-  return matchesLiteralPrefix(text.slice(cursor).toLowerCase(), "<parameter=");
+  const lower = text.slice(cursor).toLowerCase();
+  return matchesLiteralPrefix(lower, "<parameter=") || matchesLiteralPrefix(lower, "<parameter ");
 }
 
 function couldStillBeBracketedStandaloneToolCall(
@@ -156,33 +157,70 @@ function couldStillBeXmlishFunctionToolCall(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
 ): boolean {
-  const marker = "<function=";
   const lowerText = text.toLowerCase();
-  if (!matchesLiteralPrefix(lowerText, marker)) {
-    return false;
-  }
-  if (text.length <= marker.length) {
-    return true;
+  const functionMarker = "<function=";
+  if (matchesLiteralPrefix(lowerText, functionMarker)) {
+    if (text.length <= functionMarker.length) {
+      return true;
+    }
+
+    let cursor = functionMarker.length;
+    while (isXmlishNameChar(text[cursor])) {
+      cursor += 1;
+    }
+    const name = text.slice(functionMarker.length, cursor);
+    if (!name || !matcher.hasNamePrefix(name)) {
+      return false;
+    }
+    if (cursor >= text.length) {
+      return true;
+    }
+    if (text[cursor] !== ">") {
+      return false;
+    }
+    if (!matcher.hasExactName(name)) {
+      return false;
+    }
+    return couldStillBeXmlishParameterPayload(text, cursor + 1);
   }
 
-  let cursor = marker.length;
-  while (isXmlishNameChar(text[cursor])) {
-    cursor += 1;
+  if (!matchesLiteralPrefix(lowerText, "<invoke")) {
+    return false;
   }
-  const name = text.slice(marker.length, cursor);
+
+  const invoke = /^<invoke\s+name=["']([A-Za-z0-9_.:-]*)["']?\s*>?/i.exec(text);
+  if (!invoke) {
+    return text.length < "<invoke".length;
+  }
+  const name = invoke[1] ?? "";
   if (!name || !matcher.hasNamePrefix(name)) {
     return false;
   }
-  if (cursor >= text.length) {
+  if (!invoke[0].endsWith(">")) {
     return true;
-  }
-  if (text[cursor] !== ">") {
-    return false;
   }
   if (!matcher.hasExactName(name)) {
     return false;
   }
-  return couldStillBeXmlishParameterPayload(text, cursor + 1);
+  return couldStillBeXmlishParameterPayload(text, invoke[0].length);
+}
+
+function couldStillBeInvokeLeadInToolCall(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  const lower = text.toLowerCase();
+  if (!matchesLiteralPrefix(lower, "call")) {
+    return false;
+  }
+  if (text.length <= "call".length) {
+    return true;
+  }
+  if (!/\s/.test(text["call".length] ?? "")) {
+    return false;
+  }
+  const rest = text.slice("call".length).trimStart();
+  return rest.length === 0 || couldStillBeXmlishFunctionToolCall(rest, matcher);
 }
 
 function couldStillBeHarmonyStandaloneToolCall(
@@ -286,6 +324,10 @@ function hasExactSerializedToolCallPrefix(
   if (xmlish?.[1]) {
     return matcher.hasExactName(xmlish[1]);
   }
+  const invoke = /^<invoke\s+name=["']([A-Za-z0-9_.:-]+)["']\s*>/i.exec(text);
+  if (invoke?.[1]) {
+    return matcher.hasExactName(invoke[1]);
+  }
   const harmony =
     /^(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=([A-Za-z0-9_-]+)\s+code\b/.exec(text);
   return Boolean(harmony?.[1] && matcher.hasExactName(harmony[1]));
@@ -347,6 +389,7 @@ function getPlainTextToolCallBufferState(
   const toolCallLike =
     couldStillBeBracketedStandaloneToolCall(trimmed, matcher) ||
     couldStillBeXmlishFunctionToolCall(trimmed, matcher) ||
+    couldStillBeInvokeLeadInToolCall(trimmed, matcher) ||
     couldStillBeHarmonyStandaloneToolCall(trimmed, matcher);
   if (!toolCallLike) {
     return "impossible";
@@ -386,6 +429,7 @@ function hasSuppressedToolCallClosingMarker(text: string): boolean {
   return (
     lowerText.includes("</parameter>") ||
     lowerText.includes("</function>") ||
+    lowerText.includes("</invoke>") ||
     text.includes(END_TOOL_REQUEST) ||
     text.includes("<|call|>") ||
     text.includes("}") ||
