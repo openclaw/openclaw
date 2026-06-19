@@ -35,7 +35,7 @@ import {
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
-import type { OpenClawPluginToolContext } from "./types.js";
+import type { OpenClawPluginToolContext, PluginToolMetadataRegistration } from "./types.js";
 
 export {
   resetPluginToolDescriptorCache,
@@ -207,6 +207,62 @@ function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPl
  */
 export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
   return JSON.stringify([pluginId, toolName]);
+}
+
+function readPluginToolMetadataValue(metadata: object): PluginToolMetadataRegistration | undefined {
+  let toolName: unknown;
+  let displayName: unknown;
+  let description: unknown;
+  let risk: unknown;
+  let tags: unknown;
+  try {
+    toolName = (metadata as { toolName?: unknown }).toolName;
+    displayName = (metadata as { displayName?: unknown }).displayName;
+    description = (metadata as { description?: unknown }).description;
+    risk = (metadata as { risk?: unknown }).risk;
+    tags = (metadata as { tags?: unknown }).tags;
+  } catch {
+    return undefined;
+  }
+  if (typeof toolName !== "string" || !toolName) {
+    return undefined;
+  }
+  return {
+    toolName,
+    ...(typeof displayName === "string" ? { displayName } : {}),
+    ...(typeof description === "string" ? { description } : {}),
+    ...(risk === "low" || risk === "medium" || risk === "high" ? { risk } : {}),
+    ...(Array.isArray(tags) && tags.every((tag) => typeof tag === "string") ? { tags } : {}),
+  };
+}
+
+/** Builds plugin-owned tool metadata keyed by owning plugin and tool name. */
+export function buildReadablePluginToolMetadataMap(
+  entries: readonly unknown[] | undefined,
+): Map<string, PluginToolMetadataRegistration> {
+  const metadataByTool = new Map<string, PluginToolMetadataRegistration>();
+  for (const entry of entries ?? []) {
+    let pluginId: unknown;
+    let metadata: unknown;
+    try {
+      pluginId = (entry as { pluginId?: unknown }).pluginId;
+      metadata = (entry as { metadata?: unknown }).metadata;
+    } catch {
+      continue;
+    }
+    if (typeof pluginId !== "string" || !metadata || typeof metadata !== "object") {
+      continue;
+    }
+    const readableMetadata = readPluginToolMetadataValue(metadata);
+    if (!readableMetadata) {
+      continue;
+    }
+    metadataByTool.set(
+      buildPluginToolMetadataKey(pluginId, readableMetadata.toolName),
+      readableMetadata,
+    );
+  }
+  return metadataByTool;
 }
 
 function normalizeAllowlist(list?: string[]) {

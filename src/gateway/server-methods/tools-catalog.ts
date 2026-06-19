@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
+  buildReadablePluginToolMetadataMap,
   ensureStandalonePluginToolRegistryLoaded,
   getPluginToolMeta,
   resolvePluginTools,
@@ -99,12 +100,7 @@ function buildPluginGroups(params: {
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
-  const pluginToolMetadata = new Map(
-    (activeRegistry?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
-  );
+  const pluginToolMetadata = buildReadablePluginToolMetadataMap(activeRegistry?.toolMetadata);
   const seenToolIds = new Set<string>();
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
