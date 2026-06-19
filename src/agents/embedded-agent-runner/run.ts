@@ -1884,7 +1884,7 @@ async function runEmbeddedAgentInternal(
               once: true,
             });
           };
-          // Timeout recovery can continue after an attempt returns, but a native
+          // Timeout recovery can continue after an attempt returns, but a
           // transport that ignores its timeout releases the lane after one grace.
           let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
           const clearAttemptTimeoutRelease = () => {

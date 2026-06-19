@@ -288,7 +288,9 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         runId: "run-codex-timeout-lane-release-second",
       });
 
-      await vi.advanceTimersByTimeAsync(30_001);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2);
 
       await expect(firstRun).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
       await expect(secondRun).resolves.toMatchObject({ meta: { aborted: false } });
