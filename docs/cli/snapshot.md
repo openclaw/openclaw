@@ -54,6 +54,12 @@ Those files are hot runtime state. `openclaw snapshot create` reads the live
 database and writes a compact, verified SQLite artifact that can be copied by a
 host, container, object storage sync, or backup system.
 
+Snapshot artifacts are still sensitive state. Global and per-agent artifacts can
+include auth profile records, session state, plugin state, and other
+credentials-adjacent data from the source SQLite database. Protect snapshot
+repositories with the same access controls, encryption, retention policy, and
+upload destination restrictions you use for OpenClaw backups and live state.
+
 ## Named targets
 
 Use named targets when snapshotting OpenClaw-owned state:
@@ -82,8 +88,8 @@ openclaw snapshot restore ./synced/snapshot --target ./hydrated/openclaw.sqlite
 
 Restore verifies the manifest, artifact hash, and SQLite integrity before
 copying the artifact to the target path. The target SQLite file must not already
-exist; stale `-wal` and `-shm` sidecars at the target path are removed after the
-restore copy.
+exist; stale `-wal`, `-shm`, and `-journal` sidecars at the target path are
+removed after the restore copy.
 
 ## Notes
 
