@@ -4,7 +4,6 @@ import "./test-runtime-mocks.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type EmbedBatchMock = Mock<(texts: string[]) => Promise<number[][]>>;
-type EmbedQueryMock = Mock<() => Promise<number[]>>;
 
 const hoisted = vi.hoisted(() => ({
   embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0])),
@@ -13,10 +12,6 @@ const hoisted = vi.hoisted(() => ({
 
 export function getEmbedBatchMock(): EmbedBatchMock {
   return hoisted.embedBatch;
-}
-
-export function getEmbedQueryMock(): EmbedQueryMock {
-  return hoisted.embedQuery;
 }
 
 export function resetEmbeddingMocks(): void {

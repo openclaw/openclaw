@@ -30,6 +30,7 @@ import {
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -55,7 +56,9 @@ import {
   createResumeHarness,
   createStartedThreadHarness,
   fastWait,
+  getMockRuntimeIdentity,
   mockCall,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -156,6 +159,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -575,7 +580,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -726,7 +731,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -803,7 +808,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -862,7 +867,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -1044,7 +1049,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await startOrResumeThread({
       client: {
-        getServerVersion: () => "0.132.0",
+        ...mockClientRuntimeMethods(),
         request: async (method: string, requestParams?: unknown) => {
           requests.push({ method, params: requestParams });
           if (method === "thread/start") {
@@ -1899,6 +1904,7 @@ describe("runCodexAppServerAttempt", () => {
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -1960,6 +1966,7 @@ describe("runCodexAppServerAttempt", () => {
     let startedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -2001,6 +2008,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request: vi.fn(async (method: string) => {
             if (method === "thread/start") {
               return threadStartResult();
@@ -2158,8 +2166,22 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage(
+        "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
+        Date.now(),
+      ),
+    );
     sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
     sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
+    for (let index = 0; index < 8; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `continuity filler ${index}: ${"x".repeat(4_000)}`,
+          Date.now() + 2 + index,
+        ),
+      );
+    }
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "make the default webpage openclaw";
@@ -2178,10 +2200,55 @@ describe("runCodexAppServerAttempt", () => {
       "";
 
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("older next-step anchor: keep the handoff checklist");
     expect(inputText).toContain("we are fixing the Opik default project");
     expect(inputText).toContain("Opik default project context");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
+  });
+
+  it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage(
+        "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
+        Date.now(),
+      ),
+    );
+    for (let index = 0; index < 12; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `continuity block ${index}: ${"x".repeat(128_000)}`,
+          Date.now() + 1 + index,
+        ),
+      );
+    }
+    sessionManager.appendMessage(
+      assistantMessage("recent continuity anchor: resume the database migration", Date.now() + 20),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextTokenBudget = 300_000;
+    params.prompt = `current prompt survives ${"p".repeat(80_000)}`;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("recent continuity anchor: resume the database migration");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("current prompt survives");
+    expect(inputText).not.toContain("older next-step anchor: keep the handoff checklist");
   });
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
@@ -3923,6 +3990,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4024,6 +4092,7 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4126,6 +4195,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4228,6 +4298,7 @@ describe("runCodexAppServerAttempt", () => {
         agentDir,
         authProfileId,
         accountId: "account-work",
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4371,6 +4442,7 @@ describe("runCodexAppServerAttempt", () => {
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
         }),
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4562,6 +4634,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4607,6 +4680,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4773,11 +4847,28 @@ describe("runCodexAppServerAttempt", () => {
     }
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
-      userMessage("post-binding user context", bindingUpdatedAt + 1_000),
+      userMessage(
+        "pre-binding native-owned context: keep the original plan",
+        bindingUpdatedAt - 2_000,
+      ),
+    );
+    sessionManager.appendMessage(
+      userMessage(
+        "post-binding user context: resume the release checklist",
+        bindingUpdatedAt + 1_000,
+      ),
     );
     sessionManager.appendMessage(
       assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
     );
+    for (let index = 0; index < 8; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `post-binding continuity filler ${index}: ${"x".repeat(4_000)}`,
+          bindingUpdatedAt + 3_000 + index,
+        ),
+      );
+    }
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -4821,7 +4912,8 @@ describe("runCodexAppServerAttempt", () => {
     const inputText =
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
-    expect(inputText).toContain("post-binding user context");
+    expect(inputText).toContain("pre-binding native-owned context: keep the original plan");
+    expect(inputText).toContain("post-binding user context: resume the release checklist");
     expect(inputText).toContain("post-binding assistant context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-1");
@@ -4909,6 +5001,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex === 0) {
@@ -4961,6 +5054,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex < 2) {
@@ -5008,6 +5102,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(
@@ -5041,6 +5136,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             return await new Promise<never>(() => {});
@@ -5074,6 +5170,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new Error("write EPIPE");
@@ -5104,6 +5201,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(

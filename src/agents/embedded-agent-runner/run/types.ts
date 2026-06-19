@@ -73,6 +73,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Signals that the attempt's own run-timeout watchdog is active. */
+  onAttemptTimeoutArmed?: () => void;
+  /** Signals that this attempt's timeout has fired and must unwind promptly. */
+  onAttemptTimeout?: (reason: Error) => void;
+  /** Signals an explicit cancellation through the active native run handle. */
+  onAttemptAbort?: () => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;

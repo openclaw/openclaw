@@ -218,6 +218,8 @@
   "session-binding-runtime",
   "session-key-runtime",
   "session-store-runtime",
+  "sqlite-runtime",
+  "sqlite-runtime-testing",
   "session-transcript-hit",
   "session-visibility",
   "ssrf-dispatcher",

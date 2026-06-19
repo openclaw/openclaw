@@ -43,6 +43,10 @@ class FakeWebSocket extends EventEmitter {
   }
 }
 
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), init);
+}
+
 describe("scripts/measure-rpc-rtt.mjs", () => {
   it("closes websocket clients that time out before opening", async () => {
     FakeWebSocket.instances = [];
@@ -475,12 +479,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const child = new EventEmitter();
     const fetchImpl = vi
       .fn()
-      .mockRejectedValueOnce(new DOMException("request timed out", "TimeoutError"))
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ ready: true }),
-        ok: true,
-      });
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start() {} })))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, status: "live" }))
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
 
     await waitForGatewayReady({
       child,
@@ -520,21 +521,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const child = new EventEmitter();
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ failing: ["gateway"], ready: false }),
-        ok: false,
-        status: 503,
-      })
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ ok: true, status: "live" }),
-        ok: true,
-        status: 200,
-      })
-      .mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValue({ failing: [], ready: true }),
-        ok: true,
-        status: 200,
-      });
+      .mockResolvedValueOnce(jsonResponse({ failing: ["gateway"], ready: false }, { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, status: "live" }))
+      .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
 
     await waitForGatewayReady({
       child,

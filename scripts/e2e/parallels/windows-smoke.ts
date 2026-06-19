@@ -9,7 +9,7 @@ import {
   currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
-  parsePositiveInt,
+  parseTcpPort,
   parseProvider,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -157,7 +157,7 @@ export function parseArgs(argv: string[]): WindowsOptions {
       options.hostIp = value;
     },
     "--host-port": (value) => {
-      options.hostPort = parsePositiveInt(value, "--host-port");
+      options.hostPort = parseTcpPort(value, "--host-port");
       options.hostPortExplicit = true;
     },
     "--install-url": (value) => {

@@ -714,7 +714,7 @@ export class GatewayClient {
         this.suppressedTransientPreHelloCleanCloses += 1;
         this.flushPendingErrors(new GatewayClientTransientPreHelloCloseError());
         this.scheduleReconnect();
-        this.opts.onClose?.(code, reasonText, closeInfo);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       // Clear persisted device auth state only when device-token auth was active.
@@ -745,16 +745,16 @@ export class GatewayClient {
           details: connectErrorDetails,
         })
       ) {
-        this.opts.onReconnectPaused?.({
+        this.notifyReconnectPaused({
           code,
           reason: reasonText,
           detailCode: connectErrorDetailCode,
         });
-        this.opts.onClose?.(code, reasonText);
+        this.notifyClose(code, reasonText);
         return;
       }
       this.scheduleReconnect();
-      this.opts.onClose?.(code, reasonText);
+      this.notifyClose(code, reasonText);
     });
     ws.on("error", (err) => {
       this.logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
@@ -916,7 +916,7 @@ export class GatewayClient {
             : 30_000;
         this.lastTick = Date.now();
         this.startTickWatch();
-        this.opts.onHelloOk?.(helloOk);
+        this.notifyHelloOk(helloOk);
       })
       .catch((err: unknown) => {
         if (err instanceof GatewayClientTransientPreHelloCloseError) {
@@ -1124,6 +1124,38 @@ export class GatewayClient {
       this.logDebug(
         `gateway client connect error handler error: ${formatGatewayClientErrorForLog(err)}`,
       );
+    }
+  }
+
+  private notifyHelloOk(helloOk: HelloOk): void {
+    try {
+      this.opts.onHelloOk?.(helloOk);
+    } catch (err) {
+      this.logDebug(
+        `gateway client hello-ok handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyReconnectPaused(info: GatewayReconnectPausedInfo): void {
+    try {
+      this.opts.onReconnectPaused?.(info);
+    } catch (err) {
+      this.logDebug(
+        `gateway client reconnect paused handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyClose(code: number, reason: string, info?: GatewayClientCloseInfo): void {
+    try {
+      if (info === undefined) {
+        this.opts.onClose?.(code, reason);
+        return;
+      }
+      this.opts.onClose?.(code, reason, info);
+    } catch (err) {
+      this.logDebug(`gateway client close handler error: ${formatGatewayClientErrorForLog(err)}`);
     }
   }
 

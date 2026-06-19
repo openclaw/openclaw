@@ -120,16 +120,48 @@ describe("collectClawHubPublishablePluginPackages", () => {
 describe("OpenClaw dual-published plugin metadata", () => {
   const dualPublishedPlugins = [
     {
+      extensionId: "cohere",
+      packageName: "@openclaw/cohere-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/cohere-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/cohere-provider",
+      },
+    },
+    {
       extensionId: "diagnostics-otel",
       packageName: "@openclaw/diagnostics-otel",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-otel",
+      },
     },
     {
       extensionId: "diagnostics-prometheus",
       packageName: "@openclaw/diagnostics-prometheus",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-prometheus",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-prometheus",
+      },
+    },
+    {
+      extensionId: "gmi",
+      packageName: "@openclaw/gmi-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/gmi-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/gmi-provider",
+      },
     },
   ] as const;
 
-  it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
+  it("keeps dual-published plugins selectable through both ClawHub and npm release paths", () => {
     const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
     const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
       packageNames,
@@ -149,6 +181,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
           install?: {
             clawhubSpec?: string;
             defaultChoice?: string;
+            minHostVersion?: string;
             npmSpec?: string;
           };
           release?: {
@@ -158,12 +191,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toEqual({
-        clawhubSpec: `clawhub:${plugin.packageName}`,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.4.25",
-        npmSpec: plugin.packageName,
-      });
+      expect(packageJson.openclaw?.install).toEqual(plugin.install);
       expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,
@@ -444,6 +472,32 @@ describe("collectPluginClawHubReleasePlan", () => {
       packageName: "@openclaw/demo-plugin",
       version: "2026.4.1",
     });
+  });
+
+  it("keeps ClawHub trusted publisher timeouts active while reading response bodies", async () => {
+    const repoDir = createTempPluginRepo();
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(requestUrl);
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${url.pathname}`);
+    };
+
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow("ClawHub request timed out after 5ms");
   });
 
   it("routes environment-pinned trusted publisher config out of normal candidates", async () => {

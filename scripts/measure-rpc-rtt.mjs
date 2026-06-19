@@ -9,6 +9,7 @@ import net from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
@@ -16,6 +17,7 @@ const DEFAULT_ITERATIONS = 10;
 export const READY_TIMEOUT_MS = 120_000;
 /** Per-probe timeout used while polling gateway readiness endpoints. */
 export const READY_PROBE_TIMEOUT_MS = 1_000;
+const READY_PROBE_RESPONSE_BODY_MAX_BYTES = 64 * 1024;
 const GATEWAY_FORCE_KILL_GRACE_MS = 250;
 const PARENT_TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const IS_DIRECT_RUN =
@@ -126,18 +128,53 @@ function formatErrorMessage(error) {
   return String(error);
 }
 
-async function readyzReportsReady(response) {
+async function readyzReportsReady(response, options = {}) {
   if (!response.ok) {
     return false;
   }
-  if (typeof response.json !== "function") {
-    return false;
-  }
   try {
-    const body = await response.json();
+    const text = await readBoundedResponseText(
+      response,
+      "RPC RTT /readyz",
+      READY_PROBE_RESPONSE_BODY_MAX_BYTES,
+      options,
+    );
+    const body = JSON.parse(text);
     return body && typeof body === "object" && body.ready === true;
   } catch {
     return false;
+  }
+}
+
+async function fetchReadinessProbe(fetchImpl, url, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutError = Object.assign(new Error(`${url} timed out after ${timeoutMs}ms`), {
+    code: "ETIMEDOUT",
+  });
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      fetchImpl(url, {
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    return {
+      clearTimeout: () => clearTimeout(timeout),
+      response,
+      signal: controller.signal,
+      timeoutPromise,
+    };
+  } catch (error) {
+    clearTimeout(timeout);
+    throw error;
   }
 }
 
@@ -172,19 +209,33 @@ export async function waitForGatewayReady({
       );
     }
     try {
-      const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
-        signal: AbortSignal.timeout(probeTimeoutMs),
-      });
-      if (await readyzReportsReady(response)) {
-        return;
+      const probe = await fetchReadinessProbe(
+        fetchImpl,
+        `http://127.0.0.1:${port}/readyz`,
+        probeTimeoutMs,
+      );
+      try {
+        if (
+          await readyzReportsReady(probe.response, {
+            signal: probe.signal,
+            timeoutPromise: probe.timeoutPromise,
+          })
+        ) {
+          return;
+        }
+      } finally {
+        probe.clearTimeout();
       }
     } catch {
       // The gateway may not have bound the port yet.
     }
     try {
-      await fetchImpl(`http://127.0.0.1:${port}/healthz`, {
-        signal: AbortSignal.timeout(probeTimeoutMs),
-      });
+      const probe = await fetchReadinessProbe(
+        fetchImpl,
+        `http://127.0.0.1:${port}/healthz`,
+        probeTimeoutMs,
+      );
+      probe.clearTimeout();
     } catch {
       // Liveness is diagnostic only; /readyz is the usable RPC readiness contract.
     }

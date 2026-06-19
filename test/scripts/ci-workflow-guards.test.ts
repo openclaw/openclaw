@@ -350,6 +350,25 @@ describe("ci workflow guards", () => {
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
   });
 
+  it("runs gateway watch after parallel built artifact checks", () => {
+    const workflow = readCiWorkflow();
+    const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const builtArtifactChecks = buildArtifactSteps.find(
+      (step) => step.name === "Run built artifact checks",
+    );
+    const run = builtArtifactChecks.run;
+
+    expect(run).toContain('start_check "channels"');
+    expect(run).toContain('start_check "core-support-boundary"');
+    expect(run).not.toContain('start_check "gateway-watch"');
+    expect(run.indexOf('for index in "${!pids[@]}"')).toBeLessThan(
+      run.indexOf('if [ "$RUN_GATEWAY_WATCH" = "true" ]; then'),
+    );
+    expect(run).toContain(
+      'node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1',
+    );
+  });
+
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
