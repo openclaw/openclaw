@@ -670,6 +670,56 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(tailAssistantText?.text).toBe("Canonical answer");
   });
 
+  it("suppresses the delivery mirror when a cache-ttl node trails the runner reply", async () => {
+    // Regression for openclaw/openclaw#94930: the embedded runner persists the
+    // primary assistant reply (A), then `attempt.ts` appends an
+    // `openclaw.cache-ttl` custom node that becomes the active leaf. ~1s later
+    // the delivery-mirror append (no idempotencyKey) must dedupe against A by
+    // scanning past the trailing custom node — otherwise it writes a duplicate
+    // assistant (B) parented to the cache-ttl node and becomes the new leaf.
+    writeTranscriptStore();
+
+    const runnerResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        text: "Answer before cache-ttl",
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+      }),
+    });
+    expect(runnerResult.ok).toBe(true);
+    if (!runnerResult.ok) {
+      return;
+    }
+
+    const cacheTtlEntry = `${JSON.stringify({
+      type: "custom",
+      customType: "openclaw.cache-ttl",
+      timestamp: new Date().toISOString(),
+      data: { provider: "anthropic", modelId: "claude-haiku-4-5-20251001" },
+    })}\n`;
+    fs.appendFileSync(runnerResult.sessionFile, cacheTtlEntry, "utf-8");
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Answer before cache-ttl",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (mirrorResult.ok) {
+      expect(mirrorResult.messageId).toBe(runnerResult.messageId);
+      const records = fs
+        .readFileSync(runnerResult.sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type?: string });
+      expect(records.filter((record) => record.type === "message")).toHaveLength(1);
+      expect(records.some((record) => record.type === "custom")).toBe(true);
+    }
+  });
+
   it("does not reuse an older matching assistant message across turns", async () => {
     writeTranscriptStore();
 
