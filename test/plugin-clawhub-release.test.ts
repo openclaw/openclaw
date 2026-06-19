@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenClawReleaseClawHubPlan,
   buildOpenClawReleaseClawHubRuntimeState,
@@ -397,6 +397,109 @@ describe("collectPluginClawHubReleasePlan", () => {
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher",
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1",
     ]);
+  });
+
+  it("retries a rate-limited trusted publisher lookup", async () => {
+    const repoDir = createTempPluginRepo();
+    let trustedPublisherRequests = 0;
+    let firstTrustedPublisherRequestAt: number | undefined;
+    let retryTrustedPublisherRequestAt: number | undefined;
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        trustedPublisherRequests += 1;
+        if (trustedPublisherRequests === 1) {
+          firstTrustedPublisherRequestAt = Date.now();
+          return new Response("", { status: 429 });
+        }
+        retryTrustedPublisherRequestAt = Date.now();
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(trustedPublisherRequests).toBe(2);
+    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
+      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
+    );
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+
+  it("honors an HTTP-date Retry-After header", async () => {
+    const repoDir = createTempPluginRepo();
+    const retryAfter = "Wed, 21 Oct 2030 07:28:00 GMT";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse(retryAfter) - 1_000);
+    let trustedPublisherRequests = 0;
+    let firstTrustedPublisherRequestAt: number | undefined;
+    let retryTrustedPublisherRequestAt: number | undefined;
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        trustedPublisherRequests += 1;
+        if (trustedPublisherRequests === 1) {
+          firstTrustedPublisherRequestAt = performance.now();
+          return new Response("", { status: 429, headers: { "retry-after": retryAfter } });
+        }
+        retryTrustedPublisherRequestAt = performance.now();
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    try {
+      await collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(trustedPublisherRequests).toBe(2);
+    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
+      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
+    );
   });
 
   it("routes missing package rows to bootstrap candidates instead of normal candidates", async () => {
