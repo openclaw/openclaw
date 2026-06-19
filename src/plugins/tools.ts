@@ -1019,12 +1019,12 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {
     return;
   }
-  ensureStandaloneRuntimePluginRegistryLoaded({
+  return ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "channel",
     requiredPluginIds: loadState.onlyPluginIds,
     loadOptions: loadState.loadOptions,

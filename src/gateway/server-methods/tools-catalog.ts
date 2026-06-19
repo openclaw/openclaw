@@ -20,11 +20,7 @@ import {
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import {
-  getActivePluginChannelRegistry,
-  getActivePluginRegistry,
-  getPinnedActivePluginChannelRegistry,
-} from "../../plugins/runtime.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
   ensureStandalonePluginToolRegistryLoaded,
@@ -84,7 +80,7 @@ function buildPluginGroups(params: {
     agentDir,
     agentId: params.agentId,
   };
-  ensureStandalonePluginToolRegistryLoaded({
+  const toolRegistry = ensureStandalonePluginToolRegistryLoaded({
     context: toolContext,
     toolAllowlist: ["group:plugins"],
     allowGatewaySubagentBinding: true,
@@ -99,40 +95,24 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
   });
   const activeRegistry = getActivePluginRegistry();
-  // Tool-discovery loads pin a tool-only registry to the channel surface without promoting it to the
-  // active registry (see standalone-runtime-registry-loader), so a tool-only plugin's catalog
-  // metadata and declared tools can live only on the pinned channel registry. The channel selector
-  // (getActivePluginChannelRegistry) can also hide that pinned registry behind an active registry
-  // that has channels, so read the raw pinned channel registry too. The active registry stays
-  // authoritative when the same metadata key exists in more than one.
-  const extraMetadataRegistries: PluginRegistry[] = [];
-  const seenMetadataRegistries = new Set<PluginRegistry>(activeRegistry ? [activeRegistry] : []);
-  for (const registry of [
-    getActivePluginChannelRegistry(),
-    getPinnedActivePluginChannelRegistry(),
-  ]) {
-    if (registry && !seenMetadataRegistries.has(registry)) {
-      seenMetadataRegistries.add(registry);
-      extraMetadataRegistries.push(registry);
-    }
-  }
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
-  const pluginToolMetadata = new Map(
-    (activeRegistry?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
-  );
-  for (const registry of extraMetadataRegistries) {
+  const pluginToolMetadata = new Map<
+    string,
+    NonNullable<PluginRegistry["toolMetadata"]>[number]["metadata"]
+  >();
+  // Carry the exact discovery result forward. The active registry remains authoritative
+  // when both surfaces describe the same tool.
+  for (const registry of [toolRegistry, activeRegistry]) {
+    if (!registry) {
+      continue;
+    }
     for (const entry of registry.toolMetadata ?? []) {
       const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
-      if (!pluginToolMetadata.has(metadataKey)) {
-        pluginToolMetadata.set(metadataKey, entry.metadata);
-      }
+      pluginToolMetadata.set(metadataKey, entry.metadata);
     }
   }
   const seenToolIds = new Set<string>();
@@ -176,7 +156,7 @@ function buildPluginGroups(params: {
   }
   const declaredToolEntries = [
     ...(activeRegistry?.tools ?? []),
-    ...extraMetadataRegistries.flatMap((registry) => registry.tools ?? []),
+    ...(toolRegistry && toolRegistry !== activeRegistry ? toolRegistry.tools : []),
   ];
   for (const entry of declaredToolEntries) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
