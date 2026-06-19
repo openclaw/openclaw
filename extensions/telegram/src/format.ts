@@ -221,7 +221,8 @@ export function markdownToTelegramHtml(
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
   const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+  const preprocessed = convertHtmlTableToPreformatted(preserveTelegramListBoundarySpacing(markdown ?? ""));
+  const ir = markdownToIR(preprocessed, {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
@@ -1354,7 +1355,8 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+  const preprocessed = convertHtmlTableToPreformatted(preserveTelegramListBoundarySpacing(markdown ?? ""));
+  const ir = markdownToIR(preprocessed, {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",

@@ -448,7 +448,8 @@ describe("markdownToTelegramHtml", () => {
       expect(containsLoneSurrogate(chunk.html)).toBe(false);
       expect(containsLoneSurrogate(chunk.text)).toBe(false);
     }
-  
+  });
+
   describe("HTML table conversion", () => {
     it("converts a simple HTML table to a pipe-formatted code block", () => {
       const input = "Here is data:\n<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
