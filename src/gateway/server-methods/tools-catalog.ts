@@ -95,7 +95,7 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
     runtimeRegistry: toolRegistry,
   });
-  const activeRegistry = getActivePluginRegistry();
+  const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
@@ -105,13 +105,8 @@ function buildPluginGroups(params: {
     string,
     NonNullable<PluginRegistry["toolMetadata"]>[number]["metadata"]
   >();
-  // Carry the exact discovery result forward. The active registry remains authoritative
-  // when both surfaces describe the same tool.
-  for (const registry of [toolRegistry, activeRegistry]) {
-    if (!registry) {
-      continue;
-    }
-    for (const entry of registry.toolMetadata ?? []) {
+  if (catalogRegistry) {
+    for (const entry of catalogRegistry.toolMetadata ?? []) {
       const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
       pluginToolMetadata.set(metadataKey, entry.metadata);
     }
@@ -155,11 +150,7 @@ function buildPluginGroups(params: {
     seenToolIds.add(tool.name);
     groups.set(groupId, existing);
   }
-  const declaredToolEntries = [
-    ...(activeRegistry?.tools ?? []),
-    ...(toolRegistry && toolRegistry !== activeRegistry ? toolRegistry.tools : []),
-  ];
-  for (const entry of declaredToolEntries) {
+  for (const entry of catalogRegistry?.tools ?? []) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
     for (const name of names) {
       if (seenToolIds.has(name) || params.existingToolNames.has(name)) {

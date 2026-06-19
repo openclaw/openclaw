@@ -243,6 +243,18 @@ describe("tools.catalog handler", () => {
         },
       },
     ] as never;
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.toolMetadata = [
+      {
+        pluginId: "voice-call",
+        metadata: {
+          toolName: "voice_call",
+          displayName: "Wrong Workspace Voice Call",
+          risk: "low",
+        },
+      },
+    ] as never;
+    getActivePluginRegistryMock.mockReturnValue(activeRegistry);
     vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(toolRegistry);
 
     const { respond, invoke } = createInvokeParams({});
