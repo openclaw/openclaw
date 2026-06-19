@@ -1200,7 +1200,7 @@ describe("maybeScanExtraGatewayServices", () => {
     expect(mocks.findExtraGatewayServices).toHaveBeenCalledWith(process.env, { deep: true });
   });
 
-  it("maps extra gateway services to structured findings", () => {
+  it("maps intentional extra gateway services to informational structured findings", () => {
     expect(
       extraGatewayServiceToHealthFinding({
         platform: "linux",
@@ -1212,9 +1212,28 @@ describe("maybeScanExtraGatewayServices", () => {
     ).toEqual(
       expect.objectContaining({
         checkId: "core/doctor/gateway-services/extra",
-        severity: "warning",
+        severity: "info",
         source: "linux",
         target: "custom-gateway.service",
+      }),
+    );
+  });
+
+  it("keeps legacy gateway services warning-level", () => {
+    expect(
+      extraGatewayServiceToHealthFinding({
+        platform: "linux",
+        label: "openclaw-gateway.service",
+        detail: "legacy unit",
+        scope: "user",
+        legacy: true,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/extra",
+        severity: "warning",
+        source: "linux",
+        target: "openclaw-gateway.service",
       }),
     );
   });

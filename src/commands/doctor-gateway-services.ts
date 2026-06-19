@@ -245,7 +245,7 @@ export async function detectExtraGatewayServiceIssues(
 export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService): HealthFinding {
   return {
     checkId: GATEWAY_SERVICES_EXTRA_CHECK_ID,
-    severity: "warning",
+    severity: service.legacy === true ? "warning" : "info",
     message: `Other gateway-like service detected: ${service.label} (${service.scope}, ${service.detail})`,
     source: service.platform,
     target: service.label,
