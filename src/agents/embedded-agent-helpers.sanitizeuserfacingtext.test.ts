@@ -244,6 +244,41 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
+  it("strips standalone truncation sentinel lines from user-facing replies", () => {
+    expect(sanitizeUserFacingText("...(truncated)...")).toBe("");
+    expect(sanitizeUserFacingText("Before\n...(truncated)...\nAfter")).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("Before\n...[truncated]...\nAfter")).toBe("Before\nAfter");
+    expect(
+      sanitizeUserFacingText("Before\n...[additional startup memory truncated]...\nAfter"),
+    ).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("Before\n…13 chars truncated…\nAfter")).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("Before\n…3 tokens truncated…\nAfter")).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("Before\n[..., 42 more characters truncated]\nAfter")).toBe(
+      "Before\nAfter",
+    );
+    expect(
+      sanitizeUserFacingText(
+        "Before\n[... 123 more characters truncated; rerun with narrower args if needed]\nAfter",
+      ),
+    ).toBe("Before\nAfter");
+    expect(
+      sanitizeUserFacingText("Before\n[...truncated, read AGENTS.md for full content...]\nAfter"),
+    ).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("Before\n[…truncated 200+100/5000]\nAfter")).toBe(
+      "Before\nAfter",
+    );
+  });
+
+  it("preserves truncation sentinel examples in prose and fenced code", () => {
+    const inline = "What does ...(truncated)... mean?";
+    const fenced = ["Example:", "```text", "...(truncated)...", "```"].join("\n");
+    const indentedFence = ["- Example:", "  ```text", "  ...(truncated)...", "  ```"].join("\n");
+
+    expect(sanitizeUserFacingText(inline)).toBe(inline);
+    expect(sanitizeUserFacingText(fenced)).toBe(fenced);
+    expect(sanitizeUserFacingText(indentedFence)).toBe(indentedFence);
+  });
+
   it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
     const input = [
       "Before",
