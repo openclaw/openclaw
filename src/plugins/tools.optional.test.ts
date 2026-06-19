@@ -953,15 +953,16 @@ describe("resolvePluginTools optional tools", () => {
       },
     });
 
-    ensureStandalonePluginToolRegistryLoaded({
+    const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
       context: createContext() as never,
       toolAllowlist: ["optional_tool"],
     });
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
         toolAllowlist: ["optional_tool"],
       }),
-    );
+      runtimeRegistry,
+    });
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);

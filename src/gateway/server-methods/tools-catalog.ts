@@ -93,6 +93,7 @@ function buildPluginGroups(params: {
     toolAllowlist: ["group:plugins"],
     suppressNameConflicts: true,
     allowGatewaySubagentBinding: true,
+    runtimeRegistry: toolRegistry,
   });
   const activeRegistry = getActivePluginRegistry();
   const groups = new Map<string, ToolCatalogGroup>();

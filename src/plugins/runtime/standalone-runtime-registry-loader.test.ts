@@ -6,6 +6,7 @@ import type { PluginRegistry } from "../registry-types.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
+  pinActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../runtime.js";
@@ -122,9 +123,11 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
 });
 
 describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {
-  it("pins a tool-discovery channel registry without replacing the active registry", () => {
+  it("does not replace active or pinned channel registries during tool discovery", () => {
     const activeRegistry = createRegistryWithPlugin("provider-only");
     setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
+    const channelRegistry = createRegistryWithPlugin("channel-plugin");
+    pinActivePluginChannelRegistry(channelRegistry);
     const toolRegistry = createRegistryWithPlugin("tool-plugin");
     loaderMocks.loadOpenClawPlugins.mockReturnValue(toolRegistry);
 
@@ -139,9 +142,8 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
       },
     });
 
-    // Active registry (with its providers) must be left untouched; only the channel surface is pinned.
     expect(getActivePluginRegistry()).toBe(activeRegistry);
-    expect(getActivePluginChannelRegistry()).toBe(toolRegistry);
+    expect(getActivePluginChannelRegistry()).toBe(channelRegistry);
   });
 
   it("does not replace the active registry for a tool-discovery active load", () => {
@@ -188,7 +190,7 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
     expect(getActivePluginRegistry()).toBe(migrationRegistry);
   });
 
-  it("initializes the active registry for a tool-discovery load when none is active", () => {
+  it("keeps runtime surfaces empty for a cold tool-discovery load", () => {
     // Establish the cold-start precondition deterministically (no active registry).
     resetPluginRuntimeStateForTest();
     const toolRegistry = createRegistryWithPlugin("tool-plugin");
@@ -206,8 +208,6 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
     });
 
     expect(result).toBe(toolRegistry);
-    // With no prior active registry there is nothing to preserve, so the tool-discovery load
-    // initializes the active registry (and its cache key / workspaceDir) for later lookups.
-    expect(getActivePluginRegistry()).toBe(toolRegistry);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 });

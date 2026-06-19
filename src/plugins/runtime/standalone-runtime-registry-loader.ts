@@ -10,7 +10,6 @@ import {
 } from "../loader.js";
 import type { PluginRegistry } from "../registry-types.js";
 import {
-  getActivePluginRegistry,
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
@@ -35,17 +34,9 @@ function installStandaloneRegistry(
     surface: ActiveRuntimePluginRegistrySurface;
   },
 ): void {
-  // Tool-discovery loads use a tool-only plugin scope (with activate:false), so the resulting
-  // registry omits provider-only plugins. Once an active registry already exists, such a load must
-  // not replace it (that would wipe the live providers, e.g. the gateway agents.list list) — it is
-  // only pinned to its requested channel/http-route surface. When no active registry exists yet,
-  // promote it so the first standalone load still initializes runtime state (cache key /
-  // workspaceDir) that later surface lookups depend on.
-  if (params.loadOptions.toolDiscovery !== true || getActivePluginRegistry() === null) {
-    const cacheKey = resolvePluginRegistryLoadCacheKey(params.loadOptions);
-    const mode = resolveRuntimeSubagentMode(params.loadOptions);
-    setActivePluginRegistry(registry, cacheKey, mode, params.loadOptions.workspaceDir);
-  }
+  const cacheKey = resolvePluginRegistryLoadCacheKey(params.loadOptions);
+  const mode = resolveRuntimeSubagentMode(params.loadOptions);
+  setActivePluginRegistry(registry, cacheKey, mode, params.loadOptions.workspaceDir);
   switch (params.surface) {
     case "active":
       break;
@@ -99,6 +90,12 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
   }
 
   if (params.installRegistry === false) {
+    return registry;
+  }
+
+  // Tool discovery returns a request-local snapshot. Installing it would replace live provider,
+  // channel, or HTTP-route registries with a registry that intentionally omits those surfaces.
+  if (params.loadOptions.toolDiscovery === true) {
     return registry;
   }
 

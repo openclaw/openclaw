@@ -42,7 +42,7 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
   const pluginToolPolicy = resolvePluginToolPolicy(config);
-  ensureStandalonePluginToolRegistryLoaded({
+  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
     context: { config },
     ...pluginToolPolicy,
   });
@@ -50,6 +50,7 @@ function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
     context: { config },
     ...pluginToolPolicy,
     suppressNameConflicts: true,
+    runtimeRegistry,
   });
 }
 

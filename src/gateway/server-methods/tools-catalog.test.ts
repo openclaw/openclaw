@@ -255,5 +255,8 @@ describe("tools.catalog handler", () => {
     expect(voiceCall?.label).toBe("Voice Call");
     expect(voiceCall?.risk).toBe("high");
     expect(voiceCall?.tags).toEqual(["calling"]);
+    expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeRegistry: toolRegistry }),
+    );
   });
 });
