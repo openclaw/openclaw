@@ -23,6 +23,7 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
@@ -194,7 +195,11 @@ export const googlechatOutboundAdapter = {
     chunker: chunkTextForOutbound,
     chunkerMode: "markdown" as const,
     textChunkLimit: 4000,
-    sanitizeText: ({ text }: { text: string }) => sanitizeForPlainText(text),
+    // Strip internal assistant trace lines (e.g. `⚠️ 🛠️ ... (agent) failed`
+    // banners from benign non-zero shell exits) before the plain-text pass, so
+    // they don't leak to users — mirrors Discord/WhatsApp outbound. See #90684.
+    sanitizeText: ({ text }: { text: string }) =>
+      sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
