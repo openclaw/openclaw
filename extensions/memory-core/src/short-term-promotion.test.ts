@@ -3302,4 +3302,70 @@ describe("short-term promotion", () => {
       });
     });
   });
+
+  describe("promotion threshold compatibility", () => {
+    it("should promote entries with Gemini-like scores using default thresholds", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const nowMs = Date.parse("2026-04-10T10:00:00.000Z");
+
+        // Simulate 3 recall hits with gemini-embedding-001 scores (0.43–0.52 range)
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "deployment pipeline",
+          nowMs,
+          results: [
+            {
+              path: "memory/2026-04-08.md",
+              startLine: 1,
+              endLine: 2,
+              score: 0.48,
+              snippet: "Move backups to S3 Glacier Deep Archive for cost savings.",
+              source: "memory",
+            },
+          ],
+        });
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "backup strategy",
+          nowMs: nowMs + 60_000,
+          results: [
+            {
+              path: "memory/2026-04-08.md",
+              startLine: 1,
+              endLine: 2,
+              score: 0.51,
+              snippet: "Move backups to S3 Glacier Deep Archive for cost savings.",
+              source: "memory",
+            },
+          ],
+        });
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "cost optimization",
+          nowMs: nowMs + 120_000,
+          results: [
+            {
+              path: "memory/2026-04-08.md",
+              startLine: 1,
+              endLine: 2,
+              score: 0.46,
+              snippet: "Move backups to S3 Glacier Deep Archive for cost savings.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          nowMs: nowMs + 120_000,
+        });
+
+        expect(ranked.length).toBeGreaterThan(0);
+        expect(ranked[0]?.recallCount).toBe(3);
+        expect(ranked[0]?.avgScore).toBeGreaterThan(0.4);
+        expect(ranked[0]?.avgScore).toBeLessThan(0.6);
+        expect(ranked[0]?.uniqueQueries).toBe(3);
+      });
+    });
+  });
 });
