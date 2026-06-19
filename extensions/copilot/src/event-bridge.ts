@@ -70,6 +70,7 @@ export interface EventBridgeController {
   awaitCompactionChain(): Promise<void>;
   awaitCompactionCompletion(): Promise<void>;
   awaitDeltaChain(): Promise<void>;
+  hasObservedCompaction(): boolean;
   isCompacting(): boolean;
   snapshot(): EventBridgeSnapshot;
   buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
@@ -96,6 +97,7 @@ export function attachEventBridge(
   let startedCount = 0;
   let completedCount = 0;
   let activeCompactionCount = 0;
+  let observedCompaction = false;
   let deltaQueue = Promise.resolve();
   let deltaChain = Promise.resolve();
   let compactionChain = Promise.resolve();
@@ -182,6 +184,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.compaction_start", () => {
+    observedCompaction = true;
     if (activeCompactionCount === 0) {
       compactionIdle = new Promise<void>((resolve) => {
         resolveCompactionIdle = resolve;
@@ -247,6 +250,9 @@ export function attachEventBridge(
     },
     awaitDeltaChain() {
       return deltaChain;
+    },
+    hasObservedCompaction() {
+      return observedCompaction;
     },
     isCompacting() {
       return activeCompactionCount > 0;

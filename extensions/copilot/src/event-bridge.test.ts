@@ -650,6 +650,7 @@ describe("attachEventBridge", () => {
     const completion = bridge.awaitCompactionCompletion();
     await flushAsync();
 
+    expect(bridge.hasObservedCompaction()).toBe(true);
     expect(complete).not.toHaveBeenCalled();
     session.emit(
       "session.compaction_complete",

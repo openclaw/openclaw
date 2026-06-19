@@ -441,6 +441,38 @@ describe("runCopilotAttempt", () => {
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
 
+  it("does not await background compaction hooks before returning a turn", async () => {
+    const releaseBeforeCompaction = createDeferred<void>();
+    const beforeCompaction = vi.fn(async () => releaseBeforeCompaction.promise);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_compaction", handler: beforeCompaction }]),
+    );
+    let activeSession: FakeSession | undefined;
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        activeSession = session;
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    expect(result.timedOut).toBe(false);
+    await vi.waitFor(() => {
+      expect(beforeCompaction).toHaveBeenCalledTimes(1);
+    });
+    expect(activeSession?.disconnect).not.toHaveBeenCalled();
+
+    releaseBeforeCompaction.resolve();
+    activeSession?.emit("session.compaction_complete", { success: true });
+    await vi.waitFor(() => {
+      expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("returns a successful turn while background compaction remains observed", async () => {
     vi.useFakeTimers();
     const sdk = makeFakeSdk({

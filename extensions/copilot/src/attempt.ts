@@ -736,7 +736,6 @@ export async function runCopilotAttempt(
       }
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
-      await bridge.awaitCompactionChain();
       if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
@@ -778,7 +777,7 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    if (bridge?.isCompacting() && session && handle) {
+    if (bridge?.hasObservedCompaction() && session && handle) {
       timedOutDuringCompaction ||= timedOut;
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
