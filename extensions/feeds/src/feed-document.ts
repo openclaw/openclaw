@@ -109,7 +109,7 @@ export function feedEntryMatchesQuery(entry: FeedEntry, query: string): boolean 
   return haystack.includes(normalized);
 }
 
-async function readFeedBytes(url: string, runtime: FeedDocumentRuntime): Promise<Buffer> {
+export async function readFeedBytes(url: string, runtime: FeedDocumentRuntime): Promise<Buffer> {
   const parsed = new URL(url);
   if (parsed.protocol === "file:") {
     const read = runtime.readFile ?? readFile;

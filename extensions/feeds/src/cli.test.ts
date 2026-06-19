@@ -7,10 +7,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 import {
+  feedsBuildCommand,
+  feedsDiffCommand,
   feedsInstallCommand,
   feedsListCommand,
+  feedsNoticesCommand,
+  feedsHashCommand,
   feedsSearchCommand,
   feedsSourcesCommand,
+  feedsUpdatesCommand,
+  feedsValidateCommand,
   type FeedsCommandRuntime,
 } from "./cli.js";
 import { MAX_FEED_DOCUMENT_BYTES } from "./feed-document.js";
@@ -268,6 +274,442 @@ describe("Feeds CLI", () => {
     expect(runtime.stderr).toContain("Invalid --type value. Expected skill or plugin.");
   });
 
+  it("reports available feed updates from an installed inventory", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "skill",
+          id: "excel-review",
+          version: "1.2.0",
+          approval: { status: "approved" },
+        },
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          version: "1.0.0",
+        },
+      ],
+    });
+    const inventory = JSON.stringify({
+      entries: [
+        { type: "skill", id: "excel-review", version: "1.0.0" },
+        { type: "plugin", id: "calendar-helper", version: "1.0.0" },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: {
+        "/feeds/company.json": feed,
+        "/installed.json": inventory,
+      },
+    });
+
+    const exitCode = await feedsUpdatesCommand(
+      { installed: "/installed.json", json: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout).updates).toEqual([
+      expect.objectContaining({
+        type: "skill",
+        id: "excel-review",
+        installedVersion: "1.0.0",
+        availableVersion: "1.2.0",
+        approved: true,
+      }),
+    ]);
+  });
+
+  it("filters feed updates to approved entries", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        { type: "skill", id: "approved-skill", version: "2.0.0", approval: { status: "approved" } },
+        { type: "skill", id: "draft-skill", version: "2.0.0" },
+      ],
+    });
+    const inventory = JSON.stringify({
+      entries: [
+        { type: "skill", id: "approved-skill", version: "1.0.0" },
+        { type: "skill", id: "draft-skill", version: "1.0.0" },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: {
+        "/feeds/company.json": feed,
+        "/installed.json": inventory,
+      },
+    });
+
+    const exitCode = await feedsUpdatesCommand(
+      { installed: "/installed.json", approvedOnly: true, json: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout).updates.map((entry: { id: string }) => entry.id)).toEqual([
+      "approved-skill",
+    ]);
+  });
+
+  it("uses semver prerelease ordering for update notices", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          version: "1.0.0-beta.1",
+          approval: { status: "approved" },
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+        {
+          type: "plugin",
+          id: "sheet-helper",
+          version: "1.0.0",
+          approval: { status: "approved" },
+          install: { source: "clawhub", spec: "openclaw-sheet" },
+        },
+        {
+          type: "plugin",
+          id: "docs-helper",
+          version: "1.0.0-rc.1",
+          approval: { status: "approved" },
+          install: { source: "clawhub", spec: "openclaw-docs" },
+        },
+      ],
+    });
+    const inventory = JSON.stringify({
+      entries: [
+        { type: "plugin", id: "calendar-helper", version: "1.0.0" },
+        { type: "plugin", id: "sheet-helper", version: "1.0.0-beta.1" },
+        { type: "plugin", id: "docs-helper", version: "1.0.0-beta.9" },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: {
+        "/feeds/company.json": feed,
+        "/installed.json": inventory,
+      },
+    });
+
+    const exitCode = await feedsUpdatesCommand(
+      { installed: "/installed.json", approvedOnly: true, json: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    const updates = JSON.parse(runtime.stdout).updates;
+    expect(updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "sheet-helper",
+          installedVersion: "1.0.0-beta.1",
+          availableVersion: "1.0.0",
+        }),
+        expect.objectContaining({
+          id: "docs-helper",
+          installedVersion: "1.0.0-beta.9",
+          availableVersion: "1.0.0-rc.1",
+        }),
+      ]),
+    );
+    expect(updates).toHaveLength(2);
+  });
+
+  it("reports subscriber update notices", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          version: "1.2.0",
+          approval: { status: "approved" },
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+      ],
+    });
+    const inventory = JSON.stringify({
+      entries: [{ type: "plugin", id: "calendar-helper", version: "1.0.0" }],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: {
+        "/feeds/company.json": feed,
+        "/installed.json": inventory,
+      },
+    });
+
+    const exitCode = await feedsNoticesCommand(
+      { installed: "/installed.json", approvedOnly: true, json: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout).notices).toEqual([
+      expect.objectContaining({
+        type: "plugin",
+        id: "calendar-helper",
+        sourceId: "approved",
+        installedVersion: "1.0.0",
+        availableVersion: "1.2.0",
+        approved: true,
+        installCommand: "openclaw plugins install clawhub:openclaw-calendar",
+      }),
+    ]);
+  });
+
+  it("validates a local feed document and prints its integrity", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [{ type: "skill", id: "excel-review" }],
+    });
+    const integrity = `sha256:${createHash("sha256").update(feed).digest("hex")}`;
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsValidateCommand("/feeds/company.json", { json: true }, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout)).toEqual({
+      ok: true,
+      id: "company-approved",
+      entries: 1,
+      integrity,
+    });
+  });
+
+  it("validates a file URL feed document", async () => {
+    const feed = JSON.stringify({ schemaVersion: 1, id: "company-approved", entries: [] });
+    const integrity = "sha256:" + createHash("sha256").update(feed).digest("hex");
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsValidateCommand(
+      "file:///feeds/company.json",
+      { json: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout)).toEqual({
+      ok: true,
+      id: "company-approved",
+      entries: 0,
+      integrity,
+    });
+  });
+
+  it("prints a local feed document integrity hash", async () => {
+    const feed = JSON.stringify({ schemaVersion: 1, id: "company-approved", entries: [] });
+    const integrity = `sha256:${createHash("sha256").update(feed).digest("hex")}`;
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsHashCommand("/feeds/company.json", {}, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(runtime.stdout).toBe(`${integrity}\n`);
+  });
+
+  it("prints an HTTPS feed document integrity hash", async () => {
+    const feed = JSON.stringify({ schemaVersion: 1, id: "company-approved", entries: [] });
+    const integrity = "sha256:" + createHash("sha256").update(feed).digest("hex");
+    const runtime = createRuntime({
+      sources: [],
+      fetch: async (url) => {
+        expect(url).toBe("https://feeds.example.com/company.json");
+        return { ok: true, text: feed };
+      },
+    });
+
+    const exitCode = await feedsHashCommand("https://feeds.example.com/company.json", {}, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(runtime.stdout).toBe(integrity + "\n");
+  });
+
+  it("rejects invalid local feed documents during validation", async () => {
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/broken.json": JSON.stringify({ schemaVersion: 1, id: "broken" }) },
+    });
+
+    const exitCode = await feedsValidateCommand("/feeds/broken.json", {}, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("entries must be an array");
+  });
+
+  it("builds a curated feed artifact from local inventory rules", async () => {
+    const inventory = JSON.stringify({
+      schemaVersion: 1,
+      id: "upstream",
+      entries: [
+        {
+          type: "skill",
+          id: "excel-review",
+          version: "1.0.0",
+          tags: ["m365", "approved"],
+          approval: { status: "approved" },
+        },
+        { type: "plugin", id: "draft-plugin", tags: ["m365"] },
+        {
+          type: "skill",
+          id: "blocked-skill",
+          tags: ["m365", "blocked"],
+          approval: { status: "approved" },
+        },
+      ],
+    });
+    const rules = JSON.stringify({
+      includeTypes: ["skill"],
+      includeTags: ["m365"],
+      excludeTags: ["blocked"],
+      requireApproval: true,
+    });
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/inventory.json": inventory, "/feeds/rules.json": rules },
+    });
+
+    const exitCode = await feedsBuildCommand(
+      {
+        inventory: "/feeds/inventory.json",
+        rules: "/feeds/rules.json",
+        out: "/feeds/lobster-approved.json",
+        id: "lobster-approved",
+        generatedAt: "2026-05-28T00:00:00.000Z",
+        json: true,
+      },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout)).toEqual(
+      expect.objectContaining({
+        ok: true,
+        id: "lobster-approved",
+        entries: 1,
+        out: "/feeds/lobster-approved.json",
+      }),
+    );
+    expect(JSON.parse(runtime.writes["/feeds/lobster-approved.json"])).toEqual({
+      schemaVersion: 1,
+      id: "lobster-approved",
+      generatedAt: "2026-05-28T00:00:00.000Z",
+      entries: [
+        expect.objectContaining({
+          type: "skill",
+          id: "excel-review",
+          approval: { status: "approved" },
+        }),
+      ],
+    });
+  });
+
+  it("omits generatedAt by default for deterministic feed builds", async () => {
+    const inventory = JSON.stringify({
+      schemaVersion: 1,
+      id: "upstream",
+      entries: [
+        { type: "skill", id: "b" },
+        { type: "skill", id: "a" },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/inventory.json": inventory },
+    });
+
+    const firstExitCode = await feedsBuildCommand(
+      { inventory: "/feeds/inventory.json", out: "/feeds/first.json", id: "curated", json: true },
+      runtime,
+    );
+    const firstArtifact = runtime.writes["/feeds/first.json"];
+    const secondExitCode = await feedsBuildCommand(
+      { inventory: "/feeds/inventory.json", out: "/feeds/second.json", id: "curated", json: true },
+      runtime,
+    );
+
+    expect(firstExitCode).toBe(0);
+    expect(secondExitCode).toBe(0);
+    expect(JSON.parse(firstArtifact)).not.toHaveProperty("generatedAt");
+    expect(firstArtifact).toBe(runtime.writes["/feeds/second.json"]);
+  });
+
+  it("reports feed artifact deltas", async () => {
+    const previous = JSON.stringify({
+      schemaVersion: 1,
+      id: "lobster-approved",
+      entries: [
+        {
+          type: "skill",
+          id: "excel-review",
+          version: "1.0.0",
+          name: "Excel Review",
+          sha256: "old",
+          approval: { status: "pending" },
+        },
+        { type: "plugin", id: "removed-plugin" },
+      ],
+    });
+    const current = JSON.stringify({
+      schemaVersion: 1,
+      id: "lobster-approved",
+      entries: [
+        {
+          type: "skill",
+          id: "excel-review",
+          version: "1.1.0",
+          name: "Excel Review Pro",
+          sha256: "new",
+          approval: { status: "approved" },
+        },
+        { type: "skill", id: "new-skill" },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [],
+      files: { "/feeds/previous.json": previous, "/feeds/current.json": current },
+    });
+
+    const exitCode = await feedsDiffCommand(
+      { previous: "/feeds/previous.json", current: "/feeds/current.json", json: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(runtime.stdout)).toEqual(
+      expect.objectContaining({
+        added: [expect.objectContaining({ type: "skill", id: "new-skill" })],
+        removed: [expect.objectContaining({ type: "plugin", id: "removed-plugin" })],
+        updated: [{ type: "skill", id: "excel-review", previous: "1.0.0", current: "1.1.0" }],
+        approvalChanged: [
+          { type: "skill", id: "excel-review", previous: "pending", current: "approved" },
+        ],
+        metadataChanged: [{ type: "skill", id: "excel-review" }],
+        hashChanged: [{ type: "skill", id: "excel-review", previous: "old", current: "new" }],
+      }),
+    );
+  });
+
   it("dry-runs an explicit feed-backed plugin install", async () => {
     const feed = JSON.stringify({
       schemaVersion: 1,
@@ -484,22 +926,26 @@ describe("Feeds CLI", () => {
 function createRuntime(params: {
   readonly sources?: readonly Record<string, unknown>[];
   readonly files?: Readonly<Record<string, string>>;
+  readonly fetch?: FeedsCommandRuntime["fetch"];
   readonly installPolicy?: Record<string, unknown>;
 }): FeedsCommandRuntime & {
   stdout: string;
   stderr: string;
   isTTY?: boolean;
   commands: readonly string[][];
+  writes: Record<string, string>;
 } {
   const runtime: FeedsCommandRuntime & {
     stdout: string;
     stderr: string;
     isTTY?: boolean;
     commands: string[][];
+    writes: Record<string, string>;
   } = {
     stdout: "",
     stderr: "",
     commands: [],
+    writes: {},
     writeStdout(value) {
       this.stdout += value;
     },
@@ -510,7 +956,11 @@ function createRuntime(params: {
       runtime.commands.push([...argv]);
       return 0;
     },
-    async readConfigSnapshot() {
+    async writeFile(path, value) {
+      runtime.writes[path] = value;
+    },
+    fetch: params.fetch,
+    async readConfigSnapshot(): Promise<any> {
       return {
         valid: true,
         config: {
