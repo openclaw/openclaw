@@ -307,23 +307,31 @@ export async function resolveBootstrapFilesForRun(params: {
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
 
-  // Load per-agent agentDir bootstrap files when agentDir differs from
-  // workspaceDir so SOUL.md / AGENTS.md / TOOLS.md placed in the per-agent
-  // directory are not silently ignored (issue #29387).
+  // Load per-agent agentDir bootstrap files only when agentDir is explicitly
+  // configured in the agent config, so default state directories do not
+  // silently override workspace safety rules (issue #29387).
   let mergedRawFiles = rawFiles;
   if (params.config && params.agentId) {
-    const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-    const agentDir = resolveAgentDir(params.config, params.agentId);
-    const resolvedAgentDir = resolveUserPath(agentDir);
-    if (resolvedAgentDir !== resolvedWorkspaceDir) {
-      const agentDirFiles = await loadWorkspaceBootstrapFiles(agentDir);
-      const presentAgentDirFiles = agentDirFiles.filter((f) => !f.missing);
-      if (presentAgentDirFiles.length > 0) {
-        const agentDirNames = new Set(presentAgentDirFiles.map((f) => f.name));
-        // agentDir files override workspace files with the same name, enabling
-        // per-agent customization of SOUL.md, AGENTS.md, etc.
-        const workspaceOnly = rawFiles.filter((f) => !agentDirNames.has(f.name));
-        mergedRawFiles = [...workspaceOnly, ...presentAgentDirFiles];
+    const explicitAgentDir = resolveAgentConfig(params.config, params.agentId)?.agentDir?.trim();
+    if (explicitAgentDir) {
+      const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+      const agentDir = resolveAgentDir(params.config, params.agentId);
+      const resolvedAgentDir = resolveUserPath(agentDir);
+      if (resolvedAgentDir !== resolvedWorkspaceDir) {
+        const agentDirFiles = await loadWorkspaceBootstrapFiles(agentDir);
+        let presentAgentDirFiles = agentDirFiles.filter((f) => !f.missing);
+        if (workspaceSetupCompleted) {
+          presentAgentDirFiles = presentAgentDirFiles.filter(
+            (f) => f.name !== DEFAULT_BOOTSTRAP_FILENAME,
+          );
+        }
+        if (presentAgentDirFiles.length > 0) {
+          const agentDirNames = new Set(presentAgentDirFiles.map((f) => f.name));
+          // agentDir files override workspace files with the same name, enabling
+          // per-agent customization of SOUL.md, AGENTS.md, etc.
+          const workspaceOnly = rawFiles.filter((f) => !agentDirNames.has(f.name));
+          mergedRawFiles = [...workspaceOnly, ...presentAgentDirFiles];
+        }
       }
     }
   }
