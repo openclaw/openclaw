@@ -212,7 +212,7 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   return false;
 }
 
-function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
+export function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {
       continue;

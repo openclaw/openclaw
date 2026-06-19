@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  hasTelegramErrorCode,
   isRecoverableTelegramNetworkError,
   isTelegramRateLimitError,
   isTelegramServerError,
@@ -69,6 +70,16 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
+  // Check structured error_code first to avoid miscounting transient errors
+  // (e.g. 429 with retry_after: 401) whose message contains the substring "401".
+  if (hasTelegramErrorCode(error, (code) => code === 401)) {
+    return true;
+  }
+  // Any Telegram error_code that isn't 401 is NOT a 401.
+  if (hasTelegramErrorCode(error, () => true)) {
+    return false;
+  }
+  // Fall back to string matching for unstructured errors.
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return (
     message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")

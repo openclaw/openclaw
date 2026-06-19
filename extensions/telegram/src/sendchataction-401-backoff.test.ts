@@ -266,6 +266,81 @@ describe("createTelegramSendChatActionHandler", () => {
     ]);
   });
 
+  it("does not count a structured 429 whose message contains '401' as a 401 error", async () => {
+    const make429With401InMessage = () =>
+      makeTelegramError(
+        "Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)",
+        429,
+        { retry_after: 401 },
+      );
+    const fn = vi.fn().mockRejectedValue(make429With401InMessage());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 3,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+
+    // Must not suspend: this is a 429, not a 401
+    expect(handler.isSuspended()).toBe(false);
+    // Must treat as transient, not 401
+    const criticalLogs = logger.mock.calls.filter(([msg]: [string]) =>
+      String(msg).includes("CRITICAL"),
+    );
+    expect(criticalLogs).toHaveLength(0);
+    expect(logger.mock.calls.every(([msg]: [string]) => String(msg).includes("transient"))).toBe(
+      true,
+    );
+  });
+
+  it("does not count a structured 5xx whose message contains '401' as a 401 error", async () => {
+    const make502With401InMessage = () =>
+      makeTelegramError(
+        "Call to 'sendChatAction' failed! (502: Bad Gateway: upstream returned 401)",
+        502,
+      );
+    const fn = vi.fn().mockRejectedValue(make502With401InMessage());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 2,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow();
+
+    expect(handler.isSuspended()).toBe(false);
+    const criticalLogs = logger.mock.calls.filter(([msg]: [string]) =>
+      String(msg).includes("CRITICAL"),
+    );
+    expect(criticalLogs).toHaveLength(0);
+  });
+
+  it("counts a real structured 401 error (error_code: 401) toward suspension", async () => {
+    const makeReal401Error = () => makeTelegramError("Unauthorized", 401);
+    const fn = vi.fn().mockRejectedValue(makeReal401Error());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 2,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Unauthorized");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("Unauthorized");
+
+    expect(handler.isSuspended()).toBe(true);
+    const criticalLogs = logger.mock.calls.filter(([msg]: [string]) =>
+      String(msg).includes("CRITICAL"),
+    );
+    expect(criticalLogs).toHaveLength(1);
+  });
+
   it("reset() clears suspension", async () => {
     const fn = vi.fn().mockRejectedValue(make401Error());
     const logger = vi.fn();
