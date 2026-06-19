@@ -690,6 +690,50 @@ describe("model-pricing-cache", () => {
     });
   });
 
+  it("skips malformed manifest model-pricing metadata while preserving healthy policies", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const poisoned = createManifestRecord({ id: "poisoned-pricing" });
+    Object.defineProperty(poisoned, "modelPricing", {
+      get() {
+        throw new Error("model pricing metadata exploded");
+      },
+    });
+    const healthy = createManifestRecord({
+      id: "healthy-pricing",
+      modelPricing: {
+        providers: {
+          custom: { external: false },
+        },
+      },
+    });
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(
+      refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        manifestRegistry: { diagnostics: [], plugins: [poisoned, healthy] },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
     const config = {
       agents: {
