@@ -47,6 +47,7 @@ export type ToolCallSummary = {
   replaySafe: boolean;
   mutatingAction: boolean;
   actionFingerprint?: string;
+  commandExcerpt?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 

@@ -3,10 +3,7 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import {
-  normalizeChannelRouteRef,
-  type ChannelRouteRef,
-} from "../plugin-sdk/channel-route.js";
+import { normalizeChannelRouteRef, type ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import {
   normalizeConversationTargetParams,
   type ConversationTargetParams,

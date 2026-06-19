@@ -1,6 +1,7 @@
 // Summarizes extra security audit findings for user-facing output.
 import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -12,7 +13,6 @@ import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
 export type SecurityAuditFinding = {

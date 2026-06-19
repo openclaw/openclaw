@@ -34,7 +34,11 @@ function extractAdaptiveCardSubmittedData(value: unknown): unknown {
     return value;
   }
   const action = isRecord(value.action) ? value.action : undefined;
-  if (action && normalizeOptionalLowercaseString(action.type) === "action.submit" && "data" in action) {
+  if (
+    action &&
+    normalizeOptionalLowercaseString(action.type) === "action.submit" &&
+    "data" in action
+  ) {
     return action.data;
   }
   return value;

@@ -156,9 +156,8 @@ describe("gateway credential precedence coverage", () => {
       mode,
       env,
     });
-    const status = (
-      await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg))
-    ).auth;
+    const status = (await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg)))
+      .auth;
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       env,

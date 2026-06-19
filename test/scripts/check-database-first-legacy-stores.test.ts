@@ -8387,11 +8387,7 @@ describe("check-database-first-legacy-stores", () => {
       [`${relativePath}:legacy store filesystem write:${allowedWrite}`, 1],
     ]);
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      [
-        `import fs from "node:fs";`,
-        `${allowedWrite};`,
-        `${allowedWrite};`,
-      ].join("\n"),
+      [`import fs from "node:fs";`, `${allowedWrite};`, `${allowedWrite};`].join("\n"),
       relativePath,
       { currentLegacyWriteAllowances },
     );

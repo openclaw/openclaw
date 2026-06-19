@@ -9,10 +9,7 @@ import {
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
-import {
-  createTrajectoryRuntimeRecorder,
-  toTrajectoryToolDefinitions,
-} from "./runtime.js";
+import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 

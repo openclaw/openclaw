@@ -1,8 +1,8 @@
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,

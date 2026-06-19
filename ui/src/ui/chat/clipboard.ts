@@ -40,10 +40,7 @@ function copyWithExecCommand(text: string): boolean {
     if (previouslyFocused?.isConnected) {
       window.setTimeout(() => {
         const activeElement = document.activeElement;
-        if (
-          previouslyFocused.isConnected &&
-          (!activeElement || activeElement === document.body)
-        ) {
+        if (previouslyFocused.isConnected && (!activeElement || activeElement === document.body)) {
           previouslyFocused.focus();
         }
       }, 0);

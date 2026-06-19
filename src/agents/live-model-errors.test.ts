@@ -61,5 +61,4 @@ describe("live model error helpers", () => {
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
-
 });

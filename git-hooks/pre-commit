@@ -38,12 +38,12 @@ done
 format_files=()
 while IFS= read -r -d '' file; do
   format_files+=("$file")
-done < <(node "$FILTER_FILES" format -- "${restage_files[@]}")
+done < <(printf '%s\0' "${restage_files[@]}" | node "$FILTER_FILES" format)
 
 if [ "${#format_files[@]}" -gt 0 ]; then
-  "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
+  printf '%s\0' "${format_files[@]}" | xargs -0 "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern
 fi
 
 if [ "${#restage_files[@]}" -gt 0 ]; then
-  git add -- "${restage_files[@]}"
+  printf '%s\0' "${restage_files[@]}" | xargs -0 git add --
 fi

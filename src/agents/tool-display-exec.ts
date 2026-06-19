@@ -445,6 +445,29 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
 }
 
+/** Returns a bounded, redacted raw command excerpt for shell failure copy. */
+export function resolveExecCommandExcerpt(
+  toolName: string | undefined,
+  args: unknown,
+): string | undefined {
+  const normalizedToolName = toolName?.trim().toLowerCase();
+  if (normalizedToolName !== "exec" && normalizedToolName !== "bash") {
+    return undefined;
+  }
+  const record = asRecord(args);
+  const raw =
+    typeof record?.command === "string"
+      ? record.command.trim()
+      : typeof record?.cmd === "string"
+        ? record.cmd.trim()
+        : undefined;
+  if (!raw) {
+    return undefined;
+  }
+  const excerpt = compactRawCommand(unwrapShellWrapper(raw));
+  return excerpt || undefined;
+}
+
 export type ToolDetailMode = "explain" | "raw";
 
 export function resolveExecDetail(

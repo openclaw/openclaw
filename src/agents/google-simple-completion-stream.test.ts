@@ -24,9 +24,7 @@ vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
 }));
 
-const { prepareGoogleSimpleCompletionModel } = await import(
-  "./google-simple-completion-stream.js"
-);
+const { prepareGoogleSimpleCompletionModel } = await import("./google-simple-completion-stream.js");
 
 const GOOGLE_SIMPLE_COMPLETION_API = "openclaw-google-generative-ai-simple";
 

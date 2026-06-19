@@ -162,5 +162,4 @@ describe("usage-accumulator", () => {
       });
     });
   });
-
 });

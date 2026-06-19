@@ -139,9 +139,8 @@ function buildSyntheticMessageEvent(
   // card-action-c-* IDs are temporary callback tokens, not valid Feishu message IDs.
   // Using them as reply targets causes "Invalid ids" errors from the streaming reply API.
   const isTemporaryCardActionId = replyTargetMessageId?.startsWith("card-action-c-");
-  const validReplyTargetId = replyTargetMessageId && !isTemporaryCardActionId
-    ? replyTargetMessageId
-    : undefined;
+  const validReplyTargetId =
+    replyTargetMessageId && !isTemporaryCardActionId ? replyTargetMessageId : undefined;
   return {
     sender: {
       sender_id: {

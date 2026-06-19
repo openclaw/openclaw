@@ -3,9 +3,7 @@
  * Redacts and summarizes arguments into short labels/details for chat and UI
  * tool update streams.
  */
-import {
-  asOptionalObjectRecord as asRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

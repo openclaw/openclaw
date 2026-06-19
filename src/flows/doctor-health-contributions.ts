@@ -572,9 +572,8 @@ async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteOpenAIOAuthTlsPrerequisites } = await import(
-    "../plugins/provider-openai-chatgpt-oauth-tls.js"
-  );
+  const { noteOpenAIOAuthTlsPrerequisites } =
+    await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
   await noteOpenAIOAuthTlsPrerequisites({
     cfg: ctx.cfg,
     deep: ctx.options.deep === true,

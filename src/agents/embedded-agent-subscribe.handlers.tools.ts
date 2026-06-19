@@ -78,6 +78,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { resolveExecCommandExcerpt } from "./tool-display-exec.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -242,6 +243,7 @@ function buildToolCallSummary(
   structuredReplaySafe: boolean,
 ): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
+  const commandExcerpt = resolveExecCommandExcerpt(toolName, args);
   return {
     meta,
     instanceReplaySafe,
@@ -250,6 +252,7 @@ function buildToolCallSummary(
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
     actionFingerprint: mutation.actionFingerprint,
+    ...(commandExcerpt ? { commandExcerpt } : {}),
     fileTarget: mutation.fileTarget,
   };
 }
@@ -1202,6 +1205,7 @@ export async function handleToolExecutionEnd(
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
       actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
+      commandExcerpt: callSummary.commandExcerpt,
       fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
     };
   } else if (ctx.state.lastToolError) {

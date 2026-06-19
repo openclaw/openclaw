@@ -8,6 +8,7 @@ import {
   mergeInboundPathRoots,
 } from "@openclaw/media-core/inbound-path-policy";
 import { detectMime } from "@openclaw/media-core/mime";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
@@ -21,7 +22,6 @@ import {
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
-import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -357,10 +357,7 @@ export class MediaAttachmentCache {
         return usableCwdCandidate;
       }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
-      const usableStateCandidate = resolveUsableLocalCandidate(
-        stateCandidate,
-        this.localPathRoots,
-      );
+      const usableStateCandidate = resolveUsableLocalCandidate(stateCandidate, this.localPathRoots);
       if (usableStateCandidate) {
         return usableStateCandidate;
       }

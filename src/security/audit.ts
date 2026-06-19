@@ -21,6 +21,7 @@ import {
   materializeGatewayAuthSecretRefs,
 } from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type ExecApprovalsFile,
   loadExecApprovals,
@@ -34,7 +35,6 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";

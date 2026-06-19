@@ -86,10 +86,7 @@ function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): 
   return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
-function resolveProposalDir(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
+function resolveProposalDir(proposalId: string, options: SkillWorkshopStoreOptions = {}): string {
   assertProposalId(proposalId);
   return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }

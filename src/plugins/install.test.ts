@@ -2579,12 +2579,14 @@ describe("installPluginFromNpmSpec", () => {
       ]),
     });
     mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
-    const scanSpy = vi.spyOn(installSecurityScan, "scanPackageInstallSource").mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by package scan",
-      },
-    });
+    const scanSpy = vi
+      .spyOn(installSecurityScan, "scanPackageInstallSource")
+      .mockResolvedValueOnce({
+        blocked: {
+          code: "security_scan_blocked",
+          reason: "blocked by package scan",
+        },
+      });
     const captured = captureSecurityEvents();
 
     let result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;

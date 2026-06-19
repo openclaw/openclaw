@@ -144,9 +144,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
           child.exitCode = 0;
           child.emit("exit", 0, null);
         });
-        await expect(
-          stopped,
-        ).resolves.toEqual({
+        await expect(stopped).resolves.toEqual({
           exitedBeforeTeardown: true,
           exitCode: 0,
           signal: null,

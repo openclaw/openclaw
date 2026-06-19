@@ -117,9 +117,7 @@ export async function minimaxTTS(params: {
         body.base_resp.status_code !== 0
       ) {
         const msg = body.base_resp.status_msg ?? "unknown error";
-        throw new Error(
-          `MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`,
-        );
+        throw new Error(`MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`);
       }
 
       const hexAudio = body?.data?.audio;

@@ -572,9 +572,7 @@ describe("Codex plugin thread config", () => {
     let installed = false;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "plugin/list") {
-        return pluginList([
-          pluginSummary("google-calendar", { installed, enabled: installed }),
-        ]);
+        return pluginList([pluginSummary("google-calendar", { installed, enabled: installed })]);
       }
       if (method === "plugin/read") {
         return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);

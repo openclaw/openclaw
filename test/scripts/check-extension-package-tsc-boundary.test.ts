@@ -522,10 +522,9 @@ describe("check-extension-package-tsc-boundary", () => {
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
       let childPid = 0;
-      const childScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("");
+      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
+        "",
+      );
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "const fs = require('node:fs');",
@@ -535,16 +534,11 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
 
       try {
-        const failurePromise = runNodeStepAsync(
-          "hung-step-group",
-          ["--eval", parentScript],
-          100,
-          {
-            spawnImpl(command: string, args: string[], options: unknown) {
-              return spawn(command, args, options as Parameters<typeof spawn>[2]);
-            },
+        const failurePromise = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100, {
+          spawnImpl(command: string, args: string[], options: unknown) {
+            return spawn(command, args, options as Parameters<typeof spawn>[2]);
           },
-        ).then(
+        }).then(
           () => {
             throw new Error("expected hung-step-group to time out");
           },
