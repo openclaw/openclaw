@@ -27,3 +27,11 @@ export function isSensitiveImageRejectionError(raw: string | undefined): boolean
   }
   return false;
 }
+
+export function formatSensitiveImageRejectionErrorCopy(raw: string): string | undefined {
+  return isSensitiveImageRejectionError(raw)
+    ? "LLM request failed: provider rejected a recent image block as sensitive. " +
+        "OpenClaw removed the image data from session history while keeping text context; " +
+        "please retry or continue."
+    : undefined;
+}

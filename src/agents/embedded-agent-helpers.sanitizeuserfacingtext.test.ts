@@ -19,6 +19,19 @@ import {
 } from "./internal-events.js";
 
 describe("sanitizeUserFacingText", () => {
+  it("surfaces actionable sensitive-image provider rejection copy", () => {
+    expect(
+      sanitizeUserFacingText(
+        "input new_sensitive, messages[18]'s content[1] image is sensitive, please check your input (1026)",
+        { errorContext: true },
+      ),
+    ).toBe(
+      "LLM request failed: provider rejected a recent image block as sensitive. " +
+        "OpenClaw removed the image data from session history while keeping text context; " +
+        "please retry or continue.",
+    );
+  });
+
   it("strips final tags", () => {
     expect(sanitizeUserFacingText("<final>Hello</final>")).toBe("Hello");
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
