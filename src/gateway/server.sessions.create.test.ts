@@ -36,7 +36,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     sessionId?: string;
     entry?: {
       label?: string;
-      displayName?: string;
       providerOverride?: string;
       modelOverride?: string;
       parentSessionKey?: string;
@@ -45,7 +44,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   }>("sessions.create", {
     agentId: "ops",
     label: "Dashboard Chat",
-    displayName: "Research Plan",
     model: "openai/gpt-test-a",
     parentSessionKey: "main",
   });
@@ -53,7 +51,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
-  expect(created.payload?.entry?.displayName).toBe("Research Plan");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
@@ -70,7 +67,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     {
       sessionId?: string;
       label?: string;
-      displayName?: string;
       providerOverride?: string;
       modelOverride?: string;
       parentSessionKey?: string;
@@ -80,7 +76,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   const key = created.payload?.key as string;
   expect(rawStore[key]?.sessionId).toBe(created.payload?.sessionId);
   expect(rawStore[key]?.label).toBe("Dashboard Chat");
-  expect(rawStore[key]?.displayName).toBe("Research Plan");
   expect(rawStore[key]?.providerOverride).toBe("openai");
   expect(rawStore[key]?.modelOverride).toBe("gpt-test-a");
   expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
@@ -186,39 +181,6 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
-});
-
-test("sessions.create preserves an existing display name when omitted", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("sess-existing", {
-        displayName: "Research Plan",
-      }),
-    },
-  });
-
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: {
-      displayName?: string;
-    };
-  }>("sessions.create", {
-    key,
-    label: "Dashboard Orchestrator",
-  });
-
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry?.displayName).toBe("Research Plan");
-
-  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      displayName?: string;
-    }
-  >;
-  expect(rawStore[key]?.displayName).toBe("Research Plan");
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {

@@ -216,46 +216,6 @@ describe("gateway sessions patch", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  test("persists displayName", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, displayName: "Research Plan" },
-      }),
-    );
-    expect(entry.displayName).toBe("Research Plan");
-  });
-
-  test("trims displayName", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, displayName: "  Research Plan  " },
-      }),
-    );
-    expect(entry.displayName).toBe("Research Plan");
-  });
-
-  test("clears displayName when patch sets null", async () => {
-    const store = mainStoreEntry({ displayName: "Research Plan" });
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, displayName: null },
-      }),
-    );
-    expect(entry.displayName).toBeUndefined();
-  });
-
-  test("clears displayName when patch is whitespace", async () => {
-    const store = mainStoreEntry({ displayName: "Research Plan" });
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, displayName: "   " },
-      }),
-    );
-    expect(entry.displayName).toBeUndefined();
-  });
-
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

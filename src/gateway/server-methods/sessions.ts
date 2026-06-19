@@ -1400,7 +1400,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             : {}),
           reason: "new",
           commandSource: "webchat",
-          ...("displayName" in p ? { displayName: normalizeOptionalString(p.displayName) } : {}),
         });
         if (!resetResult.ok) {
           respond(false, undefined, resetResult.error);
@@ -1490,7 +1489,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(p.label),
-            ...("displayName" in p ? { displayName: normalizeOptionalString(p.displayName) } : {}),
             model: normalizeOptionalString(p.model),
           },
           loadGatewayModelCatalog: context.loadGatewayModelCatalog,

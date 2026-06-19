@@ -1334,7 +1334,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("passes a typed /new display name to the fresh-session action", async () => {
+  it("passes a typed /new label to the fresh-session action", async () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1349,7 +1349,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(request).not.toHaveBeenCalled();
-    expect(onSlashAction).toHaveBeenCalledWith("new-session", { displayName: "Research Plan" });
+    expect(onSlashAction).toHaveBeenCalledWith("new-session", { label: "Research Plan" });
     expect(host.chatMessage).toBe("");
   });
 
@@ -2186,17 +2186,17 @@ describe("handleSendChat", () => {
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
   });
 
-  it("patches the current session display name for /label", async () => {
+  it("patches the current session label for /label", async () => {
     const request = vi.fn(async (method: string, params: unknown) => {
       if (method === "sessions.patch") {
         expect(params).toStrictEqual({
           key: "agent:main",
-          displayName: "Research Plan",
+          label: "Research Plan",
         });
         return { ok: true };
       }
       if (method === "sessions.list") {
-        return createSessionsResult([row("agent:main", { displayName: "Research Plan" })]);
+        return createSessionsResult([row("agent:main", { label: "Research Plan" })]);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -2210,7 +2210,7 @@ describe("handleSendChat", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main",
-      displayName: "Research Plan",
+      label: "Research Plan",
     });
     expect(host.chatMessage).toBe("");
     expect(host.sessionsError).toBeNull();
@@ -2222,13 +2222,13 @@ describe("handleSendChat", () => {
         expect(params).toStrictEqual({
           key: "global",
           agentId: "work",
-          displayName: "Work Plan",
+          label: "Work Plan",
         });
         return { ok: true };
       }
       if (method === "sessions.list") {
         expect(params).toMatchObject({ agentId: "work" });
-        return createSessionsResult([row("global", { displayName: "Work Plan" })]);
+        return createSessionsResult([row("global", { label: "Work Plan" })]);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -2245,7 +2245,7 @@ describe("handleSendChat", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "global",
       agentId: "work",
-      displayName: "Work Plan",
+      label: "Work Plan",
     });
     expect(host.chatMessage).toBe("");
     expect(host.sessionsError).toBeNull();
@@ -2257,13 +2257,13 @@ describe("handleSendChat", () => {
         expect(params).toStrictEqual({
           key: "global",
           agentId: "work",
-          displayName: "Work Plan",
+          label: "Work Plan",
         });
         return { ok: true };
       }
       if (method === "sessions.list") {
         expect(params).toMatchObject({ agentId: "work" });
-        return createSessionsResult([row("global", { displayName: "Work Plan" })]);
+        return createSessionsResult([row("global", { label: "Work Plan" })]);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -2283,13 +2283,13 @@ describe("handleSendChat", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "global",
       agentId: "work",
-      displayName: "Work Plan",
+      label: "Work Plan",
     });
     expect(host.chatMessage).toBe("");
     expect(host.sessionsError).toBeNull();
   });
 
-  it("shows an error when /label has no display name", async () => {
+  it("shows an error when /label has no label", async () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });

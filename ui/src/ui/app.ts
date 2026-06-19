@@ -78,15 +78,15 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -345,7 +345,7 @@ export class OpenClawApp extends LitElement {
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
 
-  onSlashAction?: (action: string, payload?: { displayName?: string }) => void | Promise<void>;
+  onSlashAction?: (action: string, payload?: { label?: string }) => void | Promise<void>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
   chatInputHistorySessionKey: string | null = null;
   chatInputHistoryItems: string[] | null = null;
@@ -835,12 +835,12 @@ export class OpenClawApp extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.onSlashAction = async (action: string, payload?: { displayName?: string }) => {
+    this.onSlashAction = async (action: string, payload?: { label?: string }) => {
       switch (action) {
         case "new-session":
           await createChatSessionInternal(this as unknown as AppViewState, {
             source: "user",
-            displayName: payload?.displayName,
+            label: payload?.label,
           });
           break;
         case "export":

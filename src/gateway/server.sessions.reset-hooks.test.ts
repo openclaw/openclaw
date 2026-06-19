@@ -707,45 +707,6 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
   }
 });
 
-test("sessions.create with session.dmScope='main' applies displayName during reset in place", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-parent-dms-named",
-    content: "hello before named /new",
-  });
-
-  testState.sessionConfig = { dmScope: "main" };
-  try {
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-parent-dms-named",
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-          displayName: "Old Plan",
-        },
-      },
-    });
-
-    const result = await directSessionReq<{
-      ok: boolean;
-      key: string;
-      entry?: { displayName?: string };
-    }>("sessions.create", {
-      parentSessionKey: "main",
-      emitCommandHooks: true,
-      displayName: "Research Plan",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.payload?.key).toBe("agent:main:main");
-    expect(result.payload?.entry?.displayName).toBe("Research Plan");
-  } finally {
-    testState.sessionConfig = undefined;
-  }
-});
-
 test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");

@@ -204,26 +204,6 @@ describe("sessionsCommand", () => {
     expect(main?.totalTokensFresh).toBe(false);
   });
 
-  it("exports displayName in JSON output", async () => {
-    const store = writeStore({
-      main: {
-        sessionId: "abc123",
-        updatedAt: Date.now() - 10 * 60_000,
-        displayName: "Research Plan",
-        model: "test:opus",
-      },
-    });
-
-    const payload = await runSessionsJson<{
-      sessions?: Array<{
-        key: string;
-        displayName?: string;
-      }>;
-    }>(sessionsCommand, store);
-    const main = payload.sessions?.find((row) => row.key === "main");
-    expect(main?.displayName).toBe("Research Plan");
-  });
-
   it("applies --active filtering in JSON output", async () => {
     const store = writeStore(
       {

@@ -964,14 +964,14 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state, { source: "user", displayName: "Browser Proof Alpha" });
+    await createChatSession(state, { source: "user", label: "Browser Proof Alpha" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
       {
         agentId: "ops",
         parentSessionKey: undefined,
-        displayName: "Browser Proof Alpha",
+        label: "Browser Proof Alpha",
         emitCommandHooks: undefined,
       },
       {
@@ -984,6 +984,45 @@ describe("createChatSession", () => {
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+  });
+
+  it("does not use the fallback main session as a parent when the session list is empty", async () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:main:main",
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 0,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:main:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user", label: "Browser Label Alpha" });
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "main",
+        parentSessionKey: undefined,
+        label: "Browser Label Alpha",
+        emitCommandHooks: undefined,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+        agentId: "main",
+      },
+    );
+    expect(state.sessionKey).toBe("agent:main:dashboard:new-chat");
   });
 
   it("preserves draft and attachment edits made while session creation is in flight", async () => {

@@ -80,7 +80,6 @@ export type LoadSessionsOverrides = {
 type CreateSessionParams = {
   agentId?: string;
   label?: string;
-  displayName?: string;
   model?: string;
   parentSessionKey?: string;
   emitCommandHooks?: boolean;

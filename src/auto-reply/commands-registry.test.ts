@@ -223,7 +223,7 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("does not advertise display-name args for shared /new commands", () => {
+  it("does not advertise label args for shared /new commands", () => {
     const command = requireChatCommand("new");
     const native = requireNativeSpec(listNativeCommandSpecs(), "new");
 

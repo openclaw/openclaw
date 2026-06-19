@@ -39,6 +39,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
 } from "./session-key.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
@@ -731,6 +732,13 @@ function isPersistedSessionRow(row: SessionsListResult["sessions"][number]): boo
   return Boolean(sessionId || typeof row.updatedAt === "number");
 }
 
+function isFallbackMainSessionKey(state: AppViewState, sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return Boolean(
+    parsed && normalizeLowercaseStringOrEmpty(parsed.rest) === resolveUiConfiguredMainKey(state),
+  );
+}
+
 function resolveNewChatParentSessionKey(
   state: AppViewState,
   previousSessionKey: string,
@@ -742,7 +750,15 @@ function resolveNewChatParentSessionKey(
   if (normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown") {
     return undefined;
   }
-  const currentRow = state.sessionsResult?.sessions.find((row) =>
+  const sessions = state.sessionsResult?.sessions;
+  if (
+    sessions &&
+    sessions.length === 0 &&
+    isFallbackMainSessionKey(state, normalizedPreviousSessionKey)
+  ) {
+    return undefined;
+  }
+  const currentRow = sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, normalizedPreviousSessionKey),
   );
   if (currentRow && !isPersistedSessionRow(currentRow)) {
@@ -751,7 +767,7 @@ function resolveNewChatParentSessionKey(
   return normalizedPreviousSessionKey;
 }
 
-export type CreateChatSessionIntent = { source: "user"; displayName?: string };
+export type CreateChatSessionIntent = { source: "user"; label?: string };
 
 export async function createChatSession(
   state: AppViewState,
@@ -777,7 +793,7 @@ export async function createChatSession(
   state.lastError = null;
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const displayName = normalizeOptionalString(intent.displayName);
+  const label = normalizeOptionalString(intent.label);
   const parentSessionKey = resolveNewChatParentSessionKey(state, previousSessionKey);
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
@@ -786,7 +802,7 @@ export async function createChatSession(
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
       parentSessionKey,
-      ...(displayName ? { displayName } : {}),
+      ...(label ? { label } : {}),
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {

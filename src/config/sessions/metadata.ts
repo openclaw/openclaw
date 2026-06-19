@@ -53,29 +53,6 @@ const mergeOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
-function shouldPatchGroupDisplayName(params: {
-  existing?: SessionEntry;
-  sessionKey: string;
-  nextDisplayName: string;
-}) {
-  const existingName = normalizeOptionalString(params.existing?.displayName);
-  if (!existingName) {
-    return true;
-  }
-  if (existingName === normalizeOptionalString(params.nextDisplayName)) {
-    return true;
-  }
-  const previousGroupName = buildGroupDisplayName({
-    provider: params.existing?.channel,
-    subject: params.existing?.subject,
-    groupChannel: params.existing?.groupChannel,
-    space: params.existing?.space,
-    id: params.existing?.groupId,
-    key: params.sessionKey,
-  });
-  return existingName === normalizeOptionalString(previousGroupName);
-}
-
 /** Derives session origin metadata from an inbound message context. */
 export function deriveSessionOrigin(
   ctx: MsgContext,
@@ -199,14 +176,7 @@ export function deriveGroupSessionPatch(params: {
     id: resolution.id,
     key: params.sessionKey,
   });
-  if (
-    displayName &&
-    shouldPatchGroupDisplayName({
-      existing: params.existing,
-      sessionKey: params.sessionKey,
-      nextDisplayName: displayName,
-    })
-  ) {
+  if (displayName) {
     patch.displayName = displayName;
   }
 

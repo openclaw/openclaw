@@ -204,25 +204,6 @@ describe("native Gateway protocol levels", () => {
     }
   });
 
-  it("keeps additive Swift session displayName params source-compatible", async () => {
-    const swiftGeneratedPath =
-      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
-    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
-
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /public struct SessionsCreateParams:[\s\S]*?public init\([\s\S]*?displayname: String\? = nil,/,
-      "SessionsCreateParams displayName initializer parameter must default to nil.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /public struct SessionsPatchParams:[\s\S]*?public init\([\s\S]*?displayname: AnyCodable\? = nil,/,
-      "SessionsPatchParams displayName initializer parameter must default to nil.",
-    );
-  });
-
   it("emits named string-literal unions as Swift enums", async () => {
     const swiftGeneratedPath =
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";

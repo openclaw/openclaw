@@ -123,35 +123,6 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
   });
 
-  it("validates dashboard session display names on create and patch params", () => {
-    expect(
-      protocol.validateSessionsCreateParams({
-        agentId: "main",
-        displayName: "Research Plan",
-        parentSessionKey: "agent:main:main",
-      }),
-    ).toBe(true);
-    expect(
-      protocol.validateSessionsPatchParams({
-        key: "agent:main:dashboard:abc",
-        displayName: "Research Plan",
-      }),
-    ).toBe(true);
-    expect(
-      protocol.validateSessionsPatchParams({
-        key: "agent:main:dashboard:abc",
-        displayName: null,
-      }),
-    ).toBe(true);
-    expect(protocol.validateSessionsCreateParams({ displayName: "" })).toBe(false);
-    expect(
-      protocol.validateSessionsPatchParams({
-        key: "agent:main:dashboard:abc",
-        displayName: "",
-      }),
-    ).toBe(false);
-  });
-
   it("validates chat sends that suppress command interpretation", () => {
     expect(
       validateChatSendParams({

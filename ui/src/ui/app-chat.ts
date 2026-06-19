@@ -135,7 +135,7 @@ export type ChatHost = ChatInputHistoryState & {
   eventLog?: unknown[];
   tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
-  onSlashAction?: (action: string, payload?: { displayName?: string }) => void | Promise<void>;
+  onSlashAction?: (action: string, payload?: { label?: string }) => void | Promise<void>;
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -1889,9 +1889,9 @@ async function dispatchSlashCommand(
         setChatError(host, "New Chat is unavailable.");
         return;
       }
-      const displayName = args.trim();
-      if (displayName) {
-        await host.onSlashAction("new-session", { displayName });
+      const label = args.trim();
+      if (label) {
+        await host.onSlashAction("new-session", { label });
       } else {
         await host.onSlashAction("new-session");
       }
@@ -1915,8 +1915,8 @@ async function dispatchSlashCommand(
         setChatError(host, "Gateway not connected");
         return;
       }
-      const displayName = args.trim();
-      if (!displayName) {
+      const label = args.trim();
+      if (!label) {
         setChatError(host, "Usage: /label <name>");
         return;
       }
@@ -1925,7 +1925,7 @@ async function dispatchSlashCommand(
         await host.client.request("sessions.patch", {
           key: host.sessionKey,
           ...sessionScope,
-          displayName,
+          label,
         });
         await loadSessions(host as unknown as Parameters<typeof loadSessions>[0], sessionScope);
       } catch (err) {

@@ -2291,7 +2291,6 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
     public let label: String?
-    public let displayname: String?
     public let model: String?
     public let parentsessionkey: String?
     public let emitcommandhooks: Bool?
@@ -2302,7 +2301,6 @@ public struct SessionsCreateParams: Codable, Sendable {
         key: String?,
         agentid: String? = nil,
         label: String?,
-        displayname: String? = nil,
         model: String?,
         parentsessionkey: String?,
         emitcommandhooks: Bool?,
@@ -2312,7 +2310,6 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
-        self.displayname = displayname
         self.model = model
         self.parentsessionkey = parentsessionkey
         self.emitcommandhooks = emitcommandhooks
@@ -2324,7 +2321,6 @@ public struct SessionsCreateParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
-        case displayname = "displayName"
         case model
         case parentsessionkey = "parentSessionKey"
         case emitcommandhooks = "emitCommandHooks"
@@ -2433,7 +2429,6 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let label: AnyCodable?
-    public let displayname: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
@@ -2461,7 +2456,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         agentid: String? = nil,
         label: AnyCodable?,
-        displayname: AnyCodable? = nil,
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
@@ -2488,7 +2482,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
-        self.displayname = displayname
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.verboselevel = verboselevel
@@ -2517,7 +2510,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
-        case displayname = "displayName"
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
