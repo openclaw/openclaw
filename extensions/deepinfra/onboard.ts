@@ -17,17 +17,14 @@ export function applyDeepInfraConfig(
     alias: models[modelRef]?.alias ?? "DeepInfra",
   };
 
-  return applyAgentDefaultModelPrimary(
-    {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models,
-        },
+  return applyAgentDefaultModelPrimary({
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
       },
     },
-    modelRef,
-  );
+  }, modelRef);
 }

@@ -2,7 +2,11 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
