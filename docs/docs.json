@@ -910,15 +910,15 @@
     },
     {
       "source": "/railway",
-      "destination": "/install/railway"
+      "destination": "/vps"
     },
     {
       "source": "/northflank",
-      "destination": "/install/northflank"
+      "destination": "/vps"
     },
     {
       "source": "/render",
-      "destination": "/install/render"
+      "destination": "/vps"
     },
     {
       "source": "/gcp",
@@ -954,15 +954,39 @@
     },
     {
       "source": "/platforms/railway",
-      "destination": "/install/railway"
+      "destination": "/vps"
     },
     {
       "source": "/platforms/render",
-      "destination": "/install/render"
+      "destination": "/vps"
     },
     {
       "source": "/platforms/northflank",
-      "destination": "/install/northflank"
+      "destination": "/vps"
+    },
+    {
+      "source": "/install/railway",
+      "destination": "/vps"
+    },
+    {
+      "source": "/install/render",
+      "destination": "/vps"
+    },
+    {
+      "source": "/install/northflank",
+      "destination": "/vps"
+    },
+    {
+      "source": "/install/upstash",
+      "destination": "/vps"
+    },
+    {
+      "source": "/upstash",
+      "destination": "/vps"
+    },
+    {
+      "source": "/platforms/upstash",
+      "destination": "/vps"
     },
     {
       "source": "/gateway/trusted-proxy",
@@ -1076,12 +1100,8 @@
                   "install/kubernetes",
                   "vps",
                   "install/macos-vm",
-                  "install/northflank",
                   "install/oracle",
-                  "install/railway",
-                  "install/raspberry-pi",
-                  "install/render",
-                  "install/upstash"
+                  "install/raspberry-pi"
                 ]
               },
               {

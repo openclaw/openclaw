@@ -1,98 +1,123 @@
 ---
-summary: "Host OpenClaw on Hostinger"
+summary: "Run OpenClaw on a self-managed Hostinger VPS"
 read_when:
-  - Setting up OpenClaw on Hostinger
-  - Looking for a managed VPS for OpenClaw
-  - Using Hostinger 1-Click OpenClaw
-title: "Hostinger"
+  - Setting up OpenClaw on a Hostinger VPS
+  - You want a VPS install that you administer yourself
+title: "Hostinger VPS"
+doc-schema-version: 1
 ---
 
-Run a persistent OpenClaw Gateway on [Hostinger](https://www.hostinger.com/openclaw) via a **1-Click** managed deployment or a **VPS** install.
+Run a persistent OpenClaw Gateway on a Hostinger VPS the same way you would on
+any Linux server you control. This guide covers the self-managed path: you own
+the operating system, SSH access, OpenClaw configuration, backups, and updates.
+
+<Note>
+OpenClaw docs do not list or recommend third-party turnkey service offerings.
+Use this guide for a VPS where you administer the server yourself.
+</Note>
 
 ## Prerequisites
 
-- Hostinger account ([signup](https://www.hostinger.com/openclaw))
-- About 5-10 minutes
+- Hostinger VPS running Ubuntu 24.04 LTS or another supported Linux image
+- SSH access to the VPS
+- A non-root user with `sudo`
+- Model provider credentials or an auth flow you plan to configure during onboarding
+- Optional: Tailscale or DNS if you want access without an SSH tunnel
 
-## Option A: 1-Click OpenClaw
+Use a clean base image. If a provider marketplace image or panel automation is
+available, review its startup scripts, firewall defaults, and update behavior
+before using it.
 
-The fastest way to get started. Hostinger handles infrastructure, Docker, and automatic updates.
+## Create and secure the VPS
 
-<Steps>
-  <Step title="Purchase and launch">
-    1. From the [Hostinger OpenClaw page](https://www.hostinger.com/openclaw), choose a Managed OpenClaw plan and complete checkout.
+Create a Linux VPS and connect over SSH:
 
-    <Note>
-    During checkout you can select **Ready-to-Use AI** credits that are pre-purchased and integrated instantly inside OpenClaw -- no external accounts or API keys from other providers needed. You can start chatting right away. Alternatively, provide your own key from Anthropic, OpenAI, Google Gemini, or xAI during setup.
-    </Note>
+```bash
+ssh user@gateway-host
+```
 
-  </Step>
+Update the package index and install the basic tools OpenClaw setup commonly
+needs:
 
-  <Step title="Select a messaging channel">
-    Choose one or more channels to connect:
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git jq
+```
 
-    - **WhatsApp** -- scan the QR code shown in the setup wizard.
-    - **Telegram** -- paste the bot token from [BotFather](https://t.me/BotFather).
+Before exposing any service, decide how you will administer the host:
 
-  </Step>
+- Keep SSH restricted to trusted keys and trusted source networks where possible.
+- Prefer loopback Gateway access through an SSH tunnel or Tailscale.
+- If you later bind the Gateway to `lan` or `tailnet`, require
+  `gateway.auth.token` or `gateway.auth.password`.
 
-  <Step title="Complete installation">
-    Click **Finish** to deploy the instance. Once ready, access the OpenClaw dashboard from **OpenClaw Overview** in hPanel.
-  </Step>
+## Install OpenClaw
 
-</Steps>
+Run the installer script on the VPS:
 
-## Option B: OpenClaw on VPS
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+```
 
-More control over your server. Hostinger deploys OpenClaw via Docker on your VPS and you manage it through the **Docker Manager** in hPanel.
+Then run onboarding and install the Gateway as a user service:
 
-<Steps>
-  <Step title="Purchase a VPS">
-    1. From the [Hostinger OpenClaw page](https://www.hostinger.com/openclaw), choose an OpenClaw on VPS plan and complete checkout.
+```bash
+openclaw onboard --install-daemon
+```
 
-    <Note>
-    You can select **Ready-to-Use AI** credits during checkout -- these are pre-purchased and integrated instantly inside OpenClaw, so you can start chatting without any external accounts or API keys from other providers.
-    </Note>
+Follow the prompts for model auth, Gateway auth, and any channels you want to
+connect.
 
-  </Step>
+## Access the dashboard
 
-  <Step title="Configure OpenClaw">
-    Once the VPS is provisioned, fill in the configuration fields:
+For a loopback Gateway, forward the dashboard port to your local machine:
 
-    - **Gateway token** -- auto-generated; save it for later use.
-    - **WhatsApp number** -- your number with country code (optional).
-    - **Telegram bot token** -- from [BotFather](https://t.me/BotFather) (optional).
-    - **API keys** -- only needed if you did not select Ready-to-Use AI credits during checkout.
+```bash
+ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
+```
 
-  </Step>
+Open the local dashboard URL from the onboarding output, for example:
 
-  <Step title="Start OpenClaw">
-    Click **Deploy**. Once running, open the OpenClaw dashboard from the hPanel by clicking on **Open**.
-  </Step>
+```text
+http://127.0.0.1:18789/#token=<your-token>
+```
 
-</Steps>
+If you use Tailscale, see [Tailscale](/gateway/tailscale) for the Gateway
+access options.
 
-Logs, restarts, and updates are managed directly from the Docker Manager interface in hPanel. To update, press on **Update** in Docker Manager and that will pull the latest image.
+## Operations
 
-## Verify your setup
+Back up state and workspace data before changing plans, rebuilding the VPS, or
+moving to another host:
 
-Send "Hi" to your assistant on the channel you connected. OpenClaw will reply and walk you through initial preferences.
+```bash
+openclaw backup create
+```
+
+For updates and service restart behavior, see [Updating OpenClaw](/install/updating).
 
 ## Troubleshooting
 
-**Dashboard not loading** -- Wait a few minutes for the container to finish provisioning. Check the Docker Manager logs in hPanel.
+**Dashboard not loading** -- Verify the Gateway service is running and that your
+SSH tunnel points to the same port shown by onboarding:
 
-**Docker container keeps restarting** -- Open Docker Manager logs and look for configuration errors (missing tokens, invalid API keys).
+```bash
+openclaw gateway status --deep
+```
 
-**Telegram bot not responding** -- Send your pairing code message from Telegram directly as a message inside your OpenClaw chat to complete the connection.
+**Service fails after reboot** -- Check the user service logs and confirm Node is
+available in the service environment:
 
-## Next steps
+```bash
+journalctl --user -u openclaw-gateway.service --no-pager -n 100
+```
 
-- [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
-- [Gateway configuration](/gateway/configuration) -- all config options
+**Small VPS feels slow** -- Use the Linux server tuning notes in
+[Linux server](/vps#startup-tuning-for-small-vms-and-arm-hosts).
 
 ## Related
 
-- [Install overview](/install)
-- [VPS hosting](/vps)
+- [Linux server](/vps)
+- [Gateway remote access](/gateway/remote)
+- [Gateway security](/gateway/security)
 - [DigitalOcean](/install/digitalocean)
