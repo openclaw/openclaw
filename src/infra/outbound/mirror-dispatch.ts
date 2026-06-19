@@ -98,9 +98,13 @@ function unmarkHandled(sessionKey: string | undefined, key: string): void {
 }
 
 /**
- * Consume the "mirror handled this target" mark. The post-hoc final echo
- * (fireEchoDeliveries) calls this to SKIP targets a mirror turn already rendered
- * natively, so the two don't double-deliver. Single-use: clears the mark.
+ * Whether a mirror turn already handled this target for the current origin run, so
+ * the post-hoc final echo (fireEchoDeliveries) SKIPS it and the two don't
+ * double-deliver. NON-destructive: the mark stays valid for EVERY sent hook the
+ * origin run fires (an origin run can emit more than one sent hook — streaming +
+ * final, or multiple messages — and each must stay suppressed). The marks are
+ * cleared when the next run re-arms (launchMirrorDispatch resets the session set),
+ * not on read.
  */
 export function consumeStreamingEchoHandled(
   sessionKey: string | undefined,
@@ -113,13 +117,7 @@ export function consumeStreamingEchoHandled(
   if (!set) {
     return false;
   }
-  if (!set.delete(echoTargetKey(target))) {
-    return false;
-  }
-  if (set.size === 0) {
-    state.handledBySession.delete(sessionKey);
-  }
-  return true;
+  return set.has(echoTargetKey(target));
 }
 
 /**

@@ -16,35 +16,27 @@ import {
 } from "./mirror-dispatch.js";
 
 export type ChannelOutboundRegistrar = {
-  registerMirrorDispatcher: (
-    channel: string,
-    accountId: string,
-    dispatcher: MirrorDispatcher,
-  ) => void;
-  unregisterMirrorDispatcher: (channel: string, accountId: string) => void;
-  registerEchoAdmission: (
-    channel: string,
-    accountId: string,
-    admission: ChannelEchoAdmission,
-  ) => void;
-  unregisterEchoAdmission: (channel: string, accountId: string) => void;
+  registerMirrorDispatcher: (accountId: string, dispatcher: MirrorDispatcher) => void;
+  unregisterMirrorDispatcher: (accountId: string) => void;
+  registerEchoAdmission: (accountId: string, admission: ChannelEchoAdmission) => void;
+  unregisterEchoAdmission: (accountId: string) => void;
 };
 
 /**
- * Create an owner-scoped registrar. `owner` MUST be the host's authenticated
- * channel/plugin id — callers (plugins) never supply it themselves. The registrar
- * binds it so a plugin can only register, replace, or unregister entries it owns
- * and can never touch another channel/account's mirror or admission handler.
+ * Create a registrar bound to the host's AUTHENTICATED `channel` id. Both the
+ * registry's owner key AND its channel key are this bound id — callers never supply
+ * either, so a plugin can only register/replace/unregister mirror+admission handlers
+ * for its OWN channel and can never spoof or touch another channel/account's entry.
  */
-export function createChannelOutboundRegistrar(owner: string): ChannelOutboundRegistrar {
+export function createChannelOutboundRegistrar(channel: string): ChannelOutboundRegistrar {
   return {
-    registerMirrorDispatcher: (channel, accountId, dispatcher) =>
-      registerChannelMirrorDispatcher(owner, channel, accountId, dispatcher),
-    unregisterMirrorDispatcher: (channel, accountId) =>
-      unregisterChannelMirrorDispatcher(owner, channel, accountId),
-    registerEchoAdmission: (channel, accountId, admission) =>
-      registerChannelEchoAdmission(owner, channel, accountId, admission),
-    unregisterEchoAdmission: (channel, accountId) =>
-      unregisterChannelEchoAdmission(owner, channel, accountId),
+    registerMirrorDispatcher: (accountId, dispatcher) =>
+      registerChannelMirrorDispatcher(channel, channel, accountId, dispatcher),
+    unregisterMirrorDispatcher: (accountId) =>
+      unregisterChannelMirrorDispatcher(channel, channel, accountId),
+    registerEchoAdmission: (accountId, admission) =>
+      registerChannelEchoAdmission(channel, channel, accountId, admission),
+    unregisterEchoAdmission: (accountId) =>
+      unregisterChannelEchoAdmission(channel, channel, accountId),
   };
 }

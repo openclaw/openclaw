@@ -128,9 +128,11 @@ describe("mirror-dispatch", () => {
     expect(arg.target.channel).toBe("telegram");
     expect(typeof arg.replyResolver).toBe("function");
 
-    // The target is marked handled so the post-hoc final echo skips it — single-use.
+    // The target is marked handled so the post-hoc final echo skips it. The mark is
+    // NON-destructive: it stays valid for every sent hook the origin run fires (it is
+    // only cleared when the next run re-arms), so repeated reads keep returning true.
     expect(consumeStreamingEchoHandled("sk-1", TG)).toBe(true);
-    expect(consumeStreamingEchoHandled("sk-1", TG)).toBe(false);
+    expect(consumeStreamingEchoHandled("sk-1", TG)).toBe(true);
     handle.dispose();
   });
 

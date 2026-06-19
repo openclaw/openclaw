@@ -27,6 +27,7 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
+import { parseTelegramTarget } from "./targets.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -262,15 +263,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     target: { to: string; threadId?: string | number };
     replyResolver: GetReplyFromConfig;
   }): Promise<void> => {
-    const rawChatId = mirror.target.to
-      .replace(/^(telegram|tg):/i, "")
-      .replace(/^group:/i, "")
-      .trim();
-    const chatId: string | number = /^-?\d+$/.test(rawChatId) ? Number(rawChatId) : rawChatId;
+    // Parse the target with the canonical Telegram parser so a topic/thread encoded
+    // in the target string (e.g. "telegram:-100...:topic:42") is honored, not only an
+    // explicit threadId. Falls back to the explicit threadId when the string has none.
+    const parsedTarget = parseTelegramTarget(mirror.target.to);
+    const chatId: string | number = /^-?\d+$/.test(parsedTarget.chatId)
+      ? Number(parsedTarget.chatId)
+      : parsedTarget.chatId;
     const threadId =
-      mirror.target.threadId != null && Number.isFinite(Number(mirror.target.threadId))
+      parsedTarget.messageThreadId ??
+      (mirror.target.threadId != null && Number.isFinite(Number(mirror.target.threadId))
         ? Number(mirror.target.threadId)
-        : undefined;
+        : undefined);
     const numericChatId = typeof chatId === "number" ? chatId : Number(chatId);
     const chatType: "private" | "supergroup" =
       Number.isFinite(numericChatId) && numericChatId < 0 ? "supergroup" : "private";
