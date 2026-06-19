@@ -328,6 +328,7 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   return token;
 }
 
+// Paginate through Lark drive.file.list API to retrieve all files in a folder.
 async function listFolder(
   client: Lark.Client,
   folderToken?: string,
