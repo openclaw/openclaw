@@ -2,6 +2,7 @@
 export {
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
   resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
   updateSessionStoreEntry,

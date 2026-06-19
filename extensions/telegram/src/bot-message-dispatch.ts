@@ -72,6 +72,7 @@ import {
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -344,10 +345,10 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     agentId: params.route.agentId,
     sessionsDir: path.dirname(storePath),
   });
-  // Skip if the primary runner already wrote an equivalent assistant message.
-  // Normalize whitespace because extractAssistantVisibleText and the Telegram
-  // delivery path may join content blocks with different separators.
-  const existing = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+  // Tail reader (stops at this turn's user line), not latest reader (scans past
+  // user lines): else an identical reply on a new "say it again" turn is taken
+  // for a duplicate and dropped. Normalize whitespace; delivery may rejoin blocks.
+  const existing = await readTailAssistantTextFromSessionTranscript(sessionFile);
   if (
     existing?.text &&
     existing.text.trim().replace(/\s+/g, " ") === text.trim().replace(/\s+/g, " ")

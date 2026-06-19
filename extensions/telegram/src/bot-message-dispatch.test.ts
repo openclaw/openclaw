@@ -79,6 +79,7 @@ const appendSessionTranscriptMessage = vi.hoisted(() =>
 const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const readLatestAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
+const readTailAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const resolveAndPersistSessionFile = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -154,6 +155,7 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
   resolveAndPersistSessionFile,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
@@ -268,6 +270,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     appendSessionTranscriptMessage.mockReset();
     emitSessionTranscriptUpdate.mockReset();
     readLatestAssistantTextFromSessionTranscript.mockReset();
+    readTailAssistantTextFromSessionTranscript.mockReset();
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     resolveAndPersistSessionFile.mockReset();
@@ -1783,6 +1786,58 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("mirrors a legitimate repeat after a new user turn instead of skipping it", async () => {
+    // Regression: a prior turn produced the same assistant text, then a new
+    // user turn (e.g. "say it again") yields the same mirror text. The
+    // latest-assistant reader scans past the user line and would falsely match
+    // the old reply, dropping this turn's row. The tail reader stops at the
+    // user line, so the current turn has no assistant tail yet and the
+    // legitimate repeat is written.
+    const repeatedText = "Final answer";
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    // Old identical reply still lives behind the current user turn.
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: repeatedText,
+      timestamp: 1,
+    });
+    // Tail is the current user turn: no assistant reply recorded for it yet.
+    readTailAssistantTextFromSessionTranscript.mockResolvedValue(undefined);
+    deliverReplies.mockImplementation(
+      async (params: {
+        replies?: Array<{ text?: string }>;
+        transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      }) => {
+        const text = params.replies
+          ?.map((reply) => reply.text)
+          .filter(Boolean)
+          .join("\n\n");
+        await params.transcriptMirror?.({ text });
+        return { delivered: true };
+      },
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: repeatedText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1);
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: repeatedText }],
+    });
+  });
+
   it("mirrors the longer streamed preview when final text is truncated", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const fullAnswer =
@@ -1797,6 +1852,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
+    });
+    // Primary runner already recorded this turn's reply as the tail, so the
+    // mirror skip should fire.
+    readTailAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: fullAnswer,
     });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
