@@ -32,16 +32,20 @@ function streamingTextResponse(params: {
 }
 
 function stallingResponse(params: { status: number; onCancel: () => void }): Response {
-  const stream = new ReadableStream<Uint8Array>({
-    start() {
-      // Leave the body open until the caller aborts.
-    },
-    cancel() {
+  const reader = {
+    read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+    cancel: async () => {
       params.onCancel();
     },
-  });
+    releaseLock: () => undefined,
+  } as ReadableStreamDefaultReader<Uint8Array>;
 
-  return new Response(stream, { status: params.status });
+  return {
+    status: params.status,
+    ok: params.status >= 200 && params.status < 300,
+    headers: new Headers(),
+    body: { getReader: () => reader },
+  } as Response;
 }
 
 describe("uploadBatchJsonlFile", () => {
