@@ -55,6 +55,24 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
   return result as T;
 }
 
+function normalizePluginRuntimeOverrides(
+  overrides: DeepPartial<PluginRuntime>,
+): DeepPartial<PluginRuntime> {
+  const channelOverrides = overrides.channel;
+  if (!channelOverrides?.turn) {
+    return overrides;
+  }
+
+  const { inbound, turn, ...remainingChannelOverrides } = channelOverrides;
+  return {
+    ...overrides,
+    channel: {
+      ...remainingChannelOverrides,
+      inbound: inbound ? mergeDeep(turn, inbound) : turn,
+    },
+  };
+}
+
 function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
@@ -729,6 +747,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         buildContext: buildChannelInboundEventContextMock,
         runPreparedReply: runPreparedChannelTurnMock,
       },
+      turn: {
+        run: runChannelTurnMock,
+        dispatchReply:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchReply"],
+        buildContext: buildChannelInboundEventContextMock,
+        runPreparedReply: runPreparedChannelTurnMock,
+      },
       threadBindings: {
         setIdleTimeoutBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"],
@@ -811,5 +836,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  return mergeDeep(base, overrides);
+  const runtime = mergeDeep(base, normalizePluginRuntimeOverrides(overrides));
+  runtime.channel.turn = runtime.channel.inbound;
+  return runtime;
 }

@@ -17,11 +17,11 @@ describe("createPluginRuntimeMock", () => {
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });
 
-  it("exposes channel inbound helpers without the removed turn aliases", async () => {
+  it("exposes channel inbound helpers through the deprecated turn alias", async () => {
     const runtime = createPluginRuntimeMock();
     const channel = "test";
 
-    expect("turn" in runtime.channel).toBe(false);
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
 
     const input = vi.fn((raw: { id: string }) => ({
       id: raw.id,
@@ -81,6 +81,46 @@ describe("createPluginRuntimeMock", () => {
         dispatched: true,
       }),
     );
+  });
+
+  it("reflects inbound overrides through the deprecated turn alias", () => {
+    const overrideRun = createPluginRuntimeMock().channel.inbound.run;
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        inbound: { run: overrideRun },
+      },
+    });
+
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.run).toBe(overrideRun);
+  });
+
+  it("normalizes legacy turn overrides into the inbound alias target", () => {
+    const overrideRun = createPluginRuntimeMock().channel.inbound.run;
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        turn: { run: overrideRun },
+      },
+    });
+
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.inbound.run).toBe(overrideRun);
+    expect(runtime.channel.turn.run).toBe(overrideRun);
+  });
+
+  it("keeps canonical inbound overrides ahead of legacy turn overrides", () => {
+    const turnRun = createPluginRuntimeMock().channel.inbound.run;
+    const inboundRun = createPluginRuntimeMock().channel.inbound.run;
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        turn: { run: turnRun },
+        inbound: { run: inboundRun },
+      },
+    });
+
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.inbound.run).toBe(inboundRun);
+    expect(runtime.channel.turn.run).toBe(inboundRun);
   });
 
   it("routes untrusted group prompt facts into untrusted structured context", () => {

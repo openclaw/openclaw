@@ -72,6 +72,14 @@ export type PluginRuntimeChannelContextRegistry = {
   }) => () => void;
 };
 
+type PluginRuntimeChannelInbound = {
+  buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
+  run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+  /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
+  runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+  dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
+};
+
 export type PluginRuntimeChannel = {
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
@@ -179,13 +187,9 @@ export type PluginRuntimeChannel = {
   outbound: {
     loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
   };
-  inbound: {
-    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
-    /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
-    runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
-    dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
-  };
+  inbound: PluginRuntimeChannelInbound;
+  /** @deprecated Compatibility alias for shipped plugins compiled against `channel.turn.*`; use `channel.inbound.*`. */
+  turn: PluginRuntimeChannelInbound;
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;
