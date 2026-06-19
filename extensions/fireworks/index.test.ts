@@ -15,8 +15,6 @@ import {
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
-  FIREWORKS_K2_6_CONTEXT_WINDOW,
-  FIREWORKS_K2_6_MAX_TOKENS,
   FIREWORKS_K2_6_MODEL_ID,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
@@ -72,8 +70,8 @@ describe("fireworks provider plugin", () => {
     ]);
     expect(models[0]?.reasoning).toBe(false);
     expect(models[0]?.input).toEqual(["text", "image"]);
-    expect(models[0]?.contextWindow).toBe(FIREWORKS_K2_6_CONTEXT_WINDOW);
-    expect(models[0]?.maxTokens).toBe(FIREWORKS_K2_6_MAX_TOKENS);
+    expect(models[0]?.contextWindow).toBe(262144);
+    expect(models[0]?.maxTokens).toBe(262144);
     expect(models[1]?.reasoning).toBe(false);
     expect(models[1]?.input).toEqual(["text", "image"]);
     expect(models[1]?.contextWindow).toBe(FIREWORKS_DEFAULT_CONTEXT_WINDOW);

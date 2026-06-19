@@ -1,18 +1,22 @@
 /**
  * Resolves and persists live-session model switch requests.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { EmbeddedRunModelSwitchRequest } from "./embedded-agent-runner/runs.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+export type LiveSessionModelSelection = {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
@@ -122,8 +126,8 @@ export function hasDifferentLiveSessionModelSelection(
  * set so the switch fires on the next clean retry opportunity — even if that
  * falls into a subsequent user turn.
  *
- * This replaces the previous approach that used an in-memory map
- * (`consumeEmbeddedRunModelSwitch`) which could not distinguish between
+ * This replaces the previous approach that used an in-memory run-state map,
+ * which could not distinguish between
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {

@@ -17,6 +17,8 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
+  persistSessionResetLifecycle,
+  persistSessionRolloverLifecycle,
   persistSessionTranscriptTurn,
   purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
@@ -595,6 +597,118 @@ describe("session accessor file-backed seam", () => {
     expect(files).toContain("referenced.jsonl");
     expect(fs.existsSync(siblingTranscriptPath)).toBe(true);
     expect(fs.readdirSync(siblingDir)).toEqual(["sibling-lifecycle.jsonl"]);
+  });
+
+  it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-session.jsonl");
+    const nextTranscript = path.join(tempDir, "next-session.jsonl");
+    const previousEntry: SessionEntry = {
+      sessionFile: previousTranscript,
+      sessionId: "previous-session",
+      updatedAt: now,
+    };
+    const nextEntry: SessionEntry = {
+      sessionFile: nextTranscript,
+      sessionId: "next-session",
+      updatedAt: now + 1,
+    };
+    fs.writeFileSync(
+      previousTranscript,
+      [
+        JSON.stringify({ type: "session", id: "previous-session" }),
+        JSON.stringify({
+          id: "msg-user",
+          message: { role: "user", content: "hello" },
+          parentId: null,
+          timestamp: "2026-06-16T00:00:00.000Z",
+          type: "message",
+        }),
+        JSON.stringify({
+          id: "msg-assistant",
+          message: { role: "assistant", content: "hi" },
+          parentId: "msg-user",
+          timestamp: "2026-06-16T00:00:01.000Z",
+          type: "message",
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
+
+    const result = await persistSessionResetLifecycle({
+      agentId: "main",
+      cleanupPreviousTranscript: true,
+      nextEntry,
+      nextSessionFile: nextTranscript,
+      previousEntry,
+      previousSessionId: previousEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+
+    expect(result.replayedMessages).toBe(2);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
+    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
+  });
+
+  it("persists rollover entries and returns archived previous transcript info", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:telegram:dm:user";
+    const retiredKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-rollover.jsonl");
+    const previousEntry: SessionEntry = {
+      sessionFile: previousTranscript,
+      sessionId: "previous-rollover",
+      updatedAt: now,
+    };
+    const nextEntry: SessionEntry = {
+      sessionFile: path.join(tempDir, "next-rollover.jsonl"),
+      sessionId: "next-rollover",
+      updatedAt: now + 1,
+    };
+    fs.writeFileSync(previousTranscript, '{"type":"session","id":"previous-rollover"}\n', "utf-8");
+    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
+    await upsertSessionEntry(
+      { sessionKey: retiredKey, storePath },
+      {
+        lastChannel: "telegram",
+        lastTo: "user",
+        sessionId: "legacy-main",
+        updatedAt: now,
+      },
+    );
+
+    const result = await persistSessionRolloverLifecycle({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      previousEntry,
+      retiredEntry: {
+        key: retiredKey,
+        entry: {
+          sessionId: "legacy-main",
+          updatedAt: now,
+        },
+      },
+      sessionEntry: nextEntry,
+      sessionKey,
+      storePath,
+    });
+
+    expect(result.sessionEntry).toMatchObject(nextEntry);
+    expect(result.previousSessionTranscript.transcriptArchived).toBe(true);
+    expect(result.previousSessionTranscript.sessionFile).toContain(
+      "previous-rollover.jsonl.reset.",
+    );
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
+    expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toEqual({
+      sessionId: "legacy-main",
+      updatedAt: expect.any(Number),
+    });
+    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.existsSync(result.previousSessionTranscript.sessionFile ?? "")).toBe(true);
   });
 
   it("loads and appends transcript events through a session scope", async () => {

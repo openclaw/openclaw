@@ -474,6 +474,32 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
   });
 
+  it("keeps ClawHub trusted publisher timeouts active while reading response bodies", async () => {
+    const repoDir = createTempPluginRepo();
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(requestUrl);
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${url.pathname}`);
+    };
+
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow("ClawHub request timed out after 5ms");
+  });
+
   it("routes environment-pinned trusted publisher config out of normal candidates", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({

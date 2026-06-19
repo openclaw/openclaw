@@ -409,6 +409,33 @@ describe("release user journey assertions", () => {
     }
   });
 
+  it("keeps the ClickClack HTTP timeout active while reading error bodies", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const server = await startTcpFixtureServer((socket) => {
+      socket.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\n\r\npartial");
+    });
+
+    try {
+      await expect(
+        withEnv(
+          {
+            HOME: home,
+            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "25",
+          },
+          () =>
+            runReleaseUserJourneyAssertion("post-clickclack-inbound", [
+              `http://127.0.0.1:${server.port}`,
+              "hello",
+            ]),
+        ),
+      ).rejects.toThrow(`http://127.0.0.1:${server.port}/fixture/inbound timed out after 25ms`);
+    } finally {
+      await server.stop();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects loose body byte env values instead of parsing prefixes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
