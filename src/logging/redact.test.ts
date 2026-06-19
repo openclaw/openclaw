@@ -1094,7 +1094,8 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
     expect(serialized).toContain("main-test-case-name");
     expect(serialized).toContain("standalone app password");
-    expect(serialized).toContain("qrst-uvwx-yzab-cdef");
+    expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
   });
 
   it("masks app-specific password shapes with Apple/iCloud context in generic fields", () => {

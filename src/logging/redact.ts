@@ -942,7 +942,8 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
   return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
 }
 
-const APP_SPECIFIC_PASSWORD_CONTEXT_RE = /\b(?:apple|icloud|app[-_\s]?specific[-_\s]?password)\b/i;
+const APP_SPECIFIC_PASSWORD_CONTEXT_RE =
+  /\b(?:apple|icloud|app[-_\s]?(?:specific[-_\s]?)?password)\b/i;
 
 function redactAppSpecificPasswords(text: string, fieldKey?: string): string {
   if (!fieldKey || !APP_SPECIFIC_ONLY_FIELD_RE.test(fieldKey)) {
