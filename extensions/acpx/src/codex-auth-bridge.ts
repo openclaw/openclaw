@@ -235,6 +235,7 @@ function buildAdapterWrapperScript(params: {
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 ${params.envSetup}
@@ -379,6 +380,55 @@ function stripOpenClawWrapperArgs(args) {
   return stripped;
 }
 
+let pendingStdoutText = "";
+const stdoutDecoder = new StringDecoder("utf8");
+
+function shouldForwardAcpJsonValue(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function forwardStdoutLine(line, hasLineBreak) {
+  const trimmedLine = line.trim();
+  if (trimmedLine) {
+    try {
+      const parsed = JSON.parse(trimmedLine);
+      if (!shouldForwardAcpJsonValue(parsed)) {
+        return;
+      }
+    } catch {
+      // Keep non-JSON stdout behavior unchanged; acpx owns diagnostics for it.
+    }
+  }
+  process.stdout.write(line + (hasLineBreak ? "\\n" : ""));
+}
+
+function appendStdoutText(text) {
+  pendingStdoutText += text;
+  while (true) {
+    const lineBreak = pendingStdoutText.indexOf("\\n");
+    if (lineBreak === -1) {
+      return;
+    }
+    const line = pendingStdoutText.slice(0, lineBreak);
+    pendingStdoutText = pendingStdoutText.slice(lineBreak + 1);
+    forwardStdoutLine(line, true);
+  }
+}
+
+function appendStdout(chunk) {
+  appendStdoutText(typeof chunk === "string" ? chunk : stdoutDecoder.write(chunk));
+}
+
+function finishStdout() {
+  appendStdoutText(stdoutDecoder.end());
+  if (!pendingStdoutText) {
+    return;
+  }
+  const finalLine = pendingStdoutText;
+  pendingStdoutText = "";
+  forwardStdoutLine(finalLine, false);
+}
+
 const rawConfiguredArgs = process.argv.slice(2);
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
 
@@ -434,8 +484,12 @@ if (!command) {
 const child = spawn(command, args, {
   detached: process.platform !== "win32",
   env,
-  stdio: ["inherit", "inherit", "pipe"],
+  stdio: ["inherit", "pipe", "pipe"],
   windowsHide: true,
+});
+
+child.stdout?.on("data", (chunk) => {
+  appendStdout(chunk);
 });
 
 child.stderr?.on("data", (chunk) => {
@@ -518,8 +572,9 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("close", () => {
+  finishStdout();
   finishStderrLog();
-  process.exit(childExitCode);
+  process.exitCode = childExitCode;
 });
 `;
 }
@@ -725,7 +780,36 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
   if (configuredAdapterArgs) {
     return buildWrapperCommand(wrapperPath, configuredAdapterArgs);
   }
-  return configuredCommand?.trim() || buildWrapperCommand(wrapperPath);
+  return buildWrapperCommand(wrapperPath, [
+    RUN_CONFIGURED_COMMAND_SENTINEL,
+    ...splitCommandParts(configuredCommand?.trim() ?? ""),
+  ]);
+}
+
+function buildConfiguredAcpWrapperCommand(
+  wrapperPath: string,
+  configuredCommand: string | undefined,
+): string | undefined {
+  const normalized = configuredCommand?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return buildWrapperCommand(wrapperPath, [
+    RUN_CONFIGURED_COMMAND_SENTINEL,
+    ...splitCommandParts(normalized),
+  ]);
+}
+
+function buildWrappedConfiguredAgentCommands(
+  agents: Record<string, string>,
+  wrapperPath: string,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(agents).flatMap(([agentName, command]) => {
+      const wrappedCommand = buildConfiguredAcpWrapperCommand(wrapperPath, command);
+      return wrappedCommand ? [[agentName, wrappedCommand]] : [];
+    }),
+  );
 }
 
 /** Prepare ACPX agent commands and isolated auth homes for Codex/Claude adapters. */
@@ -756,7 +840,7 @@ export async function prepareAcpxCodexAuthConfig(params: {
   return {
     ...params.pluginConfig,
     agents: {
-      ...params.pluginConfig.agents,
+      ...buildWrappedConfiguredAgentCommands(params.pluginConfig.agents, claudeWrapperPath),
       codex: buildCodexAcpWrapperCommand(wrapperPath, configuredCodexCommand),
       claude: buildClaudeAcpWrapperCommand(claudeWrapperPath, configuredClaudeCommand),
     },

@@ -246,7 +246,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       /child\.on\("exit", \(code, signal\) => \{\s*if \(parentWatcher\) \{\s*clearInterval\(parentWatcher\);\s*\}\s*if \(orphanCleanupStarted\) \{\s*return;\s*\}/s,
     );
     expect(wrapper).toMatch(
-      /child\.on\("close", \(\) => \{\s*finishStderrLog\(\);\s*process\.exit\(childExitCode\);/s,
+      /child\.on\("close", \(\) => \{\s*finishStdout\(\);\s*finishStderrLog\(\);\s*process\.exitCode = childExitCode;/s,
     );
     expect(wrapper).not.toMatch(
       /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
@@ -458,6 +458,87 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
     expect(launched.argv).toEqual(["--permission-mode", "bypass"]);
     expect(launched.codexHome).toBeNull();
+  });
+
+  it("drops primitive ACP JSON stdout frames before acpx reads them", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
+    const installedBinPath = path.join(root, "claude-agent-acp-bin.js");
+    const validMessage = {
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { ok: true },
+    };
+    await fs.writeFile(
+      installedBinPath,
+      [
+        'process.stdout.write("1\\n");',
+        'process.stdout.write("\\"bad\\"\\n");',
+        'process.stdout.write("null\\n");',
+        'process.stdout.write("[{}]\\n");',
+        'process.stdout.write("{not json}\\n");',
+        `process.stdout.write(${JSON.stringify(JSON.stringify(validMessage) + "\n")});`,
+      ].join("\n"),
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+    });
+
+    expect(stdout.trimEnd().split("\n")).toEqual(["{not json}", JSON.stringify(validMessage)]);
+  });
+
+  it("preserves ACP stdout when UTF-8 JSON text spans chunks", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
+    const installedBinPath = path.join(root, "claude-agent-acp-bin.js");
+    const validMessage = {
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { text: "雪" },
+    };
+    await fs.writeFile(
+      installedBinPath,
+      [
+        'const prefix = Buffer.from(\'{"jsonrpc":"2.0","method":"session/update","params":{"text":"\');',
+        'const character = Buffer.from("雪");',
+        "const suffix = Buffer.from('\"}}\\n');",
+        "process.stdout.write(Buffer.concat([prefix, character.subarray(0, 1)]));",
+        "setTimeout(() => {",
+        "  process.stdout.write(Buffer.concat([character.subarray(1), suffix]));",
+        "}, 10);",
+      ].join("\n"),
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+    });
+
+    expect(JSON.parse(stdout.trim())).toEqual(validMessage);
   });
 
   it("does not copy source Codex auth", async () => {
@@ -749,9 +830,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.log"));
   });
 
-  it("leaves a custom Claude agent command alone", async () => {
+  it("wraps a custom Claude agent command", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {
@@ -769,12 +851,16 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
-    expect(resolved.agents.claude).toBe("node ./custom-claude-wrapper.mjs --flag");
+    expectClaudeWrapperCommand(resolved.agents.claude, generated.wrapperPath);
+    expect(resolved.agents.claude).toContain("--openclaw-run-configured");
+    expect(resolved.agents.claude).toContain("custom-claude-wrapper.mjs");
+    expect(resolved.agents.claude).toContain("--flag");
   });
 
-  it("does not normalize custom Claude commands that only mention the package name", async () => {
+  it("wraps custom Claude commands that only mention the package name", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
     const command =
       "node ./custom-claude-wrapper.mjs @agentclientprotocol/claude-agent-acp@0.31.4 --flag";
     const pluginConfig = resolveAcpxPluginConfig({
@@ -794,6 +880,37 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
-    expect(resolved.agents.claude).toBe(command);
+    expectClaudeWrapperCommand(resolved.agents.claude, generated.wrapperPath);
+    expect(resolved.agents.claude).toContain("--openclaw-run-configured");
+    expect(resolved.agents.claude).toContain("custom-claude-wrapper.mjs");
+    expect(resolved.agents.claude).toContain("@agentclientprotocol/claude-agent-acp@0.31.4");
+    expect(resolved.agents.claude).toContain("--flag");
+  });
+
+  it("wraps custom non-Claude agent commands", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          hermes: {
+            command: "node ./hermes-acp.mjs --flag",
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
+    });
+
+    expectClaudeWrapperCommand(resolved.agents.hermes, generated.wrapperPath);
+    expect(resolved.agents.hermes).toContain("--openclaw-run-configured");
+    expect(resolved.agents.hermes).toContain("hermes-acp.mjs");
+    expect(resolved.agents.hermes).toContain("--flag");
   });
 });
