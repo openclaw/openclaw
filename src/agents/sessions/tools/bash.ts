@@ -74,7 +74,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           timeoutHandle = setTimeout(() => {
             timedOut = true;
             if (child.pid) {
-              killProcessTree(child.pid);
+              killProcessTree(child.pid, { detached: true });
             }
           }, timeoutMs);
         }
@@ -84,7 +84,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
-            killProcessTree(child.pid);
+            killProcessTree(child.pid, { detached: true });
           }
         };
         if (signal) {
