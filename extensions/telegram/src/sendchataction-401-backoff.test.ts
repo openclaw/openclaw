@@ -301,4 +301,43 @@ describe("createTelegramSendChatActionHandler", () => {
     await handler.sendChatAction(444, "typing");
     expect(fn).toHaveBeenCalledTimes(3);
   });
+
+  it("does not treat 429 with retry_after=401 as a 401 error", async () => {
+    // grammY renders this as: "Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)"
+    // The substring "401" in the message must NOT trigger the 401 suspension path.
+    const make429WithRetryAfter401 = () =>
+      Object.assign(
+        new Error("Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)"),
+        { error_code: 429, parameters: { retry_after: 401 } },
+      );
+
+    let now = 0;
+    const fn = vi.fn().mockRejectedValue(make429WithRetryAfter401());
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutive401: 3,
+      now: () => now,
+    });
+
+    // All calls should fail but as transient errors, NOT 401 errors
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+
+    // Advance past the 401s cooldown (retry_after=401 → 401000ms)
+    now += 402_000;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+
+    now += 402_000;
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+
+    // Handler must NOT be suspended — this is a transient 429, not a 401
+    expect(handler.isSuspended()).toBe(false);
+
+    // Must NOT have logged the CRITICAL token-deletion alarm
+    const criticalLogs = logger.mock.calls.filter(([msg]) =>
+      String(msg).includes("CRITICAL"),
+    );
+    expect(criticalLogs).toEqual([]);
+  });
 });

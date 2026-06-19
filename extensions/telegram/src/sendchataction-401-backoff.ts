@@ -69,10 +69,18 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
+  // Check structured Telegram error_code first to avoid substring false positives.
+  // A 429 with retry_after=401 produces a message like "(429: Too Many Requests: retry after 401)"
+  // which contains "401" as a substring — this must NOT trigger the 401 suspension path.
+  if (typeof error === "object" && "error_code" in error) {
+    const code = (error as { error_code: unknown }).error_code;
+    if (typeof code === "number") {
+      return code === 401;
+    }
+  }
+  // Fallback for non-Telegram errors (plain Error objects without error_code).
   const message = error instanceof Error ? error.message : JSON.stringify(error);
-  return (
-    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
-  );
+  return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
 }
 
 class TelegramSendChatActionTransientCooldownError extends Error {
