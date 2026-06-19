@@ -137,6 +137,7 @@ type CreateFeishuReplyDispatcherParams = {
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  sendTarget?: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
   typingTargetMessageId?: string;
@@ -174,6 +175,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
   const threadReplyMode = threadReply === true;
+  const effectiveSendTarget = params.sendTarget ?? chatId;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const allowTopLevelReplyFallback =
     effectiveReplyInThread === true &&
@@ -392,8 +394,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        await streaming.start(chatId, resolveReceiveIdType(chatId), {
-          replyToMessageId,
+        // Strip routing prefix for Feishu streaming API
+        const streamingTarget =
+          (effectiveSendTarget || chatId)
+            .replace(/^(feishu|lark):/i, "")
+            .replace(/^(chat|user|group|dm|open_id):/i, "")
+            .trim() || chatId;
+        await streaming.start(streamingTarget, resolveReceiveIdType(effectiveSendTarget), {
+          replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
           header: cardHeader,
@@ -519,7 +527,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       send: async ({ mediaUrl }) => {
         const result = await sendMediaFeishu({
           cfg,
-          to: chatId,
+          to: effectiveSendTarget,
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -536,7 +544,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             sendChunk: async ({ chunk }) => {
               await sendMessageFeishu({
                 cfg,
-                to: chatId,
+                to: effectiveSendTarget,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
@@ -563,7 +571,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 sendChunk: async ({ chunk }) => {
                   await sendMessageFeishu({
                     cfg,
-                    to: chatId,
+                    to: effectiveSendTarget,
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
@@ -589,7 +597,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await sendMessageFeishu({
       cfg,
-      to: chatId,
+      to: effectiveSendTarget,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
       replyToMessageId: sendReplyToMessageId,
       replyInThread: effectiveReplyInThread,
@@ -761,7 +769,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               sendChunk: async ({ chunk }) => {
                 await sendStructuredCardFeishu({
                   cfg,
-                  to: chatId,
+                  to: effectiveSendTarget,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
@@ -780,7 +788,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
-                  to: chatId,
+                  to: effectiveSendTarget,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
