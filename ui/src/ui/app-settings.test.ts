@@ -159,6 +159,7 @@ const createHost = (routeId: RouteId): SettingsHost => ({
   logsAtBottom: false,
   eventLog: [],
   eventLogBuffer: [],
+  updateComplete: Promise.resolve(),
   password: "",
   basePath: "",
   themeMedia: null,
@@ -196,25 +197,25 @@ describe("setRouteFromLocation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts and stops log polling based on the route", () => {
+  it("starts and stops log polling based on the route", async () => {
     const host = createHost("chat");
 
-    setRouteFromLocation(host, "logs");
+    await setRouteFromLocation(host, "logs");
     expect(host.debugPollInterval).toBeNull();
     expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
-    setRouteFromLocation(host, "chat");
+    await setRouteFromLocation(host, "chat");
     expect(host.logsPollInterval).toBeNull();
   });
 
-  it("starts and stops debug polling based on the route", () => {
+  it("starts and stops debug polling based on the route", async () => {
     const host = createHost("chat");
 
-    setRouteFromLocation(host, "debug");
+    await setRouteFromLocation(host, "debug");
     expect(host.logsPollInterval).toBeNull();
     expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
-    setRouteFromLocation(host, "chat");
+    await setRouteFromLocation(host, "chat");
     expect(host.debugPollInterval).toBeNull();
   });
 

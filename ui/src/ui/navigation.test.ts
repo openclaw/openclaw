@@ -4,15 +4,15 @@ import {
   SETTINGS_NAVIGATION_ROUTES,
   SIDEBAR_SECTIONS,
   navigationIconForRoute,
+  subtitleForRoute,
+  titleForRoute,
 } from "../app-navigation.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
   normalizePath,
   pathForRoute,
-  subtitleForRoute,
   routeIdFromPath,
-  titleForRoute,
   type RouteId,
 } from "../app-routes.ts";
 

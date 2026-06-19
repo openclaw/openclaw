@@ -2,15 +2,13 @@
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { isSettingsNavigationRoute, SIDEBAR_SECTIONS } from "../app-navigation.ts";
 import {
-  appRouter,
-  normalizeBasePath,
-  pathForRoute,
+  isSettingsNavigationRoute,
+  SIDEBAR_SECTIONS,
   subtitleForRoute,
   titleForRoute,
-  type RouteId,
-} from "../app-routes.ts";
+} from "../app-navigation.ts";
+import { appRouter, normalizeBasePath, pathForRoute, type RouteId } from "../app-routes.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -1285,11 +1283,15 @@ export function renderApp(state: AppViewState) {
       : null;
   const isChat = state.routeId === "chat";
   const activeRoute = appRouter.getRoute(state.routeId);
+  const loadedRouteModule = appRouter.getLoadedModule(state.routeId);
   const routedPage =
-    activeRoute?.render?.({
-      state,
-      invalidate: notifyLazyViewChanged,
-    }) ?? null;
+    activeRoute?.component &&
+    loadedRouteModule &&
+    typeof loadedRouteModule === "object" &&
+    "render" in loadedRouteModule &&
+    typeof loadedRouteModule.render === "function"
+      ? loadedRouteModule.render({ state })
+      : null;
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);

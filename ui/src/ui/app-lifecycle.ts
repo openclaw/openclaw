@@ -3,12 +3,7 @@ import { cancelActiveRouteTransition, enterInitialActiveRoute } from "../app/act
 import type { SettingsHost } from "../app/app-host.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
-import {
-  startNodesPolling,
-  stopLogsPolling,
-  stopNodesPolling,
-  stopDebugPolling,
-} from "./app-polling.ts";
+import { stopLogsPolling, stopNodesPolling, stopDebugPolling } from "./app-polling.ts";
 import {
   observeTopbar,
   scheduleActivityScroll,
@@ -19,7 +14,6 @@ import {
   applySettingsFromUrl,
   detachThemeListener,
   inferBasePath,
-  syncRouteWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
@@ -92,7 +86,7 @@ type LifecycleHost = {
   controlUiRoutePaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   controlUiBootstrapReady?: Promise<void> | null;
-  popStateHandler: () => void;
+  sessionPopStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
 
@@ -104,7 +98,6 @@ export function handleConnected(host: LifecycleHost) {
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
     { applyIdentity: false, skipWithoutAuthCandidate: true },
   );
-  syncRouteWithLocation(host as unknown as Parameters<typeof syncRouteWithLocation>[0], true);
   const hasPendingGatewaySwitch =
     typeof host.pendingGatewayUrl === "string" && host.pendingGatewayUrl.trim();
   if (!hasPendingGatewaySwitch && restoreChatComposerState(host, { preserveCurrent: true })) {
@@ -117,12 +110,9 @@ export function handleConnected(host: LifecycleHost) {
     host.chatComposerProvisionalRestore = null;
   }
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
-  window.addEventListener("popstate", host.popStateHandler);
+  window.addEventListener("popstate", host.sessionPopStateHandler);
   if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
-  }
-  if (host.routeId === "nodes") {
-    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   }
   enterInitialActiveRoute(host as unknown as SettingsHost);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
@@ -195,7 +185,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.controlUiRoutePaintSeq = (host.controlUiRoutePaintSeq ?? 0) + 1;
   cancelActiveRouteTransition(host as unknown as SettingsHost);
   flushPendingChatComposerPersistence(host);
-  window.removeEventListener("popstate", host.popStateHandler);
+  window.removeEventListener("popstate", host.sessionPopStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);

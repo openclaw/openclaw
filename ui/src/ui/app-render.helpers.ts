@@ -1,7 +1,11 @@
 // Control UI module implements app render behavior.
 import { html, nothing } from "lit";
-import { isSettingsNavigationRoute, navigationIconForRoute } from "../app-navigation.ts";
-import { pathForRoute, titleForRoute, type RouteId } from "../app-routes.ts";
+import {
+  isSettingsNavigationRoute,
+  navigationIconForRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
+import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { t } from "../i18n/index.ts";
 import {
   createChatSessionsLoadOverrides,

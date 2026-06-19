@@ -3,8 +3,9 @@ import {
   isSettingsNavigationRoute,
   navigationIconForRoute,
   SETTINGS_NAVIGATION_ROUTES,
+  titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, titleForRoute } from "../app-routes.ts";
+import { pathForRoute } from "../app-routes.ts";
 import { t } from "../i18n/index.ts";
 import type { AppViewState } from "../ui/app-view-state.ts";
 import { icons } from "../ui/icons.ts";

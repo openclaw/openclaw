@@ -1,6 +1,7 @@
 import { appRouter, type RouteId, type RouteLoadContext } from "../app-routes.ts";
 // Control UI active route lifecycle and refresh orchestration.
 import { t } from "../i18n/index.ts";
+import type { RouterHistory } from "../router/index.ts";
 import {
   createChatSessionsLoadOverrides,
   refreshChat,
@@ -53,7 +54,6 @@ import { hasOperatorReadAccess, hasOperatorWriteAccess } from "./operator-access
 type ActiveRouteLoader = (context: {
   host: SettingsHost;
   app: SettingsAppHost;
-  signal: AbortSignal;
 }) => void | Promise<void>;
 
 const refreshSettingsRoute: ActiveRouteLoader = async ({ host, app }) => {
@@ -137,45 +137,100 @@ const ACTIVE_ROUTE_REFRESHERS = {
   },
 } satisfies Record<AppRefreshRouteId, ActiveRouteLoader>;
 
-type AppRouteRunner = ReturnType<typeof appRouter.createRunner>;
+type RouteTransitionOptions = {
+  history?: "none" | "push" | "replace";
+};
 
-const activeRouteRunners = new WeakMap<SettingsHost, AppRouteRunner>();
+const activeRouteSubscriptions = new WeakMap<SettingsHost, () => void>();
 
 function isAppRefreshRoute(routeId: RouteId): routeId is AppRefreshRouteId {
   return routeId in ACTIVE_ROUTE_REFRESHERS;
 }
 
-function routeRunner(host: SettingsHost): AppRouteRunner {
-  let runner = activeRouteRunners.get(host);
-  if (!runner) {
-    runner = appRouter.createRunner();
-    activeRouteRunners.set(host, runner);
-  }
-  return runner;
+function createBrowserHistory(): RouterHistory {
+  return {
+    location: () => ({
+      pathname: window.location.pathname,
+      search: window.location.search,
+      hash: window.location.hash,
+    }),
+    push: ({ pathname, search, hash }) =>
+      window.history.pushState({}, "", `${pathname}${search}${hash}`),
+    replace: ({ pathname, search, hash }) =>
+      window.history.replaceState({}, "", `${pathname}${search}${hash}`),
+    listen: (listener) => {
+      const onPopState = () =>
+        listener({
+          pathname: window.location.pathname,
+          search: window.location.search,
+          hash: window.location.hash,
+        });
+      window.addEventListener("popstate", onPopState);
+      return () => window.removeEventListener("popstate", onPopState);
+    },
+  };
 }
 
-function routeLoadContext(host: SettingsHost, signal: AbortSignal): RouteLoadContext {
-  return { host, app: host as unknown as SettingsAppHost, signal };
+function routeLoadContext(host: SettingsHost): RouteLoadContext {
+  return { host, app: host as unknown as SettingsAppHost };
+}
+
+function isPageRoute(routeId: RouteId): boolean {
+  const route = appRouter.getRoute(routeId);
+  return Boolean(route?.component || route?.load || route?.onEnter || route?.onLeave);
+}
+
+function refreshLegacyRouteAfterTransition(host: SettingsHost, routeId: RouteId): void {
+  if (!host.connected || isPageRoute(routeId)) {
+    return;
+  }
+  void refreshActiveRoute(host).catch(() => undefined);
 }
 
 export function cancelActiveRouteTransition(host: SettingsHost): void {
-  routeRunner(host).cancel();
+  activeRouteSubscriptions.get(host)?.();
+  activeRouteSubscriptions.delete(host);
+  appRouter.stop();
 }
 
 export function enterInitialActiveRoute(host: SettingsHost): void {
-  const transition = routeRunner(host).enter(host.routeId, (signal) =>
-    routeLoadContext(host, signal),
-  );
-  if (transition) {
-    void transition.catch(() => undefined);
-  }
+  activeRouteSubscriptions.get(host)?.();
+  const unsubscribe = appRouter.subscribe((next) => {
+    if (next.status !== "resolved" || !next.resolvedRouteId) {
+      host.requestUpdate?.();
+      return;
+    }
+    const previous = host.routeId;
+    host.routeId = next.resolvedRouteId;
+    if (previous !== next.resolvedRouteId) {
+      prepareActiveRouteTransition(host, previous, next.resolvedRouteId);
+      refreshLegacyRouteAfterTransition(host, next.resolvedRouteId);
+    }
+    host.requestUpdate?.();
+  });
+  activeRouteSubscriptions.set(host, unsubscribe);
+  void appRouter
+    .start(createBrowserHistory(), host.basePath, routeLoadContext(host))
+    .then(() => refreshLegacyRouteAfterTransition(host, host.routeId))
+    .catch(() => undefined);
 }
 
 export function applyActiveRouteTransition(
   host: SettingsHost,
   previous: RouteId,
   next: RouteId,
-): void {
+  options: RouteTransitionOptions = {},
+): Promise<void> {
+  prepareActiveRouteTransition(host, previous, next);
+  return appRouter
+    .navigate(next, routeLoadContext(host), {
+      history: options.history ?? "none",
+    })
+    .then(() => refreshLegacyRouteAfterTransition(host, next))
+    .catch(() => undefined);
+}
+
+function prepareActiveRouteTransition(host: SettingsHost, previous: RouteId, next: RouteId) {
   if (previous !== next) {
     scheduleControlUiRouteVisibleTiming(host, previous, next);
     clearPendingSessionsChangedReload(host);
@@ -187,12 +242,6 @@ export function applyActiveRouteTransition(
 
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
-  }
-  const transition = routeRunner(host).transition(previous, next, (signal) =>
-    routeLoadContext(host, signal),
-  );
-  if (transition) {
-    void transition.catch(() => undefined);
   }
   (next === "nodes" ? startNodesPolling : stopNodesPolling)(
     host as unknown as Parameters<typeof startNodesPolling>[0],
@@ -209,15 +258,14 @@ export async function refreshActiveRoute(host: SettingsHost): Promise<void> {
   const routeId = host.routeId;
   const refreshRun = beginControlUiRefresh(host, host.routeId);
   try {
-    await routeRunner(host).load(
-      routeId,
-      (signal) => routeLoadContext(host, signal),
-      async (context, options) => {
-        if (isAppRefreshRoute(routeId) && options.shouldRun()) {
-          await ACTIVE_ROUTE_REFRESHERS[routeId]?.(context);
-        }
-      },
-    );
+    if (isPageRoute(routeId)) {
+      await appRouter.revalidate(routeLoadContext(host));
+    } else if (isAppRefreshRoute(routeId)) {
+      await ACTIVE_ROUTE_REFRESHERS[routeId]?.({
+        host,
+        app: host as unknown as SettingsAppHost,
+      });
+    }
     finishControlUiRefresh(host, refreshRun, "ok");
   } catch (err) {
     finishControlUiRefresh(host, refreshRun, "error");

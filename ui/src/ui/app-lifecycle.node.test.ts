@@ -31,7 +31,7 @@ function createHost() {
     logsAtBottom: true,
     logsEntries: [],
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
-    popStateHandler: vi.fn(),
+    sessionPopStateHandler: vi.fn(),
     topbarObserver: { disconnect: vi.fn() } as unknown as ResizeObserver,
   };
 }
@@ -61,7 +61,7 @@ describe("handleDisconnected", () => {
 
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 
-    expect(removeSpy).toHaveBeenCalledWith("popstate", host.popStateHandler);
+    expect(removeSpy).toHaveBeenCalledWith("popstate", host.sessionPopStateHandler);
     expect(host.connectGeneration).toBe(1);
     expect(host.client).toBeNull();
     expect(host.connected).toBe(false);

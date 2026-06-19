@@ -3,7 +3,6 @@ import {
   normalizeBasePath,
   normalizePath,
   pathForRoute,
-  routeIdFromPath,
   type RouteId,
 } from "../app-routes.ts";
 // Control UI module implements app settings behavior.
@@ -196,7 +195,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 }
 
 export function setRoute(host: SettingsHost, next: RouteId) {
-  applyRouteSelection(host, next, { refreshPolicy: "always", syncUrl: true });
+  return applyRouteSelection(host, next, { syncUrl: true });
 }
 
 function applyThemeTransition(
@@ -343,35 +342,19 @@ function syncSystemThemeListener(host: SettingsHost) {
   }
 }
 
-export function syncRouteWithLocation(host: SettingsHost, replace: boolean) {
+export function syncSessionWithLocation(host: SettingsHost) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = routeIdFromPath(window.location.pathname, host.basePath) ?? "chat";
-  setRouteFromLocation(host, resolved);
-  syncUrlWithRoute(host, resolved, replace);
-}
-
-export function onPopState(host: SettingsHost) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const resolved = routeIdFromPath(window.location.pathname, host.basePath);
-  if (!resolved) {
-    return;
-  }
-
   const url = new URL(window.location.href);
   const session = normalizeOptionalString(url.searchParams.get("session"));
   if (session) {
     applySessionSelection(host, session);
   }
-
-  setRouteFromLocation(host, resolved);
 }
 
 export function setRouteFromLocation(host: SettingsHost, next: RouteId) {
-  applyRouteSelection(host, next, { refreshPolicy: "connected" });
+  return applyRouteSelection(host, next, {});
 }
 
 function updateBrowserHistory(url: URL, replace: boolean) {
@@ -388,19 +371,21 @@ function updateBrowserHistory(url: URL, replace: boolean) {
 function applyRouteSelection(
   host: SettingsHost,
   next: RouteId,
-  options: { refreshPolicy: "always" | "connected"; syncUrl?: boolean },
-) {
+  options: { syncUrl?: boolean },
+): Promise<void> | undefined {
   const prev = host.routeId;
   host.routeId = next;
-  applyActiveRouteTransition(host, prev, next);
-
-  if (options.refreshPolicy === "always" || host.connected) {
-    void refreshActiveRoute(host);
+  const transition = applyActiveRouteTransition(host, prev, next, {
+    history: options.syncUrl ? "push" : "none",
+  });
+  if (prev === next) {
+    void refreshActiveRoute(host).catch(() => undefined);
   }
 
   if (options.syncUrl) {
-    syncUrlWithRoute(host, next, false);
+    syncUrlWithRoute(host, next, true);
   }
+  return transition;
 }
 
 export function syncUrlWithRoute(host: SettingsHost, routeId: RouteId, replace: boolean) {

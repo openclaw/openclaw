@@ -12,13 +12,11 @@ import {
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
 } from "../../ui/controllers/skill-workshop.ts";
-import { createLazyView, renderLazyView } from "../../ui/lazy-view.ts";
 import { normalizeAgentId } from "../../ui/session-key.ts";
 import { normalizeOptionalString } from "../../ui/string-coerce.ts";
 import type { GatewaySessionRow } from "../../ui/types.ts";
-
-type SkillWorkshopViewModule = typeof import("../../ui/views/skill-workshop.ts");
-type LazySkillWorkshopView = ReturnType<typeof createLazyView<SkillWorkshopViewModule>>;
+import { renderSkillWorkshop } from "../../ui/views/skill-workshop.ts";
+import { filterSkillWorkshopProposals } from "../../ui/views/skill-workshop.ts";
 
 function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
   state.setSkillWorkshopUseCurrentChatForRevisions(enabled);
@@ -194,23 +192,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
   `;
 }
 
-const lazySkillWorkshopViews = new WeakMap<() => void, LazySkillWorkshopView>();
-
-function getLazySkillWorkshopView(notifyLazyViewChanged: () => void): LazySkillWorkshopView {
-  const current = lazySkillWorkshopViews.get(notifyLazyViewChanged);
-  if (current) {
-    return current;
-  }
-  const next = createLazyView<SkillWorkshopViewModule>(
-    () => import("../../ui/views/skill-workshop.ts"),
-    notifyLazyViewChanged,
-  );
-  lazySkillWorkshopViews.set(notifyLazyViewChanged, next);
-  return next;
-}
-
-export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChanged: () => void) {
-  const lazySkillWorkshop = getLazySkillWorkshopView(notifyLazyViewChanged);
+export function renderSkillWorkshopPage(state: AppViewState) {
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -225,8 +207,8 @@ export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChang
         </div>
         <div class="page-meta">${renderSkillWorkshopHeaderControls(state)}</div>
       </section>
-      ${renderLazyView(lazySkillWorkshop, (m) => {
-        const visibleProposals = m.filterSkillWorkshopProposals(
+      ${(() => {
+        const visibleProposals = filterSkillWorkshopProposals(
           state.skillWorkshopProposals,
           state.skillWorkshopStatusFilter,
           state.skillWorkshopQuery,
@@ -254,7 +236,7 @@ export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChang
           state.skillWorkshopFilePreviewKey = null;
           selectSkillWorkshopProposal(state, proposals[0].key);
         };
-        return m.renderSkillWorkshop({
+        return renderSkillWorkshop({
           loading: state.skillWorkshopLoading,
           error: state.skillWorkshopError,
           inspectingKey: state.skillWorkshopInspectingKey,
@@ -275,7 +257,7 @@ export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChang
           onStatusFilterChange: (status) => {
             state.skillWorkshopStatusFilter = status;
             selectVisibleFallback(
-              m.filterSkillWorkshopProposals(
+              filterSkillWorkshopProposals(
                 state.skillWorkshopProposals,
                 status,
                 state.skillWorkshopQuery,
@@ -285,7 +267,7 @@ export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChang
           onQueryChange: (query) => {
             state.skillWorkshopQuery = query;
             selectVisibleFallback(
-              m.filterSkillWorkshopProposals(
+              filterSkillWorkshopProposals(
                 state.skillWorkshopProposals,
                 state.skillWorkshopStatusFilter,
                 query,
@@ -325,7 +307,7 @@ export function renderSkillWorkshopPage(state: AppViewState, notifyLazyViewChang
             state.skillWorkshopFilePreviewQuery = "";
           },
         });
-      })}
+      })()}
     </section>
   `;
 }

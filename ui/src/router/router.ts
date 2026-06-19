@@ -1,337 +1,330 @@
-import { lazyPageModule } from "./lazy-page.ts";
-import type { MaybePromise, Route, RouteRecord, RouteHookOptions } from "./types.ts";
+import type {
+  PageDefinition,
+  RouteHookOptions,
+  RouteLocation,
+  RouteState,
+  RouterHistory,
+} from "./types.ts";
 
-type InvalidateContext = {
-  invalidate: () => void;
+type RouterOptions<TRouteId extends string, TLoadContext, TModule> = {
+  routes: readonly PageDefinition<TRouteId, TLoadContext, TModule>[];
+  defaultRouteId?: TRouteId;
 };
 
-type RouterOptions<
-  TRouteId extends string,
-  TLoadContext,
-  TRenderContext extends InvalidateContext,
-> = {
-  routes: readonly RouteRecord<TRouteId, TLoadContext, TRenderContext>[];
+type NavigationOptions = {
+  history?: "none" | "push" | "replace";
+  revalidate?: boolean;
 };
 
-type RouteRun = {
+type CompiledRoutes<TRouteId extends string, TLoadContext, TModule> = {
+  byId: Map<TRouteId, PageDefinition<TRouteId, TLoadContext, TModule>>;
+  byPath: Map<string, TRouteId>;
+  pathForRoute: (routeId: TRouteId, basePath?: string) => string;
+  routeIdFromPath: (pathname: string, basePath?: string) => TRouteId | null;
+};
+
+type NavigationRun = {
   controller: AbortController;
 };
 
-type RunKind = "transition" | "load";
-
-type RouteContextFactory<TLoadContext> = (signal: AbortSignal) => TLoadContext;
-
-type RouteBeforeLoad<TLoadContext> = (
-  context: TLoadContext,
-  options: RouteHookOptions,
-) => MaybePromise<void>;
-
-function isPromiseLike(value: MaybePromise<void>): value is Promise<void> {
-  return Boolean(value && typeof (value as Promise<void>).then === "function");
-}
-
-function shouldRun(options: RouteHookOptions): boolean {
-  return !options.signal.aborted && options.shouldRun();
-}
-
 export function normalizeRouteBasePath(basePath: string): string {
-  if (!basePath) {
+  const value = basePath.trim();
+  if (!value || value === "/") {
     return "";
   }
-  let base = basePath.trim();
-  if (!base.startsWith("/")) {
-    base = `/${base}`;
-  }
-  if (base === "/") {
-    return "";
-  }
-  if (base.endsWith("/")) {
-    base = base.slice(0, -1);
-  }
-  return base;
+  const withSlash = value.startsWith("/") ? value : `/${value}`;
+  return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
 }
 
 export function normalizeRoutePath(path: string): string {
-  if (!path) {
+  const value = path.trim();
+  if (!value) {
     return "/";
   }
-  let normalized = path.trim();
-  if (!normalized.startsWith("/")) {
-    normalized = `/${normalized}`;
-  }
-  if (normalized.length > 1 && normalized.endsWith("/")) {
-    normalized = normalized.slice(0, -1);
-  }
-  return normalized;
+  const withSlash = value.startsWith("/") ? value : `/${value}`;
+  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
 }
 
-function routePathKey(path: string): string {
+function pathKey(path: string): string {
   return normalizeRoutePath(path).toLowerCase();
 }
 
-function resolvePath(pathname: string, basePath: string): string {
-  const base = normalizeRouteBasePath(basePath);
-  let path = pathname || "/";
-  if (base) {
-    if (path === base) {
-      path = "/";
-    } else if (path.startsWith(`${base}/`)) {
-      path = path.slice(base.length);
-    }
-  }
-  let normalized = routePathKey(path);
-  if (normalized.endsWith("/index.html")) {
-    normalized = "/";
-  }
-  return normalized;
-}
-
-function createRoutePathIndex<TRouteId extends string>(
-  routes: readonly RouteRecord<TRouteId, unknown, InvalidateContext>[],
-  defaultRouteId: TRouteId | null,
-) {
-  const byPath = new Map<string, TRouteId>();
-  const canonicalPathById = new Map<TRouteId, string>();
-
-  for (const route of routes) {
-    const canonicalPath = normalizeRoutePath(route.path);
-    canonicalPathById.set(route.id, canonicalPath);
-    for (const path of [canonicalPath, ...(route.aliases ?? [])]) {
-      const key = routePathKey(path);
-      const existing = byPath.get(key);
-      if (existing && existing !== route.id) {
-        throw new Error(`Duplicate route path "${path}".`);
-      }
-      byPath.set(key, route.id);
-    }
-  }
-
-  const routeIdFromPath = (pathname: string, basePath = ""): TRouteId | null => {
-    const path = resolvePath(pathname, basePath);
-    if (path === "/" && defaultRouteId) {
-      return defaultRouteId;
-    }
-    return byPath.get(path) ?? null;
-  };
-
+function normalizeLocation(location: RouteLocation): RouteLocation {
   return {
-    pathForRoute(routeId: TRouteId, basePath = ""): string {
-      const path = canonicalPathById.get(routeId);
-      if (!path) {
-        throw new Error(`Unknown route id "${routeId}".`);
-      }
-      const base = normalizeRouteBasePath(basePath);
-      return base ? `${base}${path}` : path;
-    },
-    routeIdFromPath,
-    inferBasePathFromPathname(pathname: string): string {
-      let normalized = normalizeRoutePath(pathname);
-      if (normalized.endsWith("/index.html")) {
-        normalized = normalizeRoutePath(normalized.slice(0, -"/index.html".length));
-      }
-      if (normalized === "/") {
-        return "";
-      }
-      const segments = normalized.split("/").filter(Boolean);
-      for (let i = 0; i < segments.length; i++) {
-        if (byPath.has(routePathKey(`/${segments.slice(i).join("/")}`))) {
-          const prefix = segments.slice(0, i);
-          return prefix.length ? `/${prefix.join("/")}` : "";
-        }
-      }
-      return `/${segments.join("/")}`;
-    },
+    pathname: normalizeRoutePath(location.pathname),
+    search: location.search,
+    hash: location.hash,
   };
 }
 
-export function createRouter<
-  TRouteId extends string,
-  TLoadContext = unknown,
-  TRenderContext extends InvalidateContext = InvalidateContext,
->(
-  options: RouterOptions<TRouteId, TLoadContext, TRenderContext> & {
-    defaultRouteId?: TRouteId;
-  },
-) {
-  const byId = new Map<TRouteId, Route<TRouteId, TLoadContext, TRenderContext>>();
-  const routes = options.routes.map((route) => ({
-    ...route,
-    ...(route.page ? lazyPageModule(route.page) : {}),
-  }));
-  const paths = createRoutePathIndex(
-    options.routes as readonly RouteRecord<TRouteId, unknown, InvalidateContext>[],
-    options.defaultRouteId ?? null,
-  );
+function pathnameWithoutBase(pathname: string, basePath: string): string {
+  const base = normalizeRouteBasePath(basePath);
+  const path = normalizeRoutePath(pathname);
+  if (path === base) {
+    return "/";
+  }
+  return base && path.startsWith(`${base}/`) ? path.slice(base.length) : path;
+}
+
+function compileRoutes<TRouteId extends string, TLoadContext, TModule>(
+  routes: RouterOptions<TRouteId, TLoadContext, TModule>["routes"],
+): CompiledRoutes<TRouteId, TLoadContext, TModule> {
+  const byId = new Map<TRouteId, PageDefinition<TRouteId, TLoadContext, TModule>>();
+  const byPath = new Map<string, TRouteId>();
 
   for (const route of routes) {
     if (byId.has(route.id)) {
       throw new Error(`Duplicate route id "${route.id}".`);
     }
-    byId.set(route.id, route);
+    const path = normalizeRoutePath(route.path);
+    byId.set(route.id, { ...route, path });
+    for (const candidate of [path, ...(route.aliases ?? [])]) {
+      const key = pathKey(candidate);
+      const existing = byPath.get(key);
+      if (existing && existing !== route.id) {
+        throw new Error(`Duplicate route path "${candidate}".`);
+      }
+      byPath.set(key, route.id);
+    }
   }
 
-  const runHook = (
-    id: TRouteId,
-    hook: "load" | "onEnter" | "onLeave",
+  return {
+    byId,
+    byPath,
+    pathForRoute(routeId, basePath = "") {
+      const route = byId.get(routeId);
+      if (!route) {
+        throw new Error(`Unknown route id "${routeId}".`);
+      }
+      const base = normalizeRouteBasePath(basePath);
+      return base ? `${base}${route.path}` : route.path;
+    },
+    routeIdFromPath(pathname, basePath = "") {
+      return byPath.get(pathKey(pathnameWithoutBase(pathname, basePath))) ?? null;
+    },
+  };
+}
+
+function locationForPath(path: string): RouteLocation {
+  const hashIndex = path.indexOf("#");
+  const searchIndex = path.indexOf("?");
+  const queryStart =
+    searchIndex < 0 ? hashIndex : hashIndex < 0 ? searchIndex : Math.min(searchIndex, hashIndex);
+  const hashStart = hashIndex < 0 ? path.length : hashIndex;
+  const pathnameEnd = queryStart < 0 ? path.length : queryStart;
+  const searchEnd = hashIndex < 0 ? path.length : hashIndex;
+  return {
+    pathname: normalizeRoutePath(path.slice(0, pathnameEnd)),
+    search: queryStart >= 0 && queryStart < hashStart ? path.slice(queryStart, searchEnd) : "",
+    hash: hashStart < path.length ? path.slice(hashStart) : "",
+  };
+}
+
+function isCurrentRun(current: NavigationRun | null, run: NavigationRun): boolean {
+  return current === run && !run.controller.signal.aborted;
+}
+
+export function createRouter<TRouteId extends string, TLoadContext = unknown, TModule = unknown>(
+  options: RouterOptions<TRouteId, TLoadContext, TModule>,
+) {
+  const compiled = compileRoutes(options.routes);
+  const defaultRouteId = options.defaultRouteId ?? null;
+  const moduleCache = new Map<TRouteId, Promise<TModule>>();
+  const moduleValues = new Map<TRouteId, TModule>();
+  const listeners = new Set<(state: RouteState<TRouteId>) => void>();
+  let history: RouterHistory | undefined;
+  let basePath = "";
+  let stopHistory: (() => void) | undefined;
+  let currentRun: NavigationRun | null = null;
+  let resolvedRouteId: TRouteId | null = null;
+  let state: RouteState<TRouteId> = {
+    requested: locationForPath("/"),
+    resolved: null,
+    pendingRouteId: null,
+    resolvedRouteId: null,
+    status: "idle",
+  };
+
+  const publish = (next: RouteState<TRouteId>) => {
+    state = next;
+    for (const listener of listeners) {
+      listener(state);
+    }
+  };
+
+  const loadModule = (route: PageDefinition<TRouteId, TLoadContext, TModule>) => {
+    if (!route.component) {
+      return Promise.resolve(undefined as TModule);
+    }
+    const cached = moduleCache.get(route.id);
+    if (cached) {
+      return cached;
+    }
+    const loaded = Promise.resolve(route.component()).then((module) => {
+      moduleValues.set(route.id, module);
+      return module;
+    });
+    moduleCache.set(route.id, loaded);
+    void loaded.catch(() => moduleCache.delete(route.id));
+    return loaded;
+  };
+
+  const loadRoute = async (
+    route: PageDefinition<TRouteId, TLoadContext, TModule>,
     context: TLoadContext,
-    options: RouteHookOptions,
-  ): MaybePromise<void> => {
-    if (!shouldRun(options)) {
+    hookOptions: RouteHookOptions,
+  ) => {
+    await Promise.all([route.load?.(context, hookOptions), loadModule(route)]);
+  };
+
+  const runHook = async (
+    routeId: TRouteId | null,
+    hook: "onEnter" | "onLeave",
+    context: TLoadContext,
+    hookOptions: RouteHookOptions,
+  ) => {
+    if (!routeId || !hookOptions.shouldRun()) {
       return;
     }
-    return byId.get(id)?.[hook]?.(context, options);
+    await compiled.byId.get(routeId)?.[hook]?.(context, hookOptions);
   };
 
-  const transitionRoute = (
-    from: TRouteId,
-    to: TRouteId,
+  const navigate = async (
+    routeId: TRouteId,
     context: TLoadContext,
-    options: RouteHookOptions,
-  ): MaybePromise<void> => {
-    const enter = () => {
-      if (!shouldRun(options)) {
+    navigationOptions: NavigationOptions = {},
+    requestedLocation = locationForPath(compiled.pathForRoute(routeId, basePath)),
+  ): Promise<void> => {
+    const route = compiled.byId.get(routeId);
+    if (!route) {
+      throw new Error(`Unknown route id "${routeId}".`);
+    }
+    if (
+      resolvedRouteId === routeId &&
+      state.status === "resolved" &&
+      !navigationOptions.revalidate
+    ) {
+      return;
+    }
+
+    const location = normalizeLocation(requestedLocation);
+    if (history && navigationOptions.history && navigationOptions.history !== "none") {
+      history[navigationOptions.history](location);
+    }
+
+    currentRun?.controller.abort();
+    const run: NavigationRun = { controller: new AbortController() };
+    currentRun = run;
+    const hookOptions: RouteHookOptions = {
+      signal: run.controller.signal,
+      shouldRun: () => isCurrentRun(currentRun, run),
+    };
+    const previousRouteId =
+      navigationOptions.revalidate && resolvedRouteId === routeId ? null : resolvedRouteId;
+    publish({
+      requested: location,
+      resolved: state.resolved,
+      pendingRouteId: routeId,
+      resolvedRouteId,
+      status: "loading",
+    });
+
+    try {
+      await loadRoute(route, context, hookOptions);
+      if (!hookOptions.shouldRun()) {
         return;
       }
-      return runHook(to, "onEnter", context, options);
-    };
-    const leaveResult = runHook(from, "onLeave", context, options);
-    if (isPromiseLike(leaveResult)) {
-      return leaveResult.then(() => enter());
+      resolvedRouteId = routeId;
+      publish({
+        requested: location,
+        resolved: location,
+        pendingRouteId: null,
+        resolvedRouteId,
+        status: "resolved",
+      });
+      await runHook(previousRouteId, "onLeave", context, hookOptions);
+      await runHook(routeId, "onEnter", context, hookOptions);
+    } catch (error) {
+      if (!hookOptions.shouldRun()) {
+        return;
+      }
+      publish({
+        requested: location,
+        resolved: state.resolved,
+        pendingRouteId: null,
+        resolvedRouteId,
+        status: "error",
+        error,
+      });
+      throw error;
+    } finally {
+      if (isCurrentRun(currentRun, run)) {
+        currentRun = null;
+      }
     }
-    return enter();
   };
 
-  const createRunner = () => {
-    let transitionRun: RouteRun | null = null;
-    let loadRun: RouteRun | null = null;
-
-    const runFor = (kind: RunKind) => (kind === "transition" ? transitionRun : loadRun);
-    const setRun = (kind: RunKind, run: RouteRun | null) => {
-      if (kind === "transition") {
-        transitionRun = run;
-      } else {
-        loadRun = run;
-      }
-    };
-    const isCurrent = (kind: RunKind, run: RouteRun) =>
-      runFor(kind) === run && !run.controller.signal.aborted;
-    const begin = (kind: RunKind) => {
-      runFor(kind)?.controller.abort();
-      const run = { controller: new AbortController() };
-      setRun(kind, run);
-      return run;
-    };
-    const finish = (kind: RunKind, run: RouteRun) => {
-      if (!isCurrent(kind, run)) {
-        return;
-      }
-      setRun(kind, null);
-    };
-    const optionsFor = (kind: RunKind, run: RouteRun): RouteHookOptions => ({
-      signal: run.controller.signal,
-      shouldRun: () => isCurrent(kind, run),
-    });
-    const settle = (
-      kind: RunKind,
-      run: RouteRun,
-      result: MaybePromise<void>,
-    ): MaybePromise<void> => {
-      if (!isPromiseLike(result)) {
-        finish(kind, run);
-        return;
-      }
-      return result.then(
-        () => finish(kind, run),
-        (error: unknown) => {
-          const current = isCurrent(kind, run);
-          finish(kind, run);
-          if (!current) {
-            return;
-          }
-          throw error;
-        },
-      );
-    };
-
-    return {
-      cancel: () => {
-        transitionRun?.controller.abort();
-        loadRun?.controller.abort();
-        transitionRun = null;
-        loadRun = null;
-      },
-      enter(routeId: TRouteId, contextFor: RouteContextFactory<TLoadContext>): MaybePromise<void> {
-        const run = begin("transition");
-        return settle(
-          "transition",
-          run,
-          runHook(
-            routeId,
-            "onEnter",
-            contextFor(run.controller.signal),
-            optionsFor("transition", run),
-          ),
-        );
-      },
-      load(
-        routeId: TRouteId,
-        contextFor: RouteContextFactory<TLoadContext>,
-        beforeLoad?: RouteBeforeLoad<TLoadContext>,
-      ): MaybePromise<void> {
-        const run = begin("load");
-        const context = contextFor(run.controller.signal);
-        const options = optionsFor("load", run);
-        const loadRoute = () =>
-          isCurrent("load", run) ? runHook(routeId, "load", context, options) : undefined;
-        try {
-          const beforeLoadResult = beforeLoad?.(context, options);
-          if (isPromiseLike(beforeLoadResult)) {
-            return settle(
-              "load",
-              run,
-              beforeLoadResult.then(() => loadRoute()),
-            );
-          }
-          return settle("load", run, loadRoute());
-        } catch (error) {
-          finish("load", run);
-          return Promise.reject(error);
-        }
-      },
-      transition(
-        from: TRouteId,
-        to: TRouteId,
-        contextFor: RouteContextFactory<TLoadContext>,
-      ): MaybePromise<void> {
-        const run = begin("transition");
-        if (from === to) {
-          finish("transition", run);
-          return;
-        }
-        return settle(
-          "transition",
-          run,
-          transitionRoute(
-            from,
-            to,
-            contextFor(run.controller.signal),
-            optionsFor("transition", run),
-          ),
-        );
-      },
-    };
+  const handleLocation = async (
+    location: RouteLocation,
+    context: TLoadContext,
+    revalidate = false,
+  ): Promise<void> => {
+    const normalized = normalizeLocation(location);
+    const matched = compiled.routeIdFromPath(normalized.pathname, basePath);
+    const routeId = matched ?? defaultRouteId;
+    if (!routeId) {
+      return;
+    }
+    const canonical = locationForPath(compiled.pathForRoute(routeId, basePath));
+    if (!matched && history) {
+      history.replace({ ...canonical, search: normalized.search, hash: normalized.hash });
+    }
+    await navigate(routeId, context, { history: "none", revalidate }, normalized);
   };
 
   return {
-    routes,
-    getRoute: (id: TRouteId) => byId.get(id) ?? null,
-    inferBasePathFromPathname: paths.inferBasePathFromPathname,
-    pathForRoute: paths.pathForRoute,
-    routeIdFromPath: paths.routeIdFromPath,
-    matchPath: (path: string, basePath = "") => {
-      const routeId = paths.routeIdFromPath(path, basePath);
-      return routeId ? (byId.get(routeId) ?? null) : null;
+    routes: [...compiled.byId.values()],
+    getRoute: (routeId: TRouteId) => compiled.byId.get(routeId) ?? null,
+    getLoadedModule: (routeId: TRouteId) => moduleValues.get(routeId),
+    getState: () => state,
+    subscribe(listener: (next: RouteState<TRouteId>) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
-    createRunner,
+    pathForRoute: compiled.pathForRoute,
+    routeIdFromPath: compiled.routeIdFromPath,
+    start(nextHistory: RouterHistory, nextBasePath: string, context: TLoadContext): Promise<void> {
+      history = nextHistory;
+      basePath = normalizeRouteBasePath(nextBasePath);
+      stopHistory?.();
+      stopHistory = history.listen((location) => {
+        void handleLocation(location, context).catch(() => undefined);
+      });
+      return handleLocation(history.location(), context, true);
+    },
+    navigate,
+    navigateLocation(location: RouteLocation, context: TLoadContext): Promise<void> {
+      const normalized = normalizeLocation(location);
+      const matched = compiled.routeIdFromPath(normalized.pathname, basePath);
+      const routeId = matched ?? defaultRouteId;
+      if (!routeId) {
+        return Promise.resolve();
+      }
+      return navigate(routeId, context, { history: "none" }, normalized);
+    },
+    revalidate(context: TLoadContext): Promise<void> {
+      if (!resolvedRouteId) {
+        return Promise.resolve();
+      }
+      const routeId = resolvedRouteId;
+      return navigate(routeId, context, { history: "none", revalidate: true });
+    },
+    stop() {
+      stopHistory?.();
+      stopHistory = undefined;
+      currentRun?.controller.abort();
+      currentRun = null;
+      history = undefined;
+    },
   };
 }

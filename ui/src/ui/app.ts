@@ -65,7 +65,7 @@ import {
   setRoute as setRouteInternal,
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
-  onPopState as onPopStateInternal,
+  syncSessionWithLocation as syncSessionWithLocationInternal,
 } from "./app-settings.ts";
 import {
   resetToolStream as resetToolStreamInternal,
@@ -763,8 +763,10 @@ export class OpenClawApp extends LitElement {
   refreshSessionsAfterChat = new Map<string, import("./ui-types.js").ChatSessionRefreshTarget>();
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
-  popStateHandler = () =>
-    onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
+  sessionPopStateHandler = () =>
+    syncSessionWithLocationInternal(
+      this as unknown as Parameters<typeof syncSessionWithLocationInternal>[0],
+    );
   topbarObserver: ResizeObserver | null = null;
   private globalKeydownHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
