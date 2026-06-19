@@ -74,6 +74,29 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("normalizes the legacy bare group: form", () => {
+    expect(parseTelegramTarget("group:-1001234567890")).toEqual({
+      chatId: "-1001234567890",
+      chatType: "group",
+    });
+  });
+
+  it("normalizes legacy group: with a numeric topic (regression: colon must not keep the group: prefix)", () => {
+    expect(parseTelegramTarget("group:-1001234567890:5")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 5,
+      chatType: "group",
+    });
+  });
+
+  it("normalizes legacy group: with an explicit topic", () => {
+    expect(parseTelegramTarget("group:-1001234567890:topic:42")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 42,
+      chatType: "group",
+    });
+  });
+
   it("trims whitespace", () => {
     expect(parseTelegramTarget("  -1001234567890:99  ")).toEqual({
       chatId: "-1001234567890",

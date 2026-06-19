@@ -101,7 +101,11 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 }
 
 export function parseTelegramTarget(to: string): TelegramTarget {
-  const normalized = stripTelegramInternalPrefixes(to);
+  // Normalize the legacy bare `group:<id>` form first (stored echo targets + session
+  // keys still use it). stripTelegramInternalPrefixes only strips `group:` when it
+  // follows a `telegram:` prefix, so without this a bare `group:-100:5` would keep its
+  // prefix (the `:5` colon-matches as a thread, leaving chatId="group:-100").
+  const normalized = stripTelegramInternalPrefixes(normalizeTelegramOutboundTarget(to));
 
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
