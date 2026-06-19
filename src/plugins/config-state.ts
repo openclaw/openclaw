@@ -98,26 +98,38 @@ function normalizeLosslessLlmPolicy(
   rawConfig?: OpenClawConfig["plugins"],
 ): void {
   const entry = normalized.entries[LOSSLESS_CONTEXT_ENGINE_ID];
-  if (!entry) return;
+  if (!entry) {
+    return;
+  }
 
   // Only auto-populate when there is no explicit llm policy block.
   // If the operator already configured llm.allowModelOverride the
   // normal policy resolution path handles it correctly.
-  if (entry.llm?.allowModelOverride === true) return;
+  if (entry.llm?.allowModelOverride === true) {
+    return;
+  }
 
   // Read summaryModel from the raw entries object so we get the
   // un-normalized string value without any intermediate transforms.
   const rawEntries = rawConfig?.entries;
-  if (!rawEntries || typeof rawEntries !== "object") return;
+  if (!rawEntries || typeof rawEntries !== "object") {
+    return;
+  }
   const rawEntry = (rawEntries as Record<string, unknown>)[LOSSLESS_CONTEXT_ENGINE_ID];
-  if (!rawEntry || typeof rawEntry !== "object") return;
+  if (!rawEntry || typeof rawEntry !== "object") {
+    return;
+  }
   const rawPluginConfig = (rawEntry as Record<string, unknown>).config;
-  if (!rawPluginConfig || typeof rawPluginConfig !== "object") return;
+  if (!rawPluginConfig || typeof rawPluginConfig !== "object") {
+    return;
+  }
   const summaryModel =
     typeof (rawPluginConfig as Record<string, unknown>).summaryModel === "string"
       ? ((rawPluginConfig as Record<string, unknown>).summaryModel as string).trim()
       : "";
-  if (!summaryModel) return;
+  if (!summaryModel) {
+    return;
+  }
 
   // Build the llm policy from summaryModel — same logic as
   // ensureLosslessLlmPolicy in codex-route-warnings.ts.
