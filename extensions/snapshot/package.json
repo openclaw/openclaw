@@ -4,17 +4,11 @@
   "private": true,
   "description": "OpenClaw SQLite-safe snapshot provider",
   "type": "module",
+  "dependencies": {
+    "@openclaw/memory-host-sdk": "workspace:*"
+  },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "2026.5.28"
-  },
-  "peerDependencies": {
-    "openclaw": ">=2026.6.8"
-  },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [

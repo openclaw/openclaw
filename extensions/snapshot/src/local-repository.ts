@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
+  createVacuumedSqliteSnapshot,
+  verifySqliteDatabaseIntegrity,
+} from "@openclaw/memory-host-sdk/engine-storage";
+import {
   buildSnapshotArtifact,
   readSnapshotManifest,
   sha256File,
@@ -17,7 +21,6 @@ import {
   type SnapshotVerificationResult,
   type SqliteSnapshotProvider,
 } from "./snapshot-provider.js";
-import { createSqliteSnapshot, verifySqliteDatabase } from "./sqlite-snapshot.js";
 
 export type LocalSqliteSnapshotProviderOptions = {
   readonly repositoryPath: string;
@@ -49,7 +52,10 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     await fs.mkdir(this.#repositoryPath, { recursive: true });
     await fs.mkdir(stagingDir, { recursive: false });
     try {
-      const userVersion = await createSqliteSnapshot(sourcePath, artifactPath);
+      const { userVersion } = await createVacuumedSqliteSnapshot({
+        sourcePath,
+        targetPath: artifactPath,
+      });
       const manifest: SnapshotManifest = {
         schemaVersion: 1,
         snapshotId,
@@ -87,7 +93,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         `Snapshot artifact hash mismatch for ${artifactPath}: expected ${manifest.artifact.sha256}, got ${actualHash}`,
       );
     }
-    const integrityCheck = verifySqliteDatabase(artifactPath);
+    const integrityCheck = verifySqliteDatabaseIntegrity(artifactPath);
     return { ok: true, manifest, integrityCheck };
   }
 
@@ -100,7 +106,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
     await fs.copyFile(sourcePath, resolvedTargetPath, fs.constants.COPYFILE_EXCL);
     await removeSqliteSidecars(resolvedTargetPath);
     await fs.chmod(resolvedTargetPath, 0o600);
-    verifySqliteDatabase(resolvedTargetPath);
+    verifySqliteDatabaseIntegrity(resolvedTargetPath);
     return verified;
   }
 

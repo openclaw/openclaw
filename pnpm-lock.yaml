@@ -1549,13 +1549,14 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/snapshot:
+    dependencies:
+      '@openclaw/memory-host-sdk':
+        specifier: workspace:*
+        version: link:../../packages/memory-host-sdk
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
 
   extensions/stepfun:
     devDependencies:
