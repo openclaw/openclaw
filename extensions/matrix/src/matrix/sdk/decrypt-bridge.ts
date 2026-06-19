@@ -184,6 +184,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     for (const retryKey of this.decryptRetries.keys()) {
       this.clearDecryptRetry(retryKey);
     }
+    this.exhaustedDecryptRetries.clear();
   }
 
   async drainPendingDecryptions(reason: string): Promise<void> {

@@ -1177,6 +1177,65 @@ describe("MatrixClient event bridge", () => {
     }
   });
 
+  it("clears exhausted decrypt retries when the bridge stops", async () => {
+    vi.useFakeTimers();
+    const cryptoStateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "matrix-sdk-stop-exhausted-retry-"),
+    );
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+      cryptoDatabasePrefix: path.basename(cryptoStateDir),
+    });
+    const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
+
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+        cryptoListeners.set(eventName, listener);
+      }),
+      bootstrapCrossSigning: vi.fn(async () => {}),
+      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+      requestOwnUserVerification: vi.fn(async () => null),
+    }));
+
+    const encrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now(),
+      content: {},
+      decryptionFailure: true,
+    });
+
+    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {});
+
+    await client.start();
+    matrixJsClient.emit("event", encrypted);
+    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(8);
+
+    client.stopWithoutPersist();
+    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
+      encrypted.markDecrypted({
+        type: "m.room.message",
+        content: {
+          msgtype: "m.text",
+          body: "hello",
+        },
+      });
+    });
+
+    const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
+    expect(trigger).toBeTypeOf("function");
+    trigger?.();
+    await Promise.resolve();
+
+    expect(matrixJsClient.decryptEventIfNeeded).not.toHaveBeenCalled();
+  });
+
   it("does not start duplicate retries when crypto signals fire while retry is in-flight", async () => {
     const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-duplicate-retry-"));
     const client = new MatrixClient("https://matrix.example.org", "token", {
