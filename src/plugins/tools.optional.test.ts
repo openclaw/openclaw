@@ -2558,13 +2558,20 @@ describe("resolvePluginTools optional tools", () => {
     pinActivePluginChannelRegistry(channelRegistry);
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
+    const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
+      context: { ...createContext(), config },
+      toolAllowlist: ["memory_search", "memory_get"],
+      allowGatewaySubagentBinding: true,
+    });
+    expect(runtimeRegistry).toBe(activeRegistry);
+
     const tools = resolvePluginTools({
       ...createResolveToolsParams({
         context: { ...createContext(), config },
         toolAllowlist: ["memory_search", "memory_get"],
         allowGatewaySubagentBinding: true,
       }),
-      runtimeRegistry: channelRegistry,
+      runtimeRegistry,
     });
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);

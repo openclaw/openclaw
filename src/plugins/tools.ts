@@ -1024,10 +1024,17 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   if (!loadState) {
     return;
   }
-  return ensureStandaloneRuntimePluginRegistryLoaded({
+  const registry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "channel",
     requiredPluginIds: loadState.onlyPluginIds,
     loadOptions: loadState.loadOptions,
+  });
+  if (registryHasScopedPluginTools(registry, loadState.onlyPluginIds)) {
+    return registry;
+  }
+  return resolvePluginToolRegistry({
+    loadOptions: loadState.loadOptions,
+    onlyPluginIds: loadState.onlyPluginIds,
   });
 }
 
