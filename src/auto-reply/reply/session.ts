@@ -740,7 +740,7 @@ async function initSessionStateAttemptLocked(
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
-    sessionClosedAt: undefined,
+    sessionClosedAt: isSystemEvent ? baseEntry?.sessionClosedAt : undefined,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
