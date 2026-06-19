@@ -522,8 +522,18 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
           import("google-auth-library"),
           import("gaxios"),
         ]);
+        const directGaxios = gaxiosModule.Gaxios;
+        const bundledGaxios = googleAuthModule.gaxios?.Gaxios as unknown as
+          | GaxiosModule["Gaxios"]
+          | undefined;
+        // Source checkouts can resolve a root gaxios version; prefer the version
+        // bundled with google-auth-library when it differs from the direct import.
+        const Gaxios =
+          bundledGaxios && (bundledGaxios as unknown) !== (directGaxios as unknown)
+            ? bundledGaxios
+            : directGaxios;
         return {
-          Gaxios: gaxiosModule.Gaxios,
+          Gaxios,
           GoogleAuth: googleAuthModule.GoogleAuth,
           OAuth2Client: googleAuthModule.OAuth2Client,
         };

@@ -272,14 +272,14 @@ describe("googlechatPlugin outbound sendMedia", () => {
             cfg,
             to: "spaces/AAA",
             text: "threaded",
-            threadId: "thread-1",
+            threadId: "spaces/AAA/threads/thread-1",
           });
           const request = requireMockArg(sendGoogleChatMessageMock) as {
             space?: string;
             thread?: string;
           };
           expect(request.space).toBe("spaces/AAA");
-          expect(request.thread).toBe("thread-1");
+          expect(request.thread).toBe("spaces/AAA/threads/thread-1");
         },
         messageSendingHooks: () => {
           expect(googlechatMessageAdapter.send?.text).toBeTypeOf("function");
@@ -457,7 +457,7 @@ describe("googlechatPlugin threading", () => {
       context: {
         To: "googlechat:spaces/AAA",
         CurrentMessageId: "spaces/AAA/messages/msg-1",
-        ReplyToId: "spaces/AAA/threads/thread-1",
+        MessageThreadId: "spaces/AAA/threads/thread-1",
       },
       hasRepliedRef,
     });
@@ -466,6 +466,28 @@ describe("googlechatPlugin threading", () => {
       currentChannelId: "spaces/AAA",
       currentMessageId: "spaces/AAA/threads/thread-1",
       currentThreadTs: "spaces/AAA/threads/thread-1",
+      replyToMode: "all",
+      hasRepliedRef,
+    });
+  });
+
+  it("surfaces account reply mode in tool context", () => {
+    const hasRepliedRef = { value: false };
+    const result = googlechatThreadingAdapter.buildToolContext({
+      cfg: {
+        channels: {
+          googlechat: {
+            replyToMode: "all",
+          },
+        },
+      } as OpenClawConfig,
+      context: { MessageThreadId: "spaces/AAA/threads/xyz", To: "googlechat:spaces/AAA" },
+      hasRepliedRef,
+    });
+    expect(result).toEqual({
+      currentChannelId: "spaces/AAA",
+      currentMessageId: "spaces/AAA/threads/xyz",
+      currentThreadTs: "spaces/AAA/threads/xyz",
       replyToMode: "all",
       hasRepliedRef,
     });
@@ -495,6 +517,162 @@ describe("googlechatPlugin threading", () => {
     });
     expect(context.currentMessageId).toBeUndefined();
     expect(context.currentThreadTs).toBeUndefined();
+  });
+
+  it("ignores non-resource MessageThreadId values in tool context", () => {
+    const cfg = createGoogleChatCfg();
+    const result = googlechatThreadingAdapter.buildToolContext({
+      cfg,
+      context: { MessageThreadId: 12345 },
+    });
+    expect(result.replyToMode).toBe("off");
+    expect(result.currentThreadTs).toBeUndefined();
+    expect(result.currentMessageId).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.buildToolContext({
+        cfg,
+        context: { MessageThreadId: "spaces/AAA/messages/not-a-thread" },
+      }).currentThreadTs,
+    ).toBeUndefined();
+  });
+
+  it("returns an empty tool context when no inbound thread is present", () => {
+    const cfg = createGoogleChatCfg();
+    const context = googlechatThreadingAdapter.buildToolContext({ cfg, context: {} });
+    expect(context.replyToMode).toBe("off");
+    expect(context.currentThreadTs).toBeUndefined();
+    expect(context.currentMessageId).toBeUndefined();
+  });
+
+  it("resolves reply transport to a thread-shaped reply target", () => {
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: "spaces/AAA/messages/current",
+        threadId: "spaces/AAA/threads/inbound",
+      }),
+    ).toBeNull();
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: "spaces/AAA/threads/explicit",
+        threadId: "spaces/AAA/threads/inbound",
+      }),
+    ).toEqual({
+      replyToId: "spaces/AAA/threads/explicit",
+      threadId: null,
+    });
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: "spaces/AAA/messages/current",
+        threadId: undefined,
+      }),
+    ).toBeNull();
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: undefined,
+        threadId: "spaces/AAA/threads/inbound",
+      }),
+    ).toBeNull();
+    expect(
+      googlechatThreadingAdapter.resolveReplyTransport?.({
+        cfg: {} as OpenClawConfig,
+        replyToId: "spaces/AAA/not-a-thread/current",
+        threadId: "spaces/AAA/threads/inbound",
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves an auto thread only when reply mode allows implicit tool threading", () => {
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          currentMessageId: "spaces/AAA/messages/current",
+          replyToMode: "all",
+        },
+        replyToId: "spaces/AAA/messages/current",
+      }),
+    ).toBe("spaces/AAA/threads/inbound");
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          currentMessageId: "spaces/AAA/messages/current",
+          replyToMode: "all",
+        },
+        replyToId: "spaces/AAA/messages/other",
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "first",
+          hasRepliedRef: { value: true },
+        },
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "off",
+        },
+        replyToId: "spaces/AAA/messages/current",
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: "spaces/AAA/not-a-thread/current",
+      }),
+    ).toBeUndefined();
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/AAA",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: undefined,
+      }),
+    ).toBe("spaces/AAA/threads/inbound");
+    expect(
+      googlechatThreadingAdapter.resolveAutoThreadId?.({
+        cfg: {} as OpenClawConfig,
+        to: "spaces/BBB",
+        toolContext: {
+          currentChannelId: "spaces/AAA",
+          currentThreadTs: "spaces/AAA/threads/inbound",
+          replyToMode: "all",
+        },
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -644,6 +822,57 @@ describe("googlechatPlugin outbound cfg threading", () => {
     expect(request.text).toBe("hello");
   });
 
+  it("normalizes Google Chat thread resources before outbound text sends", async () => {
+    const cfg = createGoogleChatCfg();
+    const account = {
+      accountId: "default",
+      config: {},
+      credentialSource: "inline" as const,
+    };
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-threaded",
+    });
+
+    await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "hello",
+      accountId: "default",
+      replyToId: "spaces/AAA/threads/explicit",
+      threadId: "spaces/AAA/threads/inbound",
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread: "spaces/AAA/threads/explicit",
+      }),
+    );
+
+    vi.clearAllMocks();
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-unthreaded",
+    });
+
+    await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "hello",
+      accountId: "default",
+      replyToId: "spaces/AAA/messages/current",
+      threadId: undefined,
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread: undefined,
+      }),
+    );
+  });
+
   it("threads resolved cfg into sendMedia account and media loading path", async () => {
     const cfg = {
       channels: {
@@ -708,6 +937,52 @@ describe("googlechatPlugin outbound cfg threading", () => {
     expect(sendRequest.attachments).toEqual([
       { attachmentUploadToken: "token-1", contentName: "remote.png" },
     ]);
+  });
+
+  it("preserves explicit thread resources on outbound media sends", async () => {
+    const cfg = createGoogleChatCfg();
+    const account = {
+      accountId: "default",
+      config: {},
+      credentialSource: "inline" as const,
+    };
+    const { readRemoteMediaBuffer } = setupRuntimeMediaMocks({
+      loadFileName: "unused.png",
+      loadBytes: "should-not-be-used",
+    });
+
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "token-threaded",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-threaded-media",
+    });
+
+    await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "photo",
+      mediaUrl: "https://example.com/file.png",
+      accountId: "default",
+      threadId: "spaces/AAA/threads/explicit",
+    });
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/file.png",
+      }),
+    );
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        space: "spaces/AAA",
+        text: "photo",
+        thread: "spaces/AAA/threads/explicit",
+        attachments: [{ attachmentUploadToken: "token-threaded", contentName: "remote.png" }],
+      }),
+    );
   });
 
   it("sends media without requiring Google Chat runtime initialization", async () => {
