@@ -4,19 +4,12 @@ import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim } from "../../windows-command.js";
+import { resolveWindowsBatchSpawnArgv } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
-
-function resolveCommand(command: string): string {
-  return resolveWindowsCommandShim({
-    command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
-  });
-}
 
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
@@ -33,7 +26,6 @@ export async function createChildAdapter(params: {
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
   const resolvedArgv = [...params.argv];
-  resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
     env: baseEnv,
@@ -60,8 +52,16 @@ export async function createChildAdapter(params: {
     options.stdio = ["pipe", "pipe", "pipe"];
   }
 
+  // On Windows, resolve .cmd/.bat shims via PATHEXT walk and wrap in a trusted
+  // cmd.exe invocation (shell: false). On other platforms this is a no-op.
+  const batchArgv = resolveWindowsBatchSpawnArgv(
+    preparedSpawn.command,
+    preparedSpawn.args,
+    baseEnv,
+  );
+
   const spawned = await spawnWithFallback({
-    argv: [preparedSpawn.command, ...preparedSpawn.args],
+    argv: batchArgv ?? [preparedSpawn.command, ...preparedSpawn.args],
     options,
     fallbacks: useDetached
       ? [
@@ -380,12 +380,12 @@ export async function createChildAdapter(params: {
     }
     if (signal === "SIGTERM" && pid) {
       signalProcessTreeForChild(pid, "SIGTERM");
-      return;
-    }
-    try {
-      child.kill(signal);
-    } catch {
-      // ignore kill errors for non-kill signals
+    } else {
+      try {
+        child.kill(signal);
+      } catch {
+        // ignore kill errors for non-kill signals
+      }
     }
   };
 
