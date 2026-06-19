@@ -834,6 +834,16 @@ export interface TaskDeliveryState {
   task_id: string;
 }
 
+export interface TaskRouteLeases {
+  acquired_at: number;
+  expires_at: number;
+  requester_origin_json: string;
+  run_id: string;
+  settled_at: number | null;
+  status: Generated<string>;
+  task_id: string;
+}
+
 export interface TaskRuns {
   agent_id: string | null;
   child_session_key: string | null;
@@ -997,6 +1007,7 @@ export interface DB {
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
+  task_route_leases: TaskRouteLeases;
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;
