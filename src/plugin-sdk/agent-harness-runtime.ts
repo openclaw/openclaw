@@ -289,6 +289,7 @@ export {
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
+export { createDeliveredMessagingResultReconciler } from "../agents/messaging-tool-result-fallback.js";
 export {
   assertContextEngineHostSupport,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
