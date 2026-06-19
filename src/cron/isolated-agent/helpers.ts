@@ -292,14 +292,16 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
-  // Structured error payloads are fatal unless later successful output or a
-  // known non-terminal warning proves the agent recovered.
+  // Structured error payloads are fatal unless later successful output, a
+  // known non-terminal warning, or a final assistant text proves the agent recovered.
+  const isLastErrorAToolWarning = isCronToolWarning(lastErrorPayloadText);
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !(hasRecoveringTerminalOutput && isLastErrorAToolWarning);
   // Fatal structured errors own the final delivery payload unless later output
   // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
@@ -327,7 +329,6 @@ export function resolveCronPayloadOutcome(params: {
         : [];
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
-  const isLastErrorAToolWarning = isCronToolWarning(lastErrorPayloadText);
   const hasFatalErrorPayload =
     hasFatalStructuredErrorPayload ||
     failureSignal !== undefined ||
@@ -340,8 +341,16 @@ export function resolveCronPayloadOutcome(params: {
     runLevelError !== undefined &&
     structuredErrorText === undefined &&
     failureSignal === undefined;
+  // For generic fatal run-level errors with later success-looking payloads,
+  // preserve the original error payload text rather than the formatted run-level error.
+  const fallbackRunLevelErrorText =
+    hasFatalErrorPayload && !structuredErrorText && !failureSignal && lastErrorPayloadText
+      ? lastErrorPayloadText
+      : shouldUseRunLevelErrorPayload
+        ? runLevelError
+        : undefined;
   const fatalDeliveryText = hasFatalErrorPayload
-    ? (structuredErrorText ?? failureSignal?.message ?? (shouldUseRunLevelErrorPayload ? runLevelError : undefined))
+    ? (structuredErrorText ?? failureSignal?.message ?? fallbackRunLevelErrorText)
     : undefined;
   const fatalDeliveryPayload = fatalDeliveryText
     ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
