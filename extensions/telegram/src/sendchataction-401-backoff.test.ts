@@ -11,7 +11,105 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   sleepWithAbort: mocks.sleepWithAbort,
 }));
 
+// Import is401Error for direct testing (issue #94787)
+let is401Error: typeof import("./sendchataction-401-backoff.js").is401Error;
+
 let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler;
+
+describe("is401Error (issue #94787)", () => {
+  beforeAll(async () => {
+    ({ is401Error } = await import("./sendchataction-401-backoff.js"));
+  });
+
+  it("should correctly identify Telegram 401 errors by error_code field", () => {
+    const telegram401Error = {
+      error_code: 401,
+      description: "Unauthorized",
+    };
+    expect(is401Error(telegram401Error)).toBe(true);
+  });
+
+  it("should NOT misclassify 429 rate limit with retry_after=401 as 401 (the bug case)", () => {
+    // This is the exact bug scenario from issue #94787:
+    // Rate limit error with retry_after=401 seconds was being misclassified as 401
+    const rateLimitError = {
+      error_code: 429,
+      description: "Too Many Requests",
+      parameters: {
+        retry_after: 401, // 401 seconds, NOT a 401 status!
+      },
+    };
+    expect(is401Error(rateLimitError)).toBe(false);
+  });
+
+  it("should NOT misclassify 5xx errors containing '401' in message as 401", () => {
+    // Server error with message containing "401" substring should not be classified as 401
+    const serverError = new Error("HTTP 503: Service Unavailable (retry after 401 seconds)");
+    expect(is401Error(serverError)).toBe(false);
+  });
+
+  it("should identify non-Telegram 401 errors by 'unauthorized' message (fallback)", () => {
+    const unauthorizedError = new Error("Unauthorized");
+    expect(is401Error(unauthorizedError)).toBe(true);
+
+    const caseInsensitiveError = new Error("UNAUTHORIZED: token expired");
+    expect(is401Error(caseInsensitiveError)).toBe(true);
+  });
+
+  it("should handle HTTP status codes from response objects", () => {
+    const http401Error = {
+      status: 401,
+      statusText: "Unauthorized",
+    };
+    expect(is401Error(http401Error)).toBe(true);
+
+    const http403Error = {
+      status: 403,
+      statusText: "Forbidden",
+    };
+    expect(is401Error(http403Error)).toBe(false);
+  });
+
+  it("should handle statusCode variant", () => {
+    const statusCode401 = {
+      statusCode: 401,
+      message: "Unauthorized",
+    };
+    expect(is401Error(statusCode401)).toBe(true);
+  });
+
+  it("should return false for null/undefined/empty errors", () => {
+    expect(is401Error(null)).toBe(false);
+    expect(is401Error(undefined)).toBe(false);
+    expect(is401Error(0)).toBe(false);
+    expect(is401Error("")).toBe(false);
+  });
+
+  it("should handle generic network errors without 401 indicators", () => {
+    const networkError = new Error("Network request failed");
+    expect(is401Error(networkError)).toBe(false);
+
+    const timeoutError = {
+      error_code: 504,
+      description: "Gateway Timeout",
+    };
+    expect(is401Error(timeoutError)).toBe(false);
+  });
+
+  it("should correctly classify other Telegram error codes", () => {
+    const forbiddenError = {
+      error_code: 403,
+      description: "Forbidden",
+    };
+    expect(is401Error(forbiddenError)).toBe(false);
+
+    const badRequestError = {
+      error_code: 400,
+      description: "Bad Request",
+    };
+    expect(is401Error(badRequestError)).toBe(false);
+  });
+});
 
 describe("createTelegramSendChatActionHandler", () => {
   beforeAll(async () => {

@@ -69,10 +69,40 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
+
+  // First check for structured Telegram API errors with error_code field
+  if (typeof error === "object" && error !== null) {
+    const err = error as Record<string, unknown>;
+
+    // Check for Telegram's error_code field first (preferred for Telegram errors)
+    const errorCode = err.error_code;
+    if (typeof errorCode === "number") {
+      // Only match exact 401 status code, not rate limits with retry_after=401
+      if (errorCode === 401) {
+        return true;
+      }
+      // If it's a Telegram error with a non-401 code, it's definitely not a 401
+      if ("description" in err || "parameters" in err) {
+        return false;
+      }
+    }
+
+    // Check HTTP status codes from response objects
+    const status = err.status ?? err.statusCode;
+    if (typeof status === "number") {
+      if (status === 401) {
+        return true;
+      }
+      // If we have a numeric status that isn't 401, check if it looks like a Telegram error
+      if ("error_code" in err || "parameters" in err) {
+        return false;
+      }
+    }
+  }
+
+  // Fallback to message-based detection for non-Telegram errors or legacy formats
   const message = error instanceof Error ? error.message : JSON.stringify(error);
-  return (
-    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
-  );
+  return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
 }
 
 class TelegramSendChatActionTransientCooldownError extends Error {
