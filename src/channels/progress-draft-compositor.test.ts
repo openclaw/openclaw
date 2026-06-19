@@ -1,9 +1,17 @@
 // Progress draft compositor tests cover streamed draft composition for channel progress updates.
 import { describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
-import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+import {
+  DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS,
+  DEFAULT_PROGRESS_DRAFT_LABELS,
+} from "./streaming.js";
 
 describe("createChannelProgressDraftCompositor", () => {
+  it("keeps the default automatic label pool neutral for technical progress", () => {
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS).toContain("Executing");
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS).not.toContain("Lobstering");
+  });
+
   it("keeps the progress label visible when tool lines are hidden", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
