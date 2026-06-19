@@ -107,16 +107,9 @@ Reject:
 
 ## PR Body Proof
 
-Use the repo PR template. Include these exact labels:
-
-```text
-Behavior addressed:
-Real environment tested:
-Exact steps or command run after this patch:
-Evidence after fix:
-Observed result after fix:
-What was not tested:
-```
+Use the repo PR template. Include authored `## What Problem This Solves` and
+`## Evidence` sections. Keep the body focused on intent and the most useful
+validation evidence; inspect the code, tests, and CI before judging correctness.
 
 ## Existing PR Rules
 

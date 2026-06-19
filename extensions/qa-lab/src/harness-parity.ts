@@ -98,16 +98,6 @@ export type HarnessParityResult = {
   firstDriftTurn?: number;
 };
 
-export type HarnessParityReport = {
-  generatedAt: string;
-  providerMode: string;
-  left: HarnessVariant;
-  right: HarnessVariant;
-  results: HarnessParityResult[];
-  pass: boolean;
-  failures: string[];
-};
-
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }

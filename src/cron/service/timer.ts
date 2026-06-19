@@ -893,7 +893,10 @@ export function applyJobResult(
         }
       }
       // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const backoff = errorBackoffMs(
+        job.state.consecutiveErrors ?? 1,
+        state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+      );
       normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.

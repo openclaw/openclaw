@@ -1739,6 +1739,25 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+  it("samples the POSIX gateway root when command-line needles match", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout:
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
   it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
@@ -1893,6 +1912,21 @@ describe("kitchen-sink RPC process sampling", () => {
     const response = {
       headers: new Headers({
         "content-length": "1025",
+      }),
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe decimal HTTP content lengths before reading", async () => {
+    const response = {
+      headers: new Headers({
+        "content-length": "9007199254740992",
       }),
       text: vi.fn(async () => "not read"),
     };
