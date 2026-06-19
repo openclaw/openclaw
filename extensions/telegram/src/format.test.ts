@@ -473,6 +473,38 @@ describe("markdownToTelegramHtml", () => {
   });
 });
 
+describe("renderTelegramHtmlText table normalization", () => {
+  it("converts HTML tables to pipe tables on the standard text path", () => {
+    const input = "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>";
+    const output = renderTelegramHtmlText(input, { textMode: "html" });
+    expect(output).toContain("<pre><code>");
+    expect(output).toContain("|");
+    expect(output).not.toContain("&lt;table&gt;");
+  });
+
+  it("preserves HTML tables inside <pre> blocks", () => {
+    const input = "<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;example&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>";
+    const output = renderTelegramHtmlText(input, { textMode: "html" });
+    // Content inside pre/code should not be converted - it's already entity-escaped
+    expect(output).toContain("<pre><code>");
+    expect(output).toContain("&lt;table&gt;");
+  });
+
+  it("preserves raw table markup inside <code> blocks", () => {
+    const input = "<code><table><tr><td>keep me</td></tr></table></code>";
+    const output = renderTelegramHtmlText(input, { textMode: "html" });
+    // Raw tags inside code blocks get entity-escaped by Telegram's unsupported HTML escaper
+    expect(output).not.toContain("| keep me |");
+  });
+
+  it("handles mixed content with tables outside and inside pre/code", () => {
+    const input = '<p>text</p><table><tr><td>outside</td></tr></table><pre><code><table><tr><td>inside pre</td></tr></table></code></pre>';
+    const output = renderTelegramHtmlText(input, { textMode: "html" });
+    expect(output).toContain("| outside |");
+    expect(output).toContain("inside pre");
+  });
+});
+
 function containsLoneSurrogate(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
     const code = text.charCodeAt(index);
