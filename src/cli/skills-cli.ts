@@ -6,6 +6,7 @@ import {
   type SkillStatusReport,
 } from "../agents/skills-status.js";
 import { loadConfig } from "../config/config.js";
+import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
@@ -359,7 +360,10 @@ export function registerSkillsCli(program: Command) {
       try {
         const config = loadConfig();
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const report = buildWorkspaceSkillStatus(workspaceDir, {
+          config,
+          eligibility: { remote: getRemoteSkillEligibility() },
+        });
         defaultRuntime.log(formatSkillsList(report, opts));
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -376,7 +380,10 @@ export function registerSkillsCli(program: Command) {
       try {
         const config = loadConfig();
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const report = buildWorkspaceSkillStatus(workspaceDir, {
+          config,
+          eligibility: { remote: getRemoteSkillEligibility() },
+        });
         defaultRuntime.log(formatSkillInfo(report, name, opts));
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -392,7 +399,10 @@ export function registerSkillsCli(program: Command) {
       try {
         const config = loadConfig();
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const report = buildWorkspaceSkillStatus(workspaceDir, {
+          config,
+          eligibility: { remote: getRemoteSkillEligibility() },
+        });
         defaultRuntime.log(formatSkillsCheck(report, opts));
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -405,7 +415,10 @@ export function registerSkillsCli(program: Command) {
     try {
       const config = loadConfig();
       const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-      const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        config,
+        eligibility: { remote: getRemoteSkillEligibility() },
+      });
       defaultRuntime.log(formatSkillsList(report, {}));
     } catch (err) {
       defaultRuntime.error(String(err));
