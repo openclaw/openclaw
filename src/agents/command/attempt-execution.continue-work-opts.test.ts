@@ -494,6 +494,36 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
   });
 
+  it("does NOT tag the spawn-init continue_work flow with parentRunId (own-turn has no spawn lineage; #952/#990 reap guard)", async () => {
+    // A subagent's own-turn continue_work is same-session work, not a delegate
+    // child. If the spawn-init lane tags the durable flow with the subagent's own
+    // electing run as parentRunId, #990 bucket-1 treats that confident-terminal run
+    // as an orphan parent and reaps the flow on the first busy-defer — so hop-2
+    // never runs (#952). Pin that the scheduled flow carries NO parentRunId, keeping
+    // it on the #990 never-reap (parentRunId==null → same-session) path.
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done\nCONTINUE_WORK" }],
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "done",
+        agentMeta: {
+          sessionId: "session-embedded",
+          provider: "anthropic",
+          model: "claude-sonnet-4.7",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        },
+      },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const [flow] = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flow).toBeDefined();
+    expect(flow?.stateJson).toMatchObject({ kind: "continuation_work" });
+    expect(flow?.stateJson).not.toHaveProperty("parentRunId");
+  });
+
   it("captured continue_work request is invocable end-to-end on spawn-init (turn-1 cure-mechanism pin)", async () => {
     // Simulate a runEmbeddedAgent run that fires continue_work mid-turn by
     // invoking the supplied closure with a representative request payload.
