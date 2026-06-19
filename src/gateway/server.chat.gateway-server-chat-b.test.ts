@@ -2421,6 +2421,70 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history drops pre-session subagent announce pair across overread boundary", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      const announce = {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      };
+      const silentTail = Array.from({ length: 58 }, (_, index) =>
+        JSON.stringify({
+          timestamp: `2026-05-23T04:03:${String(index).padStart(2, "0")}.000Z`,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+          },
+        }),
+      );
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale announce reply across overread" }],
+          },
+        }),
+        ...silentTail,
+        JSON.stringify({
+          timestamp: "2026-05-23T04:04:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn after silent tail" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).not.toContain("stale announce reply across overread");
+      expect(serialized).not.toContain("NO_REPLY");
+      expect(serialized).toContain("fresh turn after silent tail");
+    });
+  });
+
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;

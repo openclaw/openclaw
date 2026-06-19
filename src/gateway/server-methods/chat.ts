@@ -2891,10 +2891,16 @@ async function handleChatHistoryRequest({
           )
         ).flat()
       : [];
+  const localMessagesWithPreOverreadFilter =
+    !includeFamilyHistory && typeof entry?.sessionStartedAt === "number"
+      ? dropPreSessionStartAnnouncePairs(localMessages, entry.sessionStartedAt)
+      : localMessages;
   const overreadContextMessage =
-    localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
+    localMessagesWithPreOverreadFilter.length > rawHistoryWindow.maxMessages
+      ? localMessagesWithPreOverreadFilter[0]
+      : undefined;
   const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
-    localMessages,
+    localMessagesWithPreOverreadFilter,
     overreadContextMessage,
   );
   const rawMessages = augmentChatHistoryWithCliSessionImports({
