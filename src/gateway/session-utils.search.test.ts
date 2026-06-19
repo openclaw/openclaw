@@ -513,6 +513,43 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0].displayName).toBe("Quote Assistant");
   });
 
+  test("filters omitted-account direct sessions by configured default account display fallback", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            work: { name: "Zebra Assistant" },
+            main: { name: "Agent Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:main:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "zebra" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Zebra Assistant");
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

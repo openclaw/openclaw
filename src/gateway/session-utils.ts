@@ -75,6 +75,7 @@ import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
+  DEFAULT_ACCOUNT_ID,
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
@@ -1260,6 +1261,58 @@ function readConfiguredChannelAccountName(params: {
   return normalizeOptionalString((accountConfig as { name?: unknown }).name);
 }
 
+function readConfiguredChannelDefaultAccountId(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+}): string | undefined {
+  const channelId = normalizeOptionalString(params.channel);
+  if (!channelId) {
+    return undefined;
+  }
+  const channelConfig = params.cfg.channels?.[channelId];
+  if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+    return undefined;
+  }
+  return normalizeOptionalString((channelConfig as { defaultAccount?: unknown }).defaultAccount);
+}
+
+function appendAccountIdCandidate(
+  target: string[],
+  seen: Set<string>,
+  candidate: string | undefined,
+) {
+  const normalized = normalizeOptionalString(candidate);
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  target.push(normalized);
+}
+
+function listDirectSessionAccountDisplayNameCandidates(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  entry?: SessionEntry;
+  parsed: NonNullable<ReturnType<typeof parseDirectChannelKey>>;
+}): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  appendAccountIdCandidate(candidates, seen, params.entry?.origin?.accountId);
+  appendAccountIdCandidate(candidates, seen, params.entry?.lastAccountId);
+  appendAccountIdCandidate(candidates, seen, params.parsed.accountId);
+  appendAccountIdCandidate(
+    candidates,
+    seen,
+    readConfiguredChannelDefaultAccountId({
+      cfg: params.cfg,
+      channel: params.channel,
+    }),
+  );
+  appendAccountIdCandidate(candidates, seen, DEFAULT_ACCOUNT_ID);
+  appendAccountIdCandidate(candidates, seen, params.parsed.agentId);
+  return candidates;
+}
+
 function originLabelLooksLikeDirectSessionId(params: {
   originLabel?: string;
   channel?: string;
@@ -1297,12 +1350,12 @@ function resolveDirectSessionAccountDisplayName(params: {
     normalizeOptionalString(params.entry?.channel) ??
     normalizeOptionalString(params.entry?.lastChannel) ??
     parsed?.channel;
-  const accountIdCandidates = [
-    params.entry?.origin?.accountId,
-    params.entry?.lastAccountId,
-    parsed?.accountId,
-    parsed?.agentId,
-  ];
+  const accountIdCandidates = listDirectSessionAccountDisplayNameCandidates({
+    cfg: params.cfg,
+    channel,
+    entry: params.entry,
+    parsed,
+  });
   for (const accountId of accountIdCandidates) {
     const name = readConfiguredChannelAccountName({
       cfg: params.cfg,
