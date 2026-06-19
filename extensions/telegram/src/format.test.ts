@@ -100,6 +100,9 @@ describe("markdownToTelegramHtml", () => {
       "<tg-math-block>\\int_0^1 x^2 dx</tg-math-block>",
     ].join("\n");
 
+    // Rich HTML mode preserves structural \n between HTML tags (it's whitespace
+    // that Telegram's rich renderer ignores) and only converts \n in plain text
+    // to <br> so paragraph breaks render correctly via sendRichMessage.
     expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
@@ -140,7 +143,7 @@ describe("markdownToTelegramHtml", () => {
     );
 
     expect(html).toContain(
-      '\n\n<figure><img src="https://example.com/a.jpg" alt="A"/></figure>\n\n',
+      '<br><br><figure><img src="https://example.com/a.jpg" alt="A"/></figure><br><br>',
     );
     expect(html).toContain('<a href="https://example.com/page">https://example.com/page</a>');
     expect(html).not.toContain("&lt;img");
@@ -263,6 +266,31 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
       "<h1>Title</h1>\n\n<h3>Detail</h3>",
     );
+  });
+
+  it("converts paragraph breaks to <br> in rich HTML mode", () => {
+    // Telegram's sendRichMessage parses HTML properly, treating \n as whitespace.
+    // Paragraph breaks (\n\n) must become <br> so paragraphs don't collapse.
+    expect(markdownToTelegramRichHtml("First paragraph.\n\nSecond paragraph.")).toBe(
+      "First paragraph.<br><br>Second paragraph.",
+    );
+    // Single newline (soft break) also becomes <br> in rich HTML mode.
+    expect(markdownToTelegramRichHtml("Line one\nLine two")).toBe("Line one<br>Line two");
+  });
+
+  it("preserves newlines inside <pre> blocks in rich HTML mode", () => {
+    // Newlines inside <pre> blocks must stay as \n, not become <br>,
+    // because <pre> treats whitespace literally.
+    expect(markdownToTelegramRichHtml("```python\nprint('hello')\nprint('world')\n```")).toBe(
+      "<pre><code class=\"language-python\">print('hello')\nprint('world')\n</code></pre>",
+    );
+  });
+
+  it("preserves newlines inside <tg-math-block> in rich HTML mode", () => {
+    // Newlines inside <tg-math-block> must stay as \n because the content is
+    // raw LaTeX — inserting <br> would corrupt the formula.
+    const input = "<tg-math-block>\\int_0^1 x^2 dx\n\\cdot y^2 dy</tg-math-block>";
+    expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
   it("normalizes raw code language HTML without leaking tags", () => {

@@ -1016,6 +1016,95 @@ function renderTelegramRichHtmlDocument(
   );
 }
 
+function convertNewlinesToBrsForRichHtml(html: string): string {
+  // Telegram's sendRichMessage API parses HTML properly, treating \n as whitespace.
+  // This collapses paragraph breaks in plain text. Convert \n to <br> so line and
+  // paragraph breaks render correctly in rich message mode.
+  //
+  // Rules:
+  //   1. Don't convert \n inside <pre>, <tg-math-block>, or <tg-math> —
+  //      whitespace is semantically significant there.
+  //   2. Don't convert \n that is purely structural whitespace between two
+  //      block-level/container tags (e.g. </tr>\n<tr>, </table>\n<details>).
+  //      Inserting <br> there would create invalid children inside containers.
+  //   3. Convert all other \n (plain text, text between inline tags, text
+  //      between text and tags) to <br>.
+  const blockTags = new Set([
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "caption",
+    "ul",
+    "ol",
+    "li",
+    "figure",
+    "figcaption",
+    "pre",
+    "blockquote",
+    "details",
+    "summary",
+    "aside",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "tg-collage",
+    "tg-slideshow",
+    "tg-map",
+    "tg-math-block",
+    "audio",
+    "video",
+    "img",
+    "p",
+  ]);
+  const parts = html.split(/(<[^>]+>)/g);
+  let inPre = false;
+  let inMath = false;
+  return parts
+    .map((part, index) => {
+      if (index % 2 === 1) {
+        const tagMatch = /^<\/?(\w[\w-]*)/.exec(part);
+        if (tagMatch) {
+          const tagName = tagMatch[1].toLowerCase();
+          const isClosing = part.startsWith("</");
+          if (tagName === "pre") {
+            inPre = !isClosing;
+          } else if (tagName === "tg-math-block" || tagName === "tg-math") {
+            inMath = !isClosing;
+          }
+        }
+        return part;
+      }
+      if (inPre || inMath) {
+        return part;
+      }
+      // Only skip \n for purely-whitespace segments adjacent to block-level tags.
+      // If either the preceding closing tag or the following opening tag is
+      // block-level, the whitespace is structural (e.g. </a>\n<h2>, </tr>\n<tr>).
+      // Only convert when both sides are inline tags or text.
+      if (/^\s*$/.test(part)) {
+        const prevPart = index > 0 ? parts[index - 1] : "";
+        const nextPart = index < parts.length - 1 ? parts[index + 1] : "";
+        const prevTagMatch = /^<\/(\w[\w-]*)/.exec(prevPart);
+        const nextTagMatch = /^<(?!\/)(\w[\w-]*)/.exec(nextPart);
+        const prevIsBlock = prevTagMatch && blockTags.has(prevTagMatch[1].toLowerCase());
+        const nextIsBlock = nextTagMatch && blockTags.has(nextTagMatch[1].toLowerCase());
+        if (prevIsBlock || nextIsBlock) {
+          return part;
+        }
+      }
+      return part.replace(/\n/g, "<br>");
+    })
+    .join("");
+}
+
 export function markdownToTelegramRichHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
@@ -1032,10 +1121,12 @@ export function markdownToTelegramRichHtml(
       tableMode,
     },
   );
-  return isolateTelegramRichMediaBlocks(
-    replaceTelegramRichMarkdownMediaPlaceholders(
-      renderTelegramRichHtmlDocument(ir, tables),
-      normalized.mediaBlocks,
+  return convertNewlinesToBrsForRichHtml(
+    isolateTelegramRichMediaBlocks(
+      replaceTelegramRichMarkdownMediaPlaceholders(
+        renderTelegramRichHtmlDocument(ir, tables),
+        normalized.mediaBlocks,
+      ),
     ),
   );
 }
