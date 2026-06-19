@@ -38,20 +38,30 @@ function expectButtonWithText(app: ReturnType<typeof mountApp>, text: string): H
   return button;
 }
 
-function expectLatestPluginUiBridgePort(postMessageSpy: ReturnType<typeof vi.spyOn>): MessagePort {
-  let connectCall: unknown[] | undefined;
-  for (let index = postMessageSpy.mock.calls.length - 1; index >= 0; index--) {
-    const call = postMessageSpy.mock.calls[index];
-    if ((call?.[0] as { type?: unknown })?.type === "openclaw.pluginUi.connect") {
-      connectCall = call;
-      break;
-    }
-  }
-  expect(connectCall).toBeDefined();
-  const transfer = connectCall?.[2] as Transferable[] | undefined;
-  const port = transfer?.[0];
+function capturePluginUiBridgePorts(app: ReturnType<typeof mountApp>) {
+  const ports: MessagePort[] = [];
+  const target = app as unknown as {
+    postPluginUiBridgeConnect(targetWindow: Window, port: MessagePort): void;
+  };
+  vi.spyOn(target, "postPluginUiBridgeConnect").mockImplementation((_targetWindow, port) => {
+    ports.push(port);
+  });
+  return ports;
+}
+
+function expectLatestPluginUiBridgePort(ports: MessagePort[]): MessagePort {
+  const port = ports.at(-1);
   expect(port).toBeInstanceOf(MessagePort);
   return port as MessagePort;
+}
+
+function collectPluginUiBridgeResponses(port: MessagePort): unknown[] {
+  const responses: unknown[] = [];
+  port.addEventListener("message", (event: MessageEvent) => {
+    responses.push(event.data);
+  });
+  port.start();
+  return responses;
 }
 
 function postPluginUiBridgeMessage(port: MessagePort, message: unknown) {
@@ -208,6 +218,7 @@ describe("control UI routing", () => {
 
   it("proxies sandboxed in-app plugin requests through a per-frame message port", async () => {
     const app = mountApp("/channels");
+    const ports = capturePluginUiBridgePorts(app);
     app.activePluginUiEntryPoint = {
       id: "notes-plugin-entry",
       pluginId: "notes-plugin",
@@ -224,11 +235,9 @@ describe("control UI routing", () => {
 
     const frame = expectElement(app, "iframe.plugin-ui-entry-frame", HTMLIFrameElement);
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups");
-    const postMessageSpy = vi
-      .spyOn(frame.contentWindow as Window, "postMessage")
-      .mockImplementation(() => undefined);
     frame.dispatchEvent(new Event("load"));
-    const bridgePort = expectLatestPluginUiBridgePort(postMessageSpy);
+    const bridgePort = expectLatestPluginUiBridgePort(ports);
+    const responses = collectPluginUiBridgeResponses(bridgePort);
 
     window.dispatchEvent(
       new MessageEvent("message", {
@@ -278,15 +287,16 @@ describe("control UI routing", () => {
     expect((init.headers as Headers).get("authorization")).toBeNull();
     expect((init.headers as Headers).get("x-openclaw-scopes")).toBeNull();
     expect(init.body).toBe("query");
-    expect(postMessageSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "openclaw.pluginUi.response",
-        id: "req-1",
-        ok: true,
-        status: 201,
-        body: "pong",
-      }),
-      "*",
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-1",
+          ok: true,
+          status: 201,
+          body: "pong",
+        }),
+      ),
     );
 
     fetchSpy.mockClear();
@@ -298,19 +308,21 @@ describe("control UI routing", () => {
     await nextFrame();
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(postMessageSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "openclaw.pluginUi.response",
-        id: "req-2",
-        ok: false,
-        status: 400,
-      }),
-      "*",
+    await vi.waitFor(() =>
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-2",
+          ok: false,
+          status: 400,
+        }),
+      ),
     );
 
     fetchSpy.mockClear();
     frame.dispatchEvent(new Event("load"));
-    const currentBridgePort = expectLatestPluginUiBridgePort(postMessageSpy);
+    const currentBridgePort = expectLatestPluginUiBridgePort(ports);
+    const currentResponses = collectPluginUiBridgeResponses(currentBridgePort);
     postPluginUiBridgeMessage(bridgePort, {
       type: "openclaw.pluginUi.request",
       id: "req-stale",
@@ -328,13 +340,14 @@ describe("control UI routing", () => {
     await nextFrame();
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(postMessageSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "openclaw.pluginUi.response",
-        id: "req-current",
-        ok: true,
-      }),
-      "*",
+    await vi.waitFor(() =>
+      expect(currentResponses).toContainEqual(
+        expect.objectContaining({
+          type: "openclaw.pluginUi.response",
+          id: "req-current",
+          ok: true,
+        }),
+      ),
     );
   });
 

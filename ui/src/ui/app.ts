@@ -284,13 +284,13 @@ async function proxyPluginUiFrameRequest(params: {
   frame: HTMLIFrameElement;
   entryPoint: PluginControlUiEntryPoint;
   message: PluginUiRequestMessage;
+  replyPort: MessagePort;
 }): Promise<void> {
   const id = typeof params.message.id === "string" ? params.message.id : "";
   const reply = (payload: Record<string, unknown>) => {
-    params.frame.contentWindow?.postMessage(
-      { type: "openclaw.pluginUi.response", id, ...payload },
-      "*",
-    );
+    queueMicrotask(() => {
+      params.replyPort.postMessage({ type: "openclaw.pluginUi.response", id, ...payload });
+    });
   };
   const path = resolvePluginUiRequestPath(params.entryPoint, params.message.path);
   if (!path) {
@@ -1014,14 +1014,16 @@ export class OpenClawApp extends LitElement {
       return;
     }
     this.pluginUiBridgePort?.close();
-    const channel = new MessageChannel();
-    this.pluginUiBridgePort = channel.port1;
-    this.pluginUiBridgePort.addEventListener("message", (event: MessageEvent) => {
+    const channel = this.createPluginUiBridgeChannel();
+    const bridgePort = channel.port1;
+    this.pluginUiBridgePort = bridgePort;
+    bridgePort.addEventListener("message", (event: MessageEvent) => {
       const data = event.data as PluginUiRequestMessage | null;
       if (
         data?.type !== "openclaw.pluginUi.request" ||
         this.pluginUiBridgeFrame !== frame ||
         this.pluginUiBridgeKey !== bridgeKey ||
+        this.pluginUiBridgePort !== bridgePort ||
         !this.activePluginUiEntryPoint
       ) {
         return;
@@ -1030,10 +1032,19 @@ export class OpenClawApp extends LitElement {
         frame,
         entryPoint: this.activePluginUiEntryPoint,
         message: data,
+        replyPort: bridgePort,
       });
     });
-    this.pluginUiBridgePort.start();
-    targetWindow.postMessage({ type: "openclaw.pluginUi.connect" }, "*", [channel.port2]);
+    bridgePort.start();
+    this.postPluginUiBridgeConnect(targetWindow, channel.port2);
+  }
+
+  private createPluginUiBridgeChannel(): MessageChannel {
+    return new MessageChannel();
+  }
+
+  private postPluginUiBridgeConnect(targetWindow: Window, port: MessagePort): void {
+    targetWindow.postMessage({ type: "openclaw.pluginUi.connect" }, "*", [port]);
   }
 
   private syncPluginUiBridge() {
