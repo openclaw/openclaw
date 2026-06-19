@@ -405,29 +405,39 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     // timeoutMs governs how long we wait, not the produced vector, so it is not
-    // part of the key — a cache hit short-circuits the request entirely.
+    // part of the settled key — a cache hit short-circuits the request entirely.
+    // In-flight work is keyed by cancellation policy so an untimed store/capture
+    // call never inherits a recall timeout for identical text.
     const key = JSON.stringify([this.identity, text]);
-    return this.cache.getOrCompute(key, async () => {
-      const params: Record<string, unknown> = {
-        model: this.model,
-        input: text,
-      };
-      if (this.dimensions) {
-        params.dimensions = this.dimensions;
-      }
-      ensureGlobalUndiciEnvProxyDispatcher();
-      // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
-      // omitted, then decodes the response. Several compatible providers either
-      // reject encoding_format or always return float arrays, so use the generic
-      // transport and normalize the response ourselves.
-      const response = await (
-        await this.clientPromise
-      ).post<EmbeddingCreateResponse>("/embeddings", {
-        body: params,
-        ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
-      });
-      return normalizeEmbeddingVector(response.data?.[0]?.embedding);
-    });
+    const inFlightKey = JSON.stringify([
+      key,
+      options?.timeoutMs ? `timeout:${options.timeoutMs}` : "untimed",
+    ]);
+    return this.cache.getOrCompute(
+      key,
+      async () => {
+        const params: Record<string, unknown> = {
+          model: this.model,
+          input: text,
+        };
+        if (this.dimensions) {
+          params.dimensions = this.dimensions;
+        }
+        ensureGlobalUndiciEnvProxyDispatcher();
+        // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
+        // omitted, then decodes the response. Several compatible providers either
+        // reject encoding_format or always return float arrays, so use the generic
+        // transport and normalize the response ourselves.
+        const response = await (
+          await this.clientPromise
+        ).post<EmbeddingCreateResponse>("/embeddings", {
+          body: params,
+          ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+        });
+        return normalizeEmbeddingVector(response.data?.[0]?.embedding);
+      },
+      { inFlightKey },
+    );
   }
 }
 
@@ -509,7 +519,13 @@ class ProviderAdapterEmbeddings implements Embeddings {
     const provider = await this.getProvider();
     // identity is populated by createProvider() before getProvider() resolves.
     const key = JSON.stringify([this.identity ?? "", text]);
-    return this.cache.getOrCompute(key, () => this.embedUncached(provider, text, options));
+    const inFlightKey = JSON.stringify([
+      key,
+      options?.timeoutMs ? `timeout:${options.timeoutMs}` : "untimed",
+    ]);
+    return this.cache.getOrCompute(key, () => this.embedUncached(provider, text, options), {
+      inFlightKey,
+    });
   }
 
   private async embedUncached(

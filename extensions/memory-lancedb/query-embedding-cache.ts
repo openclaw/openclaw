@@ -52,14 +52,19 @@ export function isCacheableEmbeddingVector(vector: number[]): boolean {
 }
 
 /**
- * Dependency-free, bounded LRU over an embeddings instance. Keys are
- * `[identity, normalizedText]`; values are the in-flight embed promise so that
- * both sequential and concurrent identical embeds collapse to one provider call.
+ * Dependency-free, bounded LRU over an embeddings instance. Settled entries are
+ * keyed by `[identity, normalizedText]`; in-flight work is keyed separately so
+ * concurrent callers only share a provider call when their cancellation policy
+ * matches. This avoids coupling a timeout-bound recall to an untimed store or
+ * capture call for the same text, while still sharing the settled vector after
+ * either request succeeds.
+ *
  * A Map preserves insertion order: a cache hit deletes+re-inserts the key to
- * bump recency, and overflow evicts the oldest (first) key.
+ * bump recency, and overflow evicts the oldest (first) settled key.
  */
 export class QueryEmbeddingCache {
-  private readonly entries = new Map<string, Promise<number[]>>();
+  private readonly entries = new Map<string, number[]>();
+  private readonly pending = new Map<string, Promise<number[]>>();
   private readonly maxEntries: number;
   private readonly enabled: boolean;
 
@@ -68,7 +73,11 @@ export class QueryEmbeddingCache {
     this.enabled = options?.enabled ?? true;
   }
 
-  async getOrCompute(key: string, compute: () => Promise<number[]>): Promise<number[]> {
+  async getOrCompute(
+    key: string,
+    compute: () => Promise<number[]>,
+    options?: { inFlightKey?: string },
+  ): Promise<number[]> {
     // When disabled, behave as a pass-through: never store, always recompute, so
     // the embed() call sites stay identical regardless of configuration.
     if (!this.enabled) {
@@ -81,27 +90,37 @@ export class QueryEmbeddingCache {
       this.entries.set(key, existing);
       return existing;
     }
+    const inFlightKey = options?.inFlightKey ?? key;
+    const existingPending = this.pending.get(inFlightKey);
+    if (existingPending) {
+      return existingPending;
+    }
     const pending = compute();
-    this.entries.set(key, pending);
-    // Evict failed/degenerate results so a transient failure is never memoized
-    // and the next call retries the provider.
+    this.pending.set(inFlightKey, pending);
+    // Only settled, genuine vectors enter the LRU. Failed/degenerate results
+    // are not memoized, so a transient failure is never cached and the next call
+    // retries the provider.
     pending
       .then((vector) => {
-        if (!isCacheableEmbeddingVector(vector) && this.entries.get(key) === pending) {
+        if (this.pending.get(inFlightKey) === pending) {
+          this.pending.delete(inFlightKey);
+        }
+        if (isCacheableEmbeddingVector(vector)) {
           this.entries.delete(key);
+          this.entries.set(key, vector);
+          if (this.entries.size > this.maxEntries) {
+            const oldest = this.entries.keys().next().value;
+            if (oldest !== undefined) {
+              this.entries.delete(oldest);
+            }
+          }
         }
       })
       .catch(() => {
-        if (this.entries.get(key) === pending) {
-          this.entries.delete(key);
+        if (this.pending.get(inFlightKey) === pending) {
+          this.pending.delete(inFlightKey);
         }
       });
-    if (this.entries.size > this.maxEntries) {
-      const oldest = this.entries.keys().next().value;
-      if (oldest !== undefined) {
-        this.entries.delete(oldest);
-      }
-    }
     return pending;
   }
 }

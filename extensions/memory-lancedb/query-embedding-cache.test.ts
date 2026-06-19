@@ -99,6 +99,28 @@ describe("QueryEmbeddingCache", () => {
     expect(a).toEqual([1, 2]);
     expect(b).toEqual([1, 2]);
   });
+
+  test("does not share timeout-bound in-flight work with untimed callers", async () => {
+    const cache = new QueryEmbeddingCache();
+    const timed = vi.fn(async () => {
+      throw new Error("timed out");
+    });
+    const untimed = vi.fn(async () => [3, 4]);
+
+    const timedResult = cache.getOrCompute("k", timed, { inFlightKey: "k:timeout:100" });
+    const untimedResult = cache.getOrCompute("k", untimed, { inFlightKey: "k:untimed" });
+
+    await expect(timedResult).rejects.toThrow("timed out");
+    await expect(untimedResult).resolves.toEqual([3, 4]);
+    expect(timed).toHaveBeenCalledTimes(1);
+    expect(untimed).toHaveBeenCalledTimes(1);
+
+    const afterSettled = vi.fn(async () => [5, 6]);
+    await expect(
+      cache.getOrCompute("k", afterSettled, { inFlightKey: "k:timeout:200" }),
+    ).resolves.toEqual([3, 4]);
+    expect(afterSettled).not.toHaveBeenCalled();
+  });
 });
 
 describe("canonicalizeEmbeddingIdentity", () => {
