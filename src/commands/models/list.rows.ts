@@ -43,6 +43,7 @@ export type RowBuilderContext = {
   skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
+  modelsModeReplace?: boolean;
 };
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
@@ -387,6 +388,10 @@ export async function appendAuthenticatedCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
+  // When models.mode is "replace", only show explicitly configured providers.
+  if (params.context.modelsModeReplace) {
+    return;
+  }
   const { loadModelCatalog } = await loadModelCatalogModule();
   const catalog = await loadModelCatalog({
     config: params.context.cfg,
