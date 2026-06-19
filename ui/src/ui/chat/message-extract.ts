@@ -3,8 +3,8 @@ import { stripInternalRuntimeContext } from "../../../../src/agents/internal-run
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
+import { sanitizeAssistantVisibleText } from "../../../../src/shared/text/assistant-visible-text.js";
 import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
-import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
@@ -13,7 +13,10 @@ function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   const withoutInternalContext = stripInternalRuntimeContext(text);
   if (role === "assistant") {
-    return stripThinkingTags(withoutInternalContext);
+    // Use canonical delivery sanitizer for all assistant output in Control UI.
+    // This ensures commentary to=, tool-call XML, and other internal scaffolding
+    // are stripped consistently across history and live streaming paths (fixes #89668).
+    return sanitizeAssistantVisibleText(withoutInternalContext);
   }
   return shouldStripInboundMetadata
     ? stripInboundMetadata(stripEnvelope(withoutInternalContext))

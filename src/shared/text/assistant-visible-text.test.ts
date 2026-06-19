@@ -855,6 +855,44 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
+  it("strips commentary to=functions.* trace lines", () => {
+    const input = [
+      "Here is the answer.",
+      'commentary to=functions.browser {"action":"open","url":"https://example.com"}',
+      "End of response.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Here is the answer.\nEnd of response.");
+  });
+
+  it("strips commentary to=functions.* with leading >", () => {
+    const input = ["Before.", "> commentary to=functions.tool_call some payload", "After."].join(
+      "\n",
+    );
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before.\nAfter.");
+  });
+
+  it("preserves commentary to= inside fenced code", () => {
+    const input = ["Example:", "```", "commentary to=functions.browser payload", "```"].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("strips multiple commentary lines mixed with normal text", () => {
+    const input = [
+      "The assistant processed your request.",
+      'commentary to=functions.search {"query":"test"}',
+      "Here are the results you asked for.",
+      'commentary to=functions.read_file {"path":"/tmp/test"}',
+      "Done.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(
+      "The assistant processed your request.\nHere are the results you asked for.\nDone.",
+    );
+  });
+
   it("preserves ordinary analysis headings", () => {
     const input = ["Analysis:", "This is user-visible reasoning about the result."].join("\n");
 

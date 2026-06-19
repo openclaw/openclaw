@@ -79,6 +79,28 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBeNull();
   });
 
+  it("strips commentary to=functions.* lines from assistant output", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Here is the answer to your question.",
+            'commentary to=functions.browser {"action":"open","url":"https://example.com"}',
+            "The page loaded successfully.",
+          ].join("\n"),
+        },
+      ],
+    };
+    expect(extractText(message)).toBe(
+      "Here is the answer to your question.\nThe page loaded successfully.",
+    );
+    expect(extractTextCached(message)).toBe(
+      "Here is the answer to your question.\nThe page loaded successfully.",
+    );
+  });
+
   it("strips internal runtime context blocks from user text", () => {
     const message = {
       role: "user",
