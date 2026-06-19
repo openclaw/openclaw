@@ -126,6 +126,53 @@ export type TelegramMessageContext = {
   accountId: string;
 };
 
+const DIRECT_AUDIO_TYPING_PREFLIGHT_TIMEOUT_MS = 100;
+
+async function waitForDirectAudioTypingPreflight(
+  sendTypingPromise: Promise<void>,
+  params: {
+    chatId: TelegramMessage["chat"]["id"];
+  },
+): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const guardedSendTypingPromise = sendTypingPromise.then(
+    () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    },
+    (err: unknown) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      throw err;
+    },
+  );
+  const timeoutPromise = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, DIRECT_AUDIO_TYPING_PREFLIGHT_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([guardedSendTypingPromise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  if (timedOut) {
+    void guardedSendTypingPromise.catch((err: unknown) => {
+      logVerbose(
+        `telegram audio preflight direct typing cue failed for chat ${params.chatId}: ${String(err)}`,
+      );
+    });
+  }
+}
+
 function shouldSendDirectAudioTypingBeforeBodyResolution(params: {
   msg: TelegramMessage;
   allMedia: BuildTelegramMessageContextParams["allMedia"];
@@ -472,14 +519,10 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
-  if (!(await ensureConfiguredBindingReady())) {
-    return null;
-  }
-
   if (shouldSendDirectAudioTypingBeforeBodyResolution({ msg, allMedia, isGroup })) {
     initialTypingCueSent = true;
     try {
-      await sendTyping();
+      await waitForDirectAudioTypingPreflight(sendTyping(), { chatId });
     } catch (err) {
       logVerbose(
         `telegram audio preflight direct typing cue failed for chat ${chatId}: ${String(err)}`,
@@ -515,6 +558,10 @@ export const buildTelegramMessageContext = async ({
     logger,
   });
   if (!bodyResult) {
+    return null;
+  }
+
+  if (!(await ensureConfiguredBindingReady())) {
     return null;
   }
 

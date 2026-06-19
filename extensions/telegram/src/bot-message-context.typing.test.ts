@@ -97,6 +97,34 @@ describe("buildTelegramMessageContext typing", () => {
     );
   });
 
+  it("continues voice transcription when preflight typing does not settle", async () => {
+    transcribeFirstAudio.mockClear();
+    const sendChatAction = vi.fn(() => new Promise<undefined>(() => undefined));
+    const sendChatActionHandler = createSendChatActionHandler(sendChatAction);
+
+    const contextPromise = buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        text: undefined,
+        voice: { file_id: "voice-1", duration: 1 },
+      },
+      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+      sendChatActionHandler,
+    });
+
+    await waitForSendChatActionCall(sendChatActionHandler.sendChatAction);
+
+    expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledWith(42, "typing", undefined);
+    expect(transcribeFirstAudio).not.toHaveBeenCalled();
+
+    await expect(contextPromise).resolves.not.toBeNull();
+    expect(transcribeFirstAudio).toHaveBeenCalledTimes(1);
+    expect(sendChatActionHandler.sendChatAction.mock.invocationCallOrder[0]).toBeLessThan(
+      transcribeFirstAudio.mock.invocationCallOrder[0],
+    );
+  });
+
   it("does not send direct typing when there is no replyable body", async () => {
     const sendChatActionHandler = createSendChatActionHandler();
 
