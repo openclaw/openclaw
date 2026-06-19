@@ -2,8 +2,8 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { PolicyEvidence } from "../../policy-state.js";
-import type { PolicyDoctorCheckDeps } from "../checks.js";
 import { CHECK_IDS } from "../metadata.js";
+import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
 export function createPolicyModelNetworkChecks(

@@ -48,6 +48,7 @@ import {
   networkFindings,
 } from "./scopes/model-network.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
+import type { PolicyEvaluation } from "./types.js";
 import {
   ocPathSegment,
   readPolicyBoolean,
@@ -65,6 +66,7 @@ export {
   type PolicyStrictnessKind,
 } from "./metadata.js";
 export { isPolicyValueAtLeastAsStrict } from "./strictness.js";
+export type { PolicyEvaluation } from "./types.js";
 
 const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
 
@@ -122,18 +124,6 @@ const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEval
 
 export type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
-};
-
-export type PolicyEvaluation = {
-  readonly policyPath: string;
-  readonly policy?: {
-    readonly value: unknown;
-    readonly hash: string;
-  };
-  readonly evidence: PolicyEvidence;
-  readonly expectedAttestationHash?: string;
-  readonly findings: readonly HealthFinding[];
-  readonly attestedFindings: readonly HealthFinding[];
 };
 
 export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost): void {
