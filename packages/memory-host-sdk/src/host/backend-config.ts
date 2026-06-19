@@ -439,7 +439,14 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
+  // Quoted commands (paths with spaces plus extra args) parse correctly through
+  // the shell tokenizer. Unquoted Windows absolute paths (drive-letter or UNC)
+  // use backslashes as separators, but splitShellArgs treats them as POSIX
+  // escapes and strips them, mangling the path so spawn cannot find it (#92302).
+  // For those, split on whitespace only so the executable reaches spawn intact.
+  const isQuoted = rawCommand.startsWith('"') || rawCommand.startsWith("'");
+  const isWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(rawCommand) || /^([/\\])\1/.test(rawCommand);
+  const parsedCommand = isQuoted || !isWindowsAbsolute ? splitShellArgs(rawCommand) : null;
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,

@@ -166,6 +166,64 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("/Applications/QMD Tools/qmd");
   });
 
+  it("preserves unquoted Windows drive-letter qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "C:\\Users\\bin\\qmd.exe",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    // splitShellArgs treats backslashes as POSIX escapes and would mangle this
+    // to "C:Usersbinqmd.exe"; the drive-letter path must reach spawn intact.
+    expect(requireQmdConfig(resolved).command).toBe("C:\\Users\\bin\\qmd.exe");
+  });
+
+  it("preserves unquoted Windows UNC qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "\\\\server\\share\\qmd.exe",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("\\\\server\\share\\qmd.exe");
+  });
+
+  it("preserves forward-slash Windows drive-letter qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "C:/Users/bin/qmd.exe",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("C:/Users/bin/qmd.exe");
+  });
+
+  it("keeps trailing args out of an unquoted Windows qmd command path", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "C:\\Users\\bin\\qmd.exe --rerank",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("C:\\Users\\bin\\qmd.exe");
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {
