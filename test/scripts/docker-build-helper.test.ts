@@ -3580,6 +3580,14 @@ output="$(cat "$sampler_log")"
     expect(missing).toEqual([]);
   });
 
+  it("keeps the kitchen-sink RPC Docker watchdog above the internal walk budgets", () => {
+    const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain(
+      'DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_RPC_DOCKER_RUN_TIMEOUT:-1500s}"',
+    );
+  });
+
   it("bounds kitchen-sink plugin CLI commands inside the Docker sweep", () => {
     const runner = readFileSync(KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH, "utf8");
     const sweep = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");

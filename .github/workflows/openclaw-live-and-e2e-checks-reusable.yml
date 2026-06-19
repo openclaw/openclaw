@@ -1686,7 +1686,8 @@ jobs:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_LIVE_PROVIDERS: ${{ matrix.providers }}
       OPENCLAW_LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
-      OPENCLAW_LIVE_MAX_MODELS: "6"
+      OPENCLAW_LIVE_MODELS: ${{ matrix.models || 'modern' }}
+      OPENCLAW_LIVE_MAX_MODELS: ${{ matrix.max_models || '6' }}
       OPENCLAW_LIVE_MODEL_TIMEOUT_MS: "45000"
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
