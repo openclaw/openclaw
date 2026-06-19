@@ -1230,8 +1230,6 @@ export function stopTaskRegistryMaintenance() {
   sweepInProgress = false;
 }
 
-export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
-
 export function setTaskRegistryMaintenanceRuntimeForTests(
   runtime: TaskRegistryMaintenanceRuntime,
 ): void {

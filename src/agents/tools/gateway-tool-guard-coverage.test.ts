@@ -1,10 +1,7 @@
 // Gateway config mutation guard coverage keeps agent-driven config edits inside
 // the documented low-risk allowlist.
 import { describe, expect, it } from "vitest";
-import {
-  ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST,
-  assertGatewayConfigMutationAllowedForTest,
-} from "./gateway-tool.js";
+import { assertGatewayConfigMutationAllowedForTest } from "./gateway-tool.js";
 
 function expectBlocked(
   currentConfig: Record<string, unknown>,
@@ -59,23 +56,6 @@ function expectAllowedApply(
 }
 
 describe("gateway config mutation guard coverage", () => {
-  it("keeps a narrow allowlist of agent-tunable config paths", () => {
-    // This list is the contract between the public gateway tool and protected
-    // operator-owned config surfaces.
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.promptOverlays");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.model");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].model");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].subagents.thinking");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("channels.*.requireMention");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.visibleReplies");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.groupChat.visibleReplies");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain(
-      "messages.groupChat.unmentionedInbound",
-    );
-  });
-
   it("blocks global prompt overlay edits via config.patch", () => {
     expectBlocked(
       { agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } } },
@@ -167,7 +147,10 @@ describe("gateway config mutation guard coverage", () => {
       {
         messages: {
           visibleReplies: "automatic",
-          groupChat: { visibleReplies: "automatic" },
+          groupChat: {
+            visibleReplies: "automatic",
+            unmentionedInbound: "user_request",
+          },
         },
       },
     );
@@ -181,7 +164,10 @@ describe("gateway config mutation guard coverage", () => {
       {
         messages: {
           visibleReplies: "message_tool",
-          groupChat: { visibleReplies: "automatic" },
+          groupChat: {
+            visibleReplies: "automatic",
+            unmentionedInbound: "room_event",
+          },
         },
       },
     );

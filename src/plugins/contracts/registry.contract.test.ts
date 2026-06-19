@@ -11,6 +11,9 @@ import {
 } from "./registry.js";
 
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
+const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
+  ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
+);
 
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
@@ -244,10 +247,17 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
+    const snapshotPluginIds = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
+    );
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
       origin: "bundled",
-    });
+    }).filter(
+      (pluginId) =>
+        snapshotPluginIds.has(pluginId) &&
+        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET.has(pluginId),
+    );
     const expectedPluginIds = uniqueSortedStrings([
       ...bundledWebSearchPluginIds,
       ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,

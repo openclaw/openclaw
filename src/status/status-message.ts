@@ -57,7 +57,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
-  formatTokenCount as formatTokenCountShared,
+  formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
@@ -69,8 +69,6 @@ type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults
 type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
-
-export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
   mode?: string;
