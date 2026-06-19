@@ -83,6 +83,8 @@ const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const DISCORD_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
 
+const HERMES_DISCORD_BOT_IDS = new Set(["1517043679724966128"]);
+
 const DISCORD_OPERATIONAL_TELEMETRY_PREFIXES = [
   "📚 skill_view",
   "🔍 session_search",
@@ -118,6 +120,18 @@ function isStandaloneDiscordOperationalTelemetry(text: string) {
     return true;
   }
   return /^tool calls?:\s*\S+/i.test(normalized);
+}
+
+function isHermesStandaloneOperationalTelemetry(params: {
+  author: User;
+  message: DiscordMessagePreflightContext["message"];
+}) {
+  if (!params.author.bot || !HERMES_DISCORD_BOT_IDS.has(params.author.id)) {
+    return false;
+  }
+  return isStandaloneDiscordOperationalTelemetry(
+    resolveDiscordMessageText(params.message, { includeForwarded: false }),
+  );
 }
 
 function resolveDiscordPreflightConversationKind(params: {
@@ -342,8 +356,8 @@ export async function preflightDiscordMessage(
     pluralkitInfo,
   });
 
-  if (author.bot && !sender.isPluralKit && isStandaloneDiscordOperationalTelemetry(messageText)) {
-    logVerbose("discord: drop bot operational telemetry message");
+  if (!sender.isPluralKit && isHermesStandaloneOperationalTelemetry({ author, message })) {
+    logVerbose(`discord: drop Hermes operational telemetry message ${message.id}`);
     return null;
   }
 

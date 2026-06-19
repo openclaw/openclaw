@@ -682,7 +682,7 @@ describe("preflightDiscordMessage", () => {
         id: `m-bot-telemetry-${index}`,
         channelId,
         content,
-        author: { id: "hermes-bot", bot: true, username: "Hermes" },
+        author: { id: "1517043679724966128", bot: true, username: "Hermes" },
       });
 
       await expect(
@@ -702,7 +702,33 @@ describe("preflightDiscordMessage", () => {
     }
   });
 
-  it("keeps conversational bot messages that mention operational terms", async () => {
+  it("keeps non-Hermes bot messages with operational telemetry-shaped text", async () => {
+    const channelId = "channel-bot-telemetry-other-bot";
+    const guildId = "guild-bot-telemetry-other-bot";
+    const message = createDiscordMessage({
+      id: "m-bot-telemetry-other-bot",
+      channelId,
+      content: "tool call: bash",
+      author: { id: "relay-bot", bot: true, username: "Relay" },
+    });
+
+    await expect(
+      runGuildPreflight({
+        channelId,
+        guildId,
+        message,
+        discordConfig: { allowBots: true } as DiscordConfig,
+        guildEntries: {
+          [guildId]: {
+            requireMention: false,
+            ignoreOtherMentions: false,
+          },
+        },
+      }),
+    ).resolves.not.toBeNull();
+  });
+
+  it("keeps regular bot-authored collaboration that mentions operational terms", async () => {
     const channelId = "channel-bot-telemetry-keep";
     const guildId = "guild-bot-telemetry-keep";
     const message = createDiscordMessage({
@@ -711,7 +737,7 @@ describe("preflightDiscordMessage", () => {
       content:
         "Hermes review: the prior tool calls were useful; Claw check, do you agree? <@openclaw-bot>",
       mentionedUsers: [{ id: "openclaw-bot" }],
-      author: { id: "hermes-bot", bot: true, username: "Hermes" },
+      author: { id: "1517043679724966128", bot: true, username: "Hermes" },
     });
 
     await expect(
