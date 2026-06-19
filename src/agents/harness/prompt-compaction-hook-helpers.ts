@@ -29,9 +29,15 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   developerInstructions: string;
   messages: unknown[];
   ctx: AgentHarnessHookContext;
+  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_prompt_build") && !hookRunner?.hasHooks("before_agent_start")) {
+  const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
+  if (
+    !hasPrecomputedBeforeAgentStartResult &&
+    !hookRunner?.hasHooks("before_prompt_build") &&
+    !hookRunner?.hasHooks("before_agent_start")
+  ) {
     return {
       prompt: params.prompt,
       developerInstructions: params.developerInstructions,
@@ -45,18 +51,24 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
 
   // Support the newer before_prompt_build hook plus the deprecated
   // before_agent_start hook during the prompt-build migration window.
-  const promptBuildResult = hookRunner.hasHooks("before_prompt_build")
+  const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
         log.warn(`before_prompt_build hook failed: ${String(error)}`);
         return undefined;
       })
     : undefined;
-  const beforeAgentStartResult = hookRunner.hasHooks("before_agent_start")
-    ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
-        log.warn(`deprecated before_agent_start hook failed during prompt build: ${String(error)}`);
-        return undefined;
-      })
-    : undefined;
+  // The runner resolves before_agent_start during model selection. Reuse that
+  // result so legacy one-shot hooks do not run twice for the same turn.
+  const beforeAgentStartResult = hasPrecomputedBeforeAgentStartResult
+    ? params.beforeAgentStartResult
+    : hookRunner?.hasHooks("before_agent_start")
+      ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
+          log.warn(
+            `deprecated before_agent_start hook failed during prompt build: ${String(error)}`,
+          );
+          return undefined;
+        })
+      : undefined;
 
   const systemPrompt = resolvePromptBuildSystemPrompt({
     developerInstructions: params.developerInstructions,

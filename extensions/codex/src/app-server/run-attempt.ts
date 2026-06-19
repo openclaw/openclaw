@@ -1020,6 +1020,9 @@ export async function runCodexAppServerAttempt(
       developerInstructions,
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
+      ...("beforeAgentStartResult" in params
+        ? { beforeAgentStartResult: params.beforeAgentStartResult }
+        : {}),
     });
   const resolveShiftedPromptContextRange = (
     prompt: string,

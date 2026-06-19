@@ -1,5 +1,10 @@
 // Copilot tests cover harness plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotClientPool } from "./harness.js";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 
@@ -93,6 +98,10 @@ describe("createCopilotAgentHarness", () => {
       options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
     });
     mocks.createCopilotClientPool.mockImplementation(() => makePoolMock());
+  });
+
+  afterEach(() => {
+    resetGlobalHookRunner();
   });
 
   it("returns the copilot id and default label", () => {
@@ -1148,6 +1157,7 @@ describe("createCopilotAgentHarness", () => {
         copilotHome: "/copilot-home",
         auth: { useLoggedInUser: true },
         sessionId: "oc-sess-compact",
+        sessionFile: "/session.json",
         ...overrides,
       };
     }
@@ -1179,6 +1189,14 @@ describe("createCopilotAgentHarness", () => {
     });
 
     it("calls the SDK history compaction RPC without requiring a workspace sidecar", async () => {
+      const beforeCompaction = vi.fn();
+      const afterCompaction = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_compaction", handler: beforeCompaction },
+          { hookName: "after_compaction", handler: afterCompaction },
+        ]),
+      );
       const compact = vi.fn(async () => ({
         success: true,
         tokensRemoved: 123,
@@ -1241,6 +1259,19 @@ describe("createCopilotAgentHarness", () => {
       expect(compact).toHaveBeenCalledWith({ customInstructions: "Keep decisions." });
       expect(disconnect).toHaveBeenCalledTimes(1);
       expect(release).toHaveBeenCalledTimes(1);
+      expect(beforeCompaction).toHaveBeenCalledWith(
+        { messageCount: -1, sessionFile: "/session.json" },
+        expect.objectContaining({
+          modelId: "gpt-4.1",
+          modelProviderId: "github-copilot",
+          sessionId: "oc-sess-compact-1",
+          sessionKey: "agent:main:main",
+        }),
+      );
+      expect(afterCompaction).toHaveBeenCalledWith(
+        { compactedCount: 4, messageCount: -1, sessionFile: "/session.json" },
+        expect.objectContaining({ sessionId: "oc-sess-compact-1" }),
+      );
       expect(result).toEqual({
         ok: true,
         compacted: true,

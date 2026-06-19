@@ -1,8 +1,11 @@
 // Copilot plugin module implements harness behavior.
 import type { CopilotClient } from "@github/copilot-sdk";
 import {
+  buildAgentHookContextChannelFields,
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
   type AgentHarness,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult,
@@ -399,6 +402,20 @@ function computeSessionCompactKey(params: CopilotSessionCompatParams): string {
   return computeSessionKey(params, { includeApi: false, includeAuth: false });
 }
 
+function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
+  return {
+    ...(params.runId ? { runId: params.runId } : {}),
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    modelProviderId: params.provider,
+    modelId: params.model,
+    trigger: params.trigger,
+    ...buildAgentHookContextChannelFields(params),
+  };
+}
+
 export function createCopilotAgentHarness(
   options?: CreateCopilotAgentHarnessOptions,
 ): AgentHarness {
@@ -623,11 +640,18 @@ export function createCopilotAgentHarness(
       let handle: PooledClient | undefined;
       let pool: CopilotClientPool | undefined;
       let activeSdkSession: CopilotHistoryCompactSession | undefined;
+      const hookContext = buildCopilotCompactionHookContext(params);
       try {
         throwIfAborted(params.abortSignal);
         pool = await getPool();
         handle = await pool.acquire(poolAcquire.key, poolAcquire.options);
         const client = handle.client;
+        // Manual compaction resumes a distinct SDK session, bypassing the attempt event bridge.
+        // Run the portable lifecycle hook here so both compaction paths stay observable.
+        await runAgentHarnessBeforeCompactionHook({
+          sessionFile: params.sessionFile,
+          ctx: hookContext,
+        });
         compactResult = await compactWithSafetyTimeout(
           (abortSignal) =>
             compactTrackedSdkSession({
@@ -693,6 +717,13 @@ export function createCopilotAgentHarness(
         };
       }
       const compacted = compactResult.tokensRemoved > 0 || compactResult.messagesRemoved > 0;
+      if (compacted) {
+        await runAgentHarnessAfterCompactionHook({
+          sessionFile: params.sessionFile,
+          compactedCount: compactResult.messagesRemoved,
+          ctx: hookContext,
+        });
+      }
       return {
         ok: true,
         compacted,
