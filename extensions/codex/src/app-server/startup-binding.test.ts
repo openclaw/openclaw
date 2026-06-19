@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
-import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import { rotateOversizedCodexAppServerStartupBinding, testing } from "./startup-binding.js";
 
 describe("Codex app-server startup binding", () => {
   let tempDir: string;
@@ -44,6 +44,22 @@ describe("Codex app-server startup binding", () => {
       }),
     );
   }
+
+  it("respects explicit native thread reserveTokens when reserveTokensFloor is omitted", () => {
+    expect(
+      testing.resolveCodexAppServerNativeThreadReserveTokens({
+        agents: { defaults: { compaction: { reserveTokens: 8_192 } } },
+      } as never),
+    ).toBe(8_192);
+  });
+
+  it("keeps explicit native thread reserveTokensFloor as a lower bound", () => {
+    expect(
+      testing.resolveCodexAppServerNativeThreadReserveTokens({
+        agents: { defaults: { compaction: { reserveTokens: 8_192, reserveTokensFloor: 20_000 } } },
+      } as never),
+    ).toBe(20_000);
+  });
 
   it("does not use a default byte limit when maxActiveTranscriptBytes is unset", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

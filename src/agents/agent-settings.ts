@@ -58,6 +58,7 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
+  const configuredReserveTokensFloor = toNonNegativeInt(compactionCfg?.reserveTokensFloor);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
   let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
 
@@ -76,10 +77,12 @@ export function applyAgentCompactionSettingsFromConfig(params: {
     reserveTokensFloor = Math.min(reserveTokensFloor, maxReserve);
   }
 
-  const targetReserveTokens = Math.max(
-    configuredReserveTokens ?? currentReserveTokens,
-    reserveTokensFloor,
-  );
+  const effectiveConfiguredReserveTokensFloor =
+    configuredReserveTokensFloor !== undefined ? reserveTokensFloor : undefined;
+  const targetReserveTokens =
+    configuredReserveTokens !== undefined
+      ? Math.max(configuredReserveTokens, effectiveConfiguredReserveTokensFloor ?? 0)
+      : Math.max(currentReserveTokens, reserveTokensFloor);
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};

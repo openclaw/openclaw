@@ -245,7 +245,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
       resolveCodexContextEngineProjectionReserveTokens({
         config: { agents: { defaults: { compaction: { reserveTokens: 12_000 } } } },
       }),
-    ).toBe(20_000);
+    ).toBe(12_000);
     expect(
       resolveCodexContextEngineProjectionReserveTokens({
         config: {

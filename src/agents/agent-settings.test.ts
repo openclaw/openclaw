@@ -189,16 +189,15 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
   });
 
-  it("applies capped floor over user-configured reserveTokens when default floor exceeds context window", () => {
+  it("respects explicit reserveTokens when reserveTokensFloor is not configured", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 16_384,
       getCompactionKeepRecentTokens: () => 20_000,
       applyOverrides: vi.fn(),
     };
 
-    // User sets reserveTokens=2048 but NOT reserveTokensFloor (default 20_000 applies).
-    // Pre-fix: target = max(2048, 20_000) = 20_000 → exceeds 16_384 context → infinite loop.
-    // Post-fix: floor capped to 8_384 → target = max(2048, 8_384) = 8_384 → works.
+    // User sets reserveTokens=2048 but NOT reserveTokensFloor.
+    // The implicit default floor must not override the explicit reserveTokens choice.
     const result = applyAgentCompactionSettingsFromConfig({
       settingsManager,
       cfg: {
@@ -212,7 +211,59 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     });
 
     expect(result.didOverride).toBe(true);
-    expect(result.compaction.reserveTokens).toBe(8_384); // capped floor wins over user's 2_048
+    expect(result.compaction.reserveTokens).toBe(2_048);
+    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+      compaction: { reserveTokens: 2_048 },
+    });
+  });
+
+  it("applies explicit reserveTokensFloor over lower explicit reserveTokens", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 16_384,
+      getCompactionKeepRecentTokens: () => 20_000,
+      applyOverrides: vi.fn(),
+    };
+
+    const result = applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { reserveTokens: 2_048, reserveTokensFloor: 8_384 },
+          },
+        },
+      },
+      contextTokenBudget: 16_384,
+    });
+
+    expect(result.didOverride).toBe(true);
+    expect(result.compaction.reserveTokens).toBe(8_384);
+    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+      compaction: { reserveTokens: 8_384 },
+    });
+  });
+
+  it("caps explicit reserveTokensFloor over lower explicit reserveTokens on small-context models", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 16_384,
+      getCompactionKeepRecentTokens: () => 20_000,
+      applyOverrides: vi.fn(),
+    };
+
+    const result = applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { reserveTokens: 2_048, reserveTokensFloor: 20_000 },
+          },
+        },
+      },
+      contextTokenBudget: 16_384,
+    });
+
+    expect(result.didOverride).toBe(true);
+    expect(result.compaction.reserveTokens).toBe(8_384);
     expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
       compaction: { reserveTokens: 8_384 },
     });

@@ -188,6 +188,13 @@ function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined
   return Math.ceil(tokens);
 }
 
+function toNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
 function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
@@ -789,9 +796,13 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const configuredReserveTokens = toNonNegativeInt(
+    params.cfg.agents?.defaults?.compaction?.reserveTokens,
+  );
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
+    configuredReserveTokens ??
     20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);

@@ -508,11 +508,11 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
+  /** Embedded OpenClaw reserve tokens target. */
   reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). */
+  /** Minimum reserve tokens enforced for embedded OpenClaw compaction when explicitly configured. */
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;

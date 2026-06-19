@@ -106,10 +106,7 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
   const configuredReserveTokensFloor = toNonNegativeInt(asRecord(compaction)?.reserveTokensFloor);
 
   if (configuredReserveTokens !== undefined) {
-    return Math.max(
-      configuredReserveTokens,
-      configuredReserveTokensFloor ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
-    );
+    return Math.max(configuredReserveTokens, configuredReserveTokensFloor ?? 0);
   }
   if (configuredReserveTokensFloor !== undefined) {
     return configuredReserveTokensFloor;

@@ -1470,7 +1470,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.reserveTokensFloor":
-    "Minimum floor enforced for reserveTokens in embedded OpenClaw compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
+    "Minimum floor enforced for reserveTokens in embedded OpenClaw compaction paths when explicitly configured. If reserveTokens is set and this is omitted, the explicit reserve is used as-is. Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates, or set 0 to disable the floor explicitly.",
   "agents.defaults.compaction.maxHistoryShare":
     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
   "agents.defaults.compaction.identifierPolicy":

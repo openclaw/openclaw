@@ -337,9 +337,14 @@ OpenClaw runtime's compaction settings live in agent settings:
 
 OpenClaw also enforces a safety floor for embedded runs:
 
-- If `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
-- Default floor is `20000` tokens.
-- Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
+- If both `compaction.reserveTokens` and `reserveTokensFloor` are set and
+  `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
+- If `compaction.reserveTokens` is set and `reserveTokensFloor` is omitted,
+  OpenClaw treats the explicit reserve as intentional instead of applying the
+  default floor.
+- Default floor is `20000` tokens when neither reserve value is set.
+- Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor
+  explicitly.
 - If it's already higher, OpenClaw leaves it alone.
 - Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
   and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,

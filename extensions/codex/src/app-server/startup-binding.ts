@@ -268,10 +268,7 @@ function resolveCodexAppServerNativeThreadReserveTokens(
   const reserveTokens = toNonNegativeInt(compaction?.reserveTokens);
   const reserveTokensFloor = toNonNegativeInt(compaction?.reserveTokensFloor);
   if (reserveTokens !== undefined) {
-    return Math.max(
-      reserveTokens,
-      reserveTokensFloor ?? CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS,
-    );
+    return Math.max(reserveTokens, reserveTokensFloor ?? 0);
   }
   return reserveTokensFloor ?? CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;
 }

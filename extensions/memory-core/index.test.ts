@@ -218,6 +218,23 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.reserveTokensFloor).toBe(20_000);
   });
 
+  it("uses explicit reserveTokens as the memory flush reserve floor fallback", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokens: 8_192,
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan?.reserveTokensFloor).toBe(8_192);
+  });
+
   it("parses forceFlushTranscriptBytes from byte-size strings", () => {
     const plan = buildMemoryFlushPlan({
       cfg: {
