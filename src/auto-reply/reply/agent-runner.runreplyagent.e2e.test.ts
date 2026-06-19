@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -1280,94 +1281,142 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not persist active fallback state for internal subagent announce fallback", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      responseUsage: "tokens",
-    };
-    const sessionStore = { main: sessionEntry };
-    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
-    const storePath = join(storeRoot, "sessions.json");
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
-    try {
-      state.runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "subagent timed out" }],
-        meta: {
-          agentMeta: {
-            usage: {
-              input: 100,
-              output: 50,
+  it.each([
+    ["without stored fallback state", undefined],
+    [
+      "with matching stored fallback state",
+      {
+        fallbackNoticeSelectedModel: "openai/gpt-5.5",
+        fallbackNoticeActiveModel: "google/gemini-2.5-flash",
+        fallbackNoticeReason: "timeout",
+      },
+    ],
+  ])(
+    "surfaces fallback notice for internal subagent announce without mutating fallback state %s",
+    async (_name, existingFallbackState) => {
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        responseUsage: "tokens",
+        ...(existingFallbackState ?? {}),
+      };
+      const expectedStoredFallbackState = {
+        selectedModel: existingFallbackState?.fallbackNoticeSelectedModel,
+        activeModel: existingFallbackState?.fallbackNoticeActiveModel,
+        reason: existingFallbackState?.fallbackNoticeReason,
+      };
+      const sessionStore = { main: sessionEntry };
+      const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
+      const storePath = join(storeRoot, "sessions.json");
+      await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+      try {
+        state.runEmbeddedAgentMock.mockResolvedValueOnce({
+          payloads: [{ text: "subagent timed out" }],
+          meta: {
+            agentMeta: {
+              usage: {
+                input: 100,
+                output: 50,
+              },
             },
           },
-        },
-      });
-      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
-        const { run, onFallbackStep } = args;
-        await onFallbackStep?.({
-          fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-5.5",
-          fallbackStepToModel: "google/gemini-2.5-flash",
-          fallbackStepFromFailureReason: "timeout",
-          fallbackStepFinalOutcome: "succeeded",
         });
-        return {
-          outcome: "completed" as const,
-          result: await run("google", "gemini-2.5-flash"),
-          provider: "google",
-          model: "gemini-2.5-flash",
-          attempts: [
-            {
-              provider: "openai",
-              model: "gpt-5.5",
-              error: "codex app-server attempt timed out",
-              reason: "timeout",
-            },
-          ],
-        };
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-        runOverrides: {
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:codex:subagent:c34fca91",
-            sourceChannel: "__internal__",
-            sourceTool: "subagent_announce",
+        vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(
+          async (args) => {
+            const { run, onFallbackStep } = args;
+            await onFallbackStep?.({
+              fallbackStepType: "fallback_step",
+              fallbackStepFromModel: "openai/gpt-5.5",
+              fallbackStepToModel: "google/gemini-2.5-flash",
+              fallbackStepFromFailureReason: "timeout",
+              fallbackStepFinalOutcome: "succeeded",
+            });
+            return {
+              outcome: "completed" as const,
+              result: await run("google", "gemini-2.5-flash"),
+              provider: "google",
+              model: "gemini-2.5-flash",
+              attempts: [
+                {
+                  provider: "openai",
+                  model: "gpt-5.5",
+                  error: "codex app-server attempt timed out",
+                  reason: "timeout",
+                },
+              ],
+            };
           },
-        },
-      });
-      const res = await run();
+        );
 
-      expect(sessionEntry.modelProvider).toBe("openai");
-      expect(sessionEntry.model).toBe("gpt-5.5");
-      expect(sessionEntry.providerOverride).toBeUndefined();
-      expect(sessionEntry.modelOverride).toBeUndefined();
-      expect(sessionEntry.modelOverrideSource).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-      expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
-      const persistedSession = requireStoredSessionEntry(storePath);
-      expect(persistedSession.modelProvider).toBe("openai");
-      expect(persistedSession.model).toBe("gpt-5.5");
-      expect(persistedSession.providerOverride).toBeUndefined();
-      expect(persistedSession.modelOverride).toBeUndefined();
-      expect(persistedSession.modelOverrideSource).toBeUndefined();
-      expect(persistedSession.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(persistedSession.fallbackNoticeActiveModel).toBeUndefined();
-      const payloads = Array.isArray(res) ? res : res ? [res] : [];
-      expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
-      expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
-    } finally {
-      await rm(storeRoot, { recursive: true, force: true });
-    }
-  });
+        const { run } = createMinimalRun({
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+          runOverrides: {
+            provider: "openai",
+            model: "gpt-5.5",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:codex:subagent:c34fca91",
+              sourceChannel: "__internal__",
+              sourceTool: "subagent_announce",
+            },
+          },
+        });
+        const phases: string[] = [];
+        const off = onAgentEvent((evt) => {
+          const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+          if (evt.stream === "lifecycle" && phase) {
+            phases.push(phase);
+          }
+        });
+        const res = await run();
+        off();
+
+        expect(sessionEntry.modelProvider).toBe("openai");
+        expect(sessionEntry.model).toBe("gpt-5.5");
+        expect(sessionEntry.providerOverride).toBeUndefined();
+        expect(sessionEntry.modelOverride).toBeUndefined();
+        expect(sessionEntry.modelOverrideSource).toBeUndefined();
+        expect(sessionEntry.fallbackNoticeSelectedModel).toBe(
+          expectedStoredFallbackState.selectedModel,
+        );
+        expect(sessionEntry.fallbackNoticeActiveModel).toBe(
+          expectedStoredFallbackState.activeModel,
+        );
+        expect(sessionEntry.fallbackNoticeReason).toBe(expectedStoredFallbackState.reason);
+        const persistedSession = requireStoredSessionEntry(storePath);
+        expect(persistedSession.modelProvider).toBe("openai");
+        expect(persistedSession.model).toBe("gpt-5.5");
+        expect(persistedSession.providerOverride).toBeUndefined();
+        expect(persistedSession.modelOverride).toBeUndefined();
+        expect(persistedSession.modelOverrideSource).toBeUndefined();
+        expect(persistedSession.fallbackNoticeSelectedModel).toBe(
+          expectedStoredFallbackState.selectedModel,
+        );
+        expect(persistedSession.fallbackNoticeActiveModel).toBe(
+          expectedStoredFallbackState.activeModel,
+        );
+        expect(persistedSession.fallbackNoticeReason).toBe(expectedStoredFallbackState.reason);
+        const payloads = Array.isArray(res) ? res : res ? [res] : [];
+        const fallbackPayload = payloads.find((payload) =>
+          payload.text?.includes("Model Fallback:"),
+        );
+        expect(fallbackPayload?.text).toContain("google/gemini-2.5-flash");
+        expect(fallbackPayload?.text).toContain("selected openai/gpt-5.5");
+        expect(
+          getReplyPayloadMetadata(fallbackPayload ?? {})?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
+        expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
+      } finally {
+        await rm(storeRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("surfaces empty internal fallback failures without persisting visible fallback state", async () => {
     const sessionEntry: SessionEntry = {

@@ -1891,7 +1891,14 @@ export async function runReplyAgent(params: {
       state: fallbackStateEntry,
       cfg,
     });
-    if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
+    // Source-preserving handoffs may report this run's fallback, but they must
+    // not create or clear sticky fallback state on the user-facing session.
+    const canPersistUserFacingFallbackState = !preserveUserFacingSessionState;
+    if (
+      fallbackTransition.stateChanged &&
+      !fallbackExhausted &&
+      canPersistUserFacingFallbackState
+    ) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -2016,11 +2023,10 @@ export async function runReplyAgent(params: {
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
-    if (
-      !fallbackExhausted &&
-      !preserveUserFacingSessionState &&
-      fallbackTransition.fallbackTransitioned
-    ) {
+    const shouldEmitFallbackNotice = preserveUserFacingSessionState
+      ? fallbackTransition.fallbackActive && fallbackAttempts.length > 0
+      : fallbackTransition.fallbackTransitioned;
+    if (!fallbackExhausted && shouldEmitFallbackNotice) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -2055,7 +2061,7 @@ export async function runReplyAgent(params: {
     }
     if (
       !fallbackExhausted &&
-      !preserveUserFacingSessionState &&
+      canPersistUserFacingFallbackState &&
       fallbackTransition.fallbackCleared
     ) {
       emitAgentEvent({
