@@ -232,12 +232,14 @@ describe("gateway --force helpers", () => {
     });
 
     const busyErr = Object.assign(new Error("in use"), { code: "EADDRINUSE" });
+    // Each checkPortInUse probes up to 4 hosts; the last check needs all
+    // hosts free, so use permanent mockResolvedValue instead of once.
     tryListenOnPortMock
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
       .mockRejectedValueOnce(busyErr)
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValue(undefined);
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 300,
