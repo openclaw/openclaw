@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -50,8 +51,6 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
     },
   ),
 }));
-const ORIGINAL_HOME = process.env.HOME;
-
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -210,8 +209,10 @@ function firstEmbeddedAgentArg(callIndex = 0) {
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
+  let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   beforeEach(async () => {
+    homeEnvSnapshot = captureEnv(["HOME"]);
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
@@ -222,11 +223,8 @@ describe("CLI attempt execution", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
-    }
+    homeEnvSnapshot?.restore();
+    homeEnvSnapshot = undefined;
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -278,7 +276,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -315,7 +313,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, "stale-cli-session.jsonl"),
@@ -555,7 +553,7 @@ describe("CLI attempt execution", () => {
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
     const homeDir = path.join(tmpDir, "home");
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-123",
       updatedAt: Date.now(),
@@ -604,7 +602,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -660,7 +658,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: cwd,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
