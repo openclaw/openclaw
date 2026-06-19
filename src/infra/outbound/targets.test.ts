@@ -1686,4 +1686,75 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.channel).toBe("beta");
     expect(resolved.to).toBe("room-one");
   });
+
+  // FIX #90629: heartbeat mode should inherit lastTo even when channel mismatches
+  it("should inherit lastTo in heartbeat mode even with channel mismatch (FIX #90629)", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-heartbeat-qq",
+        updatedAt: 1,
+        lastChannel: "qqbot",
+        lastTo: "c2c:user123",
+        lastAccountId: "test-account",
+      },
+      requestedChannel: "qqbot",
+      mode: "heartbeat",
+      // No explicitTo - should inherit from session
+    });
+
+    expect(resolved.to).toBe("c2c:user123");
+    expect(resolved.channel).toBe("qqbot");
+    expect(resolved.mode).toBe("heartbeat");
+  });
+
+  it("should not inherit lastTo in non-heartbeat mode with channel mismatch", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-normal-mode",
+        updatedAt: 1,
+        lastChannel: "qqbot",
+        lastTo: "c2c:user123",
+      },
+      requestedChannel: "telegram", // Different channel
+      mode: "explicit", // Non-heartbeat mode
+    });
+
+    // In non-heartbeat mode, channel mismatch should NOT inherit lastTo
+    expect(resolved.to).toBeUndefined();
+    expect(resolved.channel).toBe("telegram");
+  });
+
+  it("should inherit lastTo in heartbeat mode when same channel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-heartbeat-same-channel",
+        updatedAt: 1,
+        lastChannel: "qqbot",
+        lastTo: "c2c:user456",
+        lastAccountId: "test-account",
+      },
+      requestedChannel: "qqbot",
+      mode: "heartbeat",
+    });
+
+    expect(resolved.to).toBe("c2c:user456");
+    expect(resolved.channel).toBe("qqbot");
+  });
+
+  it("should prefer explicitTo over inherited lastTo in heartbeat mode", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-heartbeat-explicit",
+        updatedAt: 1,
+        lastChannel: "qqbot",
+        lastTo: "c2c:old-user",
+      },
+      requestedChannel: "qqbot",
+      explicitTo: "c2c:new-user",
+      mode: "heartbeat",
+    });
+
+    // Explicit to should always take precedence
+    expect(resolved.to).toBe("c2c:new-user");
+  });
 });

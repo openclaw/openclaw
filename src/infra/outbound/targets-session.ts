@@ -170,7 +170,10 @@ export function resolveSessionDeliveryTarget(params: {
   if (!to && lastTo) {
     if (channel && channel === lastChannel) {
       to = lastTo;
-    } else if (params.allowMismatchedLastTo) {
+    } else if (params.allowMismatchedLastTo || params.mode === "heartbeat") {
+      // FIX #90629: heartbeat mode inherits lastTo even when channel mismatches,
+      // because heartbeat polls may switch between channels but should still deliver
+      // to the last known destination (e.g., QQ C2C user).
       to = lastTo;
     }
   }
