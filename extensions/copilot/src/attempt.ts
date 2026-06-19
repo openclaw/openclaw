@@ -140,11 +140,11 @@ export interface CopilotAttemptDeps {
     sessionConfig: CopilotSessionConfig;
   }) => void;
   /**
-   * Called before a timed-out attempt retains its live SDK session to observe
-   * background compaction. The harness must prevent that session ID from being
-   * resumed until cleanup completes.
+   * Called before an attempt retains its live SDK session to observe background
+   * compaction. The harness must prevent that session ID from being resumed
+   * until cleanup completes.
    */
-  onTimedOutCompaction?: (info: {
+  onDeferredCompaction?: (info: {
     abort: () => void;
     cleanup: Promise<"aborted" | "completed" | "deadline">;
     sdkSessionId: string;
@@ -211,7 +211,7 @@ async function awaitCompactionCompletionOrAbort(
   }
 }
 
-function deferTimedOutCompactionCleanup(params: {
+function deferBackgroundCompactionCleanup(params: {
   abortSignal: AbortSignal | undefined;
   bridge: ReturnType<typeof attachEventBridge>;
   handle: PooledClient;
@@ -220,8 +220,8 @@ function deferTimedOutCompactionCleanup(params: {
   session: SessionLike;
   timeoutMs: number;
 }): Promise<"aborted" | "completed" | "deadline"> {
-  // sendAndWait can time out while the SDK continues background compaction.
-  // Keep its bridge attached so after_compaction uses the originating run context.
+  // The SDK can compact after its turn result or a timeout. Keep the bridge
+  // attached so after_compaction uses the originating run context.
   return (async () => {
     let outcome: "aborted" | "completed" | "deadline" = "deadline";
     try {
@@ -781,8 +781,19 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    if (timedOut && bridge?.isCompacting() && session && handle) {
-      timedOutDuringCompaction = true;
+    const compactionCompletionOutcome =
+      waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted
+        ? await awaitCompactionCompletionOrAbort(bridge!, params.abortSignal)
+        : undefined;
+    const deferCompactionCleanup =
+      bridge?.isCompacting() &&
+      session &&
+      handle &&
+      (timedOut ||
+        compactionCompletionOutcome === "aborted" ||
+        params.abortSignal?.aborted === true);
+    if (deferCompactionCleanup && bridge && session && handle) {
+      timedOutDuringCompaction ||= timedOut;
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
       if (params.abortSignal?.aborted) {
@@ -790,7 +801,7 @@ export async function runCopilotAttempt(
       } else {
         params.abortSignal?.addEventListener("abort", abortCleanup, { once: true });
       }
-      const cleanup = deferTimedOutCompactionCleanup({
+      const cleanup = deferBackgroundCompactionCleanup({
         abortSignal: cleanupAbort.signal,
         bridge,
         handle,
@@ -806,7 +817,7 @@ export async function runCopilotAttempt(
         .catch(() => undefined);
       if (sdkSessionId) {
         try {
-          deps.onTimedOutCompaction?.({
+          deps.onDeferredCompaction?.({
             abort: () => cleanupAbort.abort(),
             cleanup,
             sdkSessionId,
@@ -817,9 +828,7 @@ export async function runCopilotAttempt(
       }
       params.abortSignal?.removeEventListener("abort", onAbort);
     } else {
-      if (waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted) {
-        await awaitCompactionCompletionOrAbort(bridge!, params.abortSignal);
-      } else {
+      if (compactionCompletionOutcome === undefined) {
         await bridge?.awaitCompactionChain();
       }
       bridge?.detach();

@@ -537,7 +537,7 @@ describe("createCopilotAgentHarness", () => {
         pooledClient: { key: {} as any, client: {} as any },
         sessionConfig: TEST_SESSION_CONFIG,
       });
-      deps.onTimedOutCompaction?.({
+      deps.onDeferredCompaction?.({
         abort,
         cleanup: cleanup.promise,
         sdkSessionId: "sdk-sess-pending-cleanup",
@@ -561,7 +561,7 @@ describe("createCopilotAgentHarness", () => {
         pooledClient: { key: {} as any, client: {} as any },
         sessionConfig: TEST_SESSION_CONFIG,
       });
-      deps.onTimedOutCompaction?.({
+      deps.onDeferredCompaction?.({
         abort,
         cleanup: cleanup.promise,
         sdkSessionId: "sdk-sess-reset-cleanup",
@@ -636,7 +636,7 @@ describe("createCopilotAgentHarness", () => {
             pooledClient: { key: {} as any, client: {} as any },
             sessionConfig: TEST_SESSION_CONFIG,
           });
-          deps.onTimedOutCompaction?.({
+          deps.onDeferredCompaction?.({
             abort: () => undefined,
             cleanup: cleanup.promise,
             sdkSessionId: "sdk-sess-compacting",
@@ -678,7 +678,7 @@ describe("createCopilotAgentHarness", () => {
             pooledClient: { key: {} as any, client: {} as any },
             sessionConfig: TEST_SESSION_CONFIG,
           });
-          deps.onTimedOutCompaction?.({
+          deps.onDeferredCompaction?.({
             abort: () => undefined,
             cleanup: cleanup.promise,
             sdkSessionId: "sdk-sess-cancelled",

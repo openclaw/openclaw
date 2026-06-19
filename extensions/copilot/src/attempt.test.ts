@@ -441,31 +441,38 @@ describe("runCopilotAttempt", () => {
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
 
-  it("cancels cleanup when SDK compaction has no completion event", async () => {
+  it("defers and cancels compaction when the caller aborts after a turn result", async () => {
     const controller = new AbortController();
+    const onDeferredCompaction = vi.fn();
     let activeSession: FakeSession | undefined;
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         activeSession = session;
         session.sendAndWait.mockImplementationOnce(async () => {
           session.emit("session.compaction_start", {});
+          setTimeout(() => controller.abort(), 0);
           return makeAssistantMessageEvent("done");
         });
       },
     });
 
     const attempt = runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
+      onDeferredCompaction,
       pool: makeFakePool(sdk),
     });
-    await vi.waitFor(() => {
-      expect(activeSession?.sendAndWait).toHaveBeenCalled();
-    });
-    controller.abort();
 
     const result = await attempt;
 
     expect(result.aborted).toBe(true);
+    expect(activeSession?.abort).not.toHaveBeenCalled();
     expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
+    expect(activeSession?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
+    expect(onDeferredCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sdkSessionId: "sess-1",
+      }),
+    );
   });
 
   it("reports the native prompt hook's effective input through llm_input", async () => {
