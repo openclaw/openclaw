@@ -60,6 +60,47 @@ function estimateBoundedBase64DataBytes(data: string, maxBytes: number): number 
   return estimatedBytes;
 }
 
+function canonicalizeMcpBase64Data(data: string): string | undefined {
+  const canonicalBase64 = canonicalizeBase64(data);
+  if (canonicalBase64) {
+    return canonicalBase64;
+  }
+
+  let cleaned = "";
+  for (let i = 0; i < data.length; i += 1) {
+    const code = data.charCodeAt(i);
+    if (code <= 0x20) {
+      continue;
+    }
+    if (
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f
+    ) {
+      cleaned += data[i];
+      continue;
+    }
+    return undefined;
+  }
+
+  if (!cleaned) {
+    return undefined;
+  }
+  const remainder = cleaned.length % 4;
+  if (remainder === 1) {
+    return undefined;
+  }
+  if (remainder === 2) {
+    return `${cleaned}==`;
+  }
+  if (remainder === 3) {
+    return `${cleaned}=`;
+  }
+  return cleaned;
+}
+
 function decodeBoundedBase64Data(params: {
   data: string;
   maxBytes: number;
@@ -70,7 +111,7 @@ function decodeBoundedBase64Data(params: {
       `MCP content too large: ${params.estimatedBytes} bytes (limit: ${params.maxBytes} bytes)`,
     );
   }
-  const canonicalBase64 = canonicalizeBase64(params.data);
+  const canonicalBase64 = canonicalizeMcpBase64Data(params.data);
   if (!canonicalBase64) {
     throw new Error("MCP content has invalid base64 data");
   }
