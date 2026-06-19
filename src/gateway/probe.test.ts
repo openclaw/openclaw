@@ -8,6 +8,7 @@ const gatewayClientState = vi.hoisted(() => ({
   startCalls: 0,
   startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
   socketOpened: true,
+  transportValidated: true,
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
     role: "operator",
@@ -88,6 +89,7 @@ class MockGatewayClient {
       onClose(gatewayClientState.close.code, gatewayClientState.close.reason, {
         phase: "pre-hello",
         socketOpened: gatewayClientState.socketOpened,
+        transportValidated: gatewayClientState.transportValidated,
         transientPreHelloCleanClose: false,
       });
     }
@@ -286,6 +288,7 @@ describe("probeGateway", () => {
     deviceIdentityState.tokenParams = [];
     gatewayClientState.startMode = "hello";
     gatewayClientState.socketOpened = true;
+    gatewayClientState.transportValidated = true;
     gatewayClientState.options = null;
     gatewayClientState.requests = [];
     gatewayClientState.startCalls = 0;
@@ -606,9 +609,10 @@ describe("probeGateway", () => {
     expect(result.connectLatencyMs).not.toBeNull();
   });
 
-  it("keeps latency unknown when the socket never opened", async () => {
+  it("keeps latency unknown when the opened transport fails validation", async () => {
     gatewayClientState.startMode = "connect-error-close";
-    gatewayClientState.socketOpened = false;
+    gatewayClientState.socketOpened = true;
+    gatewayClientState.transportValidated = false;
 
     const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
 

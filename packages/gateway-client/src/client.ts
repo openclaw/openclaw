@@ -364,6 +364,7 @@ export type GatewayReconnectPausedInfo = {
 export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
   socketOpened: boolean;
+  transportValidated: boolean;
   transientPreHelloCleanClose: boolean;
 };
 
@@ -547,6 +548,7 @@ export class GatewayClient {
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
+  private transportValidated = false;
   private helloOkReceived = false;
   private suppressedTransientPreHelloCleanCloses = 0;
 
@@ -670,6 +672,7 @@ export class GatewayClient {
     }
     this.ws = ws;
     this.socketOpened = false;
+    this.transportValidated = false;
     this.helloOkReceived = false;
     this.connectNonce = null;
     this.connectSent = false;
@@ -685,6 +688,7 @@ export class GatewayClient {
           return;
         }
       }
+      this.transportValidated = true;
       this.beginPreauthHandshake();
     });
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
@@ -693,6 +697,7 @@ export class GatewayClient {
       const closeInfo: GatewayClientCloseInfo = {
         phase: this.helloOkReceived ? "post-hello" : "pre-hello",
         socketOpened: this.socketOpened,
+        transportValidated: this.transportValidated,
         transientPreHelloCleanClose: !this.helloOkReceived && code === 1000 && reasonText === "",
       };
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
@@ -703,6 +708,7 @@ export class GatewayClient {
         this.ws = null;
       }
       this.socketOpened = false;
+      this.transportValidated = false;
       this.resolvePendingStop(ws);
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.scheduleReconnect();

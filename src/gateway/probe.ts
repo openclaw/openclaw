@@ -382,7 +382,7 @@ export async function probeGateway(opts: {
         if (connectLatencyMs == null) {
           // Preserve the transport boundary: request-level handshake failures
           // still prove the listener was reachable once the socket opened.
-          if (info?.socketOpened === true) {
+          if (info?.transportValidated === true) {
             connectLatencyMs = Date.now() - startedAt;
           }
           settleProbe({

@@ -76,6 +76,7 @@ class MockWebSocket {
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
   readonly options: unknown;
+  _socket?: { getPeerCertificate: () => { fingerprint256?: string } };
 
   constructor(_url: string, options?: unknown) {
     this.options = options;
@@ -715,7 +716,12 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
-      { phase: "pre-hello", socketOpened: false, transientPreHelloCleanClose: false },
+      {
+        phase: "pre-hello",
+        socketOpened: false,
+        transportValidated: false,
+        transientPreHelloCleanClose: false,
+      },
     );
     client.stop();
   });
@@ -736,6 +742,7 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
       phase: "pre-hello",
       socketOpened: false,
+      transportValidated: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -752,6 +759,34 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
       phase: "pre-hello",
       socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+    });
+    client.stop();
+  });
+
+  it("marks an opened TLS transport unvalidated when fingerprint verification fails", () => {
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "wss://127.0.0.1:18789",
+      tlsFingerprint: "expected",
+      onClose,
+      onConnectError,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws._socket = { getPeerCertificate: () => ({ fingerprint256: "different" }) };
+    ws.emitOpen();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "gateway tls fingerprint mismatch", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -769,6 +804,7 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
       phase: "pre-hello",
       socketOpened: false,
+      transportValidated: false,
       transientPreHelloCleanClose: false,
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -836,6 +872,7 @@ describe("GatewayClient close handling", () => {
       expect(onClose).toHaveBeenCalledWith(1000, "", {
         phase: "pre-hello",
         socketOpened: true,
+        transportValidated: true,
         transientPreHelloCleanClose: true,
       });
 
@@ -921,11 +958,13 @@ describe("GatewayClient close handling", () => {
       expect(onClose).toHaveBeenNthCalledWith(1, 1000, "", {
         phase: "pre-hello",
         socketOpened: true,
+        transportValidated: true,
         transientPreHelloCleanClose: true,
       });
       expect(onClose).toHaveBeenNthCalledWith(2, 1000, "", {
         phase: "pre-hello",
         socketOpened: true,
+        transportValidated: true,
         transientPreHelloCleanClose: true,
       });
       expect(onConnectError).toHaveBeenCalledOnce();
@@ -1057,6 +1096,7 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
       phase: "pre-hello",
       socketOpened: false,
+      transportValidated: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -1827,6 +1867,7 @@ describe("GatewayClient connect auth payload", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "connect failed", {
       phase: "pre-hello",
       socketOpened: true,
+      transportValidated: true,
       transientPreHelloCleanClose: false,
     });
   });
