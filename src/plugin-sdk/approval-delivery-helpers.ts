@@ -172,7 +172,7 @@ function buildApproverRestrictedNativeApprovalCapability(
           const turnSourceChannel = normalizeMessageChannel(
             input.request.request.turnSourceChannel,
           );
-          if (turnSourceChannel !== params.channel) {
+          if (turnSourceChannel && turnSourceChannel !== params.channel) {
             return false;
           }
         }
