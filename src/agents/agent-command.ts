@@ -32,6 +32,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
+import { normalizeOutboundPayloads } from "../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -2212,28 +2213,41 @@ async function agentCommandInternal(
           );
         }
         if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
-          sessionEntry = await (
-            await loadCliCompactionRuntime()
-          ).runCliTurnCompactionLifecycle({
-            cfg,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            cwd: effectiveCwd,
-            agentDir,
-            provider: result.meta.agentMeta?.provider ?? provider,
-            model: result.meta.agentMeta?.model ?? model,
-            skillsSnapshot,
-            messageChannel,
-            agentAccountId: runContext.accountId,
-            senderIsOwner: opts.senderIsOwner,
-            thinkLevel: resolvedThinkLevel,
-            extraSystemPrompt: opts.extraSystemPrompt,
-          });
+          try {
+            sessionEntry = await (
+              await loadCliCompactionRuntime()
+            ).runCliTurnCompactionLifecycle({
+              cfg,
+              sessionId: effectiveSessionId,
+              sessionKey: sessionKey ?? effectiveSessionId,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              workspaceDir,
+              cwd: effectiveCwd,
+              agentDir,
+              provider: result.meta.agentMeta?.provider ?? provider,
+              model: result.meta.agentMeta?.model ?? model,
+              skillsSnapshot,
+              messageChannel,
+              agentAccountId: runContext.accountId,
+              senderIsOwner: opts.senderIsOwner,
+              thinkLevel: resolvedThinkLevel,
+              extraSystemPrompt: opts.extraSystemPrompt,
+            });
+          } catch (error) {
+            // Post-turn compaction only trims context for future turns; a failure must not discard
+            // a reply already generated and persisted above. Gate on the outbound content
+            // projection: with nothing deliverable, stay fatal so an empty/silent turn is not lost.
+            const hasDeliverableReply = normalizeOutboundPayloads(result.payloads ?? []).length > 0;
+            if (!hasDeliverableReply) {
+              throw error;
+            }
+            log.warn(
+              `Post-turn CLI compaction failed for ${sessionKey ?? sessionId}; delivering reply without compaction: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
       }
 
