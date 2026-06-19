@@ -150,20 +150,22 @@ function asJsonObject(value: unknown): JsonObject {
 }
 
 /**
- * Validates that availability expression group fields are arrays before the
- * evaluator iterates them.  Plugin-authored data is untyped at this boundary;
- * a non-array {@code allOf} / {@code anyOf} value would reach
- * {@code evaluateExpression} and throw on {@code .flatMap} / {@code .map},
- * crashing tool registration.
+ * Recursively validates that every {@code allOf} / {@code anyOf} group in
+ * a plugin-authored availability expression is an array.  Plugin-authored
+ * data is untyped at this boundary; a non-array group value at any nesting
+ * level reaches {@code evaluateExpression} and throws on
+ * {@code .flatMap} / {@code .map}, crashing tool registration.
  */
 function hasValidAvailabilityGroupShape(
   expr: ToolAvailabilityExpression,
 ): boolean {
   if ("allOf" in expr) {
-    return Array.isArray(expr.allOf);
+    if (!Array.isArray(expr.allOf)) return false;
+    return expr.allOf.every(hasValidAvailabilityGroupShape);
   }
   if ("anyOf" in expr) {
-    return Array.isArray(expr.anyOf);
+    if (!Array.isArray(expr.anyOf)) return false;
+    return expr.anyOf.every(hasValidAvailabilityGroupShape);
   }
   // kind-based expressions don't have group fields — always valid
   return true;

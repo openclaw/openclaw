@@ -317,26 +317,52 @@ describe("capturePluginToolDescriptor availability validation", () => {
     }
   });
 
-  it("does not warn for nested availability entries when the top-level shape is valid", () => {
-    // The shape guard only validates the top-level group fields.
-    // Nested entries inside allOf/anyOf arrays are validated later by the
-    // evaluator (if recursively structured), not by this boundary check.
+  it("does not warn for valid nested availability groups", () => {
+    // Recursive validation: valid nested allOf/anyOf groups pass through.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const cached = capturePluginToolDescriptor({
         pluginId: "test-plugin",
         tool: makeTool({
-          availability: { allOf: [{ kind: "always" }, { kind: "always" }] },
+          availability: {
+            allOf: [
+              { kind: "always" },
+              { anyOf: [{ kind: "always" }, { kind: "always" }] },
+            ],
+          },
         }),
         optional: false,
       });
-      // Top-level allOf is a valid array — no shape warning expected
+      // All groups are valid arrays — no shape warning expected
       const shapeWarnings = warnSpy.mock.calls.filter((c) =>
         String(c[0]).includes("Non-array availability group"),
       );
       expect(shapeWarnings).toHaveLength(0);
       // Descriptor should preserve the valid availability
       expect(cached.descriptor.availability).toBeDefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns for nested malformed availability groups", () => {
+    // Recursive validation: a non-array anyOf inside an allOf is caught.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cached = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({
+          availability: {
+            allOf: [{ anyOf: "not-array" }],
+          },
+        }),
+        optional: false,
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Non-array availability group"),
+      );
+      // Descriptor should strip the malformed availability
+      expect(cached.descriptor.availability).toBeUndefined();
     } finally {
       warnSpy.mockRestore();
     }
