@@ -1314,17 +1314,20 @@ describe("convertOpenClawToolToSdkTool", () => {
     );
   });
 
-  it("reports returned OpenClaw error results as observer failures", async () => {
+  it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
+    const onToolCompleted = vi.fn();
     const sourceResult = {
       content: [{ text: '{"status":"error","error":"backend unavailable"}', type: "text" }],
       details: { status: "error", error: "backend unavailable" },
     };
     const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
       onAgentToolResult,
+      onToolCompleted,
     });
 
     const result = await runSdkTool(sdkTool, {});
+    await flushAsync();
 
     expect(result).toMatchObject({ resultType: "success" });
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -1332,6 +1335,12 @@ describe("convertOpenClawToolToSdkTool", () => {
       result: sourceResult,
       isError: true,
     });
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "backend unavailable",
+        result: sourceResult,
+      }),
+    );
   });
 
   it("joins multiple text blocks with newlines", async () => {

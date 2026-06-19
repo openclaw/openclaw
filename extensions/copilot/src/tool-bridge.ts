@@ -8,6 +8,7 @@ import type {
 import {
   applyEmbeddedAttemptToolsAllow,
   buildEmbeddedAttemptToolRunContext,
+  extractToolErrorMessage,
   getPluginToolMeta,
   isSubagentSessionKey,
   isToolResultError,
@@ -515,15 +516,15 @@ export function convertOpenClawToolToSdkTool(
 
     const sdkResult = agentToolResultToSdk(result);
     const sanitizedResult = sanitizeToolResult(result);
-    notifyToolResult(
-      sanitizedResult,
-      sdkResult.resultType === "failure" || isToolResultError(sanitizedResult),
-    );
+    const resultIsError = sdkResult.resultType === "failure" || isToolResultError(sanitizedResult);
+    const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
+    notifyToolResult(sanitizedResult, resultIsError);
     notifyToolCompleted({
       toolName: sourceTool.name,
       toolCallId: invocation.toolCallId,
       args: toToolStartArgs(preparedArgs),
       result: sanitizedResult,
+      ...(resultError ? { error: resultError } : {}),
       startedAt,
     });
     return sdkResult;

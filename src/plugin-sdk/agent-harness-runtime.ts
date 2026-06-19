@@ -131,6 +131,7 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractToolErrorMessage,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   isToolResultError,
