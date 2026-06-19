@@ -1542,7 +1542,7 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
-  it("fails closed when the expected native hook relay cannot be invoked", async () => {
+  it("falls back to before-tool-call hooks when the native hook relay is unavailable", async () => {
     const params = createParams();
     mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
 
@@ -1564,15 +1564,13 @@ describe("Codex app-server approval bridge", () => {
       },
     });
 
-    expect(result).toEqual({ decision: "decline" });
-    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    // When the native hook relay is unavailable, the approval bridge now falls
+    // through to normal OpenClaw policy evaluation (runBeforeToolCallHook)
+    // instead of hard-blocking.
     expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-    findApprovalEvent(params, {
-      status: "denied",
-      message:
-        "OpenClaw native hook relay unavailable for Codex app-server approval: native hook relay not found",
-    });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ decision: "decline" });
+    findApprovalEvent(params, { status: "unavailable" });
   });
 
   it("keeps non-command approvals on the app-server approval route when a native relay is registered", async () => {
