@@ -88,8 +88,9 @@ function createApprovalRuntime(params: {
         record,
         excludeConnId: params.client?.connId,
       });
-      // Approval requests are routed to eligible operator clients only. Falling
-      // back to broadcast is safe because the event payload carries no secret.
+      // Approval requests are routed to eligible operator clients only. When no
+      // matching recipients are found, fall back to admin-only broadcast instead
+      // of global broadcast to prevent cross-agent message leakage.
       if (approvalClientConnIds) {
         params.context.broadcastToConnIds(
           "plugin.approval.requested",
@@ -100,9 +101,23 @@ function createApprovalRuntime(params: {
           },
         );
       } else {
-        params.context.broadcast("plugin.approval.requested", requestEvent, {
-          dropIfSlow: true,
-        });
+        // Use admin-only fallback to avoid leaking approval requests across
+        // agent boundaries in multi-agent setups. See issue #94768.
+        const adminConnIds = params.context.getAdminClientConnIds?.();
+        if (adminConnIds && adminConnIds.size > 0) {
+          params.context.broadcastToConnIds(
+            "plugin.approval.requested",
+            requestEvent,
+            adminConnIds,
+            {
+              dropIfSlow: true,
+            },
+          );
+        } else {
+          params.context.broadcast("plugin.approval.requested", requestEvent, {
+            dropIfSlow: true,
+          });
+        }
       }
       const hasApprovalClients =
         approvalClientConnIds !== null

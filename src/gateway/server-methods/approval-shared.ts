@@ -423,7 +423,23 @@ export async function handlePendingApprovalRequest<
         },
       );
     } else {
-      params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+      // Fall back to admin-only broadcast to prevent cross-agent message leakage.
+      // See issue #94768.
+      const adminConnIds = params.context.getAdminClientConnIds?.();
+      if (adminConnIds && adminConnIds.size > 0) {
+        params.context.broadcastToConnIds(
+          params.requestEventName,
+          params.requestEvent,
+          adminConnIds,
+          {
+            dropIfSlow: true,
+          },
+        );
+      } else {
+        params.context.broadcast(params.requestEventName, params.requestEvent, {
+          dropIfSlow: true,
+        });
+      }
     }
   }
 
