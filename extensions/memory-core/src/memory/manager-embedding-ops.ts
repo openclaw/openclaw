@@ -408,11 +408,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             items: batchTexts.length,
             timeoutMs,
           });
-          return await runEmbeddingOperationWithTimeout({
+          const result = await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
             run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
           });
+          log.debug("memory embeddings: batch completed", {
+            provider: provider.id,
+            items: batchTexts.length,
+            vectors: result.length,
+          });
+          return result;
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
@@ -456,11 +462,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             items: batchInputs.length,
             timeoutMs,
           });
-          return await runEmbeddingOperationWithTimeout({
+          const result = await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
             run: async (signal) => await embedBatchInputs(batchInputs, { signal }),
           });
+          log.debug("memory embeddings: structured batch completed", {
+            provider: provider.id,
+            items: batchInputs.length,
+            vectors: result.length,
+          });
+          return result;
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,

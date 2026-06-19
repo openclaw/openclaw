@@ -56,7 +56,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 async function startEmbeddingServer(params?: {
   token?: string;
   respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown>;
-  status?: number;
+  status?: number | ((request: CapturedRequest) => number);
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -77,7 +77,9 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
-        res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
+        const statusCode =
+          typeof params?.status === "function" ? params.status(captured) : (params?.status ?? 200);
+        res.writeHead(statusCode, { "content-type": "application/json" });
         res.end(
           JSON.stringify(
             params?.respond?.(captured) ?? {
@@ -331,6 +333,55 @@ describe("openai-compatible generic embedding provider", () => {
         }),
       ]),
     ).resolves.toBe("closed");
+  });
+
+  it("retries without dimensions when the server rejects the parameter", async () => {
+    let requestCount = 0;
+    const server = await startEmbeddingServer({
+      token: "test-token",
+      respond: ({ body }) => {
+        requestCount += 1;
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        if (typeof body.dimensions === "number") {
+          return {
+            error: {
+              message: "Unrecognized request parameter: dimensions",
+              type: "invalid_request_error",
+              code: "unrecognized_parameter",
+            },
+          } as unknown as FixtureResponse;
+        }
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 2],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+      status: ({ body }) => (typeof body.dimensions === "number" ? 400 : 200),
+    });
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        dimensions: 1024,
+        remote: {
+          baseUrl: `  ${server.baseUrl}/  `,
+          apiKey: "test-token",
+          headers: { "x-backend": "llama.cpp" },
+        },
+      }),
+    );
+
+    await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 2]);
+    expect(requestCount).toBe(2);
+    expect(server.requests[0]?.body).toHaveProperty("dimensions", 1024);
+    expect(server.requests[1]?.body).not.toHaveProperty("dimensions");
+    expect(provider.dimensions).toBe(1024);
   });
 
   it("resolves env SecretRef API keys on the memory search secret surface", async () => {

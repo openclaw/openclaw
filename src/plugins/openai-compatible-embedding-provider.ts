@@ -356,27 +356,66 @@ async function createEmbeddingHttpError(response: Response): Promise<Error> {
   );
 }
 
-async function postEmbeddingRequest(params: {
+// Self-hosted embedding servers (llama.cpp, Ollama, etc.) may reject or
+// reset on unknown parameters such as OpenAI's `dimensions`. When
+// outputDimensionality is configured we try with dimensions first to
+// preserve the configured behavior for endpoints that support it, then
+// retry without dimensions only after a clear rejection or connection reset.
+//
+// Availability: retries capped at 1 per request. A per-client WeakSet
+// circuit breaker remembers rejection so subsequent requests skip the
+// failing attempt. Outer memory embedding retry loop adds exponential
+// backoff (maxAttempts=3, baseDelayMs=500).
+//
+// Compatibility: rejection detection covers OpenAI-style, llama.cpp,
+// Ollama, vLLM, TGI, Alibaba DashScope, and generic error formats.
+// Response null guard protects against malformed server responses.
+//
+// Session safety: dimensions always included in cacheKeyData regardless
+// of wire behavior. doEmbeddingFetch releases SSRF guard in finally block.
+
+const DIMENSIONS_RETRY_MAX = 1;
+
+const dimensionsRejectedClients = new WeakSet<OpenAICompatibleEmbeddingClient>();
+
+const DIMENSIONS_REJECTION_RE =
+  /\b(?:dimensions|unknown[ _]parameter|unrecognized[ _](?:field|parameter|option|request)|invalid[ _](?:request[ _])?field|bad[ _]request)\b/i;
+
+const DIMENSIONS_RESET_RE =
+  /(?:other side closed|ECONNRESET|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
+
+function isDimensionsRejectionOrReset(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return DIMENSIONS_REJECTION_RE.test(message) || DIMENSIONS_RESET_RE.test(message);
+}
+
+function buildEmbeddingRequestBody(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
-  signal?: AbortSignal;
-  inputType?: EmbeddingProviderCallOptions["inputType"];
-}): Promise<number[][]> {
-  const { client, input } = params;
-  const inputType = resolveRequestInputType(client, params.inputType);
-  const body = {
+  inputType: string | undefined;
+  includeDimensions: boolean;
+}) {
+  const { client, input, inputType, includeDimensions } = params;
+  return {
     model: client.model,
     input,
-    ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+    ...(includeDimensions && typeof client.dimensions === "number"
+      ? { dimensions: client.dimensions }
+      : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
+}
+
+async function doEmbeddingFetch(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  body: Record<string, unknown>;
+  signal?: AbortSignal;
+  expectedCount: number;
+}): Promise<number[][]> {
+  const { client, body, expectedCount } = params;
   const { response, release } = await fetchWithSsrFGuard({
     url: `${client.baseUrl}/embeddings`,
-    init: {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify(body),
-    },
+    init: { method: "POST", headers: client.headers, body: JSON.stringify(body) },
     signal: params.signal,
     policy: client.ssrfPolicy,
     auditContext: "embedding-provider:openai-compatible",
@@ -385,12 +424,48 @@ async function postEmbeddingRequest(params: {
     if (!response.ok) {
       throw await createEmbeddingHttpError(response);
     }
+    const payload = await readJsonResponse(response);
+    if (!payload || typeof payload !== "object" || !Array.isArray((payload as Record<string, unknown>).data)) {
+      throw malformedEmbeddingResponse();
+    }
     return readEmbeddingVectors(
-      (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
-      input.length,
+      payload as OpenAICompatibleEmbeddingResponse,
+      expectedCount,
     );
   } finally {
     await release();
+  }
+}
+
+async function postEmbeddingRequest(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  input: string[];
+  signal?: AbortSignal;
+  inputType?: EmbeddingProviderCallOptions["inputType"];
+}): Promise<number[][]> {
+  const { client, input } = params;
+  const inputType = resolveRequestInputType(client, params.inputType);
+  const hasDimensions = typeof client.dimensions === "number";
+  const alreadyRejected = dimensionsRejectedClients.has(client);
+  const shouldTryWithDimensions = hasDimensions && !alreadyRejected;
+
+  const bodyWith = buildEmbeddingRequestBody({
+    client, input, inputType, includeDimensions: shouldTryWithDimensions,
+  });
+  try {
+    return await doEmbeddingFetch({
+      client, body: bodyWith, signal: params.signal, expectedCount: input.length,
+    });
+  } catch (err) {
+    if (params.signal?.aborted) throw err;
+    if (!hasDimensions || alreadyRejected || !isDimensionsRejectionOrReset(err)) throw err;
+    dimensionsRejectedClients.add(client);
+    const bodyWithout = buildEmbeddingRequestBody({
+      client, input, inputType, includeDimensions: false,
+    });
+    return await doEmbeddingFetch({
+      client, body: bodyWithout, signal: params.signal, expectedCount: input.length,
+    });
   }
 }
 
