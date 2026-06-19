@@ -211,6 +211,8 @@ const TELEGRAM_MARKDOWN_INLINE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\(([^)\n]+)\)/g;
 const TELEGRAM_MARKDOWN_REFERENCE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
 const TELEGRAM_MARKDOWN_MEDIA_PLACEHOLDER_PREFIX = "\uE000telegram-media:";
 const TELEGRAM_MARKDOWN_MEDIA_PLACEHOLDER_SUFFIX = "\uE001";
+const TELEGRAM_PRE_CODE_PLACEHOLDER_PREFIX = "\uE002pre:";
+const TELEGRAM_PRE_CODE_PLACEHOLDER_SUFFIX = "\uE003";
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "b",
   "strong",
@@ -863,12 +865,33 @@ function normalizeWideTelegramRichHtmlTables(html: string): string {
 // Normalize ALL <table> elements to Telegram-compatible <pre><code> pipe tables
 // for the standard text delivery path (non-rich-messages). Used in
 // renderTelegramHtmlText to prevent entity-escaped &lt;table&gt; text. (#94317)
+// <table> tags inside <pre> or <code> blocks are preserved as-is so that
+// literal table markup examples inside code fences are not converted. (#94317)
 function normalizeAllTelegramRichHtmlTables(html: string): string {
+  // Isolate <pre> and <code> blocks so literal table markup inside them is
+  // not converted. The ISO control characters \x00 are safe placeholders
+  // because Telegram HTML does not use them.
+  const blocks: string[] = [];
+  const withoutPreCode = html.replace(
+    /<pre\b[^>]*>[\s\S]*?<\/pre\s*>|<code\b[^>]*>[\s\S]*?<\/code\s*>/gi,
+    (match) => {
+      blocks.push(match);
+      return `\x00TBLOCK${blocks.length - 1}\x00`;
+    },
+  );
+
+  // Normalize tables in the remaining (non-pre/code) content
   TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
-  return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) => {
-    const rows = parseTelegramRichHtmlTableRows(tableHtml);
-    return renderTelegramRichHtmlRawTableFallback(tableHtml, rows);
-  });
+  const normalized = withoutPreCode.replace(
+    TELEGRAM_RICH_HTML_TABLE_PATTERN,
+    (tableHtml) => {
+      const rows = parseTelegramRichHtmlTableRows(tableHtml);
+      return renderTelegramRichHtmlRawTableFallback(tableHtml, rows);
+    },
+  );
+
+  // Restore original <pre> and <code> blocks
+  return normalized.replace(/\x00TBLOCK(\d+)\x00/g, (_, idx) => blocks[Number(idx)] ?? "");
 }
 
 type TelegramRichMarkdownMediaNormalization = {
