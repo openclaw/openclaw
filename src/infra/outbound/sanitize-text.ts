@@ -1,6 +1,7 @@
 // Plain-text sanitization strips internal runtime scaffolding and converts a
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
@@ -117,7 +118,7 @@ export function stripInternalRuntimeScaffolding(text: string): string {
  * prose (e.g. `a < b`).
  */
 export function sanitizeForPlainText(text: string): string {
-  const converted = stripInternalRuntimeScaffolding(text)
+  const converted = stripInternalRuntimeScaffolding(stripInboundMetadata(text))
     // Preserve angle-bracket autolinks as plain URLs before tag stripping.
     .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
     // Line breaks

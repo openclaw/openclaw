@@ -115,6 +115,65 @@ describe("sanitizeForPlainText", () => {
   it("collapses excessive newlines", () => {
     expect(sanitizeForPlainText("a<br><br><br><br>b")).toBe("a\n\nb");
   });
+
+  // --- inbound metadata stripping (fix #94786) --------------------------
+
+  it("strips Conversation info metadata block", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chatName": "Test", "participants": ["user1"]}',
+      "```",
+      "Actual user message",
+    ].join("\n");
+    expect(sanitizeForPlainText(input)).toBe("Actual user message");
+  });
+
+  it("strips Sender info metadata block", () => {
+    const input = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"handle": "user@example.com", "displayName": "User"}',
+      "```",
+      "Hello there",
+    ].join("\n");
+    expect(sanitizeForPlainText(input)).toBe("Hello there");
+  });
+
+  it("strips Conversation info followed by Sender info metadata blocks", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chatName": "Test"}',
+      "```",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"handle": "user@example.com"}',
+      "```",
+      "Real message content",
+    ].join("\n");
+    expect(sanitizeForPlainText(input)).toBe("Real message content");
+  });
+
+  it("strips inbound metadata blocks inside plain text where model echoed them", () => {
+    // Simulates the case where the AI model echoes metadata blocks in its reply.
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chatName": "DM"}',
+      "```",
+      "",
+      "Sure, let me help with that!",
+    ].join("\n");
+    expect(sanitizeForPlainText(input)).toBe("Sure, let me help with that!");
+  });
+
+  it("preserves untrusted metadata sentinel when part of natural user text", () => {
+    // If a user literally types "Conversation info (untrusted metadata):" without a
+    // following JSON fence, it should be preserved as it's natural user text.
+    const input = "What does Conversation info (untrusted metadata): mean?";
+    expect(sanitizeForPlainText(input)).toBe(input);
+  });
 });
 
 describe("stripInternalRuntimeScaffolding", () => {
