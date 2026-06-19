@@ -494,6 +494,28 @@ export async function runCopilotAttempt(
         });
     const attemptInput =
       promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };
+    let promptImagesCount = 0;
+    const emitLlmInput = (prompt: string, additionalContext?: string) => {
+      runAgentHarnessLlmInputHook({
+        event: {
+          runId: input.runId,
+          sessionId: input.sessionId,
+          provider: modelRef.provider,
+          model: modelRef.id,
+          ...(promptBuild.developerInstructions
+            ? { systemPrompt: promptBuild.developerInstructions }
+            : {}),
+          prompt: additionalContext ? `${prompt}\n\n${additionalContext}` : prompt,
+          // Copilot SDK sessions own their own transcript. OpenClaw's
+          // mirrored messages are persistence state, not provider input.
+          historyMessages: [],
+          imagesCount: promptImagesCount,
+          tools: sdkTools,
+        },
+        ctx: hookContext,
+      });
+    };
+    const hasNativePromptHook = Boolean(attemptInput.hooksConfig?.onUserPromptSubmitted);
     const sessionConfig = createSessionConfig(
       attemptInput,
       modelRef.id,
@@ -502,6 +524,12 @@ export async function runCopilotAttempt(
       promptBuild.developerInstructions || undefined,
       effectiveWorkspaceDir,
       effectiveCwd,
+      hasNativePromptHook
+        ? {
+            onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+              emitLlmInput(prompt, additionalContext),
+          }
+        : undefined,
     );
     const replayDecision = decideReplayAction({
       sdkSessionId: input.initialReplayState?.sdkSessionId,
@@ -563,7 +591,6 @@ export async function runCopilotAttempt(
         }
         return runAgentHarnessBeforeCompactionHook({
           sessionFile,
-          messages,
           ctx: hookContext,
         });
       },
@@ -574,7 +601,6 @@ export async function runCopilotAttempt(
         }
         return runAgentHarnessAfterCompactionHook({
           sessionFile,
-          messages,
           compactedCount: -1,
           ctx: hookContext,
         });
@@ -589,29 +615,15 @@ export async function runCopilotAttempt(
       sandbox,
       workspaceOnly: effectiveFsWorkspaceOnly,
     });
+    promptImagesCount = messageOptions.attachments?.length ?? 0;
     if (abortRequested || params.abortSignal?.aborted) {
       aborted = true;
       externalAbort = true;
     } else {
       sentTurnStarted = true;
-      runAgentHarnessLlmInputHook({
-        event: {
-          runId: input.runId,
-          sessionId: input.sessionId,
-          provider: modelRef.provider,
-          model: modelRef.id,
-          ...(promptBuild.developerInstructions
-            ? { systemPrompt: promptBuild.developerInstructions }
-            : {}),
-          prompt: attemptInput.prompt,
-          // Copilot SDK sessions own their own transcript. OpenClaw's
-          // mirrored messages are persistence state, not provider input.
-          historyMessages: [],
-          imagesCount: messageOptions.attachments?.length ?? 0,
-          tools: sdkTools,
-        },
-        ctx: hookContext,
-      });
+      if (!hasNativePromptHook) {
+        emitLlmInput(attemptInput.prompt);
+      }
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
       await bridge.awaitCompactionChain();
@@ -921,9 +933,10 @@ function createSessionConfig(
   systemMessageContent: string | undefined,
   effectiveWorkspaceDir: string | undefined,
   effectiveCwd: string | undefined,
+  hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1],
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
-  const hooks = createHooksBridge(params.hooksConfig);
+  const hooks = createHooksBridge(params.hooksConfig, hooksBridgeOptions);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
   return {
     model: sdkModelId,

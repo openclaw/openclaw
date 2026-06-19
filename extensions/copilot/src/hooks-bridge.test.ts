@@ -52,6 +52,29 @@ describe("createHooksBridge", () => {
     expect(onPreToolUse).toHaveBeenCalledWith(input, { sessionId: "sess-1" });
   });
 
+  it("reports the effective prompt after a native prompt hook completes", async () => {
+    const onUserPromptSubmitted = vi.fn().mockResolvedValue({
+      additionalContext: "Use the approved repository.",
+      modifiedPrompt: "Review the authentication change.",
+    });
+    const observedPrompt = vi.fn();
+    const hooks = createHooksBridge(
+      { onUserPromptSubmitted },
+      { onUserPromptSubmitted: observedPrompt },
+    )!;
+
+    await expect(
+      hooks.onUserPromptSubmitted!({ ...hookBase, prompt: "hello" }, { sessionId: "s" }),
+    ).resolves.toEqual({
+      additionalContext: "Use the approved repository.",
+      modifiedPrompt: "Review the authentication change.",
+    });
+    expect(observedPrompt).toHaveBeenCalledWith({
+      additionalContext: "Use the approved repository.",
+      prompt: "Review the authentication change.",
+    });
+  });
+
   it("isolates synchronous and asynchronous handler failures", async () => {
     const onHookError = vi.fn();
     const hooks = createHooksBridge({

@@ -100,7 +100,7 @@ function resolvePromptBuildSystemPrompt(params: {
 /** Runs best-effort before-compaction hooks for a harness session. */
 export async function runAgentHarnessBeforeCompactionHook(params: {
   sessionFile: string;
-  messages: AgentMessage[];
+  messages?: AgentMessage[];
   ctx: AgentHarnessHookContext;
 }): Promise<void> {
   const hookRunner = getGlobalHookRunner();
@@ -110,8 +110,8 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
   try {
     await hookRunner.runBeforeCompaction(
       {
-        messageCount: params.messages.length,
-        messages: params.messages,
+        messageCount: params.messages?.length ?? -1,
+        ...(params.messages ? { messages: params.messages } : {}),
         sessionFile: params.sessionFile,
       },
       buildAgentHookContext(params.ctx),
@@ -124,7 +124,7 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
 /** Runs best-effort after-compaction hooks for a harness session. */
 export async function runAgentHarnessAfterCompactionHook(params: {
   sessionFile: string;
-  messages: AgentMessage[];
+  messages?: AgentMessage[];
   ctx: AgentHarnessHookContext;
   compactedCount: number;
 }): Promise<void> {
@@ -135,7 +135,7 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   try {
     await hookRunner.runAfterCompaction(
       {
-        messageCount: params.messages.length,
+        messageCount: params.messages?.length ?? -1,
         compactedCount: params.compactedCount,
         sessionFile: params.sessionFile,
       },

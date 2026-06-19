@@ -399,7 +399,7 @@ describe("runCopilotAttempt", () => {
 
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageCount: 1,
+        messageCount: -1,
         sessionFile: "session.json",
       }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
@@ -407,8 +407,54 @@ describe("runCopilotAttempt", () => {
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
         compactedCount: -1,
-        messageCount: 1,
+        messageCount: -1,
         sessionFile: "session.json",
+      }),
+      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+    );
+    expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
+  });
+
+  it("reports the native prompt hook's effective input through llm_input", async () => {
+    const llmInput = vi.fn();
+    const onUserPromptSubmitted = vi.fn().mockResolvedValue({
+      additionalContext: "Use the approved repository.",
+      modifiedPrompt: "Review the authentication change.",
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session, cfg) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          const hooks = cfg.hooks as {
+            onUserPromptSubmitted?: (
+              input: { prompt: string },
+              invocation: { sessionId: string },
+            ) => Promise<unknown>;
+          };
+          await hooks.onUserPromptSubmitted?.(
+            { prompt: "hello" },
+            { sessionId: session.sessionId },
+          );
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+
+    await runCopilotAttempt(makeParams({ hooksConfig: { onUserPromptSubmitted } } as never), {
+      pool: makeFakePool(sdk),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(onUserPromptSubmitted).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "hello" }),
+      { sessionId: "sess-1" },
+    );
+    expect(llmInput).toHaveBeenCalledTimes(1);
+    expect(llmInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "Review the authentication change.\n\nUse the approved repository.",
       }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
     );

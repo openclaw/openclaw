@@ -17,6 +17,10 @@ type SessionStartHandler = NonNullable<SdkSessionHooks["onSessionStart"]>;
 type SessionEndHandler = NonNullable<SdkSessionHooks["onSessionEnd"]>;
 type ErrorOccurredHandler = NonNullable<SdkSessionHooks["onErrorOccurred"]>;
 
+export interface CopilotHooksBridgeOptions {
+  onUserPromptSubmitted?: (submission: { prompt: string; additionalContext?: string }) => void;
+}
+
 export interface CopilotHooksConfig {
   onPreToolUse?: PreToolUseHandler;
   onPreMcpToolCall?: PreMcpToolCallHandler;
@@ -70,7 +74,10 @@ function isolate<TArgs extends readonly unknown[], TResult>(
  * Build an SDK-shaped hook object from native per-attempt configuration.
  * Omit the SDK hook subsystem when no handlers were configured.
  */
-export function createHooksBridge(config?: CopilotHooksConfig): SdkSessionHooks | undefined {
+export function createHooksBridge(
+  config?: CopilotHooksConfig,
+  options?: CopilotHooksBridgeOptions,
+): SdkSessionHooks | undefined {
   if (!config) {
     return undefined;
   }
@@ -98,7 +105,22 @@ export function createHooksBridge(config?: CopilotHooksConfig): SdkSessionHooks 
     hooks.onPostToolUseFailure = postFailure as PostToolUseFailureHandler;
   }
   if (userPrompt) {
-    hooks.onUserPromptSubmitted = userPrompt as UserPromptSubmittedHandler;
+    hooks.onUserPromptSubmitted = async (input, invocation) => {
+      const output = await userPrompt(input, invocation);
+      try {
+        options?.onUserPromptSubmitted?.({
+          prompt: output?.modifiedPrompt ?? input.prompt,
+          ...(output?.additionalContext ? { additionalContext: output.additionalContext } : {}),
+        });
+      } catch (error) {
+        try {
+          onError({ hookName: "onUserPromptSubmitted", error });
+        } catch {
+          // Never let an observer or its error notifier throw into the SDK.
+        }
+      }
+      return output;
+    };
   }
   if (sessionStart) {
     hooks.onSessionStart = sessionStart as SessionStartHandler;
