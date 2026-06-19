@@ -265,6 +265,51 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
     }
   });
 
+  it("archives the env-free sibling trajectory when OPENCLAW_TRAJECTORY_DIR is enabled after the session was created (#90707)", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-trajectory-envchange-"));
+    const previousTrajectoryDir = process.env.OPENCLAW_TRAJECTORY_DIR;
+    try {
+      const sessionId = "77777777-7777-4777-8777-777777777777";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      // The trajectory + pointer were written beside the transcript while no
+      // override was configured.
+      const siblingRuntime = path.join(tmpDir, `${sessionId}.trajectory.jsonl`);
+      const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
+      writeSessionMeta(sessionFile, "main");
+      writeTrajectoryRuntime(siblingRuntime, sessionId);
+      writeTrajectoryPointer(pointerFile, sessionId, siblingRuntime);
+
+      // The override is only enabled now, so the current-env default runtime
+      // path points into an empty traces directory.
+      const trajectoryDir = path.join(tmpDir, "traces");
+      fs.mkdirSync(trajectoryDir, { recursive: true });
+      process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      // Transcript + env-free sibling runtime + pointer = 3 archived entries.
+      expect(archived).toHaveLength(3);
+      expect(fs.existsSync(siblingRuntime)).toBe(false);
+      expect(fs.existsSync(pointerFile)).toBe(false);
+      const remaining = fs.readdirSync(tmpDir);
+      expect(remaining.some((name) => name.includes(".trajectory.jsonl.reset."))).toBe(true);
+      expect(remaining.some((name) => name.includes(".trajectory-path.json.reset."))).toBe(true);
+    } finally {
+      if (previousTrajectoryDir === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY_DIR;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces real chmod archive failures through onArchiveError", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) {
       return;

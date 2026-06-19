@@ -384,21 +384,18 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
 // the runtimeFile field can name any writable path. This gate requires the
 // resolved basename to match the expected session-scoped trajectory name and the
 // first line to carry a matching session event before the file is trusted.
-function isValidPointerResolvedTrajectoryRuntime(
-  filePath: string,
-  sessionId: string,
-): boolean {
-  const expectedName = `${safeTrajectorySessionFileName(sessionId)}.jsonl`;
-  if (path.basename(path.resolve(filePath)) !== expectedName) {
-    return false;
-  }
+// Read and validate the leading runtime header of a trajectory file. Returns
+// the parsed header record when the file's first line is a well-formed OpenClaw
+// runtime trajectory event, otherwise null. This content gate is what proves a
+// file was actually written by OpenClaw, independent of its name or location.
+function readTrajectoryRuntimeHeader(filePath: string): Record<string, unknown> | null {
   try {
     const fd = fs.openSync(filePath, "r");
     const buffer = Buffer.alloc(64 * 1024);
     const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
     fs.closeSync(fd);
     if (bytesRead <= 0) {
-      return false;
+      return null;
     }
     const firstLine = buffer
       .subarray(0, bytesRead)
@@ -406,19 +403,40 @@ function isValidPointerResolvedTrajectoryRuntime(
       .split(/\r?\n/u)
       .find((line) => line.trim());
     if (!firstLine) {
-      return false;
+      return null;
     }
     const parsed: unknown = JSON.parse(firstLine.trim());
-    return (
-      isRecord(parsed) &&
-      parsed.traceSchema === "openclaw-trajectory" &&
-      parsed.schemaVersion === 1 &&
-      parsed.source === "runtime" &&
-      parsed.sessionId === sessionId
-    );
+    if (
+      !isRecord(parsed) ||
+      parsed.traceSchema !== "openclaw-trajectory" ||
+      parsed.schemaVersion !== 1 ||
+      parsed.source !== "runtime"
+    ) {
+      return null;
+    }
+    return parsed;
   } catch {
+    return null;
+  }
+}
+
+function isValidPointerResolvedTrajectoryRuntime(
+  filePath: string,
+  sessionId: string,
+): boolean {
+  // Accept both naming contracts a pointer can legitimately resolve to: the
+  // OPENCLAW_TRAJECTORY_DIR override file (`<safeSessionId>.jsonl`) and the
+  // env-free sibling beside the transcript (`<...>.trajectory.jsonl`). A session
+  // created before the override was enabled keeps a sibling-named pointer, so
+  // gating on the override name alone would drop its trajectory on reset
+  // (#90707 review). The header check below still binds the file to this
+  // session, so widening the name gate does not weaken ownership.
+  const base = path.basename(path.resolve(filePath));
+  const overrideName = `${safeTrajectorySessionFileName(sessionId)}.jsonl`;
+  if (base !== overrideName && !base.endsWith(".trajectory.jsonl")) {
     return false;
   }
+  return readTrajectoryRuntimeHeader(filePath)?.sessionId === sessionId;
 }
 
 // Rename the trajectory runtime file and its pointer sidecar next to a reset
@@ -469,7 +487,18 @@ function archiveResetTrajectorySiblings(
     sessionFile: transcriptPath,
     sessionId,
   });
-  const runtimeTargets = new Set<string>([defaultRuntimePath]);
+  // The env-free sibling (`<transcript>.trajectory.jsonl`) is an owned location
+  // regardless of the current OPENCLAW_TRAJECTORY_DIR setting. Sessions written
+  // before the override was enabled keep their trajectory here, so resolving
+  // with the current env alone would miss it and reset would still drop the
+  // forensic trail (#90707 review). Both are session-owned canonical paths;
+  // renameArchive's existsSync guard skips whichever is absent.
+  const siblingRuntimePath = resolveTrajectoryFilePath({
+    env: {},
+    sessionFile: transcriptPath,
+    sessionId,
+  });
+  const runtimeTargets = new Set<string>([defaultRuntimePath, siblingRuntimePath]);
   const pointerRuntime = readArchiveTrajectoryPointerRuntimeFile(pointerPath, sessionId);
   if (
     pointerRuntime &&
@@ -635,16 +664,29 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   // session store directory tree. Include it so
   // `.trajectory.jsonl.reset.<ts>` archives are pruned by the existing reset
   // retention rule (#90707).
+  const storeDirs = opts.directories.map((dir) => path.resolve(dir));
+  const dirs = [...storeDirs];
+  // The override directory is operator-supplied and may be shared with
+  // unrelated files. Include it so reset-archived trajectory runtimes are
+  // pruned, but unless it is also a configured session-store directory, only
+  // remove entries proven to be OpenClaw trajectory archives — generic
+  // `.reset.<ts>` / `.deleted.<ts>` files we did not create must never be
+  // removed (#90707 review).
+  const overrideOnlyDirs = new Set<string>();
   const trajectoryDirOverride = process.env.OPENCLAW_TRAJECTORY_DIR?.trim();
-  const dirs = opts.directories.map((dir) => path.resolve(dir));
   if (trajectoryDirOverride) {
-    dirs.push(path.resolve(resolveHomeRelativePath(trajectoryDirOverride)));
+    const overrideDir = path.resolve(resolveHomeRelativePath(trajectoryDirOverride));
+    dirs.push(overrideDir);
+    if (!storeDirs.includes(overrideDir)) {
+      overrideOnlyDirs.add(overrideDir);
+    }
   }
   const directories = uniqueStrings(dirs);
   let removed = 0;
   let scanned = 0;
 
   for (const dir of directories) {
+    const requireTrajectoryOwnership = overrideOnlyDirs.has(dir);
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
       for (const rule of rules) {
@@ -656,7 +698,10 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (now - timestamp > rule.olderThanMs) {
           const fullPath = path.join(dir, entry);
           const stat = await fs.promises.stat(fullPath).catch(() => null);
-          if (stat?.isFile()) {
+          if (
+            stat?.isFile() &&
+            (!requireTrajectoryOwnership || readTrajectoryRuntimeHeader(fullPath) !== null)
+          ) {
             await fs.promises.rm(fullPath).catch(() => undefined);
             removed += 1;
           }
