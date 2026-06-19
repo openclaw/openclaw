@@ -224,6 +224,12 @@ function collectConfigSecrets(params: {
     if (!hasPlaintext) {
       continue;
     }
+    // Only apply the non-secret apiKey marker exemption to the model-provider
+    // apiKey target. Other apiKey surfaces (TTS, skills, memory, web tools, etc.)
+    // must still warn when they carry a known marker value.
+    if (target.entry.id === "models.providers.*.apiKey" && isNonSecretApiKeyMarker(target.value)) {
+      continue;
+    }
     addFinding(params.collector, {
       code: "PLAINTEXT_FOUND",
       severity: "warn",

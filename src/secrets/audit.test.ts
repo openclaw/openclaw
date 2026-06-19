@@ -771,4 +771,36 @@ describe("secrets audit", () => {
       ),
     ).toBe(true);
   });
+
+  it("flags known apiKey marker on non-model-provider apiKey surfaces (Sweeper P1 regression)", async () => {
+    // messages.tts.providers.*.apiKey is NOT models.providers.*.apiKey,
+    // so OPENAI_API_KEY here must still produce PLAINTEXT_FOUND.
+    await writeJsonFile(fixture.configPath, {
+      messages: {
+        tts: {
+          providers: {
+            openai: {
+              apiKey: OPENAI_API_KEY_MARKER, // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "messages.tts.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
 });
