@@ -987,6 +987,15 @@ function responseHeader(response, name) {
   return response.headers?.get?.(name) ?? null;
 }
 
+function createPackageDownloadTimeoutError(parsed, timeoutMs) {
+  return Object.assign(
+    new Error(`package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`),
+    {
+      code: "ETIMEDOUT",
+    },
+  );
+}
+
 async function closeResponseBody(body) {
   if (!body) {
     return;
@@ -1002,8 +1011,16 @@ async function closeResponseBody(body) {
 
 async function openFetchPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const response = await options
     .fetchImpl(parsed, {
       headers: options.headers,
@@ -1013,12 +1030,7 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     .catch((error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     });
@@ -1026,14 +1038,23 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
 
 async function openHttpsPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const lookup = createPinnedLookup(parsed.hostname, options.addresses);
   const response = await new Promise((resolve, reject) => {
     const request = httpsRequest(
@@ -1065,12 +1086,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     /** @param {unknown} error */ (error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     },
@@ -1079,6 +1095,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
@@ -1124,7 +1141,46 @@ async function openPackageDownloadResponse(url, options) {
   throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
 }
 
-async function* limitResponseBody(body, maxBytes) {
+async function* limitWebResponseBody(body, maxBytes, timeoutPromise) {
+  let downloaded = 0;
+  const reader = body.getReader();
+  let timedOut = false;
+  let timeoutFailure;
+  const timeoutRead = timeoutPromise?.catch((error) => {
+    timedOut = true;
+    timeoutFailure = error;
+    void reader.cancel().catch(() => {});
+    throw error;
+  });
+  try {
+    for (;;) {
+      const next = reader.read();
+      const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
+      if (timedOut) {
+        throw toLintErrorObject(timeoutFailure, "package_url download timed out");
+      }
+      if (done) {
+        return;
+      }
+      const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
+      downloaded += size;
+      if (downloaded > maxBytes) {
+        throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
+      }
+      yield value;
+    }
+  } finally {
+    if (!timedOut) {
+      reader.releaseLock();
+    }
+  }
+}
+
+async function* limitResponseBody(body, maxBytes, timeoutPromise) {
+  if (typeof body.getReader === "function") {
+    yield* limitWebResponseBody(body, maxBytes, timeoutPromise);
+    return;
+  }
   let downloaded = 0;
   for await (const chunk of body) {
     const size = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
@@ -1138,7 +1194,10 @@ async function* limitResponseBody(body, maxBytes) {
 
 export async function downloadUrl(url, target, options = {}) {
   const maxBytes = options.maxBytes ?? PACKAGE_URL_MAX_BYTES;
-  const { close, response, timeout, timeoutMs } = await openPackageDownloadResponse(url, options);
+  const { close, response, timeout, timeoutMs, timeoutPromise } = await openPackageDownloadResponse(
+    url,
+    options,
+  );
   const tempTarget = `${target}.tmp`;
   try {
     if (!responseOk(response) || !response.body) {
@@ -1151,9 +1210,15 @@ export async function downloadUrl(url, target, options = {}) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });
-    await pipeline(limitResponseBody(response.body, maxBytes), createWriteStream(tempTarget));
+    await pipeline(
+      limitResponseBody(response.body, maxBytes, timeoutPromise),
+      createWriteStream(tempTarget),
+    );
     await fs.rename(tempTarget, target);
   } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      throw error;
+    }
     if (error?.name === "AbortError") {
       throw new Error(`package_url download timed out after ${timeoutMs}ms: ${url}`, {
         cause: error,

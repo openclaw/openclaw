@@ -918,10 +918,12 @@ export async function fetchJson(url, options = {}) {
         timeoutPromise,
         ...(abortPromise ? [abortPromise] : []),
       ]);
+      const bodyAbortPromise = abortPromise
+        ? Promise.race([timeoutPromise, abortPromise])
+        : timeoutPromise;
       const text = await Promise.race([
-        readBoundedResponseText(response, maxBodyBytes, timeoutPromise),
-        timeoutPromise,
-        ...(abortPromise ? [abortPromise] : []),
+        readBoundedResponseText(response, maxBodyBytes, bodyAbortPromise),
+        bodyAbortPromise,
       ]);
       let body = null;
       try {

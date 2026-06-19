@@ -758,6 +758,17 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({ id: "job-due", mode: "due" });
   });
 
+  it("supports force run mode", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-force", {
+      action: "run",
+      jobId: "job-force",
+      runMode: "force",
+    });
+
+    expect(readGatewayCall().params).toEqual({ id: "job-force", mode: "force" });
+  });
+
   it("normalizes cron.add job payloads", async () => {
     const tool = createTestCronTool();
     await tool.execute("call2", {
