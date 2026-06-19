@@ -948,6 +948,44 @@ describe("createChatSession", () => {
     expect(state.sessionKey).toBe("agent:main:dashboard:new-chat");
   });
 
+  it("does not use a synthetic current session row as a parent", async () => {
+    const state = createChatSessionState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "agent:ops:main", updatedAt: null })],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state, { source: "user", displayName: "Browser Proof Alpha" });
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "ops",
+        parentSessionKey: undefined,
+        displayName: "Browser Proof Alpha",
+        emitCommandHooks: undefined,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+        agentId: "ops",
+      },
+    );
+    expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+  });
+
   it("preserves draft and attachment edits made while session creation is in flight", async () => {
     const state = createChatSessionState();
     const updatedAttachments = [
