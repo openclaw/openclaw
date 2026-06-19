@@ -1215,7 +1215,16 @@ async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
+  // When the agent recovered from early tool errors and produced final non-error
+  // output, delivery should still be attempted. Check if there's any successful
+  // payload after the last error to detect recovery.
+  const lastErrorIndex = finalRunResult.payloads?.findLastIndex((p) => p?.isError === true) ?? -1;
+  const hasSuccessfulOutputAfterLastError =
+    lastErrorIndex >= 0 &&
+    finalRunResult.payloads
+      ?.slice(lastErrorIndex + 1)
+      .some((p) => p?.isError !== true && p.text?.trim());
+  if (hasFatalStructuredErrorPayload && prepared.deliveryRequested && !hasSuccessfulOutputAfterLastError) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
     const { cleanupDirectCronSession } = await loadCronDeliveryRuntime();
