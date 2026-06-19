@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
+import { resolveAgentDir, saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
 import type {
   ChatCommandDefinition,
@@ -72,6 +73,9 @@ function createModelPickerContext(): ModelPickerContext {
           policy: "open",
         },
       },
+    },
+    agents: {
+      list: [{ id: "worker", agentDir: path.join(tempDir, "worker-agent") }],
     },
   } as unknown as OpenClawConfig;
 
@@ -1028,7 +1032,13 @@ describe("Discord model picker interactions", () => {
     return { context, storePath };
   }
 
-  async function seedCliAuthProfileOverride(storePath: string) {
+  async function seedCliAuthProfileOverride(
+    storePath: string,
+    overrides: {
+      providerOverride?: string;
+      authProfileOverride?: string;
+    } = {},
+  ) {
     // An auth profile override established by a non-picker source (e.g. a CLI flag).
     await upsertSessionEntry({
       storePath,
@@ -1036,10 +1046,27 @@ describe("Discord model picker interactions", () => {
       entry: {
         updatedAt: Date.now(),
         sessionId: "bound-session",
-        authProfileOverride: "cli-profile",
+        authProfileOverride: overrides.authProfileOverride ?? "lmstudio:cli-profile",
         authProfileOverrideSource: "user",
+        ...(overrides.providerOverride ? { providerOverride: overrides.providerOverride } : {}),
       },
     });
+  }
+
+  function seedStoredAuthProfileProvider(
+    context: ModelPickerContext,
+    profileId: string,
+    provider: string,
+  ) {
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: { type: "api_key", provider, key: "sk-test" },
+        },
+      },
+      resolveAgentDir(context.cfg, "worker"),
+    );
   }
 
   async function runBoundPickerSubmit(
@@ -1065,7 +1092,7 @@ describe("Discord model picker interactions", () => {
     const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
     expect(entry?.providerOverride).toBe("lmstudio");
     // The picker selected a model only; the unrelated auth profile override survives.
-    expect(entry?.authProfileOverride).toBe("cli-profile");
+    expect(entry?.authProfileOverride).toBe("lmstudio:cli-profile");
     expect(entry?.authProfileOverrideSource).toBe("user");
   });
 
@@ -1095,7 +1122,82 @@ describe("Discord model picker interactions", () => {
 
     const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
     expect(entry?.providerOverride).toBe("lmstudio");
-    expect(entry?.authProfileOverride).toBe("cli-profile");
+    expect(entry?.authProfileOverride).toBe("lmstudio:cli-profile");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+  });
+
+  it("does not restore an auth profile override for a different provider", async () => {
+    const { context, storePath } = seedBoundPickerContext();
+    await seedCliAuthProfileOverride(storePath, {
+      providerOverride: "anthropic",
+      authProfileOverride: "anthropic:default",
+    });
+
+    const dispatchSpy = vi.fn<DispatchDiscordCommandInteraction>().mockImplementation(async () => {
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: "agent:worker:subagent:bound",
+        entry: {
+          updatedAt: Date.now(),
+          sessionId: "bound-session",
+          providerOverride: "lmstudio",
+          modelOverride: "unsloth/gemma-4-26b-a4b-it@iq4_xs",
+        },
+      });
+      return { accepted: true };
+    });
+
+    await runBoundPickerSubmit(context, dispatchSpy);
+
+    const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    expect(entry?.authProfileOverride).toBeUndefined();
+    expect(entry?.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("clears an unprefixed auth profile override when picking a different provider", async () => {
+    const { context, storePath } = seedBoundPickerContext();
+    await seedCliAuthProfileOverride(storePath, {
+      providerOverride: "anthropic",
+      authProfileOverride: "work",
+    });
+
+    await runBoundPickerSubmit(context, createDispatchSpy());
+
+    const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    expect(entry?.authProfileOverride).toBeUndefined();
+    expect(entry?.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("preserves an unprefixed auth profile override when the current provider matches", async () => {
+    const { context, storePath } = seedBoundPickerContext();
+    await seedCliAuthProfileOverride(storePath, {
+      providerOverride: "lmstudio",
+      authProfileOverride: "work",
+    });
+
+    await runBoundPickerSubmit(context, createDispatchSpy());
+
+    const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    expect(entry?.authProfileOverride).toBe("work");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+  });
+
+  it("preserves a store-only colon auth profile id when the stored provider matches", async () => {
+    const { context, storePath } = seedBoundPickerContext();
+    seedStoredAuthProfileProvider(context, "team:prod", "lmstudio");
+    await seedCliAuthProfileOverride(storePath, {
+      providerOverride: "anthropic",
+      authProfileOverride: "team:prod",
+    });
+
+    await runBoundPickerSubmit(context, createDispatchSpy());
+
+    const entry = loadSessionStore(storePath, { skipCache: true })["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    expect(entry?.authProfileOverride).toBe("team:prod");
     expect(entry?.authProfileOverrideSource).toBe("user");
   });
 });

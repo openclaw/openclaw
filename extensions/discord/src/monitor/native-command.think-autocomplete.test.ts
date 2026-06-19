@@ -99,27 +99,33 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
   );
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  normalizeProviderId: (value: string) => value.trim().toLowerCase(),
-  resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
-    const configuredModel = params.cfg.agents?.defaults?.model;
-    const primary =
-      typeof configuredModel === "string"
-        ? configuredModel.trim()
-        : (configuredModel?.primary?.trim() ?? "");
-    const slashIndex = primary.indexOf("/");
-    if (slashIndex > 0 && slashIndex < primary.length - 1) {
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
+  return {
+    ...actual,
+    normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+    resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
+      const configuredModel = params.cfg.agents?.defaults?.model;
+      const primary =
+        typeof configuredModel === "string"
+          ? configuredModel.trim()
+          : (configuredModel?.primary?.trim() ?? "");
+      const slashIndex = primary.indexOf("/");
+      if (slashIndex > 0 && slashIndex < primary.length - 1) {
+        return {
+          provider: primary.slice(0, slashIndex).trim().toLowerCase(),
+          model: primary.slice(slashIndex + 1).trim(),
+        };
+      }
       return {
-        provider: primary.slice(0, slashIndex).trim().toLowerCase(),
-        model: primary.slice(slashIndex + 1).trim(),
+        provider: "anthropic",
+        model: "claude-sonnet-4.5",
       };
-    }
-    return {
-      provider: "anthropic",
-      model: "claude-sonnet-4.5",
-    };
-  },
-}));
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
   buildModelsProviderData: buildModelsProviderDataMock,

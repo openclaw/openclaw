@@ -1,9 +1,11 @@
 // Session model override tests cover model override parsing and validation.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   applyModelOverrideToSessionEntry,
   repairProviderWrappedModelOverride,
+  shouldPreserveCompatibleAuthProfileOverride,
 } from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
@@ -255,6 +257,168 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(true);
     expect(entry.authProfileOverride).toBe("newprofile");
     expect(entry.liveModelSwitchPending).toBe(true);
+  });
+});
+
+describe("shouldPreserveCompatibleAuthProfileOverride", () => {
+  it("preserves provider-prefixed overrides for the selected provider", () => {
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry: {
+          sessionId: "sess-profile-provider-match",
+          updatedAt: 1,
+          authProfileOverride: "openai:work",
+        },
+        currentProvider: "anthropic",
+        provider: "openai",
+      }),
+    ).toBe(true);
+  });
+
+  it("clears provider-prefixed overrides for a different selected provider", () => {
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry: {
+          sessionId: "sess-profile-provider-change",
+          updatedAt: 1,
+          authProfileOverride: "anthropic:default",
+        },
+        currentProvider: "anthropic",
+        provider: "openai",
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves unprefixed overrides only when the current provider matches", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-profile-unprefixed",
+      updatedAt: 1,
+      authProfileOverride: "work",
+    };
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry,
+        currentProvider: "openai",
+        provider: "openai",
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry,
+        currentProvider: "anthropic",
+        provider: "openai",
+      }),
+    ).toBe(false);
+  });
+
+  it("uses configured profile metadata for colon-bearing profile ids", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          "work:prod": { provider: "openai", mode: "api_key" },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg,
+        entry: {
+          sessionId: "sess-profile-configured-colon-id",
+          updatedAt: 1,
+          authProfileOverride: "work:prod",
+        },
+        currentProvider: "anthropic",
+        provider: "openai",
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg,
+        entry: {
+          sessionId: "sess-profile-configured-colon-id",
+          updatedAt: 1,
+          authProfileOverride: "work:prod",
+        },
+        currentProvider: "openai",
+        provider: "anthropic",
+      }),
+    ).toBe(false);
+  });
+
+  it("uses stored profile metadata for colon-bearing profile ids", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-profile-store-colon-id",
+      updatedAt: 1,
+      authProfileOverride: "team:prod",
+    };
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry,
+        currentProvider: "anthropic",
+        provider: "openai",
+        storedAuthProfileProvider: "openai",
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry,
+        currentProvider: "openai",
+        provider: "openai",
+        storedAuthProfileProvider: "anthropic",
+      }),
+    ).toBe(false);
+  });
+
+  it("clears unknown colon-bearing profile ids unless their prefix matches the selected provider", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-profile-unknown-colon-id",
+      updatedAt: 1,
+      authProfileOverride: "work:prod",
+    };
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry,
+        currentProvider: "openai",
+        provider: "openai",
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg: {},
+        entry,
+        currentProvider: "anthropic",
+        provider: "openai",
+      }),
+    ).toBe(false);
+  });
+
+  it("still treats known provider prefixes as provider-owned", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      shouldPreserveCompatibleAuthProfileOverride({
+        cfg,
+        entry: {
+          sessionId: "sess-profile-stale-provider-prefix",
+          updatedAt: 1,
+          authProfileOverride: "openai:work",
+        },
+        currentProvider: "anthropic",
+        provider: "anthropic",
+      }),
+    ).toBe(false);
   });
 });
 

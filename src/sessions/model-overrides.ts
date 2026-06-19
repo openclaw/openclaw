@@ -1,6 +1,11 @@
 // Session model override helpers normalize per-session provider model choices.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 export type ModelOverrideSelection = {
@@ -8,6 +13,59 @@ export type ModelOverrideSelection = {
   model: string;
   isDefault?: boolean;
 };
+
+export function shouldPreserveCompatibleAuthProfileOverride(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  currentProvider: string;
+  provider: string;
+  storedAuthProfileProvider?: string;
+}): boolean {
+  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileOverride) {
+    return false;
+  }
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (!provider) {
+    return false;
+  }
+  const resolvesProviderMatch = (
+    rawProvider: string | undefined,
+    targetProvider: string,
+  ): boolean => {
+    const candidate = normalizeOptionalLowercaseString(rawProvider);
+    if (!candidate) {
+      return false;
+    }
+    return (
+      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
+      resolveProviderIdForAuth(targetProvider, { config: params.cfg })
+    );
+  };
+  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean =>
+    resolvesProviderMatch(rawProvider, provider);
+  const storedProfileProvider = normalizeOptionalString(params.storedAuthProfileProvider);
+  if (storedProfileProvider) {
+    return resolvesToTargetProvider(storedProfileProvider);
+  }
+  const configuredProfileProvider = normalizeOptionalString(
+    params.cfg.auth?.profiles?.[profileOverride]?.provider,
+  );
+  if (configuredProfileProvider) {
+    return resolvesToTargetProvider(configuredProfileProvider);
+  }
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return resolvesToTargetProvider(params.currentProvider);
+  }
+  const profileProvider = normalizeOptionalLowercaseString(
+    profileOverride.slice(0, delimiterIndex),
+  );
+  if (!profileProvider) {
+    return false;
+  }
+  return resolvesToTargetProvider(profileProvider);
+}
 
 function clearFallbackOrigin(entry: SessionEntry): boolean {
   let updated = false;

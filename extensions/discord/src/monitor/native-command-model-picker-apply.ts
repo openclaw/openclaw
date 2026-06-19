@@ -1,8 +1,12 @@
 // Discord plugin module implements native command model picker apply behavior.
 import { randomUUID } from "node:crypto";
+import { loadAuthProfileStoreForRuntime, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+import {
+  applyModelOverrideToSessionEntry,
+  shouldPreserveCompatibleAuthProfileOverride,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -34,12 +38,33 @@ type DiscordModelPickerApplyResult =
   | { status: "timeout"; noticeMessage: string }
   | { status: "failed"; noticeMessage: string };
 
+function resolveStoredAuthProfileProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: { authProfileOverride?: string };
+}): string | undefined {
+  const profileId = params.entry.authProfileOverride?.trim();
+  if (!profileId) {
+    return undefined;
+  }
+  try {
+    const agentDir = resolveAgentDir(params.cfg, params.agentId);
+    return loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    }).profiles[profileId]?.provider;
+  } catch {
+    return undefined;
+  }
+}
+
 async function persistDiscordModelPickerOverride(params: {
   cfg: OpenClawConfig;
   route: ResolvedAgentRoute;
   provider: string;
   model: string;
   isDefault: boolean;
+  defaultProvider: string;
   runtime?: string;
 }): Promise<boolean> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
@@ -64,6 +89,18 @@ async function persistDiscordModelPickerOverride(params: {
             isDefault: params.isDefault,
           },
           markLiveSwitchPending: true,
+          preserveAuthProfileOverride: shouldPreserveCompatibleAuthProfileOverride({
+            cfg: params.cfg,
+            entry,
+            currentProvider:
+              entry.providerOverride ?? entry.modelProvider ?? params.defaultProvider,
+            provider: params.provider,
+            storedAuthProfileProvider: resolveStoredAuthProfileProvider({
+              cfg: params.cfg,
+              agentId: params.route.agentId,
+              entry,
+            }),
+          }),
         }).updated || persisted;
       const runtime = params.runtime?.trim();
       if (runtime && runtime !== "auto" && runtime !== "default") {
@@ -87,10 +124,30 @@ async function persistDiscordModelPickerOverride(params: {
 // hidden /model dispatch routes through the shared directive path, which clears
 // authProfileOverride for a profile-less selection. Capture the override owned
 // by another source (CLI flag, session-level) so the picker can re-apply it.
-function captureAuthProfileOverride(cfg: OpenClawConfig, route: ResolvedAgentRoute) {
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-  const entry = loadSessionStore(storePath, { skipCache: true })[route.sessionKey];
-  if (!entry?.authProfileOverride) {
+function captureAuthProfileOverride(params: {
+  cfg: OpenClawConfig;
+  route: ResolvedAgentRoute;
+  selectedProvider: string;
+  defaultProvider: string;
+}) {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const entry = loadSessionStore(storePath, { skipCache: true })[params.route.sessionKey];
+  if (
+    !entry?.authProfileOverride ||
+    !shouldPreserveCompatibleAuthProfileOverride({
+      cfg: params.cfg,
+      entry,
+      currentProvider: entry.providerOverride ?? entry.modelProvider ?? params.defaultProvider,
+      provider: params.selectedProvider,
+      storedAuthProfileProvider: resolveStoredAuthProfileProvider({
+        cfg: params.cfg,
+        agentId: params.route.agentId,
+        entry,
+      }),
+    })
+  ) {
     return undefined;
   }
   return {
@@ -139,7 +196,12 @@ export async function applyDiscordModelPickerSelection(params: {
   settleMs: number;
   resolveCurrentModel: (route: ResolvedAgentRoute) => string;
 }): Promise<DiscordModelPickerApplyResult> {
-  const preservedAuthProfile = captureAuthProfileOverride(params.cfg, params.route);
+  const preservedAuthProfile = captureAuthProfileOverride({
+    cfg: params.cfg,
+    route: params.route,
+    selectedProvider: params.selectedProvider,
+    defaultProvider: params.defaultProvider,
+  });
   try {
     const dispatchResult = await withTimeout(
       params.dispatchCommandInteraction({
@@ -182,6 +244,7 @@ export async function applyDiscordModelPickerSelection(params: {
         isDefault:
           params.selectedProvider === params.defaultProvider &&
           params.selectedModel === params.defaultModel,
+        defaultProvider: params.defaultProvider,
         runtime: params.selectedRuntime,
       });
       await new Promise((resolve) => {
@@ -204,6 +267,7 @@ export async function applyDiscordModelPickerSelection(params: {
           isDefault:
             params.selectedProvider === params.defaultProvider &&
             params.selectedModel === params.defaultModel,
+          defaultProvider: params.defaultProvider,
           runtime: params.selectedRuntime,
         });
         await new Promise((resolve) => {
