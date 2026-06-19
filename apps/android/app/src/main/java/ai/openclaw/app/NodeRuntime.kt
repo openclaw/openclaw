@@ -373,6 +373,14 @@ class NodeRuntime(
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
   private val _cronErrorText = MutableStateFlow<String?>(null)
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _cronJobDetail = MutableStateFlow<GatewayCronJobDetail?>(null)
+  val cronJobDetail: StateFlow<GatewayCronJobDetail?> = _cronJobDetail.asStateFlow()
+  private val _cronJobDetailLoading = MutableStateFlow(false)
+  val cronJobDetailLoading: StateFlow<Boolean> = _cronJobDetailLoading.asStateFlow()
+  private val _cronJobDetailErrorText = MutableStateFlow<String?>(null)
+  val cronJobDetailErrorText: StateFlow<String?> = _cronJobDetailErrorText.asStateFlow()
+  private var cronJobDetailRequestId: String? = null
+  private val cronJobDetailRequestSeq = AtomicLong(0)
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -469,6 +477,11 @@ class NodeRuntime(
         _modelAuthProviders.value = emptyList()
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
+        _cronJobDetail.value = null
+        cronJobDetailRequestId = null
+        cronJobDetailRequestSeq.incrementAndGet()
+        _cronJobDetailLoading.value = false
+        _cronJobDetailErrorText.value = null
         _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
         _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
         _nodesDevicesSummary.value =
@@ -799,6 +812,21 @@ class NodeRuntime(
   fun refreshCronJobs() {
     scope.launch {
       refreshCronFromGateway()
+    }
+  }
+
+  fun loadCronJobDetail(id: String) {
+    val trimmedId = id.trim()
+    if (trimmedId.isEmpty()) return
+    val requestSeq = cronJobDetailRequestSeq.incrementAndGet()
+    cronJobDetailRequestId = trimmedId
+    _cronJobDetailLoading.value = true
+    _cronJobDetailErrorText.value = null
+    if (_cronJobDetail.value?.id == trimmedId) {
+      _cronJobDetail.value = null
+    }
+    scope.launch {
+      loadCronJobDetailFromGateway(trimmedId, requestSeq)
     }
   }
 
@@ -1959,7 +1987,7 @@ class NodeRuntime(
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      val listRes = operatorSession.request("cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
+      val listRes = operatorSession.request("cron.list", """{"includeDisabled":true,"limit":100,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
       val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
       _cronJobs.value = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
     } catch (_: Throwable) {
@@ -1968,6 +1996,39 @@ class NodeRuntime(
       _cronRefreshing.value = false
     }
   }
+
+  private suspend fun loadCronJobDetailFromGateway(
+    trimmedId: String,
+    requestSeq: Long,
+  ) {
+    if (!operatorConnected) {
+      if (isCurrentCronJobDetailRequest(trimmedId, requestSeq)) {
+        _cronJobDetail.value = null
+        _cronJobDetailLoading.value = false
+      }
+      return
+    }
+    try {
+      val res = operatorSession.request("cron.get", buildJsonObject { put("id", JsonPrimitive(trimmedId)) }.toString())
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      if (isCurrentCronJobDetailRequest(trimmedId, requestSeq)) {
+        _cronJobDetail.value = parseCronJobDetail(root)
+      }
+    } catch (_: Throwable) {
+      if (isCurrentCronJobDetailRequest(trimmedId, requestSeq)) {
+        _cronJobDetailErrorText.value = "Could not load cron job."
+      }
+    } finally {
+      if (isCurrentCronJobDetailRequest(trimmedId, requestSeq)) {
+        _cronJobDetailLoading.value = false
+      }
+    }
+  }
+
+  private fun isCurrentCronJobDetailRequest(
+    id: String,
+    seq: Long,
+  ): Boolean = cronJobDetailRequestId == id && cronJobDetailRequestSeq.get() == seq
 
   private suspend fun refreshUsageFromGateway() {
     _usageRefreshing.value = true
@@ -2284,6 +2345,90 @@ class NodeRuntime(
         )
       }.orEmpty()
 
+  private fun parseCronJobDetail(obj: JsonObject?): GatewayCronJobDetail? {
+    val id =
+      obj
+        ?.get("id")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+    val name =
+      obj
+        ?.get("name")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+    if (id.isEmpty() || name.isEmpty()) return null
+    val job = obj ?: return null
+    val schedule = job["schedule"].asObjectOrNull()
+    val payload = job["payload"].asObjectOrNull()
+    val delivery = job["delivery"].asObjectOrNull()
+    val failureAlert = job["failureAlert"]
+    val state = job["state"].asObjectOrNull()
+    return GatewayCronJobDetail(
+      id = id,
+      name = name,
+      description = job["description"].asStringOrNull()?.trim().orEmpty(),
+      enabled = job.boolean("enabled"),
+      deleteAfterRun = job.optionalBoolean("deleteAfterRun") ?: false,
+      scheduleKind =
+        schedule
+          ?.get("kind")
+          .asStringOrNull()
+          ?.trim()
+          .orEmpty(),
+      scheduleLabel = cronScheduleLabel(schedule),
+      scheduleDetail = cronScheduleDetail(schedule),
+      sessionTarget =
+        job["sessionTarget"]
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() } ?: "unknown",
+      wakeMode =
+        job["wakeMode"]
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() } ?: "unknown",
+      payloadKind =
+        payload
+          ?.get("kind")
+          .asStringOrNull()
+          ?.trim()
+          .orEmpty(),
+      payloadText = cronPayloadText(payload),
+      payloadLabel = cronPayloadLabel(payload),
+      deliveryLabel = cronDeliveryLabel(delivery),
+      failureAlertLabel = cronFailureAlertLabel(failureAlert),
+      createdAtMs = job.long("createdAtMs"),
+      updatedAtMs = job.long("updatedAtMs"),
+      nextRunAtMs = state.long("nextRunAtMs"),
+      runningAtMs = state.long("runningAtMs"),
+      lastRunAtMs = state.long("lastRunAtMs"),
+      lastRunStatus = cronJobLastRunStatus(state),
+      lastError =
+        state
+          ?.get("lastError")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() },
+      lastDurationMs = state.long("lastDurationMs"),
+      consecutiveErrors = state.long("consecutiveErrors")?.toInt(),
+      consecutiveSkipped = state.long("consecutiveSkipped")?.toInt(),
+      lastDeliveryStatus =
+        state
+          ?.get("lastDeliveryStatus")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() },
+      lastDeliveryError =
+        state
+          ?.get("lastDeliveryError")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() },
+    )
+  }
+
   private fun parseUsageProviders(providers: JsonArray?): List<GatewayUsageProviderSummary> =
     providers
       ?.mapNotNull { item ->
@@ -2557,6 +2702,66 @@ class NodeRuntime(
     return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
   }
 
+  private fun cronScheduleDetail(schedule: JsonObject?): String {
+    val value = schedule ?: return "Scheduled"
+    return when (value["kind"].asStringOrNull()) {
+      "at" -> value["at"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "One time"
+      "every" -> {
+        val every = value.long("everyMs")?.let(::formatEverySchedule) ?: "Repeating"
+        val anchor = value.long("anchorMs")?.let { "Anchor $it" }
+        listOfNotNull(every, anchor).joinToString(" · ")
+      }
+      "cron" -> {
+        val expr = value["expr"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "Cron"
+        val timezone = value["tz"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        val stagger = value.long("staggerMs")?.takeIf { it > 0L }?.let { "Stagger ${formatEverySchedule(it)}" }
+        listOfNotNull(expr, timezone, stagger).joinToString(" · ")
+      }
+      else -> "Scheduled"
+    }
+  }
+
+  private fun cronPayloadText(payload: JsonObject?): String? {
+    val value = payload ?: return null
+    return when (value["kind"].asStringOrNull()) {
+      "systemEvent" -> value["text"].asStringOrNull()
+      "agentTurn" -> value["message"].asStringOrNull()
+      "command" -> (value["argv"] as? JsonArray)?.mapNotNull { it.asStringOrNull() }?.joinToString(" ")
+      else -> null
+    }?.trim()?.takeIf { it.isNotEmpty() }
+  }
+
+  private fun cronPayloadLabel(payload: JsonObject?): String {
+    val value = payload ?: return "Payload"
+    return when (value["kind"].asStringOrNull()) {
+      "systemEvent" -> "System event"
+      "agentTurn" -> {
+        val model = value["model"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        val thinking = value["thinking"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        listOfNotNull("Agent turn", model, thinking?.let { "Thinking $it" }).joinToString(" · ")
+      }
+      "command" -> "Command"
+      else -> "Payload"
+    }
+  }
+
+  private fun cronDeliveryLabel(delivery: JsonObject?): String {
+    val value = delivery ?: return "Default"
+    val mode = value["mode"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return "Default"
+    val channel = value["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+    val to = value["to"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+    return listOfNotNull(mode.replaceFirstChar { it.uppercaseChar() }, channel, to).joinToString(" · ")
+  }
+
+  private fun cronFailureAlertLabel(failureAlert: JsonElement?): String {
+    if (failureAlert == null) return "Default"
+    if ((failureAlert as? JsonPrimitive)?.content == "false") return "Off"
+    val alert = failureAlert.asObjectOrNull() ?: return "Default"
+    val after = alert.long("after")?.let { "After $it" }
+    val cooldown = alert.long("cooldownMs")?.takeIf { it > 0L }?.let { "Cooldown ${formatEverySchedule(it)}" }
+    return listOfNotNull(after, cooldown).joinToString(" · ").ifBlank { "On" }
+  }
+
   private fun formatEverySchedule(everyMs: Long): String {
     val minutes = everyMs / 60_000L
     val hours = minutes / 60L
@@ -2820,6 +3025,36 @@ data class GatewayCronJobSummary(
   val promptPreview: String,
   val nextRunAtMs: Long?,
   val lastRunStatus: String?,
+)
+
+data class GatewayCronJobDetail(
+  val id: String,
+  val name: String,
+  val description: String,
+  val enabled: Boolean,
+  val deleteAfterRun: Boolean,
+  val scheduleKind: String,
+  val scheduleLabel: String,
+  val scheduleDetail: String,
+  val sessionTarget: String,
+  val wakeMode: String,
+  val payloadKind: String,
+  val payloadText: String?,
+  val payloadLabel: String,
+  val deliveryLabel: String,
+  val failureAlertLabel: String,
+  val createdAtMs: Long?,
+  val updatedAtMs: Long?,
+  val nextRunAtMs: Long?,
+  val runningAtMs: Long?,
+  val lastRunAtMs: Long?,
+  val lastRunStatus: String?,
+  val lastError: String?,
+  val lastDurationMs: Long?,
+  val consecutiveErrors: Int?,
+  val consecutiveSkipped: Int?,
+  val lastDeliveryStatus: String?,
+  val lastDeliveryError: String?,
 )
 
 data class GatewayUsageSummary(

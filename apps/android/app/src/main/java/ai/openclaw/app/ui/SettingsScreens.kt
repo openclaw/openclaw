@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
@@ -25,6 +26,8 @@ import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -34,6 +37,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -65,6 +70,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
@@ -97,6 +103,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import java.text.DateFormat
+import java.util.Date
 
 /**
  * Detail routes reachable from the Android settings home surface.
@@ -210,6 +218,12 @@ private fun CronJobsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  var selectedJobId by remember { mutableStateOf<String?>(null) }
+  selectedJobId?.let { jobId ->
+    CronJobDetailSettingsScreen(viewModel = viewModel, jobId = jobId, onBack = { selectedJobId = null })
+    return
+  }
+
   val cronStatus by viewModel.cronStatus.collectAsState()
   val cronJobs by viewModel.cronJobs.collectAsState()
   val cronRefreshing by viewModel.cronRefreshing.collectAsState()
@@ -252,7 +266,60 @@ private fun CronJobsSettingsScreen(
             Text(text = "Create recurring OpenClaw work from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> CronJobsPanel(jobs = cronJobs)
+      else -> CronJobsPanel(jobs = cronJobs, onJobClick = { selectedJobId = it.id })
+    }
+  }
+}
+
+@Composable
+private fun CronJobDetailSettingsScreen(
+  viewModel: MainViewModel,
+  jobId: String,
+  onBack: () -> Unit,
+) {
+  BackHandler(onBack = onBack)
+
+  val job by viewModel.cronJobDetail.collectAsState()
+  val loading by viewModel.cronJobDetailLoading.collectAsState()
+  val errorText by viewModel.cronJobDetailErrorText.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
+
+  LaunchedEffect(isConnected, jobId) {
+    if (isConnected) {
+      viewModel.loadCronJobDetail(jobId)
+    }
+  }
+
+  val current = job?.takeIf { it.id == jobId }
+  SettingsDetailFrame(
+    title = current?.name ?: "Cron Job",
+    subtitle = "Inspect scheduled gateway work.",
+    icon = Icons.Default.Bolt,
+    onBack = onBack,
+  ) {
+    ClawSecondaryButton(
+      text = if (loading) "Refreshing" else "Refresh",
+      onClick = { viewModel.loadCronJobDetail(jobId) },
+      enabled = isConnected && !loading,
+      modifier = Modifier.fillMaxWidth(),
+    )
+
+    errorText?.let { text ->
+      ClawPanel {
+        Text(text = text, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+      }
+    }
+
+    when {
+      !isConnected ->
+        ClawPanel {
+          Text(text = "Connect the gateway to inspect cron jobs.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      current == null ->
+        ClawPanel {
+          Text(text = if (loading) "Loading cron job…" else "Cron job not loaded.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      else -> CronJobDetailPanel(current)
     }
   }
 }
@@ -1095,6 +1162,7 @@ private data class SettingsToggleRow(
 internal data class SettingsMetric(
   val title: String,
   val value: String,
+  val copyable: Boolean = false,
 )
 
 @Composable
@@ -1116,9 +1184,12 @@ private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
 }
 
 @Composable
-private fun CronJobsPanel(jobs: List<GatewayCronJobSummary>) {
+private fun CronJobsPanel(
+  jobs: List<GatewayCronJobSummary>,
+  onJobClick: (GatewayCronJobSummary) -> Unit,
+) {
   ClawListPanel(items = jobs) { job ->
-    CronJobListRow(job = job)
+    CronJobListRow(job = job, onClick = { onJobClick(job) })
   }
 }
 
@@ -1141,13 +1212,139 @@ private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
 }
 
 @Composable
-private fun CronJobListRow(job: GatewayCronJobSummary) {
+private fun CronJobListRow(
+  job: GatewayCronJobSummary,
+  onClick: () -> Unit,
+) {
   ClawDetailRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
+    modifier = Modifier.clickable(onClick = onClick),
     leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
-    trailing = { ClawStatusPill(text = cronJobStatusText(job), status = cronJobStatus(job)) },
+    trailing = {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ClawStatusPill(text = cronJobStatusText(job), status = cronJobStatus(job))
+        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(17.dp), tint = ClawTheme.colors.textSubtle)
+      }
+    },
   )
+}
+
+@Composable
+private fun CronJobDetailPanel(
+  job: GatewayCronJobDetail,
+) {
+  SettingsMetricPanel(
+    rows =
+      listOf(
+        SettingsMetric("Status", if (job.enabled) "Enabled" else "Off"),
+        SettingsMetric("Schedule", job.scheduleLabel),
+        SettingsMetric("Next Wake", formatCronWake(job.nextRunAtMs)),
+        SettingsMetric("Last Run", formatCronTimestamp(job.lastRunAtMs)),
+      ),
+  )
+  CronJobFieldsPanel(
+    rows =
+      listOf(
+        SettingsMetric("ID", job.id, copyable = true),
+        SettingsMetric("Description", job.description.ifBlank { "None" }),
+        SettingsMetric("Schedule Detail", job.scheduleDetail),
+        SettingsMetric("Session Target", job.sessionTarget),
+        SettingsMetric("Wake Mode", job.wakeMode),
+        SettingsMetric("Delete After Run", if (job.deleteAfterRun) "Yes" else "No"),
+        SettingsMetric("Payload", job.payloadLabel),
+        SettingsMetric("Delivery", job.deliveryLabel),
+        SettingsMetric("Failure Alert", job.failureAlertLabel),
+        SettingsMetric("Created", formatCronTimestamp(job.createdAtMs)),
+        SettingsMetric("Updated", formatCronTimestamp(job.updatedAtMs)),
+        SettingsMetric("Running Since", formatCronTimestamp(job.runningAtMs)),
+        SettingsMetric("Last Status", cronJobStatusText(job)),
+        SettingsMetric("Last Duration", job.lastDurationMs?.let { "${it}ms" } ?: "None"),
+        SettingsMetric("Consecutive Errors", job.consecutiveErrors?.toString() ?: "0"),
+        SettingsMetric("Consecutive Skips", job.consecutiveSkipped?.toString() ?: "0"),
+        SettingsMetric("Delivery Status", job.lastDeliveryStatus ?: "None"),
+      ),
+  )
+  job.payloadText?.let { text ->
+    CronJobTextPanel(title = cronPayloadTextTitle(job), text = text)
+  }
+  job.lastError?.let { text ->
+    CronJobTextPanel(title = "Last Error", text = text, warning = true)
+  }
+  job.lastDeliveryError?.let { text ->
+    CronJobTextPanel(title = "Delivery Error", text = text, warning = true)
+  }
+}
+
+@Composable
+private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
+  val context = LocalContext.current
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+    ClawSeparatedColumn(items = rows) { row ->
+      val rowModifier =
+        if (row.copyable) {
+          Modifier
+            .fillMaxWidth()
+            .heightIn(min = 46.dp)
+            .clickable(onClickLabel = "Copy ${row.title}") { copyCronDetailValue(context, row.title, row.value) }
+            .padding(vertical = 6.dp)
+        } else {
+          Modifier
+            .fillMaxWidth()
+            .heightIn(min = 46.dp)
+            .padding(vertical = 6.dp)
+        }
+      Row(modifier = rowModifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+        Text(text = row.title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, modifier = Modifier.weight(0.42f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Column(modifier = Modifier.weight(0.58f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = row.value,
+              style = ClawTheme.type.caption,
+              color = if (row.copyable) ClawTheme.colors.primary else ClawTheme.colors.text,
+              modifier = Modifier.weight(1f),
+              maxLines = 3,
+              overflow = TextOverflow.Ellipsis,
+            )
+            if (row.copyable) {
+              Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.primary)
+            }
+          }
+          if (row.copyable) {
+            Text(text = "Tap to copy", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+        }
+      }
+    }
+  }
+}
+
+private fun copyCronDetailValue(
+  context: Context,
+  title: String,
+  value: String,
+) {
+  val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw cron job $title", value))
+  Toast.makeText(context, "$title copied", Toast.LENGTH_SHORT).show()
+}
+
+@Composable
+private fun CronJobTextPanel(
+  title: String,
+  text: String,
+  warning: Boolean = false,
+) {
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+      Text(text = title, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(
+        text = text,
+        style = ClawTheme.type.body,
+        color = if (warning) ClawTheme.colors.warning else ClawTheme.colors.text,
+      )
+    }
+  }
 }
 
 @Composable
@@ -1269,6 +1466,16 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   }
 }
 
+private fun cronJobStatusText(job: GatewayCronJobDetail): String {
+  if (!job.enabled) return "Off"
+  return when (job.lastRunStatus?.lowercase()) {
+    "error" -> "Issue"
+    "ok" -> "OK"
+    "skipped" -> "Skipped"
+    else -> "Ready"
+  }
+}
+
 /** Maps gateway cron status text to app status colors. */
 private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   if (!job.enabled) return ClawStatus.Neutral
@@ -1278,6 +1485,14 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
     else -> ClawStatus.Success
   }
 }
+
+private fun cronPayloadTextTitle(job: GatewayCronJobDetail): String =
+  when (job.payloadKind) {
+    "systemEvent" -> "System Event Text"
+    "agentTurn" -> "Agent Prompt"
+    "command" -> "Command"
+    else -> "Payload Text"
+  }
 
 /** Applies query/system visibility rules while always preserving selected packages. */
 internal fun filterNotificationAppsForPicker(
@@ -1347,6 +1562,11 @@ private fun formatCronWake(timeMs: Long?): String {
     minutes > 0 -> "${minutes}m"
     else -> "Soon"
   }
+}
+
+private fun formatCronTimestamp(timeMs: Long?): String {
+  val value = timeMs ?: return "None"
+  return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(value))
 }
 
 @Composable
