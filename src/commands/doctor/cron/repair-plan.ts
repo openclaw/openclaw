@@ -17,6 +17,24 @@ function formatJobNameList(names: string[]): string {
 }
 
 /**
+ * Advisory for isolated agentTurn cron jobs that describe a command but cannot access shell tools.
+ * These need operator attention, but `doctor --fix` cannot safely infer whether to grant tool
+ * access or recreate them as command cron jobs.
+ */
+export function formatUnresolvedCommandPromptAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  const describeVerb = names.length === 1 ? "describes" : "describe";
+  const accessVerb = names.length === 1 ? "lacks" : "lack";
+  return [
+    `${pluralize(names.length, "isolated cron job")} ${describeVerb} a shell command in the agent prompt but ${accessVerb} shell/process tool access${formatJobNameList(names)}.`,
+    "- This is not the supported shell-tool prompt shape, so doctor cannot prove the job will execute the requested command.",
+    '- Recreate the job as a command cron job (`openclaw cron add ... --command "<shell>"`) or grant explicit shell/process tool access before relying on it.',
+  ].join("\n");
+}
+
+/**
  * Advisory for isolated agentTurn cron jobs that drive shell/process tools from the prompt.
  * These keep running and are not a legacy store row, so `doctor --fix` cannot rewrite them;
  * routing this through the auto-repair preview made the finding persist after every --fix.

@@ -692,6 +692,52 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(payload.message).toContain("python3 scripts/check_mail.py");
   });
 
+  it("keeps restricted command prompts actionable without a --fix repair note", async () => {
+    const storePath = await makeTempStorePath();
+    const commandPromptJob = createCurrentCronJob({
+      id: "restricted-command-prompt",
+      name: "Restricted command prompt",
+      schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: [
+          "Command to run:",
+          "- command: python3 scripts/check_mail.py",
+          "- workdir: /home/openclaw/.razor/clawd",
+        ].join("\n"),
+        toolsAllow: ["read", "message"],
+      },
+      delivery: { mode: "announce" },
+    });
+    await writeCurrentCronStore(storePath, [commandPromptJob]);
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    expectNoNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining(
+      "1 isolated cron job describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
+      "Cron",
+    );
+    expectNoteContaining("not the supported shell-tool prompt shape", "Cron");
+    expectNoteContaining("Recreate the job as a command cron job", "Cron");
+    expectNoNoteContaining("informational only", "Cron");
+    expectNoNoteContaining("keep running as-is", "Cron");
+    expectNoNoteContaining("openclaw doctor --fix", "Cron");
+    expect(prompter.confirm).not.toHaveBeenCalled();
+
+    const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain("python3 scripts/check_mail.py");
+    expect(payload.toolsAllow).toEqual(["read", "message"]);
+  });
+
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [
