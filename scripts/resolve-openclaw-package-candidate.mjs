@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
@@ -1165,6 +1166,7 @@ async function* limitWebResponseBody(body, maxBytes, timeoutPromise) {
       const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
       downloaded += size;
       if (downloaded > maxBytes) {
+        await reader.cancel().catch(() => {});
         throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
       }
       yield value;
@@ -1199,6 +1201,7 @@ export async function downloadUrl(url, target, options = {}) {
     options,
   );
   const tempTarget = `${target}.tmp`;
+  let output;
   try {
     if (!responseOk(response) || !response.body) {
       throw new Error(`failed to download package_url: HTTP ${responseStatus(response)}`);
@@ -1210,10 +1213,8 @@ export async function downloadUrl(url, target, options = {}) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });
-    await pipeline(
-      limitResponseBody(response.body, maxBytes, timeoutPromise),
-      createWriteStream(tempTarget),
-    );
+    output = createWriteStream(tempTarget);
+    await pipeline(limitResponseBody(response.body, maxBytes, timeoutPromise), output);
     await fs.rename(tempTarget, target);
   } catch (error) {
     if (error?.code === "ETIMEDOUT") {
@@ -1228,6 +1229,9 @@ export async function downloadUrl(url, target, options = {}) {
   } finally {
     clearTimeout(timeout);
     await close();
+    if (output && !output.closed) {
+      await once(output, "close").catch(() => {});
+    }
     await fs.rm(tempTarget, { force: true });
   }
 }

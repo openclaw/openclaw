@@ -13,9 +13,9 @@ export {
 export {
   buildStatusMessage,
   formatContextUsageShort,
-  formatTokenCount,
   type StatusArgs,
 } from "../status/status-message.js";
+export { formatTokenCount } from "../utils/usage-format.js";
 
 type ToolsMessageItem = {
   id: string;

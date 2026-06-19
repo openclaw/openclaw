@@ -9,12 +9,14 @@
  * - `redactBodyKeys` replaces the hardcoded `file_data` redaction.
  */
 
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const FILE_UPLOAD_TIMEOUT_MS = 120_000;
+const QQBOT_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 interface RequestOptions {
   /** Request timeout override in milliseconds. */
@@ -140,16 +142,21 @@ export class ApiClient {
       `[qqbot:api] <<< Status: ${res.status} ${res.statusText}${traceId ? ` | TraceId: ${traceId}` : ""}`,
     );
 
-    let rawBody: string;
-    try {
-      rawBody = await res.text();
-    } catch (err) {
-      throw new ApiError(
-        `Failed to read response [${path}]: ${formatErrorMessage(err)}`,
-        res.status,
-        path,
-      );
-    }
+    const readBody = async (limitBytes?: number): Promise<string> => {
+      try {
+        return limitBytes === undefined
+          ? await res.text()
+          : await readResponseTextLimited(res, limitBytes);
+      } catch (err) {
+        throw new ApiError(
+          `Failed to read response [${path}]: ${formatErrorMessage(err)}`,
+          res.status,
+          path,
+        );
+      }
+    };
+
+    const rawBody = res.ok ? await readBody() : await readBody(QQBOT_API_ERROR_BODY_LIMIT_BYTES);
     this.logger?.debug?.(`[qqbot:api] <<< Body: ${rawBody}`);
 
     // Detect non-JSON responses (HTML gateway errors, CDN rate-limit pages).

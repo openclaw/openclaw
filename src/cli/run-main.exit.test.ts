@@ -39,7 +39,7 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
-const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
@@ -216,7 +216,7 @@ vi.mock("../plugins/memory-state.js", () => ({
 }));
 
 vi.mock("../agents/harness/registry.js", () => ({
-  listAgentHarnessIds: listAgentHarnessIdsMock,
+  listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
 
@@ -354,7 +354,7 @@ describe("runCli exit behavior", () => {
       sourceConfig: { gateway: { mode: "local" } },
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
-    listAgentHarnessIdsMock.mockReturnValue([]);
+    listRegisteredAgentHarnessesMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
@@ -398,7 +398,7 @@ describe("runCli exit behavior", () => {
   });
 
   it("disposes registered harnesses after full CLI command completion", async () => {
-    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+    listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "codex" } }]);
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({

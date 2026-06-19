@@ -1,4 +1,5 @@
 // Slack tests cover interactions plugin behavior.
+import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -180,6 +181,10 @@ type RegisteredViewClosedHandler = (args: {
   };
 }) => Promise<void>;
 
+type RegisteredShortcutHandler = (
+  args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body">,
+) => Promise<void>;
+
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -204,6 +209,7 @@ function createContext(overrides?: {
   let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewClosedHandler | null = null;
+  let shortcutHandler: RegisteredShortcutHandler | null = null;
   const app = {
     action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
       actionMatcher = matcher;
@@ -214,6 +220,9 @@ function createContext(overrides?: {
     }),
     viewClosed: vi.fn((_matcher: RegExp, next: RegisteredViewClosedHandler) => {
       viewClosedHandler = next;
+    }),
+    shortcut: vi.fn((_matcher: RegExp, next: RegisteredShortcutHandler) => {
+      shortcutHandler = next;
     }),
     client: {
       chat: {
@@ -307,6 +316,12 @@ function createContext(overrides?: {
       }
       return viewClosedHandler;
     },
+    getShortcutHandler: () => {
+      if (!shortcutHandler) {
+        throw new Error("Expected Slack shortcut handler to be registered");
+      }
+      return shortcutHandler;
+    },
   };
 }
 
@@ -395,6 +410,165 @@ describe("registerSlackInteractionEvents", () => {
       handled: false,
       duplicate: false,
     });
+  });
+
+  it("routes global shortcuts to the actor's direct session", async () => {
+    const { ctx, getShortcutHandler, resolveSessionKey } = createContext();
+    const trackEvent = vi.fn();
+    registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await getShortcutHandler()({
+      ack,
+      body: {
+        type: "shortcut",
+        callback_id: "capture-note",
+        trigger_id: "123.trigger",
+        user: { id: "U123", username: "ada", team_id: "T9" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "100.200",
+      },
+    });
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(trackEvent).toHaveBeenCalledOnce();
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: undefined,
+      channelType: "im",
+      senderId: "U123",
+      threadTs: undefined,
+    });
+    expect(slackInteractionPayload()).toMatchObject({
+      interactionType: "global_shortcut",
+      actionId: "shortcut:capture-note",
+      callbackId: "capture-note",
+      userId: "U123",
+      teamId: "T9",
+      triggerId: "[redacted]",
+      actionTs: "100.200",
+    });
+    expect(enqueueSystemEventText()).not.toContain("secret");
+    expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
+      sessionKey: "agent:ops:slack:channel:C1",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U123",
+        accountId: "default",
+      },
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledOnce();
+  });
+
+  it("routes message shortcuts with selected-message context", async () => {
+    const { ctx, getShortcutHandler, resolveSessionKey } = createContext({
+      resolveChannelName: async () => ({ name: "ops", type: "channel" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getShortcutHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      body: {
+        type: "message_action",
+        callback_id: "summarize-message",
+        trigger_id: "456.trigger",
+        response_url: "https://hooks.slack.test/response",
+        message_ts: "200.300",
+        message: {
+          type: "message",
+          user: "U456",
+          ts: "200.300",
+          text: "Selected message",
+          thread_ts: "200.100",
+        },
+        user: { id: "U123", name: "ada", team_id: "T9" },
+        channel: { id: "C1", name: "ops" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "200.400",
+      },
+    });
+
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "C1",
+      channelType: "channel",
+      senderId: "U123",
+      threadTs: "200.100",
+    });
+    expect(slackInteractionPayload()).toMatchObject({
+      interactionType: "message_shortcut",
+      actionId: "shortcut:summarize-message",
+      callbackId: "summarize-message",
+      channelId: "C1",
+      channelName: "ops",
+      messageTs: "200.300",
+      threadTs: "200.100",
+      messageUserId: "U456",
+      messageText: "Selected message",
+      triggerId: "[redacted]",
+      responseUrl: "[redacted]",
+    });
+    expect(enqueueSystemEventText()).not.toContain("secret");
+    expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
+      deliveryContext: {
+        channel: "slack",
+        to: "channel:C1",
+        accountId: "default",
+        threadId: "200.100",
+      },
+    });
+  });
+
+  it("acknowledges mismatched shortcuts before dropping them", async () => {
+    const order: string[] = [];
+    const { ctx, getShortcutHandler } = createContext({
+      shouldDropMismatchedSlackEvent: () => {
+        order.push("filter");
+        return true;
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getShortcutHandler()({
+      ack: vi.fn(async () => {
+        order.push("ack");
+      }),
+      body: {
+        type: "shortcut",
+        callback_id: "capture-note",
+        trigger_id: "123.trigger",
+        user: { id: "U123", username: "ada", team_id: "T9" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "100.200",
+      },
+    });
+
+    expect(order).toEqual(["ack", "filter"]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces DM policy for global shortcuts", async () => {
+    const { ctx, getShortcutHandler } = createContext({
+      dmEnabled: false,
+      dmPolicy: "disabled",
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getShortcutHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      body: {
+        type: "shortcut",
+        callback_id: "capture-note",
+        trigger_id: "123.trigger",
+        user: { id: "U123", username: "ada", team_id: "T9" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "100.200",
+      },
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("enqueues structured events and updates button rows", async () => {

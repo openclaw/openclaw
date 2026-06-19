@@ -25,10 +25,10 @@ function runConfigureSigning(teamId: string, user = "localuser"): string {
       OPENCLAW_IOS_APP_BUNDLE_ID: "",
       OPENCLAW_IOS_BUNDLE_ID_BASE: "",
       OPENCLAW_IOS_BUNDLE_SUFFIX: "",
+      OPENCLAW_IOS_APP_GROUP_ID: "",
       OPENCLAW_IOS_SHARE_BUNDLE_ID: "",
       OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID: "",
       OPENCLAW_IOS_WATCH_APP_BUNDLE_ID: "",
-      OPENCLAW_IOS_WATCH_EXTENSION_BUNDLE_ID: "",
       USER: user,
     },
     encoding: "utf8",
@@ -66,6 +66,7 @@ describe.sequential("scripts/ios-configure-signing.sh", () => {
     expect(generated).toContain("OPENCLAW_DEVELOPMENT_TEAM = FWJYW4S8P8");
     expect(generated).toContain("OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app");
     expect(generated).toContain("OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share");
+    expect(generated).toContain("OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared");
     expect(generated).toContain("OPENCLAW_ACTIVITY_WIDGET_PROFILE = ");
   });
 
@@ -79,6 +80,9 @@ describe.sequential("scripts/ios-configure-signing.sh", () => {
     expect(generated).toContain("OPENCLAW_DEVELOPMENT_TEAM = Y3YUZP442G");
     expect(generated).toContain(
       "OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app.test.localuser-y3yuzp442g",
+    );
+    expect(generated).toContain(
+      "OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.test.localuser-y3yuzp442g.shared",
     );
   });
 });
