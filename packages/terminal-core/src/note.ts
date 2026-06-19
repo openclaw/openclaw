@@ -1,9 +1,9 @@
 // Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { note as clackNote } from "@clack/prompts";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 import { normalizeLowercaseStringOrEmpty } from "./string.js";
+import { isRich, theme } from "./theme.js";
 
 const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
@@ -199,6 +199,86 @@ function createNoteOutput(columns: number): NodeJS.WriteStream {
   return output;
 }
 
+/**
+ * Returns true when a line exceeds maxWidth and at least one of the words on
+ * that line is a copy-sensitive token (path, URL, file-like name).  Such lines
+ * are allowed to overflow the note box rather than being re-wrapped, because
+ * breaking them mid-token defeats the reason they are surfaced — the user needs
+ * to copy-paste them unbroken.
+ */
+function hasCopySensitiveOverflow(line: string, maxWidth: number): boolean {
+  if (visibleWidth(line) <= maxWidth) return false;
+  const words = line.split(/\s+/);
+  return words.some((w) => isCopySensitiveToken(w));
+}
+
+/**
+ * Render a bordered note box directly, bypassing @clack/prompts' note() so that
+ * OpenClaw owns the text-wrapping decisions end-to-end.  wrapNoteMessage already
+ * produces correctly-wrapped lines (copy-sensitive tokens are kept intact and
+ * allowed to overflow the wrap width).  clackNote would re-wrap them at the box
+ * border, splitting paths mid-token.  Building the box ourselves eliminates that
+ * second pass.
+ *
+ * Lines that contain copy-sensitive tokens and exceed the content area width are
+ * allowed to overflow past the right border of the box.
+ */
+function renderNoteBox(
+  message: string,
+  title: string | undefined,
+  columns: number,
+  output: NodeJS.WriteStream,
+) {
+  const rich = isRich();
+  const dim = (s: string) => (rich ? theme.muted(s) : s);
+  const accent = (s: string) => (rich ? theme.accent(s) : s);
+
+  const titleText = title ?? "";
+  const titleWidth = visibleWidth(titleText);
+  const contentLines = message.split("\n");
+
+  const boxH = dim("─");
+  const boxV = dim("│");
+  const cornerTR = dim("╮");
+  const cornerBL = dim("╰");
+  const cornerBR = dim("╯");
+  const step = accent("◇");
+
+  const borderLeftWidth = 3; // "│  "
+  const borderRightWidth = 3; // "  │"
+  const borderOverhead = borderLeftWidth + borderRightWidth; // 6
+
+  // Content area width: max of title and non-copy-sensitive lines.
+  // Copy-sensitive overflow lines are allowed to exceed this.
+  let contentWidth = Math.max(titleWidth, 40);
+  for (const line of contentLines) {
+    const w = visibleWidth(line);
+    if (w > contentWidth && !hasCopySensitiveOverflow(line, columns - borderOverhead)) {
+      contentWidth = w;
+    }
+  }
+  contentWidth = Math.min(contentWidth, columns - borderOverhead);
+
+  // Title line: ◇  Title ───╮
+  const titleDashLen = Math.max(1, contentWidth - titleWidth + 1);
+  output.write(`${step}  ${titleText} ${boxH.repeat(titleDashLen)}${cornerTR}\n`);
+
+  // Content lines
+  for (const line of contentLines) {
+    const lineWidth = visibleWidth(line);
+    if (lineWidth > contentWidth && hasCopySensitiveOverflow(line, contentWidth)) {
+      // Copy-sensitive overflow: let the line extend past the box right border.
+      output.write(`${boxV}  ${line}\n`);
+    } else {
+      const pad = Math.max(0, contentWidth - lineWidth);
+      output.write(`${boxV}  ${line}${" ".repeat(pad)}  ${boxV}\n`);
+    }
+  }
+
+  // Bottom line: ╰───╯
+  output.write(`${cornerBL}${boxH.repeat(contentWidth + 4)}${cornerBR}\n`);
+}
+
 export function note(message: unknown, title?: string) {
   if (
     suppressNotesStorage.getStore() === true ||
@@ -207,10 +287,9 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
-    output: createNoteOutput(columns),
-    format: (line) => line,
-  });
+  const wrapped = wrapNoteMessage(message, { columns });
+  const output = createNoteOutput(columns);
+  renderNoteBox(wrapped, stylePromptTitle(title), columns, output);
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {
