@@ -379,16 +379,16 @@ describe("script-specific dev tooling hardening", () => {
       }),
     };
     const response = {
-      ok: true,
       headers: new Headers({ "content-length": "9007199254740993" }),
       body,
     } as unknown as Response;
 
     await expect(
-      realtimeSmokeTesting.requestOpenAIRealtimeSdpAnswer("client-secret", "v=0", {
-        timeoutMs: 50,
-        fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-      }),
+      realtimeSmokeTesting.readOpenAIRealtimeBrowserResponseText(
+        response,
+        "OpenAI Realtime SDP answer",
+        maxBytes,
+      ),
     ).rejects.toThrow(`OpenAI Realtime SDP answer response body exceeded ${maxBytes} bytes`);
     expect(body.getReader).not.toHaveBeenCalled();
     expect(body.cancel).toHaveBeenCalledTimes(1);

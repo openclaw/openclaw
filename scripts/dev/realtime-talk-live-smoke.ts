@@ -43,8 +43,14 @@ type OpenAIHttpOptions = {
   timeoutMs?: number;
 };
 
+type OpenAIRealtimeBrowserResponseReader = (
+  response: Response,
+  label: string,
+  maxBytes: number,
+) => Promise<string>;
+
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
-  openclawRequestOpenAIRealtimeSdpAnswer?: (offerSdp: string) => Promise<string>;
+  openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
 };
 
 function getEnv(name: string): string | undefined {
@@ -118,6 +124,63 @@ function compareStrings(left: string | undefined, right: string | undefined): nu
   return (left ?? "").localeCompare(right ?? "");
 }
 
+async function readOpenAIRealtimeBrowserResponseText(
+  response: Response,
+  label: string,
+  maxBytes: number,
+): Promise<string> {
+  const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
+    new Error(`${label} response body exceeded ${maxBytes} bytes`);
+  const rawContentLength = response.headers.get("content-length");
+  if (rawContentLength && /^\d+$/u.test(rawContentLength)) {
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw responseBodyTooLargeError(label, maxBytes);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw responseBodyTooLargeError(label, maxBytes);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+}
+
+function openAIRealtimeBrowserResponseReaderInitScript(): string {
+  return `globalThis.openclawReadBoundedRealtimeResponseText = ${readOpenAIRealtimeBrowserResponseText.toString()};`;
+}
+
 async function createOpenAIClientSecret(
   apiKey: string,
   options: OpenAIHttpOptions = {},
@@ -174,39 +237,6 @@ async function createOpenAIClientSecret(
   return secret;
 }
 
-async function requestOpenAIRealtimeSdpAnswer(
-  clientSecret: string,
-  offerSdp: string,
-  options: OpenAIHttpOptions = {},
-): Promise<string> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? resolveOpenAIHttpTimeoutMs();
-  return await withTimeout({
-    label: "OpenAI Realtime SDP offer request",
-    timeoutMs,
-    run: async (signal) => {
-      const response = await fetchImpl("https://api.openai.com/v1/realtime/calls", {
-        method: "POST",
-        body: offerSdp,
-        headers: {
-          Authorization: `Bearer ${clientSecret}`,
-          "Content-Type": "application/sdp",
-        },
-        signal,
-      });
-      if (!response.ok) {
-        throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
-      }
-      return await readBoundedText(
-        response,
-        "OpenAI Realtime SDP answer",
-        OPENAI_HTTP_RESPONSE_MAX_BYTES,
-        signal,
-      );
-    },
-  });
-}
-
 async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
   const provider = buildOpenAIRealtimeVoiceProvider();
   const events: string[] = [];
@@ -256,73 +286,115 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
     try {
       const page = await context.newPage();
       await page.evaluate("globalThis.__name = (fn) => fn");
-      await page.exposeFunction(
-        "openclawRequestOpenAIRealtimeSdpAnswer",
-        async (offerSdp: string) => {
-          return await requestOpenAIRealtimeSdpAnswer(clientSecret, offerSdp, {
-            timeoutMs: openAIHttpTimeoutMs,
-          });
+      await page.evaluate(openAIRealtimeBrowserResponseReaderInitScript());
+      const result = await page.evaluate(
+        async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
+          const readBoundedTextLocal = (globalThis as OpenAIWebRtcSmokeGlobal)
+            .openclawReadBoundedRealtimeResponseText;
+          if (!readBoundedTextLocal) {
+            throw new Error("OpenAI Realtime bounded response reader was not installed");
+          }
+          const withBrowserTimeout = async <T>(
+            label: string,
+            run: (signal: AbortSignal) => Promise<T>,
+          ): Promise<T> => {
+            const controller = new AbortController();
+            let timeout: number | undefined;
+            const timeoutPromise = new Promise<T>((_resolve, reject) => {
+              timeout = window.setTimeout(() => {
+                const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+                reject(error);
+                controller.abort(error);
+              }, timeoutMs);
+            });
+            try {
+              return await Promise.race([run(controller.signal), timeoutPromise]);
+            } finally {
+              if (timeout !== undefined) {
+                window.clearTimeout(timeout);
+              }
+            }
+          };
+          let media: MediaStream | undefined;
+          let peer: RTCPeerConnection | undefined;
+          try {
+            if (navigator.mediaDevices?.getUserMedia) {
+              media = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } else {
+              const audioContext = new AudioContext();
+              const destination = audioContext.createMediaStreamDestination();
+              const oscillator = audioContext.createOscillator();
+              oscillator.connect(destination);
+              oscillator.start();
+              media = destination.stream;
+            }
+            peer = new RTCPeerConnection();
+            for (const track of media.getAudioTracks()) {
+              peer.addTrack(track, media);
+            }
+            const channel = peer.createDataChannel("oai-events");
+            const connectionState = new Promise<string>((resolve) => {
+              const timeout = window.setTimeout(
+                () => resolve(peer?.connectionState ?? "timeout"),
+                12_000,
+              );
+              peer?.addEventListener("connectionstatechange", () => {
+                if (peer?.connectionState === "connected" || peer?.connectionState === "failed") {
+                  window.clearTimeout(timeout);
+                  resolve(peer.connectionState);
+                }
+              });
+              channel.addEventListener("open", () => {
+                window.clearTimeout(timeout);
+                resolve(peer?.connectionState || "data-channel-open");
+              });
+            });
+            const offer = await peer.createOffer();
+            await peer.setLocalDescription(offer);
+            const offerSdp = offer.sdp;
+            if (!offerSdp) {
+              throw new Error("OpenAI Realtime SDP offer did not include SDP");
+            }
+            const answer = await withBrowserTimeout(
+              "OpenAI Realtime SDP offer request",
+              async (signal) => {
+                const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+                  method: "POST",
+                  body: offerSdp,
+                  headers: {
+                    Authorization: `Bearer ${secret}`,
+                    "Content-Type": "application/sdp",
+                  },
+                  signal,
+                });
+                if (!response.ok) {
+                  throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
+                }
+                return await readBoundedTextLocal(
+                  response,
+                  "OpenAI Realtime SDP answer",
+                  sdpAnswerMaxBytes,
+                );
+              },
+            );
+            await peer.setRemoteDescription({ type: "answer", sdp: answer });
+            const state = await connectionState;
+            return {
+              answerHasAudio: answer.includes("m=audio"),
+              remoteDescriptionApplied: peer.remoteDescription?.type === "answer",
+              connectionState: state,
+            };
+          } finally {
+            peer?.close();
+            media?.getTracks().forEach((track) => track.stop());
+          }
+        },
+        {
+          clientSecret,
+          sdpAnswerMaxBytes: OPENAI_HTTP_RESPONSE_MAX_BYTES,
+          timeoutMs: openAIHttpTimeoutMs,
         },
       );
-      const result = await page.evaluate(async () => {
-        const requestSdpAnswer = (globalThis as OpenAIWebRtcSmokeGlobal)
-          .openclawRequestOpenAIRealtimeSdpAnswer;
-        if (!requestSdpAnswer) {
-          throw new Error("OpenAI Realtime SDP answer bridge was not installed");
-        }
-        let media: MediaStream | undefined;
-        let peer: RTCPeerConnection | undefined;
-        try {
-          if (navigator.mediaDevices?.getUserMedia) {
-            media = await navigator.mediaDevices.getUserMedia({ audio: true });
-          } else {
-            const audioContext = new AudioContext();
-            const destination = audioContext.createMediaStreamDestination();
-            const oscillator = audioContext.createOscillator();
-            oscillator.connect(destination);
-            oscillator.start();
-            media = destination.stream;
-          }
-          peer = new RTCPeerConnection();
-          for (const track of media.getAudioTracks()) {
-            peer.addTrack(track, media);
-          }
-          const channel = peer.createDataChannel("oai-events");
-          const connectionState = new Promise<string>((resolve) => {
-            const timeout = window.setTimeout(
-              () => resolve(peer?.connectionState ?? "timeout"),
-              12_000,
-            );
-            peer?.addEventListener("connectionstatechange", () => {
-              if (peer?.connectionState === "connected" || peer?.connectionState === "failed") {
-                window.clearTimeout(timeout);
-                resolve(peer.connectionState);
-              }
-            });
-            channel.addEventListener("open", () => {
-              window.clearTimeout(timeout);
-              resolve(peer?.connectionState || "data-channel-open");
-            });
-          });
-          const offer = await peer.createOffer();
-          await peer.setLocalDescription(offer);
-          const offerSdp = offer.sdp;
-          if (!offerSdp) {
-            throw new Error("OpenAI Realtime SDP offer did not include SDP");
-          }
-          const answer = await requestSdpAnswer(offerSdp);
-          await peer.setRemoteDescription({ type: "answer", sdp: answer });
-          const state = await connectionState;
-          return {
-            answerHasAudio: answer.includes("m=audio"),
-            remoteDescriptionApplied: peer.remoteDescription?.type === "answer",
-            connectionState: state,
-          };
-        } finally {
-          peer?.close();
-          media?.getTracks().forEach((track) => track.stop());
-        }
-      });
       return {
         name: "openai-webrtc-browser",
         ok: result.answerHasAudio && result.remoteDescriptionApplied,
@@ -717,8 +789,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 export const testing = {
   OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
+  readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
-  requestOpenAIRealtimeSdpAnswer,
   resolveOpenAIHttpTimeoutMs,
 };
 
