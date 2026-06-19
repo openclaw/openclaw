@@ -690,3 +690,30 @@ describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () =>
     expect(result).toBe(text);
   });
 });
+
+describe("formatUserFacingAssistantErrorText — sensitive image rejection (follow-up to #94906)", () => {
+  const makeAssistantError = (errorMessage: string): AssistantMessage =>
+    makeAssistantMessageFixture({
+      errorMessage,
+      content: [{ type: "text", text: errorMessage }],
+    });
+  // Regression: previously isRawAssistantErrorPassthrough classified the
+  // "LLM error api_error: ..." friendly text as a passthrough and dropped the
+  // rich error into GENERIC_ASSISTANT_ERROR_TEXT ("LLM request failed.").
+  // The actionable copy must surface even when the raw payload parses cleanly
+  // and produces a "LLM error api_error: ..." friendly prefix.
+  it("returns the actionable copy for MiniMax 1026 raw payload", () => {
+    const raw =
+      '{"type":"error","error":{"type":"api_error","message":"input new_sensitive, messages[18] content[1] image is sensitive, please check your input (1026)"},"request_id":"sha256:e47bcf6e81c9"}';
+    const msg = makeAssistantError(raw);
+    const result = formatUserFacingAssistantErrorText(msg, {
+      provider: "minimax",
+      model: "MiniMax-M3",
+    });
+    expect(result).toBe(
+      "LLM request failed: provider rejected a recent image block as sensitive. " +
+        "OpenClaw removed the image data from session history while keeping text context; " +
+        "please retry or continue.",
+    );
+  });
+});
