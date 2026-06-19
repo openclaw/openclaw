@@ -334,6 +334,50 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
   });
+
+  it("keeps processing tool start when progress callbacks throw", async () => {
+    const { ctx, warn, onExecutionPhase, onAgentEvent } = createTestContext();
+    onExecutionPhase.mockImplementation(() => {
+      throw new Error("phase exploded");
+    });
+    onAgentEvent.mockImplementation(() => {
+      throw new Error("event exploded");
+    });
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-throws",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.state.toolMetaById.has("tool-callback-throws")).toBe(true);
+    expect(ctx.state.itemStartedCount).toBe(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("tool execution phase callback failed"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
+
+  it("does not leak unhandled rejections when tool start progress rejects", async () => {
+    const { ctx, warn, onAgentEvent } = createTestContext();
+    onAgentEvent.mockRejectedValue(new Error("progress failed"));
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-rejects",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+    await Promise.resolve();
+
+    expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
 });
 
 describe("handleToolExecutionEnd cron mutation tracking", () => {
