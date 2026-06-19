@@ -807,7 +807,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "loopback-token"),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
@@ -886,7 +886,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "loopback-token"),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
@@ -962,7 +962,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       makeBootstrapWarn: vi.fn(() => () => undefined),
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "token"),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "token"),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({
         agentId: "main",
         tools: [
