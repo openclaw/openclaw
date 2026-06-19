@@ -526,6 +526,49 @@ describe("createTelegramBot channel_post media", () => {
     expect(getFile).toHaveBeenCalled();
   });
 
+  it("silently handles media download failure when ingest override is active", async () => {
+    // When ingest=true bypasses the mention skip and media download then fails,
+    // no visible error reply should be sent to the group. The original skip was
+    // designed to avoid spamming groups with error messages for unaddressed
+    // media; the ingest bypass preserves that intent by keeping failure replies
+    // silent.
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true, ingest: true } },
+        },
+      },
+    });
+    saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: ECONNRESET"));
+    const getFile = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+        message_id: 92068,
+        date: 1736380800,
+        photo: [{ file_id: "p1" }],
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile,
+    });
+
+    // Media was attempted (ingest override allowed it through)
+    expect(saveRemoteMedia).toHaveBeenCalled();
+    // No visible error reply was sent to the group — the failure is silent
+    const sendMessageCalls = sendMessageSpy.mock.calls.filter(
+      ([text]) =>
+        String(text).includes("Failed to download") ||
+        String(text).includes("could not be fetched"),
+    );
+    expect(sendMessageCalls).toEqual([]);
+  });
+
   it("notifies mentioned requireMention groups when media download fails", async () => {
     loadConfig.mockReturnValue({
       channels: {

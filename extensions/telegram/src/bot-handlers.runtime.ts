@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
@@ -15,6 +14,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -783,7 +783,7 @@ export const registerTelegramHandlers = ({
     effectiveDmAllow: NormalizedAllowFrom;
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
-  }): Promise<boolean> => {
+  }): Promise<{ skip: boolean; ingestOverride: boolean }> => {
     const {
       ctx,
       msg,
@@ -799,7 +799,7 @@ export const registerTelegramHandlers = ({
       topicConfig,
     } = params;
     if (!isGroup || mediaMayNeedDownloadForMentionDetection(msg)) {
-      return false;
+      return { skip: false, ingestOverride: false };
     }
 
     const runtimeCfg = telegramDeps.getRuntimeConfig();
@@ -825,7 +825,7 @@ export const registerTelegramHandlers = ({
       resolveGroupRequireMention(chatId),
     );
     if (!requireMention) {
-      return false;
+      return { skip: false, ingestOverride: false };
     }
 
     const botUsername = ctx.me?.username?.trim().toLowerCase();
@@ -893,6 +893,12 @@ export const registerTelegramHandlers = ({
       // receive ALL messages (including unaddressed media) via message:received
       // hooks. Skipping media before download defeats that intent — the text-
       // message path already respects ingest (bot-message-context.body.ts:438).
+      //
+      // When ingest overrides the mention skip, media download failures should
+      // be handled silently (no visible group error reply). The original skip
+      // was designed to avoid spamming groups with error messages for messages
+      // the bot wasn't addressed on; the ingest bypass preserves that intent
+      // by keeping failure replies silent.
       const telegramGroupPolicy = resolveChannelGroupPolicy({
         cfg: runtimeCfg,
         channel: "telegram",
@@ -900,15 +906,20 @@ export const registerTelegramHandlers = ({
         accountId,
       });
       const ingestEnabled =
-        topicConfig?.ingest ?? telegramGroupPolicy.groupConfig?.ingest ?? telegramGroupPolicy.defaultConfig?.ingest;
+        topicConfig?.ingest ??
+        telegramGroupPolicy.groupConfig?.ingest ??
+        telegramGroupPolicy.defaultConfig?.ingest;
       if (ingestEnabled === true) {
-        logger.info({ chatId, reason: "ingest-enabled" }, "not skipping group media: ingest overrides mention skip");
-        return false;
+        logger.info(
+          { chatId, reason: "ingest-enabled" },
+          "not skipping group media: ingest overrides mention skip",
+        );
+        return { skip: false, ingestOverride: true };
       }
       logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
-      return true;
+      return { skip: true, ingestOverride: false };
     }
-    return false;
+    return { skip: false, ingestOverride: false };
   };
 
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
@@ -923,22 +934,21 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (
-        await shouldSkipMediaDownloadForUnaddressedMentionGroup({
-          ctx: primaryEntry.ctx,
-          msg: primaryEntry.msg,
-          chatId: primaryEntry.msg.chat.id,
-          isGroup: entry.isGroup,
-          isForum: entry.isForum,
-          resolvedThreadId: entry.resolvedThreadId,
-          dmThreadId: entry.dmThreadId,
-          senderId: entry.senderId,
-          effectiveGroupAllow: entry.effectiveGroupAllow,
-          effectiveDmAllow: entry.effectiveDmAllow,
-          groupConfig: entry.groupConfig,
-          topicConfig: entry.topicConfig,
-        })
-      ) {
+      const mentionSkipResult = await shouldSkipMediaDownloadForUnaddressedMentionGroup({
+        ctx: primaryEntry.ctx,
+        msg: primaryEntry.msg,
+        chatId: primaryEntry.msg.chat.id,
+        isGroup: entry.isGroup,
+        isForum: entry.isForum,
+        resolvedThreadId: entry.resolvedThreadId,
+        dmThreadId: entry.dmThreadId,
+        senderId: entry.senderId,
+        effectiveGroupAllow: entry.effectiveGroupAllow,
+        effectiveDmAllow: entry.effectiveDmAllow,
+        groupConfig: entry.groupConfig,
+        topicConfig: entry.topicConfig,
+      });
+      if (mentionSkipResult.skip) {
         releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
@@ -975,7 +985,7 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      if (skippedCount > 0) {
+      if (skippedCount > 0 && !mentionSkipResult.ingestOverride) {
         const total = entry.messages.length;
         const wasOrWere = skippedCount === 1 ? "was" : "were";
         await withTelegramApiErrorLogging({
@@ -2147,22 +2157,21 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    if (
-      await shouldSkipMediaDownloadForUnaddressedMentionGroup({
-        ctx,
-        msg,
-        chatId,
-        isGroup,
-        isForum,
-        resolvedThreadId,
-        dmThreadId,
-        senderId,
-        effectiveGroupAllow,
-        effectiveDmAllow,
-        groupConfig,
-        topicConfig,
-      })
-    ) {
+    const mentionSkipResult = await shouldSkipMediaDownloadForUnaddressedMentionGroup({
+      ctx,
+      msg,
+      chatId,
+      isGroup,
+      isForum,
+      resolvedThreadId,
+      dmThreadId,
+      senderId,
+      effectiveGroupAllow,
+      effectiveDmAllow,
+      groupConfig,
+      topicConfig,
+    });
+    if (mentionSkipResult.skip) {
       releaseDispatchDedupeKeys(dispatchDedupeKeys);
       return;
     }
@@ -2195,17 +2204,25 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_parameters: {
-              message_id: msg.message_id,
-              allow_sending_without_reply: true,
-            },
-          }),
-      }).catch(() => {});
+      // When this media was processed via ingest override (unaddressed group
+      // message where ingest=true bypassed the mention skip), silently handle
+      // the download failure — do not post a visible error reply to the group.
+      // The original pre-download skip was designed to avoid spamming groups
+      // with error messages for unaddressed media; the ingest bypass preserves
+      // that intent by keeping failure replies silent.
+      if (!mentionSkipResult.ingestOverride) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_parameters: {
+                message_id: msg.message_id,
+                allow_sending_without_reply: true,
+              },
+            }),
+        }).catch(() => {});
+      }
       releaseDispatchDedupeKeys(dispatchDedupeKeys);
       return;
     }
