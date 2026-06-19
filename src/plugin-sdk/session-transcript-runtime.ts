@@ -45,9 +45,10 @@ export type SessionTranscriptReadParams = {
 
 export type SessionTranscriptTargetParams = SessionTranscriptReadParams & {
   /**
-   * Optional active transcript artifact target. Use this when the caller is
-   * already operating on a concrete transcript file and needs all scoped
-   * operations to bind to that same target.
+   * @deprecated Prefer the structured `{ agentId, sessionKey, sessionId }`
+   * transcript identity. This file-shaped target is kept only for callers that
+   * already own an active transcript artifact during the pre-SQLite transition
+   * and must be removed before the SQLite storage flip.
    */
   sessionFile?: string;
 };
