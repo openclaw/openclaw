@@ -242,7 +242,11 @@ describe("nodeHandlers node.pair.remove", () => {
       await pairAndroidNodeDevice(state.stateDir, nodeId);
 
       if (tokenState === "revoked") {
-        const revoked = await revokeDeviceToken({ deviceId: nodeId, role: "node" }, state.stateDir);
+        const revoked = await revokeDeviceToken({
+          deviceId: nodeId,
+          role: "node",
+          baseDir: state.stateDir,
+        });
         expect(revoked.ok).toBe(true);
       } else {
         const { pairedPath } = resolvePairingPaths(state.stateDir, "devices");
