@@ -15,6 +15,22 @@
         "type": "boolean",
         "description": "Enable feeds doctor checks."
       },
+      "installPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional install-time policy for entries discovered through feeds.",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "warn", "enforce"],
+            "description": "Install policy mode. Defaults to off."
+          },
+          "requireApproval": {
+            "type": "boolean",
+            "description": "Require feed entries to declare approval.status=approved before install."
+          }
+        }
+      },
       "sources": {
         "type": "array",
         "description": "Catalog feed sources used for curated skill and plugin discovery.",

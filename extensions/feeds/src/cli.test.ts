@@ -7,6 +7,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 import {
+  feedsInstallCommand,
   feedsListCommand,
   feedsSearchCommand,
   feedsSourcesCommand,
@@ -266,26 +267,261 @@ describe("Feeds CLI", () => {
     expect(exitCode).toBe(2);
     expect(runtime.stderr).toContain("Invalid --type value. Expected skill or plugin.");
   });
+
+  it("dry-runs an explicit feed-backed plugin install", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("calendar-helper", { dryRun: true }, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(runtime.stdout).toBe("openclaw plugins install clawhub:openclaw-calendar\n");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("runs the existing install command for a selected feed entry", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        { type: "skill", id: "excel-review", install: { source: "clawhub", slug: "excel-review" } },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand(
+      "excel-review",
+      { type: "skill", force: true },
+      runtime,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(runtime.commands).toEqual([["skills", "install", "excel-review", "--force"]]);
+  });
+
+  it("enforces approved feed install metadata when configured", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      installPolicy: { mode: "enforce", requireApproval: true },
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("calendar-helper", {}, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("is not approved by feed metadata");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("defaults enforce mode to approved-only installs", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      installPolicy: { mode: "enforce" },
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("calendar-helper", {}, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("is not approved by feed metadata");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("defaults requireApproval without a mode to enforce", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      installPolicy: { requireApproval: true },
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("calendar-helper", {}, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("is not approved by feed metadata");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("warns but installs unapproved feed entries in warn mode", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+        },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      installPolicy: { mode: "warn", requireApproval: true },
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("calendar-helper", {}, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(runtime.stderr).toContain("Warning: Feed entry 'calendar-helper' is not approved");
+    expect(runtime.commands).toEqual([["plugins", "install", "clawhub:openclaw-calendar"]]);
+  });
+
+  it("installs approved feed entries when enforcement is enabled", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        {
+          type: "plugin",
+          id: "calendar-helper",
+          install: { source: "clawhub", spec: "openclaw-calendar" },
+          approval: { status: "approved", owner: "platform" },
+        },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      installPolicy: { mode: "enforce", requireApproval: true },
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("calendar-helper", {}, runtime);
+
+    expect(exitCode).toBe(0);
+    expect(runtime.stderr).toBe("");
+    expect(runtime.commands).toEqual([["plugins", "install", "clawhub:openclaw-calendar"]]);
+  });
+
+  it("requires disambiguation before installing duplicate feed entry ids", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        { type: "skill", id: "shared", install: { source: "clawhub", slug: "shared-skill" } },
+        { type: "plugin", id: "shared", install: { source: "clawhub", spec: "shared-plugin" } },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("shared", {}, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("Use --source or --type to choose one.");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("rejects feed install entries without supported install metadata", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [{ type: "plugin", id: "unknown", install: { source: "container" } }],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const exitCode = await feedsInstallCommand("unknown", {}, runtime);
+
+    expect(exitCode).toBe(2);
+    expect(runtime.stderr).toContain("does not include supported install metadata");
+    expect(runtime.commands).toEqual([]);
+  });
 });
 
 function createRuntime(params: {
   readonly sources?: readonly Record<string, unknown>[];
   readonly files?: Readonly<Record<string, string>>;
-}): FeedsCommandRuntime & { stdout: string; stderr: string; isTTY?: boolean } {
-  const runtime: FeedsCommandRuntime & { stdout: string; stderr: string; isTTY?: boolean } = {
+  readonly installPolicy?: Record<string, unknown>;
+}): FeedsCommandRuntime & {
+  stdout: string;
+  stderr: string;
+  isTTY?: boolean;
+  commands: readonly string[][];
+} {
+  const runtime: FeedsCommandRuntime & {
+    stdout: string;
+    stderr: string;
+    isTTY?: boolean;
+    commands: string[][];
+  } = {
     stdout: "",
     stderr: "",
+    commands: [],
     writeStdout(value) {
       this.stdout += value;
     },
     error(value) {
       this.stderr += `${value}\n`;
     },
+    async runOpenClawCommand(argv) {
+      runtime.commands.push([...argv]);
+      return 0;
+    },
     async readConfigSnapshot() {
       return {
         valid: true,
         config: {
-          plugins: { entries: { feeds: { enabled: true, config: { sources: params.sources } } } },
+          plugins: {
+            entries: {
+              feeds: {
+                enabled: true,
+                config: { sources: params.sources, installPolicy: params.installPolicy },
+              },
+            },
+          },
         },
       };
     },

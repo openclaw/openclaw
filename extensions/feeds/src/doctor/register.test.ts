@@ -51,6 +51,31 @@ describe("Feeds doctor checks", () => {
     expect(findings).toEqual([]);
   });
 
+  it("reports invalid install policy config", () => {
+    const findings = evaluateFeedsConfig({
+      cfg: {
+        plugins: {
+          entries: {
+            feeds: {
+              enabled: true,
+              config: {
+                installPolicy: { mode: "block", requireApproval: "yes" },
+                sources: [{ id: "approved", url: "https://feeds.example.com/root.json" }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "feeds/config-invalid",
+        ocPath: "oc://openclaw.config/plugins/entries/feeds/config/installPolicy/mode",
+      }),
+    ]);
+  });
+
   it("reports duplicate ids, unsupported urls, and missing pinned integrity", () => {
     const findings = evaluateFeedsConfig({
       cfg: {
