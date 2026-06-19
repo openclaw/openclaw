@@ -77,12 +77,20 @@ describe("requiresInternalAcpSessionEffects", () => {
       true,
     ],
     [
-      "parent-owned background ACP sessions",
+      "parent-owned one-shot background ACP sessions",
       {
         acp: { mode: "oneshot" },
         spawnedBy: parentKey,
       },
       true,
+    ],
+    [
+      "parent-owned persistent ACP sessions",
+      {
+        acp: { mode: "persistent" },
+        spawnedBy: parentKey,
+      },
+      false,
     ],
     [
       "interactive ACP sessions",

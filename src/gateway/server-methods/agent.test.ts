@@ -2243,8 +2243,8 @@ describe("gateway agent handler", () => {
         state: "idle",
         lastActivityAt: Date.now(),
       },
-      spawnedBy: "agent:main:webchat:main",
-      parentSessionKey: "agent:main:webchat:main",
+      spawnedBy: "agent:main:telegram:123",
+      parentSessionKey: "agent:main:telegram:123",
       hubDelegated: {
         ownerSessionKey: "agent:main:webchat:main",
         createdAt: Date.now(),
@@ -2260,6 +2260,8 @@ describe("gateway agent handler", () => {
         message: "你好",
         agentId: "main",
         sessionKey: "agent:main:main",
+        replyChannel: "telegram",
+        to: "123",
         deliver: true,
         bestEffortDeliver: true,
         idempotencyKey: "test-hub-delegated-metadata-internal",
@@ -2277,6 +2279,50 @@ describe("gateway agent handler", () => {
     }>();
     expect(callArgs.sessionEffects).toBe("internal");
     expect(callArgs.deliver).not.toBe(true);
+  });
+
+  it("keeps parent-owned thread-bound ACP session delivery visible", async () => {
+    mockMainSessionEntry({
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime-thread-bound",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+      spawnedBy: "agent:main:telegram:123",
+      parentSessionKey: "agent:main:telegram:123",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "thread reply" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "thread-bound resume",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        bestEffortDeliver: true,
+        idempotencyKey: "test-thread-bound-acp-visible-delivery",
+      },
+      {
+        reqId: "thread-bound-acp-visible-delivery",
+        client: backendGatewayClient(),
+        context: makeContext(),
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      sessionEffects?: string;
+      deliver?: boolean;
+    }>();
+    expect(callArgs.sessionEffects).not.toBe("internal");
+    expect(callArgs.deliver).toBe(true);
   });
 
   it("rejects public transcriptMessage overrides", async () => {

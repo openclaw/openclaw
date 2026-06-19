@@ -8,14 +8,19 @@ type SessionInteractionEntry = {
   spawnedBy?: string;
   parentSessionKey?: string;
   hubDelegated?: HubDelegatedSessionMeta | null;
-  acp?: unknown;
+  acp?: { mode?: unknown } | null;
 };
 
-/** Hub-delegated and parent-owned ACP child sessions must stay off user-visible chat surfaces. */
+/** Background ACP child runs must stay off user-visible chat surfaces. */
 export function requiresInternalAcpSessionEffects(entry?: SessionInteractionEntry | null): boolean {
   const hubDelegatedOwner = normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey);
-  const hubDelegated = Boolean(hubDelegatedOwner);
-  return hubDelegated || isParentOwnedBackgroundAcpSession(entry);
+  if (hubDelegatedOwner) {
+    return true;
+  }
+  if (!isParentOwnedBackgroundAcpSession(entry)) {
+    return false;
+  }
+  return entry?.acp?.mode !== "persistent";
 }
 
 function resolveAcpSessionInteractionMode(
