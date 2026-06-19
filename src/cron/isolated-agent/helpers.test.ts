@@ -6,6 +6,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
@@ -226,5 +227,40 @@ describe("isHeartbeatOnlyResponse", () => {
         ACK_MAX,
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveCronPayloadOutcome", () => {
+  it("treats a recovered early tool error as non-fatal when later payloads succeed (#94846)", () => {
+    // Scenario: early sed error (isError:true) → later apply_patch success → final assistant text
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ 🛠️ sed: can't read file: No such file or directory", isError: true },
+        { text: "Patch applied successfully." },
+      ],
+      runLevelError: new Error("sed: can't read file"),
+      finalAssistantVisibleText: "REPRO_FINAL_OUTPUT_PRESENT",
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
+  });
+
+  it("still treats a genuine fatal error as fatal when no recovery occurs", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Fatal: connection refused", isError: true }],
+      runLevelError: new Error("connection refused"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(true);
+  });
+
+  it("treats a recovered error as non-fatal even without finalAssistantVisibleText", () => {
+    // Later successful payload (deliverable content) proves recovery
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ 🛠️ sed: file missing", isError: true },
+        { text: "Task completed successfully. Here are the results." },
+      ],
+      runLevelError: new Error("sed: file missing"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
   });
 });

@@ -257,11 +257,9 @@ export function resolveCronPayloadOutcome(params: {
     params.finalAssistantVisibleText,
   );
   const hasSuccessfulPayloadAfterLastError =
-    !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     params.payloads.slice(lastErrorPayloadIndex + 1).some(isSuccessfulCronPayload);
   const hasSuccessfulPayloadBeforeLastError =
-    !params.runLevelError &&
     lastErrorPayloadIndex > 0 &&
     params.payloads.slice(0, lastErrorPayloadIndex).some(isSuccessfulCronPayload);
   const lastErrorPayload =
@@ -330,7 +328,9 @@ export function resolveCronPayloadOutcome(params: {
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    (runLevelError !== undefined && !hasRecoveringTerminalOutput);
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
