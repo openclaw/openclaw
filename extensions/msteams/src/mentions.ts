@@ -5,6 +5,7 @@
  * 1. Text containing <at>Name</at> tags
  * 2. entities array with mention metadata
  */
+import { matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 
 type MentionEntity = {
   type: "mention";
@@ -111,4 +112,36 @@ export function formatMentionText(text: string, mentions: MentionInfo[]): string
     formatted = formatted.replace(namePattern, `<at>${mention.name}</at>`);
   }
   return formatted;
+}
+
+/**
+ * Whether a channel/group message should be treated as an implicit mention because
+ * its text matches a configured mention pattern (e.g. the agent's name). This lets
+ * the agent answer when named without an `@` — the message-handler ORs the result
+ * into the `wasMentioned` fact so the existing requireMention gate still drops
+ * everything else (no extra model turn).
+ *
+ * Guards, in order: never for DMs or already-@mentioned messages (handled by the
+ * normal path); nothing to match without text or patterns; and never for the bot's
+ * own posts — with RSC the bot also receives its own channel messages, and a reply
+ * that happens to contain the keyword would otherwise re-trigger itself.
+ */
+export function isMSTeamsKeywordMention(params: {
+  isDirectMessage: boolean;
+  alreadyMentioned: boolean;
+  text: string | undefined;
+  fromId: string | undefined;
+  recipientId: string | undefined;
+  mentionRegexes: RegExp[];
+}): boolean {
+  if (params.isDirectMessage || params.alreadyMentioned) {
+    return false;
+  }
+  if (!params.text || params.mentionRegexes.length === 0) {
+    return false;
+  }
+  if (params.fromId && params.fromId === params.recipientId) {
+    return false;
+  }
+  return matchesMentionPatterns(params.text, params.mentionRegexes);
 }

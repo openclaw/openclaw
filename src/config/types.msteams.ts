@@ -11,7 +11,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
-import type { DmConfig } from "./types.messages.js";
+import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -163,6 +163,13 @@ export type MSTeamsConfig = {
   mediaAuthAllowHosts?: Array<string>;
   /** Default: require @mention to respond in channels/groups. */
   requireMention?: boolean;
+  /**
+   * Scope the global `messages.groupChat.mentionPatterns` to selected Teams
+   * conversations. A pattern match makes a non-@mention channel message count
+   * as a mention, so the agent answers when named without an @ (e.g. "Radar, …").
+   * Same seam as the Discord/Slack/WhatsApp channels.
+   */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Max group/channel messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
