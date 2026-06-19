@@ -1,9 +1,10 @@
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
-import type { SessionEchoTarget, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatErrorMessage } from "../errors.js";
 import { markChannelMirrorCapable } from "./channel-mirror-capability.js";
+import type { MirrorDispatcher } from "./channel-outbound-registrar.types.js";
 import { createMirrorReplyResolver } from "./echo-mirror-resolver.js";
 import { normalizeEchoTargetId, resolveEchoTargets } from "./echo.js";
 
@@ -28,13 +29,9 @@ const log = createSubsystemLogger("outbound/mirror-dispatch");
  * replyResolver), so it does not re-trigger the post-hoc echo and re-deliver to the
  * other pinned threads.
  */
-export type MirrorDispatcher = (params: {
-  cfg: OpenClawConfig;
-  target: SessionEchoTarget;
-  /** Drives the mirrored turn from the origin run's bus; replaces the model. */
-  replyResolver: GetReplyFromConfig;
-  sessionKey?: string;
-}) => Promise<void> | void;
+// Canonical type home is the leaf module (breaks an outbound-pipeline import cycle);
+// re-exported here for existing importers of MirrorDispatcher.
+export type { MirrorDispatcher };
 
 export type MirrorDispatchHandle = {
   /** Number of targets a mirror turn was launched for. */

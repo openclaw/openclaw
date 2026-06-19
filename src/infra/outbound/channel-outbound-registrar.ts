@@ -7,20 +7,17 @@
 import {
   registerChannelEchoAdmission,
   unregisterChannelEchoAdmission,
-  type ChannelEchoAdmission,
 } from "./channel-admission.js";
+import type { ChannelOutboundRegistrar } from "./channel-outbound-registrar.types.js";
 import {
   registerChannelMirrorDispatcher,
   unregisterChannelMirrorDispatcher,
-  type MirrorDispatcher,
 } from "./mirror-dispatch.js";
 
-export type ChannelOutboundRegistrar = {
-  registerMirrorDispatcher: (accountId: string, dispatcher: MirrorDispatcher) => void;
-  unregisterMirrorDispatcher: (accountId: string) => void;
-  registerEchoAdmission: (accountId: string, admission: ChannelEchoAdmission) => void;
-  unregisterEchoAdmission: (accountId: string) => void;
-};
+// The type lives in the leaf module (./channel-outbound-registrar.types.js) so type
+// consumers like ChannelGatewayContext don't pull this factory's value imports (the
+// outbound delivery pipeline) into a module cycle; re-exported here for convenience.
+export type { ChannelOutboundRegistrar };
 
 /**
  * Create a registrar bound to the host's AUTHENTICATED `channel` id. Both the

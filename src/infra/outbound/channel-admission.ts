@@ -7,22 +7,14 @@
 // enablement of the destination too.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isChannelMirrorCapable } from "./channel-mirror-capability.js";
+import type {
+  ChannelEchoAdmission,
+  EchoAdmissionTarget,
+} from "./channel-outbound-registrar.types.js";
 
-export type EchoAdmissionTarget = {
-  to: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
-/**
- * Returns false when an echo delivery to this target is currently not allowed.
- * May be async — telegram re-checks DM pairing/allowlist authorization, which is
- * resolved through the ingress resolver.
- */
-export type ChannelEchoAdmission = (
-  cfg: OpenClawConfig,
-  target: EchoAdmissionTarget,
-) => boolean | Promise<boolean>;
+// Canonical type home is the leaf module (breaks an outbound-pipeline import cycle);
+// re-exported here for existing importers of the admission types.
+export type { ChannelEchoAdmission, EchoAdmissionTarget };
 
 /** A registered admission predicate plus the owner that registered it (owner-scoped). */
 type OwnedEchoAdmission = { owner: string; admission: ChannelEchoAdmission };
