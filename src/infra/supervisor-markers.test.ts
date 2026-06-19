@@ -1,6 +1,6 @@
 // Covers supervisor marker files used to identify managed OpenClaw processes.
 import { spawnSync } from "node:child_process";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { detectRespawnSupervisor, SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 vi.mock("node:child_process", () => ({
@@ -131,10 +131,6 @@ describe("win32 schtasks probe fallback", () => {
     mockSpawnSync.mockReset();
   });
 
-  afterEach(() => {
-    mockSpawnSync.mockReset();
-  });
-
   it("returns schtasks when probe succeeds with no env vars set", () => {
     mockSpawnSync.mockReturnValue({
       status: 0,
@@ -148,7 +144,7 @@ describe("win32 schtasks probe fallback", () => {
     expect(mockSpawnSync).toHaveBeenCalledWith(
       "schtasks.exe",
       ["/Query", "/TN", "OpenClaw Gateway"],
-      expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
+      expect.objectContaining({ timeout: 3000, stdio: "pipe", windowsHide: true }),
     );
   });
 
@@ -172,7 +168,9 @@ describe("win32 schtasks probe fallback", () => {
   });
 
   it("skips probe when env vars are already set", () => {
-    detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32");
+    expect(
+      detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32"),
+    ).toBe("schtasks");
     expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
