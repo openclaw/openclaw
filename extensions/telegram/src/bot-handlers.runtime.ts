@@ -31,7 +31,10 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+import {
+  applyModelOverrideToSessionEntry,
+  shouldPreserveCompatibleAuthProfileOverride,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -56,6 +59,7 @@ import {
   type NormalizedAllowFrom,
 } from "./bot-access.js";
 import {
+  loadAuthProfileStoreForRuntime,
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveDefaultModelForAgent,
@@ -166,6 +170,26 @@ import {
 } from "./network-errors.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
+
+function resolveStoredAuthProfileProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: { authProfileOverride?: string };
+}): string | undefined {
+  const profileId = params.entry.authProfileOverride?.trim();
+  if (!profileId) {
+    return undefined;
+  }
+  try {
+    const agentDir = resolveAgentDir(params.cfg, params.agentId);
+    return loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    }).profiles[profileId]?.provider;
+  } catch {
+    return undefined;
+  }
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -2916,6 +2940,18 @@ export const registerTelegramHandlers = ({
                       model: selection.model,
                       isDefault: isDefaultSelection,
                     },
+                    preserveAuthProfileOverride: shouldPreserveCompatibleAuthProfileOverride({
+                      cfg: runtimeCfg,
+                      entry,
+                      currentProvider:
+                        entry.providerOverride ?? entry.modelProvider ?? resolvedDefault.provider,
+                      provider: selection.provider,
+                      storedAuthProfileProvider: resolveStoredAuthProfileProvider({
+                        cfg: runtimeCfg,
+                        agentId: sessionState.agentId,
+                        entry,
+                      }),
+                    }),
                   });
                   return entry;
                 },

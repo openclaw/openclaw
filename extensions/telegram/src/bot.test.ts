@@ -1,5 +1,6 @@
 // Telegram tests cover bot plugin behavior.
 import { rm } from "node:fs/promises";
+import { resolveAgentDir, saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
@@ -11,7 +12,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { loadSessionStore, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
@@ -1572,6 +1573,206 @@ describe("createTelegramBot", () => {
       expect(entry?.providerOverride).toBe("openai");
       expect(entry?.modelOverride).toBe("gpt-5.4");
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("preserves compatible auth profile overrides when selecting a Telegram model", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-auth-compatible-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              agentDir: `${storePath}.agent`,
+            },
+          ],
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "team:prod": { type: "api_key", provider: "openai", key: "sk-test" },
+          },
+        },
+        resolveAgentDir(config as OpenClawConfig, "main"),
+      );
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
+
+      const callbackCtx = {
+        callbackQuery: {
+          id: "cbq-model-auth-compatible-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 24,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+      await callbackHandler(callbackCtx);
+      const sessionKey = Object.keys(loadSessionStore(storePath, { skipCache: true }))[0];
+      if (!sessionKey) {
+        throw new Error("Expected Telegram model callback to create a session entry");
+      }
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          updatedAt: Date.now(),
+          sessionId: "telegram-auth-compatible",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+          authProfileOverride: "team:prod",
+          authProfileOverrideSource: "user",
+        },
+      });
+
+      await callbackHandler({
+        ...callbackCtx,
+        callbackQuery: {
+          ...callbackCtx.callbackQuery,
+          id: "cbq-model-auth-compatible-2",
+        },
+      });
+
+      const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.authProfileOverride).toBe("team:prod");
+      expect(entry?.authProfileOverrideSource).toBe("user");
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-auth-compatible-2");
+    } finally {
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.agent`, { recursive: true, force: true });
+    }
+  });
+
+  it("clears incompatible auth profile overrides when selecting a Telegram model", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-auth-incompatible-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
+
+      const callbackCtx = {
+        callbackQuery: {
+          id: "cbq-model-auth-incompatible-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 25,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+      await callbackHandler(callbackCtx);
+      const sessionKey = Object.keys(loadSessionStore(storePath, { skipCache: true }))[0];
+      if (!sessionKey) {
+        throw new Error("Expected Telegram model callback to create a session entry");
+      }
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          updatedAt: Date.now(),
+          sessionId: "telegram-auth-incompatible",
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          authProfileOverride: "anthropic:default",
+          authProfileOverrideSource: "user",
+        },
+      });
+
+      await callbackHandler({
+        ...callbackCtx,
+        callbackQuery: {
+          ...callbackCtx.callbackQuery,
+          id: "cbq-model-auth-incompatible-2",
+        },
+      });
+
+      const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.authProfileOverride).toBeUndefined();
+      expect(entry?.authProfileOverrideSource).toBeUndefined();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-auth-incompatible-2");
     } finally {
       await rm(storePath, { force: true });
     }

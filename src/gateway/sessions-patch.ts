@@ -10,7 +10,8 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
@@ -22,7 +23,6 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -49,7 +49,10 @@ import {
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  shouldPreserveCompatibleAuthProfileOverride,
+} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 
@@ -73,43 +76,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
-function shouldPreserveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  currentProvider: string;
-  provider: string;
-}): boolean {
-  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
-  if (!profileOverride) {
-    return false;
-  }
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
-    const candidate = normalizeOptionalLowercaseString(rawProvider);
-    if (!candidate) {
-      return false;
-    }
-    return (
-      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
-      resolveProviderIdForAuth(provider, { config: params.cfg })
-    );
-  };
-  const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
-    return resolvesToTargetProvider(params.currentProvider);
-  }
-  const profileProvider = normalizeOptionalLowercaseString(
-    profileOverride.slice(0, delimiterIndex),
-  );
-  if (!profileProvider) {
-    return false;
-  }
-  return resolvesToTargetProvider(profileProvider);
-}
-
 function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
@@ -128,6 +94,26 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
     return normalized;
   }
   return undefined;
+}
+
+function resolveStoredAuthProfileProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry;
+}): string | undefined {
+  const profileId = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileId) {
+    return undefined;
+  }
+  try {
+    const agentDir = resolveAgentDir(params.cfg, params.agentId);
+    return loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    }).profiles[profileId]?.provider;
+  } catch {
+    return undefined;
+  }
 }
 
 type SessionPatchProjectionEntry = {
@@ -533,11 +519,16 @@ export async function projectSessionsPatchEntry(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+        preserveAuthProfileOverride: shouldPreserveCompatibleAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolvedDefault.provider,
+          storedAuthProfileProvider: resolveStoredAuthProfileProvider({
+            cfg,
+            agentId: sessionAgentId,
+            entry: next,
+          }),
         }),
       });
       delete next.liveModelSwitchPending;
@@ -582,11 +573,16 @@ export async function projectSessionsPatchEntry(params: {
           isDefault,
         },
         profileOverride: trailingProfile || undefined,
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+        preserveAuthProfileOverride: shouldPreserveCompatibleAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolved.ref.provider,
+          storedAuthProfileProvider: resolveStoredAuthProfileProvider({
+            cfg,
+            agentId: sessionAgentId,
+            entry: next,
+          }),
         }),
         markLiveSwitchPending: true,
       });

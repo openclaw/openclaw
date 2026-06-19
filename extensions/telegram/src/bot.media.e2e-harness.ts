@@ -297,6 +297,7 @@ vi.mock("./bot.agent.runtime.js", () => ({
 }));
 
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
+  loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles: {} })),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveDefaultAgentId: vi.fn(() => "default"),
   resolveDefaultModelForAgent: vi.fn(() => ({

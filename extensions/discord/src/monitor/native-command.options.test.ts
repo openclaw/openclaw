@@ -31,9 +31,15 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  resolveHumanDelayConfig: () => undefined,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
+  return {
+    ...actual,
+    resolveHumanDelayConfig: () => undefined,
+  };
+});
 
 let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
