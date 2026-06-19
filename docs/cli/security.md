@@ -38,8 +38,8 @@ For webhook ingress, startup logs a non-fatal security warning and audit flags `
 - `hooks.path="/"`
 - `hooks.defaultSessionKey` is unset
 - `hooks.allowedAgentIds` is unrestricted
-- request `sessionKey` overrides are enabled
-- overrides are enabled without `hooks.allowedSessionKeyPrefixes`
+- request `sessionKey` overrides are enabled without `hooks.allowedSessionKeyPrefixes`, allowing arbitrary key shapes
+- overrides are enabled without a non-empty `hooks.allowedSessionKeyPrefixes` bound
 
 If Gateway password auth is supplied only at startup, pass the same value to `openclaw security audit --auth password --password <password>` so the audit can check it against `hooks.token`.
 Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
