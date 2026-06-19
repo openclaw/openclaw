@@ -132,7 +132,9 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .option("--status <status>", "Filter by status")
     .option("--json", "Print JSON", false)
     .action(async (options: JsonOptions & { board?: string; status?: string }) => {
-      let cards = await params.store.list({ boardId: options.board });
+      let cards = (await params.store.list({ boardId: options.board })).filter(
+        (card) => !card.metadata?.archivedAt,
+      );
       if (options.status) {
         cards = cards.filter((card) => card.status === options.status);
       }
