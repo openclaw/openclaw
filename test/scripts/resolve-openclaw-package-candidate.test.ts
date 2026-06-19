@@ -726,6 +726,50 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(bodyCancelled).toBe(true);
   });
 
+  it("rejects unsafe decimal package_url content-length values before reading", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let readStarted = false;
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          ({
+            body: {
+              cancel() {
+                bodyCancelled = true;
+                return Promise.resolve();
+              },
+              getReader() {
+                return {
+                  cancel() {
+                    bodyCancelled = true;
+                    return Promise.resolve();
+                  },
+                  read() {
+                    readStarted = true;
+                    return new Promise(() => {});
+                  },
+                  releaseLock() {},
+                };
+              },
+            },
+            headers: new Headers({ "content-length": "9007199254740993" }),
+            status: 200,
+          }) as Response,
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 1024,
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(/exceeds maximum download size/u);
+    expect(readStarted).toBe(false);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
+  });
+
   it("bounds package_url downloads and writes completed files atomically", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
