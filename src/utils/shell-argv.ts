@@ -30,6 +30,15 @@ export function splitShellArgs(raw: string): string[] | null {
       continue;
     }
     if (!inSingle && !inDouble && ch === "\\") {
+      // POSIX shells escape the next character with backslash outside quotes,
+      // but on Windows absolute paths (e.g. C:\Users\...) the backslash is a
+      // path separator, not an escape. Only consume the backslash when the
+      // next character is a shell metacharacter that actually needs escaping.
+      const next = raw[i + 1];
+      if (next && !/[\s'"\\$`\n\r]/.test(next)) {
+        buf += ch;
+        continue;
+      }
       escaped = true;
       continue;
     }
