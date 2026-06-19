@@ -2098,7 +2098,7 @@ describe("buildStatusMessage", () => {
     );
   });
 
-  it("uses persisted cost without zero-token counters when recent transcript tail has no usage", async () => {
+  it("preserves full-session cost when recent transcript tail has a subtotal", async () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-transcript-cost-before-tail";
@@ -2115,6 +2115,14 @@ describe("buildStatusMessage", () => {
               totalTokens: 30,
               cost: { total: 0.0021 },
             },
+          ],
+        });
+        fs.appendFileSync(
+          logPath,
+          `\n${JSON.stringify({
+            type: "message",
+            message: { role: "user", content: "x".repeat(300 * 1024) },
+          })}\n${[
             {
               input: 5,
               output: 10,
@@ -2123,14 +2131,18 @@ describe("buildStatusMessage", () => {
               totalTokens: 15,
               cost: { total: 0.0042 },
             },
-          ],
-        });
-        fs.appendFileSync(
-          logPath,
-          `\n${JSON.stringify({
-            type: "message",
-            message: { role: "user", content: "x".repeat(300 * 1024) },
-          })}`,
+          ]
+            .map((usage) =>
+              JSON.stringify({
+                type: "message",
+                message: {
+                  role: "assistant",
+                  model: "claude-opus-4-6",
+                  usage,
+                },
+              }),
+            )
+            .join("\n")}`,
           "utf-8",
         );
 

@@ -722,7 +722,11 @@ export function buildStatusMessage(args: StatusArgs): string {
       ) {
         cacheWrite = logUsage.cacheWrite;
       }
-      if (typeof logUsage.costUsd === "number" && Number.isFinite(logUsage.costUsd)) {
+      if (
+        statusCostUsd === undefined &&
+        typeof logUsage.costUsd === "number" &&
+        Number.isFinite(logUsage.costUsd)
+      ) {
         statusCostUsd = logUsage.costUsd;
       }
     }
