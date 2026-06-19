@@ -367,4 +367,38 @@ describe("capturePluginToolDescriptor availability validation", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it("does not crash on non-object entries inside availability groups", () => {
+    // Plugin-authored data is arbitrary JS — null, primitives, and arrays
+    // inside allOf/anyOf should not throw during the shape check.  The
+    // evaluator will diagnose them as malformed expressions later.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = capturePluginToolDescriptor({
+        pluginId: "test-plugin",
+        tool: makeTool({
+          availability: {
+            allOf: [
+              { kind: "always" },
+              null as never,
+              "not-an-object" as never,
+              42 as never,
+              [1, 2, 3] as never,
+              { anyOf: [{ kind: "always" }] },
+            ],
+          },
+        }),
+        optional: false,
+      });
+      // Should not throw — non-object entries are silently skipped
+      const shapeWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("Non-array availability group"),
+      );
+      expect(shapeWarnings).toHaveLength(0);
+      // Valid availability preserved (non-object entries are evaluator's problem)
+      expect(result.descriptor.availability).toBeDefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
