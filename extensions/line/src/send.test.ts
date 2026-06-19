@@ -12,6 +12,7 @@ const {
   resolveLineChannelAccessTokenMock,
   recordChannelActivityMock,
   logVerboseMock,
+  warnMock,
   resolvePinnedHostnameWithPolicyMock,
 } = vi.hoisted(() => {
   const pushMessageMockLocal = vi.fn();
@@ -31,6 +32,7 @@ const {
   const resolveLineChannelAccessTokenMockLocal = vi.fn(() => "line-token");
   const recordChannelActivityMockLocal = vi.fn();
   const logVerboseMockLocal = vi.fn();
+  const warnMockLocal = vi.fn();
   const resolvePinnedHostnameWithPolicyMockLocal = vi.fn();
   return {
     pushMessageMock: pushMessageMockLocal,
@@ -43,6 +45,7 @@ const {
     resolveLineChannelAccessTokenMock: resolveLineChannelAccessTokenMockLocal,
     recordChannelActivityMock: recordChannelActivityMockLocal,
     logVerboseMock: logVerboseMockLocal,
+    warnMock: warnMockLocal,
     resolvePinnedHostnameWithPolicyMock: resolvePinnedHostnameWithPolicyMockLocal,
   };
 });
@@ -74,6 +77,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return {
     ...actual,
     logVerbose: logVerboseMock,
+    warn: warnMock,
   };
 });
 
@@ -123,6 +127,7 @@ describe("LINE send helpers", () => {
     resolveLineChannelAccessTokenMock.mockReset();
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
+    warnMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockReset();
 
     MessagingApiClientMock.mockImplementation(function () {
@@ -413,7 +418,7 @@ describe("LINE send helpers", () => {
       }),
     ).rejects.toThrow("LINE push failed");
 
-    expect(logVerboseMock).toHaveBeenCalledWith(
+    expect(warnMock).toHaveBeenCalledWith(
       "line: push message failed (400 Bad Request): invalid flex payload",
     );
   });

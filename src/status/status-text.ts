@@ -324,13 +324,10 @@ function buildStatusUptimeLine(): string {
 
 async function resolveRuntimePluginHealthLine(): Promise<string> {
   try {
-    const { collectRuntimePluginHealthSnapshot } = (await loadStatusPluginHealthRuntime()) ?? {};
-    return formatCompactPluginHealthLine(
-      collectRuntimePluginHealthSnapshot?.() ??
-        (() => {
-          throw new TypeError();
-        })(),
-    );
+    const mod = await loadStatusPluginHealthRuntime();
+    if (!mod) return "⚠️ Plugins: health unavailable";
+    const snapshot = mod.collectRuntimePluginHealthSnapshot?.();
+    return formatCompactPluginHealthLine(snapshot);
   } catch {
     return "⚠️ Plugins: health unavailable";
   }

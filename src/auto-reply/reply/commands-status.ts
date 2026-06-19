@@ -23,13 +23,27 @@ export async function buildStatusReply(
   }
 
   try {
-    return {
-      text: await buildStatusText({
+    const statusText = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        clearTimeout(timer);
+        reject(new Error("Status render timeout"));
+      }, 10_000);
+      buildStatusText({
         ...params,
         statusChannel: command.channel,
         statusAccountId: command.accountId,
-      }),
-    };
+      }).then(
+        (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+    return { text: statusText };
   } catch (error) {
     return {
       text: `⚠️ Status: error rendering response (${error instanceof Error ? error.message : String(error)})`,
