@@ -12,6 +12,11 @@ on:
         required: false
         default: "*qa*"
         type: string
+      strict_inputs:
+        description: Fail when score or QA evidence inputs have non-fatal drift
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -85,9 +90,14 @@ jobs:
           find .artifacts/maturity-evidence -name qa-evidence.json -print
 
       - name: Render artifact docs
+        env:
+          STRICT_INPUTS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_inputs }}
         run: |
           set -euo pipefail
-          args=(--output-dir .artifacts/maturity-docs)
+          args=(--output-dir .artifacts/maturity-docs --static-assets-dir .artifacts/maturity-docs/assets/maturity)
+          if [[ "$STRICT_INPUTS" == "true" ]]; then
+            args+=(--strict-inputs)
+          fi
           if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
             args+=(--evidence-dir .artifacts/maturity-evidence)
           fi
@@ -97,6 +107,7 @@ jobs:
             echo
             echo "- Committed docs check: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
+            echo "- Strict inputs: \`${STRICT_INPUTS:-false}\`"
             if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
               echo "- QA evidence: included"
             else

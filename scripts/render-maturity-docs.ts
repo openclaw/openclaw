@@ -22,8 +22,10 @@ type Args = {
   taxonomy: string;
   scores: string;
   outputDir: string;
+  staticAssetsDir?: string;
   evidenceDir?: string;
   check: boolean;
+  strictInputs: boolean;
 };
 
 type ScoreObject = {
@@ -157,6 +159,7 @@ type EvidenceEntry = {
 };
 
 type EvidenceSummary = {
+  sourcePath: string;
   path: string;
   generatedAt: string;
   profile: string;
@@ -183,6 +186,8 @@ type RenderInputs = {
 type RenderMaturityScorecardInputs = RenderInputs & {
   evidenceSummaries: EvidenceSummary[];
   scoreWarnings: string[];
+  evidenceWarnings: string[];
+  staticAssetsPath?: string;
 };
 
 type GeneratedNoticeInputs = {
@@ -195,8 +200,10 @@ function parseArgs(argv: string[]): Args {
     taxonomy: DEFAULT_TAXONOMY_PATH,
     scores: DEFAULT_SCORES_PATH,
     outputDir: DEFAULT_OUTPUT_DIR,
+    staticAssetsDir: undefined,
     evidenceDir: undefined,
     check: false,
+    strictInputs: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -205,6 +212,10 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--check") {
       args.check = true;
+      continue;
+    }
+    if (arg === "--strict-inputs") {
+      args.strictInputs = true;
       continue;
     }
     const next = (): string => {
@@ -221,6 +232,8 @@ function parseArgs(argv: string[]): Args {
       args.scores = next();
     } else if (arg === "--output-dir") {
       args.outputDir = next();
+    } else if (arg === "--static-assets-dir") {
+      args.staticAssetsDir = next();
     } else if (arg === "--evidence-dir") {
       args.evidenceDir = next();
     } else if (arg === "--help" || arg === "-h") {
@@ -230,8 +243,11 @@ Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
   --scores <path>       Aggregate score YAML path (default: docs/maturity-scores.yaml)
   --output-dir <path>   Directory for maturity-scorecard.md, taxonomy.md, and taxonomy-outline.md
+  --static-assets-dir <path>
+                        Copy source YAML and QA evidence JSON for docs components
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
   --check               Fail when output files are stale
+  --strict-inputs       Fail on score or evidence input warnings
   -h, --help            Show this help
 `);
       process.exit(0);
@@ -645,6 +661,14 @@ function yamlCode(value: unknown): string {
   return `\`${markdownEscape(value)}\``;
 }
 
+function htmlAttributeEscape(value: unknown): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function scoreText(value?: ScoreObject): string {
   if (!value || typeof value !== "object") {
     return "`Unscored`";
@@ -699,6 +723,24 @@ function generatedNotice(inputs: GeneratedNoticeInputs): string[] {
   return [
     "> " + parts.join(" "),
     "> Committed docs intentionally exclude the old maintainer inventory tree; per-run QA evidence stays in GitHub Actions artifacts.",
+    "",
+  ];
+}
+
+function renderMetadataComment({
+  taxonomyPath,
+  scoresPath,
+  evidenceSummaries,
+  scoreWarnings,
+  evidenceWarnings,
+  staticAssetsPath,
+}: RenderMaturityScorecardInputs): string[] {
+  const scorecardCount = evidenceSummaries.filter((item) => item.scorecard).length;
+  const staticAssetsAttribute = staticAssetsPath
+    ? ` static-assets="${htmlAttributeEscape(staticAssetsPath)}"`
+    : "";
+  return [
+    `<!-- <maturity-render taxonomy="${htmlAttributeEscape(taxonomyPath)}" scores="${htmlAttributeEscape(scoresPath)}" evidence-files="${evidenceSummaries.length}" evidence-scorecards="${scorecardCount}" score-warnings="${scoreWarnings.length}" evidence-warnings="${evidenceWarnings.length}"${staticAssetsAttribute} /> -->`,
     "",
   ];
 }
@@ -884,6 +926,7 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
     const payload = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
     const entries = Array.isArray(payload.entries) ? (payload.entries as EvidenceEntry[]) : [];
     return {
+      sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
       generatedAt: typeof payload.generatedAt === "string" ? payload.generatedAt : "",
       profile: typeof payload.profile === "string" ? payload.profile : "",
@@ -893,6 +936,71 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
       scorecard: readScorecard(payload, filePath),
     };
   });
+}
+
+function evidenceScorecardWarnings(evidenceSummaries: EvidenceSummary[]): string[] {
+  return evidenceSummaries
+    .filter((item) => !item.scorecard)
+    .map(
+      (item) =>
+        `${item.path}: qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile <id> to produce deterministic scorecard rows`,
+    );
+}
+
+function writeInputWarnings(warnings: string[]): void {
+  for (const warning of warnings) {
+    process.stderr.write(`warning: ${warning}\n`);
+  }
+}
+
+function enforceStrictInputs(warnings: string[]): void {
+  if (warnings.length === 0) {
+    return;
+  }
+  throw new Error(
+    `strict input validation failed:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`,
+  );
+}
+
+function staticAssetPath(outputDir: string, staticAssetsDir?: string): string | undefined {
+  if (!staticAssetsDir) {
+    return undefined;
+  }
+  const relative = path.relative(outputDir, staticAssetsDir).replaceAll(path.sep, "/");
+  return relative.startsWith("..") ? undefined : relative;
+}
+
+function copyStaticSourceAssets({
+  evidenceSummaries,
+  scoresPath,
+  staticAssetsDir,
+  taxonomyPath,
+}: {
+  evidenceSummaries: EvidenceSummary[];
+  scoresPath: string;
+  staticAssetsDir: string;
+  taxonomyPath: string;
+}): string[] {
+  fs.mkdirSync(staticAssetsDir, { recursive: true });
+  const copied = [
+    [taxonomyPath, path.join(staticAssetsDir, "taxonomy.yaml")],
+    [scoresPath, path.join(staticAssetsDir, "maturity-scores.yaml")],
+  ];
+  const evidenceDir = path.join(staticAssetsDir, "evidence");
+  fs.rmSync(evidenceDir, { recursive: true, force: true });
+  if (evidenceSummaries.length > 0) {
+    fs.mkdirSync(evidenceDir, { recursive: true });
+  }
+  for (const [index, evidence] of evidenceSummaries.entries()) {
+    copied.push([
+      evidence.sourcePath,
+      path.join(evidenceDir, `qa-evidence-${String(index + 1).padStart(2, "0")}.json`),
+    ]);
+  }
+  for (const [source, target] of copied) {
+    fs.copyFileSync(source, target);
+  }
+  return copied.map(([, target]) => target);
 }
 
 function renderEvidenceSection(evidenceSummaries: EvidenceSummary[]): string[] {
@@ -944,20 +1052,6 @@ function renderEvidenceSection(evidenceSummaries: EvidenceSummary[]): string[] {
   return lines;
 }
 
-function renderScoreWarnings(warnings: string[]): string[] {
-  if (warnings.length === 0) {
-    return [];
-  }
-  return [
-    "## Score input warnings",
-    "",
-    "The renderer found non-fatal drift between score and taxonomy inputs. The artifact was still generated so reviewers can inspect the current state.",
-    "",
-    ...warnings.map((warning) => `- ${markdownEscape(warning)}`),
-    "",
-  ];
-}
-
 function renderMaturityScorecard({
   taxonomy,
   scores,
@@ -965,6 +1059,8 @@ function renderMaturityScorecard({
   scoresPath,
   evidenceSummaries,
   scoreWarnings,
+  evidenceWarnings,
+  staticAssetsPath,
 }: RenderMaturityScorecardInputs): string {
   const levels = taxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
@@ -974,6 +1070,16 @@ function renderMaturityScorecard({
       "Maturity scorecard",
       "Generated OpenClaw maturity scorecard for product, platform, provider, channel, and QA surfaces.",
     ),
+    ...renderMetadataComment({
+      taxonomy,
+      scores,
+      taxonomyPath,
+      scoresPath,
+      evidenceSummaries,
+      scoreWarnings,
+      evidenceWarnings,
+      staticAssetsPath,
+    }),
     "# Maturity scorecard",
     "",
     ...generatedNotice({ taxonomyPath, scoresPath }),
@@ -983,7 +1089,6 @@ function renderMaturityScorecard({
     `- Category scores: ${scores.counts.category_scores}`,
     `- Process version: ${scores.process_version}`,
     "",
-    ...renderScoreWarnings(scoreWarnings),
     "## Rollups",
     "",
     "| Basis | Coverage | Quality | Completeness |",
@@ -1170,6 +1275,22 @@ function main(): void {
   validateTaxonomy(taxonomy, taxonomyPath);
   const scoreWarnings = validateScores(scores, scoresPath, taxonomy);
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  const evidenceWarnings = evidenceScorecardWarnings(evidenceSummaries);
+  const inputWarnings = [...scoreWarnings, ...evidenceWarnings];
+  writeInputWarnings(inputWarnings);
+  if (args.strictInputs) {
+    enforceStrictInputs(inputWarnings);
+  }
+  const staticAssetsPath = staticAssetPath(outputDir, args.staticAssetsDir);
+  const copiedStaticAssets =
+    !args.check && args.staticAssetsDir
+      ? copyStaticSourceAssets({
+          evidenceSummaries,
+          scoresPath,
+          staticAssetsDir: args.staticAssetsDir,
+          taxonomyPath,
+        })
+      : [];
   const outputs = new Map<string, string>([
     [
       "maturity-scorecard.md",
@@ -1180,6 +1301,8 @@ function main(): void {
         scoresPath,
         evidenceSummaries,
         scoreWarnings,
+        evidenceWarnings,
+        staticAssetsPath,
       }),
     ],
     ["taxonomy.md", renderTaxonomy({ taxonomy, scores, taxonomyPath, scoresPath })],
@@ -1206,6 +1329,11 @@ function main(): void {
     );
   } else {
     process.stdout.write(`maturity docs already up to date in ${outputDir}\n`);
+  }
+  if (copiedStaticAssets.length > 0) {
+    process.stdout.write(
+      `copied maturity static assets:\n${copiedStaticAssets.map((file) => `- ${file}`).join("\n")}\n`,
+    );
   }
 }
 
