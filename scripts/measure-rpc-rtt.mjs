@@ -671,19 +671,31 @@ export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
         clearTimeout(timer);
         ws.off?.("open", onOpen);
         ws.off?.("error", onError);
+        ws.off?.("close", onClose);
         callback();
       };
       const onOpen = () => settle(resolve);
       const onError = (error) =>
         settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      const onClose = (code, reason) =>
+        settle(() => {
+          const text = toText(reason);
+          const suffix = text.length > 0 ? `: ${text}` : "";
+          reject(new Error(`closed before open (${code})${suffix}`));
+        });
       const timer = setTimeout(() => {
         settle(() => {
-          ws.close();
+          if (typeof ws.terminate === "function") {
+            ws.terminate();
+          } else {
+            ws.close();
+          }
           reject(new Error("gateway websocket open timeout"));
         });
       }, openTimeoutMs);
       ws.once("open", onOpen);
       ws.once("error", onError);
+      ws.once("close", onClose);
     });
   const request = async (method, params, timeoutMs = 10_000) =>
     await new Promise((resolve, reject) => {

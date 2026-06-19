@@ -193,6 +193,14 @@ function containerReceiveCheck(
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    ws.once("close", (code, reason) => {
+      const reasonText = reason.length > 0 ? `: ${reason.toString("utf8")}` : "";
+      settle({
+        ok: false,
+        status: null,
+        error: `Signal container receive WebSocket closed before open (${code}${reasonText})`,
+      });
+    });
   });
 }
 

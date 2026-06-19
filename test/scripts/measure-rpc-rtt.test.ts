@@ -22,6 +22,7 @@ class FakeWebSocket extends EventEmitter {
   closed = false;
   readyState = 0;
   sent: string[] = [];
+  terminated = false;
 
   constructor(
     readonly url: string,
@@ -41,6 +42,11 @@ class FakeWebSocket extends EventEmitter {
     this.readyState = 3;
     this.emit("close", 1000, "closed");
   }
+
+  terminate(): void {
+    this.terminated = true;
+    this.close();
+  }
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -58,6 +64,22 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
 
     await expect(client.waitOpen()).rejects.toThrow("gateway websocket open timeout");
     expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+    expect(FakeWebSocket.instances[0]?.terminated).toBe(true);
+  });
+
+  it("rejects websocket closes before opening", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      openTimeoutMs: 10_000,
+      url: "ws://127.0.0.1:12345",
+    });
+
+    const opened = client.waitOpen();
+    FakeWebSocket.instances[0]?.emit("close", 1006, Buffer.from("bye"));
+
+    await expect(opened).rejects.toThrow("closed before open (1006): bye");
+    expect(FakeWebSocket.instances[0]?.closed).toBe(false);
   });
 
   it("rejects pending websocket requests when cleanup closes the client", async () => {

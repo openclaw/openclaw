@@ -278,6 +278,8 @@ export type SessionEntryUpdateOptions = {
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
   takeCacheOwnership?: boolean;
+  /** Throw when best-effort store recovery cannot confirm the requested write. */
+  requireWriteSuccess?: boolean;
 };
 
 export type SessionLifecycleTranscriptInfo = {
@@ -625,6 +627,7 @@ export async function updateSessionEntry(
     sessionKey: scope.sessionKey,
     skipMaintenance: options.skipMaintenance,
     takeCacheOwnership: options.takeCacheOwnership,
+    requireWriteSuccess: options.requireWriteSuccess,
     update,
   });
 }
