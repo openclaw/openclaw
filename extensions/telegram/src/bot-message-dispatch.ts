@@ -1978,6 +1978,30 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
 
+                    // Reasoning blocks carry isReasoning=true and are suppressed
+                    // by normalizeDeliveryPayload (shouldSuppressReasoningPayload
+                    // returns true). Deliver them directly through the reasoning
+                    // lane so thinking persists under /reasoning on.
+                    if (payload.isReasoning && typeof payload.text === "string") {
+                      const reasoningText =
+                        splitTelegramReasoningText(payload.text, true).reasoningText ??
+                        payload.text;
+                      if (reasoningText.trim()) {
+                        reasoningStepState.noteReasoningHint();
+                        await deliverLaneText({
+                          laneName: "reasoning",
+                          text: reasoningText,
+                          payload,
+                          infoKind: info.kind,
+                        });
+                        reasoningStepState.noteReasoningDelivered();
+                        if (info.kind === "final") {
+                          reasoningStepState.resetForNextStep();
+                        }
+                      }
+                      return;
+                    }
+
                     const normalizedPayload = normalizeDeliveryPayload(payload);
                     if (!normalizedPayload) {
                       return;
