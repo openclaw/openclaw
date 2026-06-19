@@ -713,21 +713,21 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
-    return escapeUnsupportedTelegramHtml(text);
+    // Normalize HTML tables before entity-escaping so <table> tags are
+    // converted to Telegram-compatible <pre><code> pipe tables instead of
+    // being entity-escaped as &lt;table&gt; literal text. (#94317)
+    return escapeUnsupportedTelegramHtml(
+      normalizeAllTelegramRichHtmlTables(text),
+    );
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
 }
 
 export function sanitizeTelegramRichHtml(html: string): string {
-  // Table normalization must run before HTML escaping so that raw <table>
-  // tags are still present when TELEGRAM_RICH_HTML_TABLE_PATTERN scans them.
-  // If escapeUnsupportedTelegramHtml runs first, <table> becomes &lt;table&gt;
-  // and the table converter never matches. (#94317)
   return isolateTelegramRichMediaBlocks(
-    escapeUnsupportedTelegramHtml(
-      normalizeTelegramRichHtmlTables(html),
-      TELEGRAM_RICH_HTML_TAG_SUPPORT,
+    normalizeWideTelegramRichHtmlTables(
+      escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
     ),
   );
 }
@@ -849,12 +849,21 @@ function renderTelegramRichHtmlRawTableFallback(
   return `<pre><code>${escapeHtml([caption, tableText].filter(Boolean).join("\n"))}</code></pre>\n\n`;
 }
 
-// Normalize ALL <table> elements to Telegram-compatible <pre><code> pipe tables.
-// Telegram's HTML parse mode does not support <table>, so raw tables would be
-// entity-escaped by escapeUnsupportedTelegramHtml and rendered as literal text.
-// Previously only wide tables (>20 columns) were converted, leaving regular
-// tables to be escaped and displayed as raw &lt;table&gt; text. (#94317)
-function normalizeTelegramRichHtmlTables(html: string): string {
+function normalizeWideTelegramRichHtmlTables(html: string): string {
+  TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
+  return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) => {
+    const rows = parseTelegramRichHtmlTableRows(tableHtml);
+    const columnCount = Math.max(...rows.map((row) => row.length), 0);
+    return columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT
+      ? renderTelegramRichHtmlRawTableFallback(tableHtml, rows)
+      : tableHtml;
+  });
+}
+
+// Normalize ALL <table> elements to Telegram-compatible <pre><code> pipe tables
+// for the standard text delivery path (non-rich-messages). Used in
+// renderTelegramHtmlText to prevent entity-escaped &lt;table&gt; text. (#94317)
+function normalizeAllTelegramRichHtmlTables(html: string): string {
   TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
   return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) => {
     const rows = parseTelegramRichHtmlTableRows(tableHtml);
