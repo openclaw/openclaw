@@ -284,7 +284,7 @@ export async function getReplyFromConfig(
         agentId: resolveSessionAgentId({
           sessionKey: resolvedAgentSessionKey,
           config: cfg,
-          agentId: finalized.AgentId,
+          fallbackAgentId: finalized.AgentId,
         }),
       };
     },

@@ -265,6 +265,7 @@ export async function initSessionState(params: {
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
+    fallbackAgentId: sessionCtxForState.AgentId,
   });
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
