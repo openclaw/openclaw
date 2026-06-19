@@ -36,6 +36,9 @@ const MAX_CONSECUTIVE_PREVIEW_FAILURES = 3;
 // Flood waits beyond this freeze the preview longer than it is useful; clamp so
 // a large retry_after cannot park the suspension past the run's lifetime.
 const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
+// Keep token-sized first previews quiet, but materialize a stable short draft
+// after two throttle windows so Telegram users still see active work.
+const MIN_INITIAL_PREVIEW_DELAY_THROTTLE_WINDOWS = 2;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -227,6 +230,39 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let shortInitialPreviewSinceMs: number | undefined;
+  let shortInitialPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+  let rescheduleDraftUpdate: ((text: string) => void) | undefined;
+  const minInitialPreviewDelayMs =
+    minInitialChars == null ? undefined : throttleMs * MIN_INITIAL_PREVIEW_DELAY_THROTTLE_WINDOWS;
+  const clearShortInitialPreviewTimer = () => {
+    if (shortInitialPreviewTimer) {
+      clearTimeout(shortInitialPreviewTimer);
+      shortInitialPreviewTimer = undefined;
+    }
+  };
+  const resetShortInitialPreviewDelay = () => {
+    shortInitialPreviewSinceMs = undefined;
+    clearShortInitialPreviewTimer();
+  };
+  const scheduleShortInitialPreviewRetry = (delayMs: number) => {
+    if (shortInitialPreviewTimer || streamState.stopped || streamState.final) {
+      return;
+    }
+    shortInitialPreviewTimer = setTimeout(
+      () => {
+        shortInitialPreviewTimer = undefined;
+        if (streamState.stopped || streamState.final || typeof streamMessageId === "number") {
+          return;
+        }
+        const text = lastRequestedText;
+        if (text.trim()) {
+          rescheduleDraftUpdate?.(text);
+        }
+      },
+      Math.max(0, delayMs),
+    );
+  };
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
@@ -403,9 +439,22 @@ export function createTelegramDraftStream(params: {
     }
     const sendGeneration = generation;
 
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !streamState.final) {
+    if (
+      typeof streamMessageId !== "number" &&
+      minInitialChars != null &&
+      minInitialPreviewDelayMs != null &&
+      !streamState.final
+    ) {
       if (renderedText.length < minInitialChars) {
-        return false;
+        const now = Date.now();
+        shortInitialPreviewSinceMs ??= now;
+        const elapsedMs = now - shortInitialPreviewSinceMs;
+        if (elapsedMs < minInitialPreviewDelayMs) {
+          scheduleShortInitialPreviewRetry(minInitialPreviewDelayMs - elapsedMs);
+          return false;
+        }
+      } else {
+        resetShortInitialPreviewDelay();
       }
     }
 
@@ -417,6 +466,7 @@ export function createTelegramDraftStream(params: {
         sendGeneration,
       });
       if (sent) {
+        resetShortInitialPreviewDelay();
         previewRevision += 1;
         lastDeliveredText = trimmed;
         consecutivePreviewFailures = 0;
@@ -467,10 +517,14 @@ export function createTelegramDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
   });
+  rescheduleDraftUpdate = updateDraft;
 
   const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
     if (streamState.stopped || streamState.final) {
       return;
+    }
+    if (!text.trim()) {
+      resetShortInitialPreviewDelay();
     }
     lastRequestedPreview = preview;
     lastRequestedText = text;
@@ -490,6 +544,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const stop = async () => {
+    resetShortInitialPreviewDelay();
     streamState.final = true;
     await loop.flush();
     if (streamState.stopped) {
@@ -507,6 +562,7 @@ export function createTelegramDraftStream(params: {
     keepPending?: boolean;
     resetOffset?: boolean;
   }) => void = (options) => {
+    resetShortInitialPreviewDelay();
     streamState.stopped = false;
     streamState.final = options?.keepFinal === true;
     generation += 1;
@@ -526,6 +582,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
+    resetShortInitialPreviewDelay();
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
       readMessageId: () => streamMessageId,
@@ -544,6 +601,7 @@ export function createTelegramDraftStream(params: {
   };
 
   const discard = async () => {
+    resetShortInitialPreviewDelay();
     await stopForClear();
   };
 

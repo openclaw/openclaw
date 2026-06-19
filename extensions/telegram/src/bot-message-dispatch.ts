@@ -1364,7 +1364,7 @@ export const dispatchTelegramMessage = async ({
       recomputeQueuedAnswerBlockRotations();
     }
   };
-  const updateDraftFromPartial = (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
+  const updateDraftFromPartial = async (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
     const laneStream = lane.stream;
     if (!laneStream || !update.text) {
       return;
@@ -1376,6 +1376,7 @@ export const dispatchTelegramMessage = async ({
     }
     if (lane === answerLane) {
       if (streamMode === "progress") {
+        await progressDraft.noteActivity();
         return;
       }
       resetAnswerToolProgressDraft();
@@ -1402,7 +1403,7 @@ export const dispatchTelegramMessage = async ({
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
       }
-      updateDraftFromPartial(lanes[segment.lane], segment.update);
+      await updateDraftFromPartial(lanes[segment.lane], segment.update);
     }
   };
   const flushDraftLane = async (lane: DraftLaneState) => {

@@ -65,6 +65,24 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(true);
   });
 
+  it("shows the progress label for generic activity after the gate starts", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.noteActivity();
+    expect(update).not.toHaveBeenCalled();
+
+    await progress.noteActivity();
+
+    expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
+  });
+
   it("does not resurrect progress after suppression", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

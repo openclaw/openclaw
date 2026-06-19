@@ -894,6 +894,24 @@ describe("draft stream initial message debounce", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
     });
 
+    it("materializes the latest stable short first message after the initial debounce window", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api);
+
+      stream.update("Processing");
+      await stream.flush();
+      stream.update("Still working");
+      await stream.flush();
+      await vi.advanceTimersByTimeAsync(1_999);
+
+      expect(api.sendMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await vi.waitFor(() => expectPreviewSend(api, "Still working"));
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    });
+
     it("does not send a first message when discard() supersedes a short partial", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
@@ -901,6 +919,7 @@ describe("draft stream initial message debounce", () => {
       stream.update("Processing");
       await stream.discard?.();
       await stream.flush();
+      await vi.advanceTimersByTimeAsync(2_000);
 
       expect(api.sendMessage).not.toHaveBeenCalled();
       expect(api.editMessageText).not.toHaveBeenCalled();
@@ -914,6 +933,21 @@ describe("draft stream initial message debounce", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalled();
+    });
+
+    it("does not replay a delayed short first message after reaching the threshold", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api);
+
+      stream.update("Processing");
+      await stream.flush();
+      stream.update("I am processing your request..");
+      await stream.flush();
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expectPreviewSend(api, "I am processing your request..");
+      expect(api.editMessageText).not.toHaveBeenCalled();
     });
 
     it("works with longer text above threshold", async () => {

@@ -2932,6 +2932,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("shows a progress label for answer-only progress-mode partials", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Working", delta: "Working" });
+        expect(draftStream.updatePreview).not.toHaveBeenCalled();
+        await replyOptions?.onPartialReply?.({ text: "Working on it", delta: " on it" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(telegramHtmlPreview("<b>Working</b>"));
+    expect(draftStream.update).not.toHaveBeenCalledWith("Working on it");
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Done" });
+  });
+
   it("renders command status without command output in Telegram progress draft previews", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
