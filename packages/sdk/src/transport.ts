@@ -80,12 +80,16 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private connectPromise: Promise<void> | null = null;
   private rejectPendingConnect: ((error: Error) => void) | null = null;
   private closePromise: Promise<void> | null = null;
+  private closed = false;
 
   constructor(options: GatewayClientTransportOptions = {}) {
     this.options = options;
   }
 
   connect(): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new Error("gateway transport is closed"));
+    }
     if (this.connectPromise) {
       return this.connectPromise;
     }
@@ -146,6 +150,10 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (this.closePromise) {
       return await this.closePromise;
     }
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
     this.eventsHub.close();
     const client = this.client;
     this.client = null;
