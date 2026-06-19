@@ -84,7 +84,7 @@ describe("opencode-go provider plugin", () => {
     const expectedModelIds = [
       "deepseek-v4-flash",
       "deepseek-v4-pro",
-      "glm-5",
+      "glm-5.2",
       "glm-5.1",
       "hy3-preview",
       "kimi-k2.5",

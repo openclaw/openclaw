@@ -26,7 +26,7 @@ The provider includes:
 
 | Model ref                       | Name                  |
 | ------------------------------- | --------------------- |
-| `opencode-go/glm-5`             | GLM-5                 |
+| `opencode-go/glm-5.2`           | GLM-5.2               |
 | `opencode-go/glm-5.1`           | GLM-5.1               |
 | `opencode-go/kimi-k2.5`         | Kimi K2.5             |
 | `opencode-go/kimi-k2.6`         | Kimi K2.6 (3x limits) |

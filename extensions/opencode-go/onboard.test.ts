@@ -8,7 +8,7 @@ const MODEL_REF = "opencode-go/kimi-k2.6";
 const EXPECTED_MODEL_IDS = [
   "deepseek-v4-pro",
   "deepseek-v4-flash",
-  "glm-5",
+  "glm-5.2",
   "glm-5.1",
   "hy3-preview",
   "kimi-k2.5",
