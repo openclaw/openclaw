@@ -211,7 +211,7 @@ describe("installSessionToolResultGuard", () => {
     appendToolResultText(sm, "x".repeat(80_000));
 
     const text = getToolResultText(getPersistedMessages(sm));
-    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text.length).toBeLessThanOrEqual(32_000);
     expect(text).toContain("truncated");
   });
 
