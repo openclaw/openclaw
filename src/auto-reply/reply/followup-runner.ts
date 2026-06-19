@@ -26,6 +26,7 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
+import { hasNonzeroUsage } from "../../agents/usage.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -41,10 +42,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
+import { resolveResponseUsageMode } from "../thinking.shared.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createAgentLifecycleTerminalBackstop,
@@ -64,6 +67,7 @@ import {
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
@@ -1448,6 +1452,41 @@ export function createFollowupRunner(params: {
           "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
         );
         return;
+      }
+
+      // FIX #93905: Append usage footer for followup (e.g. Telegram) delivery
+      // paths. The /usage command sets responseUsage on the session entry, but
+      // followup-runner never rendered it — only agent-runner did for webchat.
+      // Guard against preserved-handoff/internal replies so we don't leak usage
+      // footers into subagent_announce and similar inter-session messages.
+      const responseUsageRaw =
+        activeSessionEntry?.responseUsage ??
+        (replySessionKey ? sessionStore?.[replySessionKey]?.responseUsage : undefined);
+      const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+      if (
+        responseUsageMode !== "off" &&
+        hasNonzeroUsage(usage) &&
+        !preserveUserFacingSessionState
+      ) {
+        const costConfig = resolveModelCostConfig({
+          provider: providerUsed,
+          model: modelUsed,
+          config: runtimeConfig,
+          allowPluginNormalization: false,
+        });
+        const showCost = responseUsageMode === "full" && costConfig !== undefined;
+        const formatted = formatResponseUsageLine({ usage, showCost, costConfig });
+        if (formatted) {
+          deliveryPayloads = appendUsageLine(deliveryPayloads, formatted);
+        } else if (replySessionKey) {
+          // formatResponseUsageLine returns null for total-only usage
+          // (input/output both absent). Append a minimal key line so
+          // /usage full still shows context on the followup path.
+          deliveryPayloads = appendUsageLine(
+            deliveryPayloads,
+            `Usage · session \`${replySessionKey}\``,
+          );
+        }
       }
 
       await sendFollowupPayloads(
