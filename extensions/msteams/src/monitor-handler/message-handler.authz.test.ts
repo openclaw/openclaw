@@ -768,7 +768,7 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please run the deployment"),
+      ([text]) => typeof text === "string" && text.includes("Teams message in channel from Member"),
     );
     if (!systemEventCall) {
       throw new Error("expected skipped Teams message system event");
@@ -810,7 +810,7 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please check the build"),
+      ([text]) => typeof text === "string" && text.includes("Teams message in channel from Member"),
     );
     if (!systemEventCall) {
       throw new Error("expected active Teams message system event");

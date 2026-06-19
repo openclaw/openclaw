@@ -507,11 +507,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
 
-    const enqueuePrimaryMessageSystemEvent = () =>
-      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+    // Do not enqueue inbound user previews as system events.
+    // System events are prepended to future prompts and can be misread as
+    // authoritative transcript turns. The preview is logged instead, matching
+    // the Feishu inbound pattern.
+    const enqueuePrimaryMessageSystemEvent = () => {
+      log(`msteams: ${inboundLabel}: ${preview}`);
+      core.system.enqueueSystemEvent(inboundLabel, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
       });
+    };
 
     const channelId = conversationId;
     const { teamConfig, channelConfig } = channelGate;

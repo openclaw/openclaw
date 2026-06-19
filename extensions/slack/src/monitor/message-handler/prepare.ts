@@ -1131,7 +1131,14 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+  // Do not enqueue inbound user previews as system events.
+  // System events are prepended to future prompts and can be misread as
+  // authoritative transcript turns. The preview is logged instead, matching
+  // the Feishu inbound pattern.
+  if (shouldLogVerbose()) {
+    logVerbose(`slack[${accountId}]: ${inboundLabel}: ${preview}`);
+  }
+  enqueueSystemEvent(inboundLabel, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });
