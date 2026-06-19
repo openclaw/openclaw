@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -115,6 +115,10 @@ type PluginStartupTraceDetail = {
   name: string;
   metrics: ReadonlyArray<readonly [string, number | string]>;
 };
+
+function listRegisteredAgentHarnessIdsForTest(): string[] {
+  return listRegisteredAgentHarnesses().map((entry) => entry.harness.id);
+}
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -2775,7 +2779,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
       onlyPluginIds: ["codex-harness"],
     });
-    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["codex"]);
 
     loadOpenClawPlugins({
       cache: false,
@@ -2786,7 +2790,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
     });
-    expect(listAgentHarnessIds()).toStrictEqual([]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -2817,7 +2821,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["bad-harness"],
     });
 
-    expect(listAgentHarnessIds()).toStrictEqual([]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
     const diagnostic = registry.diagnostics.find(
       (entry) =>
         entry.level === "error" &&

@@ -32,7 +32,6 @@ import {
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   redactQaLiveLaneDetails,
-  redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
@@ -2898,6 +2897,8 @@ const SAFE_WHATSAPP_DRIVER_DIAGNOSTICS_PATTERN =
   /observed \d+ WhatsApp driver message\(s\) after (?:(?:pending|resolved) approval )?wait lower bound(?:: [-A-Za-z0-9_#:=()., +;/]+)?/u;
 const SAFE_WHATSAPP_PRE_SCENARIO_FAILURE_PATTERN =
   /^WhatsApp QA failed during (?:auth archive unpack|credential heartbeat start|credential lease acquisition|driver session start|scenario execution)$/u;
+const SAFE_WHATSAPP_CREDENTIAL_POOL_EXHAUSTED_PATTERN =
+  /Convex credential pool exhausted for kind "whatsapp" after \d+ms\./u;
 
 function formatWhatsAppPreScenarioFailureLabel(phase: WhatsAppQaPreScenarioPhase) {
   return `WhatsApp QA failed during ${phase}`;
@@ -2918,7 +2919,10 @@ function redactWhatsAppQaScenarioDetails(details: string) {
   const preScenarioFailureLabel =
     separatorIndex < 0 ? firstLine.trim() : firstLine.slice(0, separatorIndex).trim();
   if (SAFE_WHATSAPP_PRE_SCENARIO_FAILURE_PATTERN.test(preScenarioFailureLabel)) {
-    return preScenarioFailureLabel;
+    const poolExhausted = firstLine.match(SAFE_WHATSAPP_CREDENTIAL_POOL_EXHAUSTED_PATTERN);
+    return poolExhausted
+      ? `${preScenarioFailureLabel}: ${poolExhausted[0]}`
+      : preScenarioFailureLabel;
   }
   const safeDriverDiagnostics = normalized.match(SAFE_WHATSAPP_DRIVER_DIAGNOSTICS_PATTERN);
   if (safeDriverDiagnostics) {
@@ -2929,6 +2933,26 @@ function redactWhatsAppQaScenarioDetails(details: string) {
     .map((segment) => segment.trim())
     .filter(isRedactionSafeWhatsAppScenarioDetailSegment);
   return safeSegments.length > 0 ? safeSegments.join("; ") : redactQaLiveLaneDetails();
+}
+
+function redactWhatsAppQaCleanupIssue(issue: string) {
+  const firstLine = issue.split(/\r?\n/u, 1)[0] ?? "";
+  const separatorIndex = firstLine.indexOf(":");
+  const label = separatorIndex < 0 ? "" : firstLine.slice(0, separatorIndex).trim();
+  if (!label) {
+    return redactQaLiveLaneDetails();
+  }
+  if (SAFE_WHATSAPP_PRE_SCENARIO_FAILURE_PATTERN.test(label)) {
+    const poolExhausted = firstLine.match(SAFE_WHATSAPP_CREDENTIAL_POOL_EXHAUSTED_PATTERN);
+    if (poolExhausted) {
+      return `${label}: ${poolExhausted[0]}`;
+    }
+  }
+  return `${label}: ${redactQaLiveLaneDetails()}`;
+}
+
+function redactWhatsAppQaCleanupIssues(issues: readonly string[]) {
+  return issues.map(redactWhatsAppQaCleanupIssue);
 }
 
 function createMissingGroupJidScenarioResult(params: {
@@ -2988,7 +3012,7 @@ async function buildPublishedWhatsAppQaRunView(params: {
   scenarioResults: WhatsAppQaScenarioResult[];
 }) {
   const publishedCleanupIssues = params.redactMetadata
-    ? redactQaLiveLaneIssues(params.cleanupIssues)
+    ? redactWhatsAppQaCleanupIssues(params.cleanupIssues)
     : params.cleanupIssues;
   const publishedScenarioResults = params.redactMetadata
     ? redactWhatsAppQaScenarioResults(params.scenarioResults)
