@@ -502,6 +502,74 @@ describe("createBundleMcpToolRuntime", () => {
     ]);
   });
 
+  it("stages MCP SDK-compatible unpadded image, audio, and resource base64", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "image", data: "TQ", mimeType: "image/png" },
+            { type: "audio", data: "TWE", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://unpadded", blob: "SGVsbG8", mimeType: "application/pdf" },
+            },
+          ],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.content).toEqual([
+      { type: "image", data: "TQ", mimeType: "image/png" },
+      { type: "text", text: "[audio audio/mpeg]" },
+      { type: "text", text: "blob://unpadded" },
+    ]);
+    expect(
+      resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0].toString("utf8")),
+    ).toEqual(["M", "Ma", "Hello"]);
+    expect(result.details).toMatchObject({
+      media: {
+        attachments: [
+          {
+            type: "image",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-0.png",
+          },
+          {
+            type: "audio",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-1.mp3",
+          },
+          {
+            type: "resource",
+            mediaUrl: "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-2.pdf",
+            uri: "blob://unpadded",
+          },
+        ],
+      },
+    });
+  });
+
+  it("does not stage MCP base64 with invalid characters", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "audio", data: "AA!A", mimeType: "audio/mpeg" }],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.content).toEqual([{ type: "text", text: "[audio audio/mpeg]" }]);
+    expect(resolveOutboundAttachmentFromBufferMock).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      mcpServer: "bundleProbe",
+      mcpTool: "bundle_probe",
+    });
+  });
+
   it("rejects oversized MCP base64 before decoding staged media", async () => {
     const oversizedImageBase64 = "A".repeat(9 * 1024 * 1024);
     const runtime = await materializeBundleMcpToolsForRun({
