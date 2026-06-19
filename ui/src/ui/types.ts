@@ -33,8 +33,6 @@ export type ChannelUiMetaEntry = {
   systemImage?: string;
 };
 
-export const CRON_CHANNEL_LAST = "last";
-
 export type ChannelAccountSnapshot = {
   accountId: string;
   name?: string | null;
@@ -262,23 +260,6 @@ export type NostrStatus = {
   lastStopAt?: number | null;
   lastError?: string | null;
   profile?: NostrProfile | null;
-};
-
-export type MSTeamsProbe = {
-  ok: boolean;
-  error?: string | null;
-  appId?: string | null;
-};
-
-export type MSTeamsStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  port?: number | null;
-  probe?: MSTeamsProbe | null;
-  lastProbeAt?: number | null;
 };
 
 export type ConfigSnapshotIssue = {

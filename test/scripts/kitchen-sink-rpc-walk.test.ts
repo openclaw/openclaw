@@ -45,6 +45,7 @@ import {
   parseGatewayCliRequestFailure,
   readPositiveInt,
   readBoundedResponseText,
+  resolveKitchenSinkRpcPort,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
@@ -56,6 +57,7 @@ import {
   usesBuiltOpenClawEntry,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -83,6 +85,11 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
   });
@@ -123,6 +130,23 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(() => readPositiveInt("0", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_PORT")).toThrow(
       'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a positive integer. Got: "0"',
     );
+  });
+
+  it("uses an explicit RPC port or asks the OS for an available fallback", async () => {
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
+    ).resolves.toBe(19080);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65535" }),
+    ).resolves.toBe(65535);
+    await expect(
+      resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65536" }),
+    ).rejects.toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: "65536"',
+    );
+    await expect(
+      resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
+    ).resolves.toBe(45678);
   });
 
   it("cleans up the generated temporary home tree", async () => {
@@ -234,6 +258,48 @@ describe("kitchen-sink RPC gateway teardown", () => {
     ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: 0,
+      kill: vi.fn(),
+      pid: 12347,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn(() => true);
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 1 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12347, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12347, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12347, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  posixIt("rechecks process group liveness after the wrapper exits during teardown", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null as number | null,
+      kill: vi.fn(),
+      pid: 12348,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    const killProcess = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+      if (signal === "SIGTERM") {
+        setTimeout(() => {
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+        }, 0);
+      }
+      return true;
+    });
+
+    await stopGateway(child, { killGraceMs: 1, killProcess, teardownGraceMs: 100 });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, -12348, 0);
+    expect(killProcess).toHaveBeenNthCalledWith(2, -12348, "SIGTERM");
+    expect(killProcess).toHaveBeenCalledWith(-12348, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("fails readiness waits before polling after signaled gateway exits", async () => {
@@ -702,6 +768,52 @@ describe("kitchen-sink RPC caller loading", () => {
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("kills descendants when timed commands exit cleanly after SIGTERM", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
+    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    let grandchildPid = 0;
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+      timeoutKillGraceMs: 2_000,
+      timeoutMs: 100,
+    });
+
+    try {
+      await waitFor(() => existsSync(grandchildPidPath));
+      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+
+      await expect(runPromise).rejects.toThrow("timed out after 100ms");
+      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+    } finally {
+      await runPromise.catch(() => {});
+      if (grandchildPid && isProcessAlive(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL");
+      }
+      cleanupTempDirs(tempDirs);
     }
   });
 });
@@ -1703,6 +1815,30 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("aborts HTTP probe retry backoff when the external signal fires", async () => {
+    const controller = new AbortController();
+    const reset = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi.fn().mockRejectedValue(reset);
+    const startedAt = Date.now();
+
+    setTimeout(() => {
+      controller.abort(new Error("gateway exited before ready"));
+    }, 25);
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 2,
+        fetchImpl,
+        retryDelayMs: 5_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("gateway exited before ready");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
   it("bounds HTTP probe response bodies", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
 
@@ -1768,10 +1904,102 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  it("streams HTTP probe responses with non-decimal content-length values", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({
+        "content-length": "1e3",
+      }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return { done: false, value: new Uint8Array(1025) };
+            },
+            async cancel() {
+              canceled = true;
+            },
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("reads bounded response streams", async () => {
     await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
       '{"status":"live"}',
     );
+  });
+
+  it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
+    let canceled = false;
+    const timeoutError = Object.assign(new Error("fetch probe timed out"), {
+      code: "ETIMEDOUT",
+    });
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { headers: new Headers() },
+    );
+
+    await expect(
+      readBoundedResponseText(response, 1024, Promise.reject(timeoutError)),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "fetch probe timed out",
+    });
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const controller = new AbortController();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull() {
+            readStarted = true;
+            return new Promise(() => {});
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = fetchJson("http://127.0.0.1:19680/readyz", {
+      attempts: 1,
+      fetchImpl,
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    });
+    const rejection = expect(result).rejects.toThrow("gateway exited before ready");
+
+    await waitFor(() => readStarted);
+    controller.abort(new Error("gateway exited before ready"));
+
+    await rejection;
+    await waitFor(() => canceled);
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

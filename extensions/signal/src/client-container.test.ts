@@ -183,6 +183,19 @@ describe("containerCheck", () => {
       error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
     });
   });
+
+  it("rejects container receive endpoints that close before opening", async () => {
+    wsMockState.behavior = "close";
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
+
+    expect(result).toEqual({
+      ok: false,
+      status: null,
+      error: "Signal container receive WebSocket closed before open (1000: done)",
+    });
+  });
 });
 
 describe("containerRestRequest", () => {

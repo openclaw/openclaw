@@ -44,11 +44,6 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
-/** True when current or recent inbound history may contain agent-turn attachments. */
-export function hasPotentialAgentTurnAttachments(ctx: MsgContext): boolean {
-  return hasInboundMedia(ctx) || hasInboundHistoryMedia(ctx);
-}
-
 /** Resolves image attachments for the current agent turn and recent image history. */
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;

@@ -127,6 +127,10 @@ type PersistTextTurnTranscriptParams = {
   };
 };
 
+type PersistTextTurnTranscriptResult =
+  | { kind: "persisted"; sessionEntry: SessionEntry | undefined }
+  | { kind: "session-rebound"; sessionEntry: undefined };
+
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
@@ -175,6 +179,10 @@ function resolveHarnessAuthProfileSelection(params: {
       authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
       authProfileMode: profileAuth.mode,
     };
+  }
+
+  if (!params.allowHarnessAuthProfileForwarding) {
+    return { authProfileProvider: params.authProfileProvider };
   }
 
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
@@ -285,11 +293,11 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
 
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
-): Promise<SessionEntry | undefined> {
+): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
-    return params.sessionEntry;
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
 
   const messages = [];
@@ -356,9 +364,13 @@ async function persistTextTurnTranscript(
       publishWhen: "always",
       touchSessionEntry: true,
       updateMode: "file-only",
+      ...(params.sessionStore && params.storePath ? { expectedSessionId: params.sessionId } : {}),
     },
   );
-  return turn.sessionEntry;
+  if (turn.rejectedReason === "session-rebound") {
+    return { kind: "session-rebound", sessionEntry: undefined };
+  }
+  return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -391,7 +403,7 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
     assistant: {
@@ -417,7 +429,7 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
@@ -973,9 +985,6 @@ export function emitAcpLifecycleError(params: {
     },
   });
 }
-
-/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
-export const formatAcpLifecycleError = formatAcpErrorChain;
 
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({

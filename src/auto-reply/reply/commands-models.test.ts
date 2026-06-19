@@ -85,7 +85,6 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
     modelProviderAuthMocks.authenticatedProviders.has(provider),
   getCurrentProviderAuthState: () => null,
   clearCurrentProviderAuthState: () => undefined,
-  warmCurrentProviderAuthState: async () => undefined,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({

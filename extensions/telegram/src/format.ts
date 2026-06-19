@@ -32,6 +32,10 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+function isTelegramRichLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
+}
+
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.
  * These are wrapped in <code> tags to prevent Telegram from generating
@@ -49,6 +53,11 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
     return null;
   }
   if (link.start === link.end) {
+    return null;
+  }
+  // Telegram rich links reject local or relative hrefs; keep the label visible
+  // instead of letting one unsupported link drop the whole message.
+  if (!isTelegramRichLinkHref(href)) {
     return null;
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
@@ -1070,11 +1079,30 @@ function findTelegramHtmlEntityEnd(text: string, start: number): number {
   return text[index] === ";" ? index : -1;
 }
 
+// Never return a split index that lands between a UTF-16 surrogate pair, or
+// both chunks would carry a lone surrogate that re-encodes to U+FFFD. If the
+// pair starts the segment, keep it whole so chunking still advances.
+function clampToSurrogateBoundary(text: string, index: number): number {
+  const high = text.charCodeAt(index - 1);
+  const low = text.charCodeAt(index);
+  const splitsPair =
+    index > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  if (!splitsPair) {
+    return index;
+  }
+  return index > 1 ? index - 1 : index + 1;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
+  const splitIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  return clampToSurrogateBoundary(text, splitIndex);
+}
+
+function findTelegramHtmlEntitySafeSplitIndex(text: string, normalizedMaxLength: number): number {
   const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
   if (lastAmpersand === -1) {
     return normalizedMaxLength;

@@ -114,6 +114,9 @@ export const pluginSdkDocMetadata = {
   "runtime-store": {
     category: "runtime",
   },
+  "sqlite-runtime": {
+    category: "runtime",
+  },
   "qa-live-transport-scenarios": {
     category: "utilities",
   },

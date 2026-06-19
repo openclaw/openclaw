@@ -2148,6 +2148,41 @@ describe("runCli exit behavior", () => {
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
+  it("suggests close known commands for unowned command roots before proxy startup", async () => {
+    await expect(runCli(["node", "openclaw", "upate"])).rejects.toThrow(
+      "Did you mean this?\n  openclaw update",
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps suggestions out of plugin-policy diagnostics", async () => {
+    resolveManifestCommandAliasOwnerMock.mockReturnValueOnce({
+      pluginId: "codex",
+      kind: "runtime-slash",
+      cliCommand: "plugins",
+    });
+
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", "codex"]);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("runtime slash command");
+    expect((error as Error).message).toContain("/codex");
+    expect((error as Error).message).not.toContain("Did you mean this?");
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
   it("rejects unowned command roots even when --help is appended (regression for #81077)", async () => {
     await expect(runCli(["node", "openclaw", "foo", "--help"])).rejects.toThrow(
       'No built-in command or plugin CLI metadata owns "foo"',

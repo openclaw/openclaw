@@ -13,6 +13,32 @@ openclaw_e2e_eval_test_state_from_b64() {
   fi
   eval "$decoded"
 }
+openclaw_e2e_read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+openclaw_e2e_read_nonnegative_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
 openclaw_e2e_resolve_entrypoint() {
   local entry
   for entry in dist/index.mjs dist/index.js; do
@@ -176,8 +202,9 @@ NODE
 }
 openclaw_e2e_print_log() {
   local path="$1"
-  local max_bytes="${OPENCLAW_E2E_LOG_TAIL_BYTES:-262144}"
-  local max_lines="${OPENCLAW_E2E_LOG_TAIL_LINES:-120}"
+  local max_bytes max_lines
+  max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
+  max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
   echo "--- $path ---"
   tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true

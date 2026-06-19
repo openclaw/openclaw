@@ -209,6 +209,13 @@ Options:
   --cpu-core-warn <ratio>        Hot CPU threshold (default: 0.9)
   --hot-wall-warn-ms <ms>        Minimum wall time for hot CPU observations (default: 30000)
   --max-rss-warn-mb <mb>         Maximum RSS warning threshold (default: 1536)
+  --wall-anomaly-multiplier <n>  Wall-time anomaly multiplier (default: 3)
+  --rss-anomaly-multiplier <n>   RSS anomaly multiplier (default: 2.5)
+  --qa-cpu-regression-multiplier <n>  QA baseline CPU regression multiplier (default: 2)
+  --qa-wall-regression-multiplier <n> QA baseline wall regression multiplier (default: 2)
+  --command-timeout-ms <ms>      Lifecycle/slash command timeout (default: 120000)
+  --build-timeout-ms <ms>        Prebuild command timeout (default: 600000)
+  --qa-timeout-ms <ms>           QA chunk timeout (default: 900000)
   --skip-prebuild                Skip the upfront build used to avoid per-command rebuild noise
   --skip-lifecycle              Skip plugin install/inspect/disable/enable/doctor/uninstall
   --skip-qa                     Skip QA Lab RPC conversation runs
@@ -216,6 +223,14 @@ Options:
   --allow-empty                 Allow zero-command runs when every active phase is skipped
   --fail-on-observation         Treat RSS/CPU/wall observation rows as guard failures
   --keep-run-root               Preserve isolated HOME/state/log temp root after success
+
+Environment:
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS   Comma-separated plugin ids to include
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_TOTAL Total plugin shards
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_INDEX Zero-based shard index
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION=1
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT=1
+  OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES  QA summary read ceiling
 `);
 }
 

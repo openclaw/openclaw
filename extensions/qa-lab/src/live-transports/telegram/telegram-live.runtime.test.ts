@@ -118,6 +118,44 @@ describe("telegram live qa runtime", () => {
     ).toBe(true);
   });
 
+  it("waits until the Telegram channel account is connected", async () => {
+    const gateway = {
+      call: vi
+        .fn()
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            telegram: [
+              {
+                accountId: "sut",
+                connected: false,
+                restartPending: false,
+                running: true,
+              },
+            ],
+          },
+        })
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            telegram: [
+              {
+                accountId: "sut",
+                connected: true,
+                restartPending: false,
+                running: true,
+              },
+            ],
+          },
+        }),
+    };
+
+    await testing.waitForTelegramChannelRunning(gateway as never, "sut", {
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    expect(gateway.call).toHaveBeenCalledTimes(2);
+  });
+
   it("normalizes the Telegram QA canary timeout env", () => {
     expect(testing.resolveTelegramQaCanaryTimeoutMs({})).toBe(30_000);
     expect(
@@ -622,6 +660,9 @@ describe("telegram live qa runtime", () => {
     expect(repeatedSteps[2]?.expectReply).toBe(true);
     expect(repeatedSteps[3]?.input).toBe("/commands@sut_bot");
     expect(repeatedSteps[3]?.expectReply).toBe(true);
+    const commandsStep = requireScenario(scenarios, "telegram-commands-command").buildRun("sut_bot")
+      .steps[0];
+    expect(commandsStep?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
     const otherBotStep = requireScenario(scenarios, "telegram-other-bot-command-gating").buildRun(
       "sut_bot",
     ).steps[0];
