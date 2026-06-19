@@ -72,6 +72,9 @@ type ResetSessionEntry = {
     threadId?: string;
   };
   label?: string;
+  sessionId?: string;
+  usageFamilyKey?: string;
+  usageFamilySessionIds?: string[];
 };
 
 type ModelResetEntry = Pick<
@@ -420,6 +423,41 @@ test("sessions.reset rotates an already-stale generated transcript file to the n
   const persistedEntry = store["agent:main:main"];
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
   expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}.jsonl`);
+});
+
+test("sessions.reset records usage family lineage for ordinary reset archives", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const previousSessionId = "sess-before-ordinary-reset";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(previousSessionId),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: ResetSessionEntry;
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  if (!nextSessionId) {
+    throw new Error("expected reset session id");
+  }
+  expect(nextSessionId).not.toBe(previousSessionId);
+  expect(reset.payload?.entry.usageFamilyKey).toBe("agent:main:main");
+  expect(reset.payload?.entry.usageFamilySessionIds).toEqual([previousSessionId, nextSessionId]);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    ResetSessionEntry
+  >;
+  expect(store["agent:main:main"]?.usageFamilyKey).toBe("agent:main:main");
+  expect(store["agent:main:main"]?.usageFamilySessionIds).toEqual([
+    previousSessionId,
+    nextSessionId,
+  ]);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
