@@ -1,7 +1,11 @@
 // Discord plugin module implements message handler.process behavior.
 import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
-import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAckReaction,
+  resolveHumanDelayConfig,
+  formatReasoningMessage,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -609,17 +613,10 @@ async function processDiscordMessageInner(
       );
       return null;
     }
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return null;
+    if (payload.isReasoning && typeof payload.text === "string") {
+      // Format reasoning as a Thinking message matching the documented /reasoning
+      // contract (separate visible message prefixed with Thinking).
+      payload.text = formatReasoningMessage(payload.text);
     }
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
       const reply = resolveSendableOutboundReplyParts(payload);
@@ -652,17 +649,8 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
     const isFinal = info.kind === "final";
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return { visibleReplySent: false };
+    if (payload.isReasoning && typeof payload.text === "string") {
+      payload.text = formatReasoningMessage(payload.text);
     }
     if (
       isFinal &&

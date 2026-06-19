@@ -2639,17 +2639,22 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses reasoning payload delivery to Discord", async () => {
+  it("formats reasoning payload as Thinking message on Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalled();
+    const params = firstMockArg(deliverDiscordReply, "deliverDiscordReply");
+    expect(params.replies[0]).toHaveProperty("isReasoning", true);
+    // isReasoning payload text is formatted as "Thinking\n\n_<text>_"
+    expect(params.replies[0].text).toContain("Thinking");
+    expect(params.replies[0].text).toContain("_thinking..._");
   });
 
-  it("suppresses reasoning-tagged final payload delivery to Discord", async () => {
+  it("formats reasoning-tagged final payload as Thinking message", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
-        text: "Reasoning:\nthis should stay internal",
+        text: "Reasoning:\nthis should be shown",
         isReasoning: true,
       });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2661,8 +2666,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalled();
+    const params = firstMockArg(deliverDiscordReply, "deliverDiscordReply");
+    expect(params.replies[0]).toHaveProperty("isReasoning", true);
+    expect(params.replies[0].text).toContain("Thinking");
+    expect(params.replies[0].text).toContain("_Reasoning:_");
   });
 
   it("delivers non-reasoning block payloads to Discord", async () => {
