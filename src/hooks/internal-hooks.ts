@@ -286,7 +286,9 @@ export function getRegisteredEventKeys(): string[] {
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
   return (
-    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+    (handlers.get(type)?.length ?? 0) > 0 ||
+    (handlers.get(`${type}:${action}`)?.length ?? 0) > 0 ||
+    (handlers.get(`${type}_${action}`)?.length ?? 0) > 0
   );
 }
 
@@ -312,7 +314,8 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
 
   const typeHandlers = handlers.get(event.type) ?? [];
   const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-  const allHandlers = [...typeHandlers, ...specificHandlers];
+  const underscoreHandlers = handlers.get(`${event.type}_${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers, ...underscoreHandlers];
 
   for (const handler of allHandlers) {
     try {
