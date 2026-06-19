@@ -281,6 +281,7 @@ const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the me
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const RICH_MESSAGE_UNSUPPORTED_RE = /method is not available|method not found|400.*Bad Request/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
@@ -481,6 +482,11 @@ function isTelegramMessageDeleteNoopError(err: unknown): boolean {
 
 function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
+/** Returns true when the error indicates the Bot API does not support sendRichMessage. */
+function isTelegramRichMessageUnsupportedError(err: unknown): boolean {
+  return RICH_MESSAGE_UNSUPPORTED_RE.test(formatErrorMessage(err));
 }
 
 async function withTelegramHtmlParseFallback<T>(params: {
@@ -849,10 +855,11 @@ export async function sendMessageTelegram(
     try {
       return await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context);
     } catch (richErrUnknown) {
-      // Fall back gracefully — the Bot API server may not support sendRichMessage yet.
-      const richErrMessage = richErrUnknown instanceof Error ? richErrUnknown.message : String(richErrUnknown);
+      if (!isTelegramRichMessageUnsupportedError(richErrUnknown)) {
+        throw richErrUnknown;
+      }
       sendLogger.warn(
-        `sendRichMessage failed (${richErrMessage}), falling back to legacy sendMessage`,
+        `sendRichMessage failed, falling back to legacy sendMessage`,
       );
       return await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
     }
@@ -1644,9 +1651,11 @@ export async function editMessageTelegram(
         "editMessage",
         (err) => !isTelegramMessageNotModifiedError(err),
       ).catch((richEditErrUnknown: unknown) => {
-        const richEditErrMessage = richEditErrUnknown instanceof Error ? richEditErrUnknown.message : String(richEditErrUnknown);
+        if (!isTelegramRichMessageUnsupportedError(richEditErrUnknown)) {
+          throw richEditErrUnknown;
+        }
         sendLogger.warn(
-          `editMessageText (rich) failed (${richEditErrMessage}), falling back to legacy edit`,
+          `editMessageText (rich) failed, falling back to legacy edit`,
         );
         return withTelegramHtmlParseFallback({
           label: "editMessage",
