@@ -50,6 +50,7 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskRunDeliveryStatusByRunId,
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
   setTaskProgressById,
@@ -1696,6 +1697,103 @@ describe("task-registry", () => {
         "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("wakes the parent when subagent completion delivery is blocked", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:reader",
+        runId: "run-subagent-blocked",
+        task: "Read the source files",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      setTaskRunDeliveryStatusByRunId({
+        runId: "run-subagent-blocked",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:reader",
+        deliveryStatus: "failed",
+        error: "retry-limit",
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-blocked"), {
+        deliveryStatus: "failed",
+        error: "retry-limit",
+      });
+
+      markTaskTerminalByRunId({
+        runId: "run-subagent-blocked",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:reader",
+        status: "succeeded",
+        endedAt: 250,
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion delivery failed before reaching the requester: retry-limit.",
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-subagent-blocked"), {
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Background task blocked: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: retry-limit.",
+        "Task needs follow-up: Subagent task (run run-suba). Required completion delivery failed before reaching the requester: retry-limit.",
+      ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+
+      markTaskTerminalByRunId({
+        runId: "run-subagent-blocked",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:reader",
+        status: "succeeded",
+        endedAt: 250,
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion delivery failed before reaching the requester: retry-limit.",
+      });
+      expect(peekSystemEvents("agent:main:main")).toHaveLength(2);
+    });
+  });
+
+  it("keeps ordinary blocked subagent completions on the announce path", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:reader",
+        runId: "run-subagent-progress-only",
+        task: "Read the source files",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion ended with progress-only text, not a final deliverable.",
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expectRecordFields(requireTaskByRunId("run-subagent-progress-only"), {
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+      });
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hasPendingHeartbeatWake()).toBe(false);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });

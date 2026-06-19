@@ -153,6 +153,42 @@ describe("task-executor-policy", () => {
       ),
     ).toBe(false);
     expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion delivery failed before reaching the requester: retry-limit.",
+          error: "retry-limit",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          terminalOutcome: "blocked",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutoDeliverTaskTerminalUpdate(
+        createTask({
+          runtime: "subagent",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion ended with progress-only text, not a final deliverable.",
+          error: "stale delivery error",
+        }),
+      ),
+    ).toBe(false);
+    expect(
       shouldAutoDeliverTaskStateChange(
         createTask({
           status: "running",

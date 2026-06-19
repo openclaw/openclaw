@@ -113,7 +113,19 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
   if (task.notifyPolicy === "silent") {
     return false;
   }
-  if (task.runtime === "subagent" && task.status !== "cancelled") {
+  const isSubagentBlockedDeliveryRecovery =
+    task.runtime === "subagent" &&
+    task.status === "succeeded" &&
+    task.terminalOutcome === "blocked" &&
+    Boolean(task.error?.trim()) &&
+    task.terminalSummary
+      ?.trim()
+      .startsWith("Required completion delivery failed before reaching the requester:") === true;
+  if (
+    task.runtime === "subagent" &&
+    task.status !== "cancelled" &&
+    !isSubagentBlockedDeliveryRecovery
+  ) {
     return false;
   }
   if (!isTerminalTaskStatus(task.status)) {
