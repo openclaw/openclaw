@@ -439,11 +439,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
 
   private log = (text: string): void => this.phases.append(text);
 
-  private guestExec = (
-    args: string[],
-    options: { check?: boolean; timeoutMs?: number } = {},
-  ): string => this.guest.exec(args, options);
-
   private guestPowerShell(
     script: string,
     options: { check?: boolean; timeoutMs?: number } = {},

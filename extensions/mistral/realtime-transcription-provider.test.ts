@@ -38,6 +38,22 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
   });
 
+  it("normalizes pasted API key artifacts for realtime auth headers", () => {
+    const provider = buildMistralRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as OpenClawConfig,
+      rawConfig: {
+        providers: {
+          mistral: {
+            apiKey: "  sk-\r\nmistral│  ",
+          },
+        },
+      },
+    });
+
+    expect(resolved?.apiKey).toBe("sk-mistral");
+  });
+
   it("builds a Mistral realtime websocket URL", () => {
     const url = testing.toMistralRealtimeWsUrl({
       apiKey: "mistral-key",

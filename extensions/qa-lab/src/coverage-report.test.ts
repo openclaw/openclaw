@@ -14,6 +14,7 @@ const TEST_EXECUTABLE_COVERAGE_ID = "channels.dm";
 const TEST_BROWSER_CATEGORY_ID = "browser-control-ui-and-webchat.browser-ui";
 const TEST_BROWSER_COVERAGE_ID = "ui.control";
 const TEST_WEBCHAT_COVERAGE_ID = "ui.webchat";
+const DOTTED_COVERAGE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;
 
 function testMaturityTaxonomy(params?: {
   categoryId?: string;
@@ -138,6 +139,11 @@ describe("qa coverage report", () => {
     expect(inventory.scorecardTaxonomy.evidenceRefCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.scenarioCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
+    expect(
+      inventory.scorecardTaxonomy.categories
+        .flatMap((category) => category.coverageIds)
+        .every((coverageId) => DOTTED_COVERAGE_ID_PATTERN.test(coverageId)),
+    ).toBe(true);
     expect(inventory.scorecardTaxonomy.validationIssues.length).toBeGreaterThan(0);
     expect(
       inventory.scorecardTaxonomy.validationIssues.some((issue) =>

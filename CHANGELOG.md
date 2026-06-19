@@ -33,7 +33,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.6.8..HEAD history: 373 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.6.8..HEAD~1 history: 375 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
@@ -410,6 +410,8 @@ This audited record covers the complete v2026.6.8..HEAD history: 373 merged PRs.
 - **PR #94118** [codex] Fix Telegram rich local Markdown link hrefs. Related #94117. Thanks @dankarization and @obviyus.
 - **PR #94646** refactor(sqlite): land database-first memory and proxy alignment. Thanks @vincentkoc.
 - **PR #94658** test(sqlite): use shared temp directory helper. Thanks @vincentkoc.
+- **PR #92135** fix(openai-embedding): preserve openai/ prefix for non-native base URLs. Related #92124. Thanks @xialonglee and @Kambrian.
+- **PR #93737** refactor: add session maintenance transaction seam. Thanks @jalehman.
 
 ## 2026.6.8
 

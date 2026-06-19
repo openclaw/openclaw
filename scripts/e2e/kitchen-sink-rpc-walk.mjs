@@ -892,14 +892,10 @@ export async function fetchJson(url, options = {}) {
     let removeExternalAbort = () => {};
     const abortPromise = externalSignal
       ? new Promise((_, reject) => {
-          const abortError = () =>
-            externalSignal.reason instanceof Error
-              ? externalSignal.reason
-              : new Error("fetch aborted");
           const onAbort = () => {
-            const error = abortError();
+            const error = getExternalAbortReason(externalSignal);
             controller.abort(error);
-            reject(new Error(error.message, { cause: error }));
+            reject(createExternalAbortError(externalSignal));
           };
           if (externalSignal.aborted) {
             onAbort();
@@ -922,10 +918,12 @@ export async function fetchJson(url, options = {}) {
         timeoutPromise,
         ...(abortPromise ? [abortPromise] : []),
       ]);
+      const bodyAbortPromise = abortPromise
+        ? Promise.race([timeoutPromise, abortPromise])
+        : timeoutPromise;
       const text = await Promise.race([
-        readBoundedResponseText(response, maxBodyBytes, timeoutPromise),
-        timeoutPromise,
-        ...(abortPromise ? [abortPromise] : []),
+        readBoundedResponseText(response, maxBodyBytes, bodyAbortPromise),
+        bodyAbortPromise,
       ]);
       let body = null;
       try {
@@ -939,7 +937,7 @@ export async function fetchJson(url, options = {}) {
       if (attempt >= attempts || !isRetryableTransientNetworkError(error)) {
         throw error;
       }
-      await delay(options.retryDelayMs ?? 250);
+      await delayWithAbort(options.retryDelayMs ?? 250, externalSignal);
     } finally {
       removeExternalAbort();
       if (timeout) {
@@ -950,12 +948,39 @@ export async function fetchJson(url, options = {}) {
   throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
+function getExternalAbortReason(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new Error("fetch aborted");
+}
+
+function createExternalAbortError(signal) {
+  const reason = getExternalAbortReason(signal);
+  return new Error(reason.message, { cause: reason });
+}
+
+async function delayWithAbort(delayMs, signal) {
+  if (!signal) {
+    await delay(delayMs);
+    return;
+  }
+  if (signal.aborted) {
+    throw createExternalAbortError(signal);
+  }
+  try {
+    await delay(delayMs, undefined, { signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw createExternalAbortError(signal);
+    }
+    throw error;
+  }
+}
+
 export async function readBoundedResponseText(response, byteLimit, timeoutPromise) {
   const resolvedByteLimit = byteLimit ?? resolveKitchenSinkRpcConfig().fetchBodyMaxBytes;
   const contentLength = response.headers?.get?.("content-length");
   if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > resolvedByteLimit) {
+    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > resolvedByteLimit) {
       await response.body?.cancel?.().catch(() => undefined);
       throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
@@ -971,25 +996,31 @@ export async function readBoundedResponseText(response, byteLimit, timeoutPromis
   }
   const chunks = [];
   let totalBytes = 0;
-  for (;;) {
-    const read = reader.read();
-    const { done, value } = await withOptionalTimeout(
-      read,
-      timeoutPromise?.catch((error) => {
-        cancelReaderSoon(reader);
-        throw error;
-      }),
-    );
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const read = reader.read();
+      const { done, value } = await withOptionalTimeout(
+        read,
+        timeoutPromise?.catch((error) => {
+          cancelReaderSoon(reader);
+          throw error;
+        }),
+      );
+      if (done) {
+        break;
+      }
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > resolvedByteLimit) {
+        await reader.cancel().catch(() => undefined);
+        throw createFetchBodyTooLargeError(resolvedByteLimit);
+      }
+      chunks.push(chunk);
     }
-    const chunk = Buffer.from(value);
-    totalBytes += chunk.byteLength;
-    if (totalBytes > resolvedByteLimit) {
-      await reader.cancel().catch(() => undefined);
-      throw createFetchBodyTooLargeError(resolvedByteLimit);
-    }
-    chunks.push(chunk);
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {}
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
@@ -1848,12 +1879,14 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     if (hasMalformedProcessTreeRows(malformedRows, rootTreeRows)) {
       return null;
     }
+    const rootRow = rootTreeRows.find((row) => row.processId === safePid) ?? null;
     const descendants = rootTreeRows.filter((row) => row.processId !== safePid);
-    const commandMatches = descendants.filter((row) =>
+    const matchesCommandNeedles = (row) =>
       commandLineNeedles.every((needle) =>
         row.command.toLowerCase().includes(needle.toLowerCase()),
-      ),
-    );
+      );
+    const commandMatches = descendants.filter(matchesCommandNeedles);
+    const rootCommandMatches = rootRow && matchesCommandNeedles(rootRow) ? [rootRow] : [];
     const gatewayTitleMatches = descendants.filter((row) =>
       row.command.toLowerCase().includes("openclaw-gateway"),
     );
@@ -1862,7 +1895,9 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
         ? commandMatches
         : gatewayTitleMatches.length > 0
           ? gatewayTitleMatches
-          : descendants,
+          : descendants.length > 0
+            ? descendants
+            : rootCommandMatches,
     );
     if (!selected) {
       return null;

@@ -633,6 +633,22 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     ]);
   });
 
+  it("rejects Blacksmith Testbox for Windows-shaped proof", () => {
+    for (const args of [
+      ["run", "--provider", "blacksmith-testbox", "--target", "windows", "--", "echo ok"],
+      ["run", "--provider", "blacksmith-testbox", "--windows-mode", "wsl2", "--", "echo ok"],
+    ]) {
+      const result = runWrapper(azureProviderHelp, args);
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "provider=blacksmith-testbox supports Linux Testbox proof only",
+      );
+      expect(result.stderr).toContain("windows-testbox-probe.yml");
+    }
+  });
+
   it("fails closed for AWS proof when broker auth is missing", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",

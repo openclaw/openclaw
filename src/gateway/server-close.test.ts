@@ -70,7 +70,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
-const { createChatRunState } = await import("./server-chat-state.js");
+const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
 const {
   finishGatewayRestartTrace,
   recordGatewayRestartTraceSpan,
@@ -548,7 +548,12 @@ describe("createGatewayCloseHandler", () => {
         nodeSendToSession,
         chatRunState,
         chatAbortControllers,
-        removeChatRun: vi.fn(() => ({ sessionKey: "session-1", clientRunId: "run-1" })),
+        removeChatRun: vi.fn(() => ({
+          sessionKey: "session-1",
+          clientRunId: "run-1",
+          registeredAtMs: 1_000,
+          registeredSequence: 1,
+        })),
       }),
     );
 
@@ -746,16 +751,24 @@ describe("createGatewayCloseHandler", () => {
         },
       ],
     ]);
+    const chatRunState = createTestChatRunState();
+    const abortedRunsSet = vi.spyOn(chatRunState.abortedRuns, "set");
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
       events.push("marker");
     });
     const removeChatRun = vi.fn(() => {
       events.push("abort");
-      return { sessionKey: "agent:main:main", clientRunId: "run-1" };
+      return {
+        sessionKey: "agent:main:main",
+        clientRunId: "run-1",
+        registeredAtMs: 1_000,
+        registeredSequence: 1,
+      };
     });
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
+        chatRunState,
         markMainSessionsAbortedForRestart,
         removeChatRun,
         resolveActiveSessionIdForKey: (sessionKey) => {
@@ -807,6 +820,20 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(completedController.signal.aborted).toBe(true);
     expect(hiddenController.signal.aborted).toBe(true);
+    const completedMarker = abortedRunsSet.mock.calls.find(
+      ([runId]) => runId === "completed-run",
+    )?.[1];
+    expect(completedMarker).toEqual({
+      abortedAtMs: expect.any(Number),
+      sequence: expect.any(Number),
+    });
+    chatRunState.registry.add("completed-run", {
+      sessionKey: "agent:main:fresh",
+      clientRunId: "completed-run",
+    });
+    expect(
+      isChatAbortMarkerCurrent(completedMarker, chatRunState.registry.peek("completed-run")),
+    ).toBe(false);
   });
 
   it("keeps post-terminal caller work in restart drain and recovery", async () => {

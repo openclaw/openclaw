@@ -1739,6 +1739,25 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+  it("samples the POSIX gateway root when command-line needles match", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout:
+          " 4321     1  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
   it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
@@ -1815,6 +1834,30 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("aborts HTTP probe retry backoff when the external signal fires", async () => {
+    const controller = new AbortController();
+    const reset = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi.fn().mockRejectedValue(reset);
+    const startedAt = Date.now();
+
+    setTimeout(() => {
+      controller.abort(new Error("gateway exited before ready"));
+    }, 25);
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 2,
+        fetchImpl,
+        retryDelayMs: 5_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("gateway exited before ready");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
   it("bounds HTTP probe response bodies", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
 
@@ -1880,6 +1923,21 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe decimal HTTP content lengths before reading", async () => {
+    const response = {
+      headers: new Headers({
+        "content-length": "9007199254740992",
+      }),
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("streams HTTP probe responses with non-decimal content-length values", async () => {
     let readStarted = false;
     let canceled = false;
@@ -1918,6 +1976,30 @@ describe("kitchen-sink RPC process sampling", () => {
     );
   });
 
+  it("releases HTTP probe response stream readers after bounded reads", async () => {
+    const releaseLock = vi.fn();
+    const response = {
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode("ok") })
+              .mockResolvedValueOnce({ done: true }),
+            releaseLock,
+          };
+        },
+      },
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).resolves.toBe("ok");
+
+    expect(releaseLock).toHaveBeenCalledOnce();
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
   it("cancels stalled HTTP probe response streams when the timeout wins", async () => {
     let canceled = false;
     const timeoutError = Object.assign(new Error("fetch probe timed out"), {
@@ -1942,6 +2024,40 @@ describe("kitchen-sink RPC process sampling", () => {
       message: "fetch probe timed out",
     });
     expect(canceled).toBe(true);
+  });
+
+  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const controller = new AbortController();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull() {
+            readStarted = true;
+            return new Promise(() => {});
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = fetchJson("http://127.0.0.1:19680/readyz", {
+      attempts: 1,
+      fetchImpl,
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    });
+    const rejection = expect(result).rejects.toThrow("gateway exited before ready");
+
+    await waitFor(() => readStarted);
+    controller.abort(new Error("gateway exited before ready"));
+
+    await rejection;
+    await waitFor(() => canceled);
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

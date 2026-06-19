@@ -218,8 +218,18 @@ function isSourceFile(filePath) {
 }
 
 function isGeneratedAssetSourceFile(filePath) {
-  return /(?:^|\/)extensions\/[^/]+\/assets\/[^/]+\.[cm]?js$/u.test(
-    filePath.replaceAll(path.sep, "/"),
+  const normalized = filePath.replaceAll(path.sep, "/");
+  return (
+    /(?:^|\/)extensions\/[^/]+\/(?:assets|dist)\/.+\.[cm]?js$/u.test(normalized) ||
+    /(?:^|\/)packages\/[^/]+\/dist\/.+\.[cm]?js$/u.test(normalized)
+  );
+}
+
+function isGeneratedAssetSourcePath(filePath) {
+  return (
+    /(?:^|\/)extensions\/[^/]+\/(?:assets|dist)(?:\/|$)/u.test(
+      filePath.replaceAll(path.sep, "/"),
+    ) || /(?:^|\/)packages\/[^/]+\/dist(?:\/|$)/u.test(filePath.replaceAll(path.sep, "/"))
   );
 }
 
@@ -253,6 +263,9 @@ async function collectSourceFiles(targetPath) {
       continue;
     }
     const entryPath = path.join(targetPath, entry.name);
+    if (isGeneratedAssetSourcePath(entryPath)) {
+      continue;
+    }
     if (entry.isDirectory()) {
       files.push(...(await collectSourceFiles(entryPath)));
       continue;

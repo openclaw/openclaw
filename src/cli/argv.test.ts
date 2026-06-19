@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildParseArgv,
   getFlagValue,
-  getCommandPath,
   getCommandPositionalsWithRootOptions,
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -442,7 +441,7 @@ describe("argv helpers", () => {
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
-    expect(getCommandPath(argv, 2)).toEqual(expected);
+    expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
   });
 
   it("extracts command path while skipping known root option values", () => {
@@ -562,6 +561,16 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "--", "--timeout=99"],
       expected: undefined,
     },
+    {
+      name: "repeated flag uses final value",
+      argv: ["node", "openclaw", "status", "--timeout", "100", "--timeout=200"],
+      expected: "200",
+    },
+    {
+      name: "missing repeated value remains invalid",
+      argv: ["node", "openclaw", "status", "--timeout", "--timeout", "200"],
+      expected: null,
+    },
   ])("extracts flag values: $name", ({ argv, expected }) => {
     expect(getFlagValue(argv, "--timeout")).toBe(expected);
   });
@@ -598,17 +607,37 @@ describe("argv helpers", () => {
     {
       name: "invalid integer",
       argv: ["node", "openclaw", "status", "--timeout", "nope"],
-      expected: undefined,
+      expected: null,
     },
     {
       name: "non-decimal integer",
       argv: ["node", "openclaw", "status", "--timeout", "0x10"],
-      expected: undefined,
+      expected: null,
     },
     {
       name: "partial integer",
       argv: ["node", "openclaw", "status", "--timeout", "5s"],
-      expected: undefined,
+      expected: null,
+    },
+    {
+      name: "zero",
+      argv: ["node", "openclaw", "status", "--timeout", "0"],
+      expected: null,
+    },
+    {
+      name: "negative integer",
+      argv: ["node", "openclaw", "status", "--timeout", "-5"],
+      expected: null,
+    },
+    {
+      name: "repeated value uses final valid integer",
+      argv: ["node", "openclaw", "status", "--timeout", "nope", "--timeout", "5000"],
+      expected: 5000,
+    },
+    {
+      name: "repeated value rejects final invalid integer",
+      argv: ["node", "openclaw", "status", "--timeout", "5000", "--timeout", "nope"],
+      expected: null,
     },
   ])("parses positive integer flag values: $name", ({ argv, expected }) => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);

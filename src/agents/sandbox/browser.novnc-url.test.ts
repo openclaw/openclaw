@@ -2,7 +2,6 @@
 // password generation for sandbox browser viewing.
 import { describe, expect, it } from "vitest";
 import {
-  buildNoVncDirectUrl,
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
   generateNoVncPassword,
@@ -11,10 +10,6 @@ import {
 } from "./novnc-auth.js";
 
 describe("noVNC auth helpers", () => {
-  it("builds the default observer URL without password", () => {
-    expect(buildNoVncDirectUrl(45678)).toBe("http://127.0.0.1:45678/vnc.html");
-  });
-
   it("issues one-time short-lived observer tokens", () => {
     // Observer tokens are bearer access to a browser session, so consumption is
     // one-shot and bounded by a short TTL.

@@ -709,25 +709,6 @@ export class MediaStreamHandler {
     this.clearAudio(streamSid);
   }
 
-  /**
-   * Get active session by call ID.
-   */
-  getSessionByCallId(callId: string): StreamSession | undefined {
-    return [...this.sessions.values()].find((session) => session.callId === callId);
-  }
-
-  /**
-   * Close all sessions.
-   */
-  closeAll(): void {
-    for (const session of this.sessions.values()) {
-      this.clearTtsState(session.streamSid);
-      session.sttSession.close();
-      session.ws.close();
-    }
-    this.sessions.clear();
-  }
-
   private getTtsQueue(streamSid: string): TtsQueueEntry[] {
     const existing = this.ttsQueues.get(streamSid);
     if (existing) {

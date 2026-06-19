@@ -210,6 +210,12 @@ function applyWhamCooldownResult(params: {
   };
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function probeWhamForCooldown(
   store: AuthProfileStore,
   profileId: string,
@@ -249,6 +255,7 @@ async function probeWhamForCooldown(
     });
 
     if (!res.ok) {
+      await cancelUnreadResponseBody(res);
       if (res.status === 401) {
         return { cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS, reason: "wham_token_expired" };
       }

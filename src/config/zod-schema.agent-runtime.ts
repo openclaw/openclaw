@@ -1016,13 +1016,6 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-export const AgentEmbeddedHarnessSchema = z
-  .object({
-    runtime: z.string().optional(),
-  })
-  .strict()
-  .optional();
-
 export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),

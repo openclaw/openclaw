@@ -24,9 +24,9 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verify as verifySigstoreBundle } from "sigstore";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
@@ -183,8 +183,15 @@ const NPM_PROVENANCE_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml
 const NPM_PROVENANCE_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com";
 const NPM_PROVENANCE_BUILDER_ID = "https://github.com/actions/runner/github-hosted";
 const NPM_REGISTRY_REQUEST_TIMEOUT_MS = 30_000;
+const NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 const NPM_REGISTRY_PROVENANCE_ATTEMPTS = 30;
 const NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS = 10_000;
+
+type FetchRegistryJsonOptions = {
+  fetchImpl?: typeof fetch;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
 
 export function verifyNpmRegistrySignatures(params: {
   integrity: string;
@@ -270,7 +277,8 @@ async function verifySigstoreNpmProvenanceBundle(
   bundle: unknown,
   policy: NpmProvenanceVerificationPolicy,
 ): Promise<void> {
-  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0], policy);
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
 }
 
 export async function verifyNpmProvenanceAttestation(params: {
@@ -920,18 +928,48 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
   npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), cwd);
 }
 
-async function fetchRegistryJson(url: string): Promise<unknown> {
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(NPM_REGISTRY_REQUEST_TIMEOUT_MS),
+export async function fetchRegistryJson(
+  url: string,
+  options: FetchRegistryJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = options.timeoutMs ?? NPM_REGISTRY_REQUEST_TIMEOUT_MS;
+  const maxBodyBytes = options.maxBodyBytes ?? NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES;
+  const controller = new AbortController();
+  const timeoutError = Object.assign(
+    new Error(`npm registry request timed out after ${timeoutMs}ms: ${url}`),
+    { code: "ETIMEDOUT" },
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
   });
-  if (!response.ok) {
-    throw new Error(`npm registry request failed (${response.status}): ${url}`);
+  try {
+    const response = await Promise.race([
+      (options.fetchImpl ?? fetch)(url, {
+        headers: {
+          Accept: "application/json",
+        },
+        redirect: "error",
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    if (!response.ok) {
+      throw new Error(`npm registry request failed (${response.status}): ${url}`);
+    }
+    return JSON.parse(
+      await readBoundedResponseText(response, `npm registry ${url}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      }),
+    );
+  } finally {
+    clearTimeout(timeout);
   }
-  return response.json();
 }
 
 function isRetryableRegistryProvenanceError(error: unknown): boolean {

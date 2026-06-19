@@ -401,6 +401,7 @@ describe("runMessageAction plugin dispatch", () => {
             messageId: "om_123",
           },
           defaultAccountId: "ops",
+          requesterAccountId: "ops",
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
@@ -421,6 +422,7 @@ describe("runMessageAction plugin dispatch", () => {
           {
             action: "pin",
             accountId: "ops",
+            requesterAccountId: "ops",
             requesterSenderId: "trusted-user",
             sessionKey: "agent:alpha:main",
             sessionId: "session-123",

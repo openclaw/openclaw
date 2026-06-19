@@ -223,8 +223,6 @@ export function readExternalCliBootstrapCredential(params: {
   );
 }
 
-export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
-
 /** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
 export function readExternalCliFallbackCredential(params: {
   profileId: string;

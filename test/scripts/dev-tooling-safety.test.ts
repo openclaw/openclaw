@@ -370,6 +370,30 @@ describe("script-specific dev tooling hardening", () => {
     ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
   });
 
+  it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {
+    const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
+    const body = {
+      cancel: vi.fn(() => Promise.resolve()),
+      getReader: vi.fn(() => {
+        throw new Error("reader should not be acquired");
+      }),
+    };
+    const response = {
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body,
+    } as unknown as Response;
+
+    await expect(
+      realtimeSmokeTesting.readOpenAIRealtimeBrowserResponseText(
+        response,
+        "OpenAI Realtime SDP answer",
+        maxBytes,
+      ),
+    ).rejects.toThrow(`OpenAI Realtime SDP answer response body exceeded ${maxBytes} bytes`);
+    expect(body.getReader).not.toHaveBeenCalled();
+    expect(body.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
     const response = new Response(

@@ -103,6 +103,37 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
+  it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
+    const input = [
+      "<table>",
+      "<thead><tr><th>Name</th><th>Age</th></tr></thead>",
+      "<tbody><tr><td>Ada</td><td>37</td></tr></tbody>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+
+    expect(html).toBe("<pre><code>| Name | Age |\n| Ada  | 37  |</code></pre>\n\n");
+    expect(html).not.toContain("&lt;table");
+  });
+
+  it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
+    expect(
+      renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
+        textMode: "html",
+      }),
+    ).toBe(
+      "<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;A&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>",
+    );
+  });
+
+  it("preserves supported raw rich HTML tables during sanitization", () => {
+    const input =
+      '<table bordered><caption>Scores</caption><tbody><tr><td>A</td><td align="right">1</td></tr></tbody></table>';
+
+    expect(sanitizeTelegramRichHtml(input)).toBe(input);
+  });
+
   it("isolates rich media tags as blocks", () => {
     const html = markdownToTelegramRichHtml(
       'One <img src="https://example.com/a.jpg" alt="A"> two https://example.com/page',
