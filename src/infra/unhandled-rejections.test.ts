@@ -272,6 +272,12 @@ describe("isTransientSqliteError", () => {
 
     expect(isTransientSqliteError(error)).toBe(false);
   });
+
+  it("returns true for unable to open database file even without SQLite context", () => {
+    const error = new Error("unable to open database file");
+
+    expect(isTransientSqliteError(error)).toBe(true);
+  });
 });
 
 describe("isTransientFileWatchError", () => {

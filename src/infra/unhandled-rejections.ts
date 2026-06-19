@@ -161,7 +161,7 @@ function hasSqliteSignal(err: unknown): boolean {
     "message" in err && typeof err.message === "string"
       ? normalizeLowercaseStringOrEmpty(err.message)
       : "";
-  if (message.includes("sqlite")) {
+  if (message.includes("sqlite") || message.includes("unable to open database file")) {
     return true;
   }
 
