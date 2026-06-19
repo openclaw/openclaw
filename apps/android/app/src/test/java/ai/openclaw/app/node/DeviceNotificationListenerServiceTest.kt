@@ -229,7 +229,6 @@ class DeviceNotificationListenerServiceTest {
       "tag-$id",
       1_000,
       0,
-      0,
       notification,
       Process.myUserHandle(),
       postTimeMs,
