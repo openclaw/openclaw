@@ -100,7 +100,12 @@ async function loadSkillsStatusReport(
 ): Promise<SkillStatusReport> {
   const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
   const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
+  const { getRemoteSkillEligibility } = await import("../skills/runtime/remote.js");
+  return buildWorkspaceSkillStatus(workspaceDir, {
+    config,
+    agentId,
+    eligibility: { remote: getRemoteSkillEligibility() },
+  });
 }
 
 async function runSkillsAction(
