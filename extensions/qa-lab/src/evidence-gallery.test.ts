@@ -198,7 +198,7 @@ describe("evidence gallery", () => {
           surface: "web-ui",
         },
         {
-          coverageIds: ["cli-entrypoint"],
+          coverageIds: ["cli.entrypoint"],
           runner: {
             availability: "local",
             command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
@@ -274,7 +274,7 @@ describe("evidence gallery", () => {
             title: "UX Matrix: cli / error-state",
             source: { path: "scripts/ux-matrix/dashboard.ts" },
           },
-          coverage: [{ id: "status-snapshots", role: "primary" }],
+          coverage: [{ id: "cli.status-snapshots", role: "primary" }],
           execution: {
             runner: "ux-matrix-dashboard",
             environment: {
@@ -359,7 +359,7 @@ describe("evidence gallery", () => {
       {
         artifactKinds: [],
         artifactPaths: [],
-        coverageIds: ["cli-entrypoint"],
+        coverageIds: ["cli.entrypoint"],
         runner: {
           availability: "local",
           command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",

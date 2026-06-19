@@ -884,6 +884,7 @@ describe("test-projects args", () => {
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
+          "test/scripts/openai-chat-tools-client.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",

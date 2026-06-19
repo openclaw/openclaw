@@ -14,14 +14,11 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
-  isLaunchAgentListed,
-  isOpenClawUpdateLaunchdLabel,
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
-  removeOpenClawUpdateLaunchdJob,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
@@ -456,22 +453,6 @@ describe("launchd runtime state", () => {
 });
 
 describe("launchctl list detection", () => {
-  it("detects the resolved label in launchctl list", async () => {
-    state.listOutput = "123 0 ai.openclaw.gateway\n";
-    const listed = await isLaunchAgentListed({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-    });
-    expect(listed).toBe(true);
-  });
-
-  it("returns false when the label is missing", async () => {
-    state.listOutput = "123 0 com.other.service\n";
-    const listed = await isLaunchAgentListed({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-    });
-    expect(listed).toBe(false);
-  });
-
   it("parses stale OpenClaw updater jobs from launchctl list", () => {
     const jobs = parseLaunchctlListOpenClawUpdateJobs(
       [
@@ -541,24 +522,6 @@ describe("launchctl list detection", () => {
       ]);
     },
   );
-
-  it("recognizes only OpenClaw updater launchd labels", () => {
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.update.2026.5.12")).toBe(true);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.1717168800")).toBe(true);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.gateway")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.gateway")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.profile")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-updater.1717168800")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("com.example.update")).toBe(false);
-  });
-
-  it.runIf(process.platform === "darwin")("removes legacy updater launchd jobs", async () => {
-    await expect(removeOpenClawUpdateLaunchdJob(" ai.openclaw.update.2026.5.12 ")).resolves.toBe(
-      true,
-    );
-
-    expect(state.launchctlCalls).toContainEqual(["remove", "ai.openclaw.update.2026.5.12"]);
-  });
 
   it.runIf(process.platform === "darwin")(
     "disables the current legacy updater launchd job",
