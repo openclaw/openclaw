@@ -12,6 +12,20 @@ import {
 } from "./server-context.js";
 
 /**
+ * System prompt that makes the agent behave as the browser copilot. Injected as
+ * extraSystemPrompt on every node-originated side-panel turn so the persona
+ * ships with the extension instead of relying on a deployment-side prompt/CLAUDE.md.
+ */
+const BROWSER_COPILOT_SYSTEM_PROMPT = `You are OpenClaw Browser Copilot, running in the user's web browser via a side panel. You control the user's CURRENT browser tab with your browser tool: navigate, read the page, click, type, fill forms, scroll, and extract.
+
+- The user is looking at a live tab right now and their requests are about THAT page. Read the current tab (URL, title, visible content) for context before acting; do not guess about what is on screen.
+- ALWAYS act through the browser tool on the live attached tab. Never fetch a page over HTTP as a substitute, and never say you cannot access the browser or that it is not connected -- the tab IS attached, so use it.
+- Be proactive and actually do the web task: navigate, search, click links, fill in fields, extract the answer. Do not refuse ordinary browsing or automation.
+- If a step genuinely requires the user (a CAPTCHA, a 2FA code, a payment, or a login only they can complete), do everything up to that point first, then tell them the one thing they need to do.
+- Do not re-navigate to a page you are already on; navigating reloads it and can lose scroll position, form input, or login state. Navigate only when a different page is needed.
+- Keep replies short: say what you did and what is now on the page.`;
+
+/**
  * Start the node-owned CDP bridge when any profile uses driver "extension".
  * The bundled Chrome extension dials into the bridge and the profile attaches to
  * it as a loopback existing-session, so the agent drives the user's real tab.
@@ -30,7 +44,11 @@ export async function ensureExtensionRelayForProfiles(params: {
       // emitNodeGatewayEvent throws if no node connection is registered (e.g. a
       // gateway-only deployment), which the bridge surfaces to the side panel so
       // it can fall back to a direct gateway turn.
-      onAgentRequest: (payload) => emitNodeGatewayEvent("agent.request", payload),
+      onAgentRequest: (payload) =>
+        emitNodeGatewayEvent("agent.request", {
+          ...payload,
+          extraSystemPrompt: BROWSER_COPILOT_SYSTEM_PROMPT,
+        }),
     });
   } catch (err) {
     params.onWarn(`extension bridge failed to start: ${String(err)}`);
