@@ -17,6 +17,7 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { getActiveTaskRouteLease } from "../../tasks/task-route-lease.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -142,6 +143,15 @@ export async function resolveDeliveryTarget(
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
     accountId?: string;
     sessionKey?: string;
+    /**
+     * Detached run id for the current cron run. When provided, the resolver
+     * consults the task-route lease store as an additional fallback for the
+     * outbound origin: if the originating session entry has been evicted or
+     * the shared main session bucket was retargeted by another conversation
+     * since the cron job was created, the lease carries the original
+     * requester origin captured at job start (see #92460).
+     */
+    runId?: string;
   },
   options?: { dryRun?: boolean },
 ): Promise<DeliveryTargetResolution> {
@@ -180,11 +190,30 @@ export async function resolveDeliveryTarget(
     ? loadSessionEntry({ agentId, sessionKey: threadSessionKey, storePath })
     : undefined;
   const mainEntry = loadSessionEntry({ agentId, sessionKey: mainSessionKey, storePath });
-  const main = storedDeliveryEntry ?? threadEntry ?? mainEntry;
+  // Task-route lease fallback for #92460: when the session-keyed lookups
+  // miss (because the originating session entry is gone, the shared main
+  // bucket is now another conversation's room, or no thread session exists),
+  // an active lease on the run id carries the requester origin captured
+  // at job start. Best-effort: lease lookup is read-only and never throws.
+  const leaseOrigin = jobPayload.runId
+    ? getActiveTaskRouteLease(jobPayload.runId)?.requesterOrigin
+    : undefined;
+  const leaseEntry: SessionEntry | undefined = leaseOrigin
+    ? ({
+        sessionId: threadSessionKey ?? mainSessionKey,
+        updatedAt: 0,
+        deliveryContext: leaseOrigin,
+      } satisfies SessionEntry)
+    : undefined;
+  // Precedence: stored cron delivery context > thread entry > lease entry
+  // > shared main session bucket. The lease entry only wins when the
+  // higher-precedence sources are missing AND a lease exists for the run.
+  const main = storedDeliveryEntry ?? threadEntry ?? leaseEntry ?? mainEntry;
   // True when the cron has no delivery identity of its own (no per-job target, no own
-  // sessionKey, no stored/creation delivery context) and therefore fell back to the SHARED
-  // agent-main session bucket. See the #91613 refusal below.
-  const usedSharedMainFallback = mainEntry !== undefined && main === mainEntry;
+  // sessionKey, no stored/creation delivery context, no active lease) and therefore fell
+  // back to the SHARED agent-main session bucket. See the #91613 refusal below.
+  const usedSharedMainFallback =
+    mainEntry !== undefined && main === mainEntry && !storedDeliveryEntry && !leaseEntry;
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,

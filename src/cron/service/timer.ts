@@ -156,6 +156,15 @@ type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  /**
+   * Optional detached task run id for the current cron run. When provided,
+   * the delivery-target resolver consults the task-route lease store (see
+   * #92460) so a cron whose originating session entry has been evicted
+   * (or whose shared main session bucket was retargeted by another
+   * conversation) can still recover the original outbound origin captured
+   * at job start.
+   */
+  runId?: string;
 };
 
 /** Executes cron job core logic with the configured wall-clock timeout and watchdog cleanup. */
@@ -195,7 +204,9 @@ export async function executeJobCoreWithTimeout(
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
-      const corePromise = executeJobCore(state, job, runAbortController.signal);
+      const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        runId: opts?.runId,
+      });
       trackActiveCronTaskRunSettlement(corePromise);
       void corePromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
@@ -249,6 +260,7 @@ export async function executeJobCoreWithTimeout(
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      runId: opts?.runId,
     });
     trackActiveCronTaskRunSettlement(corePromise);
     watchdog.start();
@@ -2132,6 +2144,7 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    runId: options?.runId,
   });
 
   if (abortSignal?.aborted) {
