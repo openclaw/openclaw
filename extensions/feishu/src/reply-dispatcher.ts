@@ -171,6 +171,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  // In DM chats (skipReplyToInMessages=true), ordinary DM rootId should also be
+  // omitted so streaming.start() chooses "create" mode, matching plain-text and
+  // static-card sends. Group/thread rootId is preserved for correct threading.
+  const streamingRootId = skipReplyToInMessages ? undefined : rootId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
@@ -394,7 +398,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
-          rootId,
+          rootId: streamingRootId,
           header: cardHeader,
           note: cardNote,
         });

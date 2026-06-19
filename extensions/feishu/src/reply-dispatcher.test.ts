@@ -1565,22 +1565,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("omits replyToMessageId from streaming.start() in DM chats (skipReplyToInMessages)", async () => {
-    // In DM chats, skipReplyToInMessages=true means sendReplyToMessageId=undefined.
-    // The streaming card start() should receive undefined replyToMessageId,
-    // so resolveStreamingCardSendMode returns "create" (no Reply-to label in DM).
+  it("omits both replyToMessageId and rootId from streaming.start() in DM chats (skipReplyToInMessages)", async () => {
+    // In DM chats, skipReplyToInMessages=true means both sendReplyToMessageId and
+    // streamingRootId are undefined. The streaming card start() should receive
+    // undefined for both, so resolveStreamingCardSendMode returns "create" (no
+    // Reply-to label, no root_create fallback in DM).
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
-      replyToMessageId: "om_dm_msg",
+      replyToMessageId: "dm_msg",
       skipReplyToInMessages: true,
+      rootId: "dm_root",
     });
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
     expectStreamingStartOptions(0, {
       replyToMessageId: undefined,
+      rootId: undefined,
       header: { title: "agent", template: "blue" },
       note: "Agent: agent",
+    });
+  });
+
+  it("preserves rootId for group/thread streaming when skipReplyToInMessages is false", async () => {
+    // In group chats, skipReplyToInMessages=false so rootId is passed through,
+    // enabling root_create mode for proper threading.
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "group_msg",
+      skipReplyToInMessages: false,
+      rootId: "group_root",
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expectStreamingStartOptions(0, {
+      replyToMessageId: "group_msg",
+      rootId: "group_root",
     });
   });
 
