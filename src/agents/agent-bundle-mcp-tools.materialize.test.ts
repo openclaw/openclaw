@@ -412,6 +412,60 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("does not let invalid MCP base64 consume relay budget before valid media", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "image", data: "AA!A", mimeType: "image/png" },
+            { type: "audio", data: "AA!A", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://invalid-1", blob: "AA!A", mimeType: "application/pdf" },
+            },
+            { type: "image", data: "AA!A", mimeType: "image/png" },
+            { type: "audio", data: "AA!A", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://invalid-2", blob: "AA!A", mimeType: "application/pdf" },
+            },
+            { type: "image", data: "AA!A", mimeType: "image/png" },
+            { type: "audio", data: "AA!A", mimeType: "audio/mpeg" },
+            { type: "image", data: "TQ", mimeType: "image/png" },
+            { type: "audio", data: "TWE", mimeType: "audio/mpeg" },
+            {
+              type: "resource",
+              resource: { uri: "blob://valid", blob: "SGVsbG8", mimeType: "application/pdf" },
+            },
+          ],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const media = extractToolResultMediaArtifact(result);
+
+    expect(resolveOutboundAttachmentFromBufferMock).toHaveBeenCalledTimes(3);
+    expect(
+      resolveOutboundAttachmentFromBufferMock.mock.calls.map((call) => call[0].toString("utf8")),
+    ).toEqual(["M", "Ma", "Hello"]);
+    expect(media?.mediaUrls).toEqual([
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-8.png",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-9.mp3",
+      "/tmp/openclaw/media/outbound/bundleProbe-bundle_probe-10.pdf",
+    ]);
+    expect(result.details).toMatchObject({
+      media: {
+        attachments: [
+          { type: "image" },
+          { type: "audio" },
+          { type: "resource", uri: "blob://valid" },
+        ],
+      },
+    });
+  });
+
   it("rejects oversized MCP base64 before decoding staged media", async () => {
     const oversizedImageBase64 = "A".repeat(9 * 1024 * 1024);
     const runtime = await materializeBundleMcpToolsForRun({

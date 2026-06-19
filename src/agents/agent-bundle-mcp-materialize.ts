@@ -102,7 +102,7 @@ function canonicalizeMcpBase64Data(data: string): string | undefined {
 }
 
 function decodeBoundedBase64Data(params: {
-  data: string;
+  canonicalBase64: string;
   maxBytes: number;
   estimatedBytes: number;
 }): Buffer {
@@ -111,11 +111,7 @@ function decodeBoundedBase64Data(params: {
       `MCP content too large: ${params.estimatedBytes} bytes (limit: ${params.maxBytes} bytes)`,
     );
   }
-  const canonicalBase64 = canonicalizeMcpBase64Data(params.data);
-  if (!canonicalBase64) {
-    throw new Error("MCP content has invalid base64 data");
-  }
-  const buffer = Buffer.from(canonicalBase64, "base64");
+  const buffer = Buffer.from(params.canonicalBase64, "base64");
   if (buffer.byteLength > params.maxBytes) {
     throw new Error(
       `MCP content too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
@@ -168,6 +164,14 @@ function reserveMcpRelayMediaBudget(params: {
   return true;
 }
 
+function releaseMcpRelayMediaBudget(params: {
+  budget: McpRelayMediaBudget;
+  estimatedBytes: number;
+}) {
+  params.budget.attachmentCount = Math.max(0, params.budget.attachmentCount - 1);
+  params.budget.decodedBytes = Math.max(0, params.budget.decodedBytes - params.estimatedBytes);
+}
+
 async function stageMcpBinaryAttachment(params: {
   serverName: string;
   toolName: string;
@@ -180,10 +184,15 @@ async function stageMcpBinaryAttachment(params: {
 }): Promise<McpRelayMediaAttachment | undefined> {
   const mimeType = normalizeMimeType(params.mimeType);
   const maxBytes = maxBytesForMime(mimeType);
+  let reservedEstimatedBytes: number | undefined;
   try {
     const estimatedBytes = estimateBoundedBase64DataBytes(params.data, maxBytes);
     if (estimatedBytes === undefined) {
       return undefined;
+    }
+    const canonicalBase64 = canonicalizeMcpBase64Data(params.data);
+    if (!canonicalBase64) {
+      throw new Error("MCP content has invalid base64 data");
     }
     if (
       !reserveMcpRelayMediaBudget({
@@ -196,8 +205,9 @@ async function stageMcpBinaryAttachment(params: {
     ) {
       return undefined;
     }
+    reservedEstimatedBytes = estimatedBytes;
     const buffer = decodeBoundedBase64Data({
-      data: params.data,
+      canonicalBase64,
       maxBytes,
       estimatedBytes,
     });
@@ -218,6 +228,12 @@ async function stageMcpBinaryAttachment(params: {
       ...(params.uri ? { uri: params.uri } : {}),
     };
   } catch (error) {
+    if (reservedEstimatedBytes !== undefined) {
+      releaseMcpRelayMediaBudget({
+        budget: params.budget,
+        estimatedBytes: reservedEstimatedBytes,
+      });
+    }
     logWarn(
       `bundle-mcp: could not stage ${params.type} content from ${params.serverName}/${params.toolName}: ${
         error instanceof Error ? error.message : String(error)
