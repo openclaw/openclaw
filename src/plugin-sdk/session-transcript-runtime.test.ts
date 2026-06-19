@@ -10,6 +10,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
+  publishSessionTranscriptUpdateByIdentity,
   readSessionTranscriptEvents,
   resolveSessionTranscriptIdentity,
   resolveSessionTranscriptTarget,
@@ -156,6 +157,31 @@ describe("session transcript runtime SDK", () => {
     ]);
   });
 
+  it("publishes updates with the resolved scoped transcript identity", async () => {
+    const scope = {
+      agentId: "main",
+      sessionFile: path.join(tempDir, "publish-target.jsonl"),
+      sessionId: "publish-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    await publishSessionTranscriptUpdateByIdentity({
+      ...scope,
+      update: {
+        messageId: "message-from-direct-publish",
+      },
+    });
+
+    expect(emitSpy).toHaveBeenCalledWith({
+      agentId: "main",
+      messageId: "message-from-direct-publish",
+      sessionFile: scope.sessionFile,
+      sessionKey: "agent:main:main",
+    });
+  });
+
   it("locks read and append helpers to one scoped transcript target", async () => {
     const scope = {
       agentId: "main",
@@ -274,7 +300,6 @@ describe("session transcript runtime SDK", () => {
       });
       await locked.publishUpdate({
         messageId: "message-from-callback",
-        sessionKey: scope.sessionKey,
       });
       expect(emitSpy).not.toHaveBeenCalled();
       callbackCompleted = true;
@@ -289,6 +314,7 @@ describe("session transcript runtime SDK", () => {
         fileText: expect.stringContaining("queued publish"),
         update: expect.objectContaining({
           messageId: "message-from-callback",
+          agentId: "main",
           sessionFile: scope.sessionFile,
           sessionKey: scope.sessionKey,
         }),

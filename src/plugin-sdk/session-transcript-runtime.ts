@@ -199,7 +199,18 @@ export async function appendSessionTranscriptMessageByIdentity<TMessage>(
 export async function publishSessionTranscriptUpdateByIdentity(
   params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },
 ): Promise<void> {
-  await publishTranscriptUpdate(params, params.update);
+  const target = await resolveSessionTranscriptRuntimeTarget(params);
+  await publishTranscriptUpdate(
+    {
+      ...params,
+      sessionFile: target.sessionFile,
+    },
+    {
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      ...params.update,
+    },
+  );
 }
 
 /**
