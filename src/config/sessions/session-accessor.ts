@@ -278,6 +278,12 @@ export type SessionTranscriptManualTrimResult =
       kept: number;
     };
 
+export type SessionTranscriptManualTrimPreflightResult =
+  | Extract<SessionTranscriptManualTrimResult, { compacted: false }>
+  | {
+      compacted: true;
+    };
+
 export type SessionEntryUpdateOptions = {
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
   skipMaintenance?: boolean;
@@ -944,6 +950,30 @@ export async function publishTranscriptUpdate(
  * This is one storage-sized mutation: future stores can trim transcript rows and
  * update entry metadata inside the same backend transaction.
  */
+export async function preflightSessionTranscriptForManualCompact(
+  scope: SessionTranscriptRuntimeScope,
+  params: { maxLines: number; sessionFile?: string },
+): Promise<SessionTranscriptManualTrimPreflightResult> {
+  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
+  if (!transcript) {
+    return { compacted: false, reason: "no transcript" };
+  }
+
+  const maxLines = Math.max(1, Math.floor(params.maxLines));
+  let totalLines = 0;
+  try {
+    for await (const _line of streamSessionTranscriptLines(transcript.sessionFile)) {
+      totalLines += 1;
+      if (totalLines > maxLines) {
+        return { compacted: true };
+      }
+    }
+  } catch {
+    return { compacted: false, kept: 0 };
+  }
+  return { compacted: false, kept: totalLines };
+}
+
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; nowMs?: number; sessionFile?: string },

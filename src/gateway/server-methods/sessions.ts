@@ -61,6 +61,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+  preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -2620,12 +2621,48 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Active-run safety parity with the LLM-summarize branch above. The
-    // maxLines truncate path archives the transcript and overwrites it in
-    // place, so an active runner could otherwise keep appending to the file we
-    // are about to archive and truncate, losing that output (the data-loss mode
-    // tracked by #72765). Interrupt any active run for this session *before*
-    // reading and truncating, exactly as the summarize branch does.
+    const trimPreflight = await preflightSessionTranscriptForManualCompact(
+      {
+        sessionId,
+        storePath,
+        sessionKey: compactTarget.primaryKey,
+        agentId: target.agentId,
+      },
+      {
+        maxLines,
+        sessionFile: entry?.sessionFile,
+      },
+    );
+    if (!trimPreflight.compacted) {
+      if ("kept" in trimPreflight) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimPreflight.kept,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+      }
+      return;
+    }
+
+    // Active-run safety parity with the LLM-summarize branch above. The maxLines
+    // truncate path archives and overwrites the transcript, so once preflight
+    // proves a destructive trim is needed, interrupt before rereading and writing.
     const truncateInterrupt = await interruptSessionRunIfActive({
       req,
       context,

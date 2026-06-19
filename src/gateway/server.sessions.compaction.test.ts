@@ -686,6 +686,57 @@ test("sessions.compact maxLines interrupts an active run before truncating, matc
   ws.close();
 });
 
+test("sessions.compact maxLines does not interrupt an active run when truncation is a no-op", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 10 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
+  );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.kept).toBe(10);
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when no transcript exists", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    reason?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.reason).toBe("no transcript");
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
 test("sessions.compact maxLines aborts without truncating when an active run cannot be interrupted", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
