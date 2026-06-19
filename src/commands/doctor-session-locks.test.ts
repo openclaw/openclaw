@@ -196,6 +196,32 @@ describe("noteSessionLockHealth", () => {
     }
   });
 
+  it("preserves report-only live OpenClaw locks in dry-run repair effects", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const reportOnlyLock = path.join(sessionsDir, "report-only.jsonl.lock");
+    await fs.writeFile(
+      reportOnlyLock,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 45_000).toISOString() }),
+      "utf8",
+    );
+
+    const [lock] = await detectStaleSessionLocks({
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+
+    expect(lock?.staleReasons).toEqual(["too-old"]);
+    expect(sessionLockToRepairEffect(lock!)).toEqual({
+      kind: "state",
+      action: "would-preserve-report-only-stale-session-lock",
+      target: reportOnlyLock,
+      dryRunSafe: false,
+    });
+    await expect(fs.access(reportOnlyLock)).resolves.toBeUndefined();
+  });
+
   it("uses configured stale threshold without removing live OpenClaw lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });

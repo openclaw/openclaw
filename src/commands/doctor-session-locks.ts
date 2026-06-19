@@ -13,6 +13,7 @@ import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.j
 import { shortenHomePath } from "../utils.js";
 
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
 
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
@@ -76,9 +77,14 @@ export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthF
 }
 
 export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRepairEffect {
+  const action =
+    lock.staleReasons.length > 0 &&
+    lock.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))
+      ? "would-preserve-report-only-stale-session-lock"
+      : "would-remove-stale-session-lock";
   return {
     kind: "state",
-    action: "would-remove-stale-session-lock",
+    action,
     target: lock.lockPath,
     dryRunSafe: false,
   };
