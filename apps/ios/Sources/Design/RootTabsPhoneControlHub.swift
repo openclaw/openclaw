@@ -89,7 +89,7 @@ struct RootTabsPhoneControlHub: View {
 
     private var gatewayActionRow: some View {
         Button {
-            self.openRootDestination(.gateway)
+            self.openPhoneRootDestination(.gateway)
         } label: {
             HStack(spacing: 10) {
                 ProStatusDot(color: self.gatewayStateColor)
@@ -140,7 +140,7 @@ struct RootTabsPhoneControlHub: View {
     private func destinationRow(_ destination: RootTabs.SidebarDestination) -> some View {
         if self.opensRootTab(destination) {
             Button {
-                self.openRootDestination(destination)
+                self.openPhoneRootDestination(destination)
             } label: {
                 self.rowLabel(destination)
             }
@@ -198,57 +198,58 @@ struct RootTabsPhoneControlHub: View {
             EmptyView()
         case .overview:
             CommandCenterTab(
+                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerLeadingAction: self.phoneDetailBackAction,
                 showsHeaderMark: false,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openPhoneRootDestination(.chat) },
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openPhoneRootDestination(.chat) },
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .workboard:
             IPadWorkboardScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openPhoneRootDestination(.chat) },
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .instances:
             AgentProTab(
                 directRoute: .instances,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Instances",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .sessions:
             CommandSessionsScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) })
+                openChat: { self.openPhoneRootDestination(.chat) })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Dreaming",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .usage:
             AgentProTab(
                 directRoute: .usage,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Usage",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .cron:
             AgentProTab(
                 directRoute: .cron,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .docs:
             OpenClawDocsScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                gatewayAction: { self.openRootDestination(.gateway) })
+                gatewayAction: { self.openPhoneRootDestination(.gateway) })
         case .settings:
             EmptyView()
         }
@@ -267,6 +268,11 @@ struct RootTabsPhoneControlHub: View {
         self.navigationPath.removeLast()
     }
 
+    private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination) {
+        self.navigationPath.removeAll()
+        self.openRootDestination(destination)
+    }
+
     private func opensRootTab(_ destination: RootTabs.SidebarDestination) -> Bool {
         RootTabs.shouldOpenRootTabFromPhoneHub(destination)
     }
@@ -276,7 +282,7 @@ struct RootTabsPhoneControlHub: View {
         self.didApplyInitialDestination = true
         guard let initialDestination, initialDestination != .overview else { return }
         if self.opensRootTab(initialDestination) {
-            self.openRootDestination(initialDestination)
+            self.openPhoneRootDestination(initialDestination)
         } else {
             self.navigationPath = [initialDestination]
         }

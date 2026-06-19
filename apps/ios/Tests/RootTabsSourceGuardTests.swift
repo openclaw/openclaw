@@ -193,7 +193,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("case .docs:"))
         #expect(source.contains("OpenClawDocsScreen("))
         #expect(source.contains("headerLeadingAction: self.phoneDetailBackAction"))
-        #expect(source.contains("gatewayAction: { self.openRootDestination(.gateway) }"))
+        #expect(source.contains("gatewayAction: { self.openPhoneRootDestination(.gateway) }"))
         #expect(!source.contains("Label(\"Docs\", systemImage: \"book\")"))
         #expect(!source.contains("https://docs.openclaw.ai"))
     }
@@ -239,7 +239,7 @@ struct RootTabsSourceGuardTests {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
         #expect(source.contains("private var gatewayActionRow: some View"))
-        #expect(source.contains("self.openRootDestination(.gateway)"))
+        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
         #expect(source.contains("private var phoneDetailBackAction: OpenClawSidebarHeaderAction"))
         #expect(source.contains("accessibilityLabel: \"Back to Control\""))
         #expect(source.contains("accessibilityIdentifier: \"OpenClawPhoneDetailBackButton\""))
@@ -253,7 +253,22 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("private func metric(label:"))
     }
 
-    @Test func `workboard uses real gateway methods`() throws {
+    @Test func phoneHubClearsDetailPathBeforeRootTabHandoff() throws {
+        let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
+        let handoff = try Self.extract(
+            source,
+            from: "private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination)",
+            to: "private func opensRootTab(_ destination: RootTabs.SidebarDestination)")
+        let clearRange = try #require(handoff.range(of: "self.navigationPath.removeAll()"))
+        let openRange = try #require(handoff.range(of: "self.openRootDestination(destination)"))
+
+        #expect(source.contains("NavigationStack(path: self.$navigationPath)"))
+        #expect(!source.contains("self.openRootDestination(.gateway)"))
+        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
+        #expect(clearRange.lowerBound < openRange.lowerBound)
+    }
+
+    @Test func workboardUsesRealGatewayMethods() throws {
         let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
 
         #expect(source.contains("workboard.cards.list"))
@@ -519,11 +534,16 @@ struct RootTabsSourceGuardTests {
         #expect(settingsSource.contains("NavigationLink(value: SettingsRoute.gateway)"))
         #expect(rootSource.contains("case .settings:"))
         #expect(rootSource
-            .matches(of: /SettingsProTab\(\s*headerLeadingAction: self\.sidebarHeaderLeadingAction,/)
+            .matches(
+                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: self\.handleSettingsRouteChange/)
             .count >= 1)
         #expect(rootSource
             .contains(
                 "directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway"))
+        #expect(rootSource.contains("ownsNavigationStack: false"))
+        #expect(rootSource.contains("@State private var sidebarNavigationPath: [SettingsRoute] = []"))
+        #expect(rootSource.contains("NavigationStack(path: self.$sidebarNavigationPath)"))
+        #expect(rootSource.contains("self.sidebarNavigationPath.removeAll()"))
         #expect(rootSource.matches(of: /SettingsProTab\(\s*initialRoute: self\.selectedSettingsRoute,/).count == 1)
         #expect(rootSource.contains(".id(self.settingsTabViewID)"))
         #expect(rootSource.contains("@State private var selectedSettingsRouteRequestID: Int = 0"))

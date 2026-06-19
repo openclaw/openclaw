@@ -26,6 +26,9 @@ struct RootTabs: View {
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
+    // Embedded Settings rows push onto the sidebar stack; clear it before
+    // changing sidebar roots so stale settings detail screens cannot survive.
+    @State private var sidebarNavigationPath: [SettingsRoute] = []
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
@@ -398,13 +401,16 @@ struct RootTabs: View {
                 headerTitle: "Chat",
                 headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
+                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .talk:
             TalkProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
+                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 showsHeaderMark: false,
@@ -472,22 +478,25 @@ struct RootTabs: View {
                 SettingsProTab(
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
                     onRouteChange: self.handleSettingsRouteChange)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
                     onRouteChange: self.handleSettingsRouteChange)
             }
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
                 onRouteChange: self.handleSettingsRouteChange)
         }
     }
 
     private var sidebarDetailNavigationShell: some View {
-        NavigationStack {
+        NavigationStack(path: self.$sidebarNavigationPath) {
             self.sidebarDetailShell
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -926,6 +935,7 @@ struct RootTabs: View {
 
 extension RootTabs {
     private func selectSidebarDestination(_ destination: SidebarDestination) {
+        self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }
@@ -939,6 +949,7 @@ extension RootTabs {
     }
 
     private func selectSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath.removeAll()
         if route != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }

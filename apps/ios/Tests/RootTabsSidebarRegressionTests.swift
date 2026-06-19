@@ -42,6 +42,30 @@ import Testing
         #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
     }
 
+    @Test func sidebarSelectionResetsEmbeddedSettingsNavigationPath() throws {
+        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let sidebarDetail = try Self.extract(
+            source,
+            from: "private var sidebarDetail: some View",
+            to: "private var sidebarDetailNavigationShell: some View")
+        let navigationShell = try Self.extract(
+            source,
+            from: "private var sidebarDetailNavigationShell: some View",
+            to: "private var usesSidebarTabs: Bool")
+        let selection = try Self.extract(
+            source,
+            from: "private func selectSidebarDestination(_ destination: SidebarDestination)",
+            to: "private func showSidebar()")
+        let resetRange = try #require(selection.range(of: "self.sidebarNavigationPath.removeAll()"))
+        let destinationRange = try #require(selection.range(of: "self.selectedSidebarDestination = destination"))
+
+        #expect(source.contains("@State private var sidebarNavigationPath: [SettingsRoute] = []"))
+        #expect(navigationShell.contains("NavigationStack(path: self.$sidebarNavigationPath)"))
+        #expect(sidebarDetail.contains("case .settings:"))
+        #expect(sidebarDetail.contains("ownsNavigationStack: false"))
+        #expect(resetRange.lowerBound < destinationRange.lowerBound)
+    }
+
     private static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

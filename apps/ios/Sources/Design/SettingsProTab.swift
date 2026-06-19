@@ -63,17 +63,20 @@ struct SettingsProTab: View {
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let ownsNavigationStack: Bool
     let onRouteChange: ((SettingsRoute?) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        ownsNavigationStack: Bool = true,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
+        self.ownsNavigationStack = ownsNavigationStack
         self.onRouteChange = onRouteChange
     }
 
@@ -88,29 +91,37 @@ struct SettingsProTab: View {
         if let directRoute {
             self.destination(for: directRoute)
         } else {
-            self.settingsNavigationStack
+            if self.ownsNavigationStack {
+                self.settingsNavigationStack
+            } else {
+                self.settingsNavigationContent
+            }
         }
     }
 
     private var settingsNavigationStack: some View {
         NavigationStack(path: self.$navigationPath) {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        self.settingsHeader
-                        self.appearanceSection
-                        self.gatewaySection
-                        self.settingsListSection
-                    }
-                    .padding(.top, 18)
-                    .padding(.bottom, 18)
+            self.settingsNavigationContent
+        }
+    }
+
+    private var settingsNavigationContent: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    self.settingsHeader
+                    self.appearanceSection
+                    self.gatewaySection
+                    self.settingsListSection
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 18)
             }
-            .navigationBarHidden(true)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                self.destination(for: route)
-            }
+        }
+        .navigationBarHidden(true)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
         }
     }
 
