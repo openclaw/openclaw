@@ -2016,7 +2016,7 @@ describe("buildStatusMessage", () => {
   function buildTranscriptStatusText(params: {
     sessionId: string;
     sessionKey: string;
-    estimatedCostUsd?: number;
+    sessionCostUsd?: number;
   }) {
     return buildStatusMessage({
       agent: {
@@ -2028,10 +2028,8 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 3,
         contextTokens: 32_000,
-        ...(params.estimatedCostUsd !== undefined
-          ? { estimatedCostUsd: params.estimatedCostUsd }
-          : {}),
       },
+      ...(params.sessionCostUsd !== undefined ? { sessionCostUsd: params.sessionCostUsd } : {}),
       sessionKey: params.sessionKey,
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
@@ -2139,7 +2137,7 @@ describe("buildStatusMessage", () => {
         const text = buildTranscriptStatusText({
           sessionId,
           sessionKey: "agent:main:main",
-          estimatedCostUsd: 0.0063,
+          sessionCostUsd: 0.0063,
         });
 
         expect(normalizeTestText(text)).toContain("Cost: $0.0063");

@@ -110,6 +110,7 @@ export type StatusArgs = {
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
+  sessionCostUsd?: number;
   now?: number;
 };
 
@@ -646,8 +647,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
   let statusCostUsd =
-    typeof entry?.estimatedCostUsd === "number" && Number.isFinite(entry.estimatedCostUsd)
-      ? entry.estimatedCostUsd
+    typeof args.sessionCostUsd === "number" && Number.isFinite(args.sessionCostUsd)
+      ? args.sessionCostUsd
       : undefined;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   // Undefined freshness is legacy, not stale: keep persisted totals for /status,

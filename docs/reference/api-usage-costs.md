@@ -18,9 +18,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 - If OpenClaw has usage metadata and local pricing for the active model,
   `/status` also shows **estimated cost** for the last reply. This can include
   explicitly priced non-API-key providers such as Bedrock `aws-sdk` models.
-- If the session has persisted cost, `/status` uses that value instead of
-  recalculating from token counts and local pricing. The bounded recent
-  transcript fallback can also provide cost when present.
+- If transcript usage includes `usage.cost.total`, `/status` and
+  `openclaw status` can show cumulative transcript-backed session cost instead
+  of recalculating from token counts and local pricing.
 - If live session metadata is sparse, `/status` can recover token/cache
   counters and the active runtime model label from the latest transcript usage
   entry. Existing nonzero live values still take precedence, and prompt-sized

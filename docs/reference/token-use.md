@@ -72,8 +72,8 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 Use these in chat:
 
 - `/status` → **emoji-rich status card** with the session model, context usage,
-  last response input/output tokens, and cost when persisted session metadata,
-  the bounded recent transcript fallback, or local pricing provides a total.
+  last response input/output tokens, and cost when transcript usage provides an
+  explicit cumulative total or local pricing provides an estimate.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
