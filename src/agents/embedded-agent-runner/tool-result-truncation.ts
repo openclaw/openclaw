@@ -40,7 +40,12 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  * for compaction summaries. For the live request path we still keep a bounded
  * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
-export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
+// FIX #94280: Bump the default live-tool-result ceiling from 16 000 to
+// 32 000 chars. Screenshots and other media payloads (e.g. nodes invoke
+// base64 PNG at ~25 K chars) exceed the old limit, resulting in unusable
+// truncated output. The new floor still stays well below a typical small
+// context window.
+export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
 const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
 const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
