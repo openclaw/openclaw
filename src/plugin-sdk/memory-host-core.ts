@@ -59,6 +59,18 @@ export async function listMemoryWorkspacePublicArtifacts(params: {
     });
   }
 
+  if (workspaceEntries.has("LEARNINGS.md")) {
+    const absolutePath = path.join(params.workspaceDir, "LEARNINGS.md");
+    artifacts.push({
+      kind: "learnings-root",
+      workspaceDir: params.workspaceDir,
+      relativePath: "LEARNINGS.md",
+      absolutePath,
+      agentIds: [...params.agentIds],
+      contentType: "markdown",
+    });
+  }
+
   const memoryDir = path.join(params.workspaceDir, "memory");
   for (const absolutePath of await listMarkdownFilesRecursive(memoryDir)) {
     const relativePath = path.relative(params.workspaceDir, absolutePath).replace(/\\/g, "/");

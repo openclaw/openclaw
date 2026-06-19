@@ -4,6 +4,8 @@ import path from "node:path";
 
 /** Canonical root memory file name used by current workspaces. */
 export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
+/** Canonical root learnings file name for user-curated insights. */
+export const CANONICAL_ROOT_LEARNINGS_FILENAME = "LEARNINGS.md";
 /** Legacy root memory file name kept out of auxiliary scans. */
 export const LEGACY_ROOT_MEMORY_FILENAME = "memory.md";
 const ROOT_MEMORY_REPAIR_RELATIVE_DIR = ".openclaw-repair/root-memory";
@@ -16,6 +18,11 @@ export function resolveCanonicalRootMemoryPath(workspaceDir: string): string {
 /** Resolves the legacy root memory file path for a workspace. */
 export function resolveLegacyRootMemoryPath(workspaceDir: string): string {
   return path.join(workspaceDir, LEGACY_ROOT_MEMORY_FILENAME);
+}
+
+/** Resolves the canonical root learnings file path for a workspace. */
+export function resolveCanonicalRootLearningsPath(workspaceDir: string): string {
+  return path.join(workspaceDir, CANONICAL_ROOT_LEARNINGS_FILENAME);
 }
 
 /** Resolves the repair directory used while migrating root memory files. */

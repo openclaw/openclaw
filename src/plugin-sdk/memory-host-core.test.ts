@@ -74,6 +74,7 @@ describe("memory-host-core helpers", () => {
       const workspaceDir = path.join(fixtureRoot, "workspace");
       await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+      await fs.writeFile(path.join(workspaceDir, "LEARNINGS.md"), "# User Learnings\n", "utf8");
       await fs.writeFile(
         path.join(workspaceDir, "memory", "2026-05-18.md"),
         "# Daily Note\n",
@@ -106,6 +107,14 @@ describe("memory-host-core helpers", () => {
           workspaceDir,
           relativePath: "MEMORY.md",
           absolutePath: path.join(workspaceDir, "MEMORY.md"),
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "learnings-root",
+          workspaceDir,
+          relativePath: "LEARNINGS.md",
+          absolutePath: path.join(workspaceDir, "LEARNINGS.md"),
           agentIds: ["main"],
           contentType: "markdown",
         },
