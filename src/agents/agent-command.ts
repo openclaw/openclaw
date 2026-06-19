@@ -2212,28 +2212,46 @@ async function agentCommandInternal(
           );
         }
         if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
-          sessionEntry = await (
-            await loadCliCompactionRuntime()
-          ).runCliTurnCompactionLifecycle({
-            cfg,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            cwd: effectiveCwd,
-            agentDir,
-            provider: result.meta.agentMeta?.provider ?? provider,
-            model: result.meta.agentMeta?.model ?? model,
-            skillsSnapshot,
-            messageChannel,
-            agentAccountId: runContext.accountId,
-            senderIsOwner: opts.senderIsOwner,
-            thinkLevel: resolvedThinkLevel,
-            extraSystemPrompt: opts.extraSystemPrompt,
-          });
+          try {
+            sessionEntry = await (
+              await loadCliCompactionRuntime()
+            ).runCliTurnCompactionLifecycle({
+              cfg,
+              sessionId: effectiveSessionId,
+              sessionKey: sessionKey ?? effectiveSessionId,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              workspaceDir,
+              cwd: effectiveCwd,
+              agentDir,
+              provider: result.meta.agentMeta?.provider ?? provider,
+              model: result.meta.agentMeta?.model ?? model,
+              skillsSnapshot,
+              messageChannel,
+              agentAccountId: runContext.accountId,
+              senderIsOwner: opts.senderIsOwner,
+              thinkLevel: resolvedThinkLevel,
+              extraSystemPrompt: opts.extraSystemPrompt,
+            });
+          } catch (compactionError) {
+            // #94688: Post-turn CLI transcript compaction is non-fatal when the
+            // assistant reply has already been generated and persisted — a
+            // compaction failure should not turn an already-available reply into
+            // an UNAVAILABLE turn.  Log a warning so the session can be marked
+            // for recovery on the next turn instead of blocking delivery.
+            const hasGeneratedReply =
+              (result.payloads?.length ?? 0) > 0 ||
+              Boolean(result.meta.finalAssistantVisibleText?.trim());
+            if (hasGeneratedReply) {
+              log.warn(
+                `Post-turn CLI transcript compaction failed for ${sessionKey ?? effectiveSessionId}, but reply already generated — continuing to delivery: ${compactionError instanceof Error ? compactionError.message : String(compactionError)}`,
+              );
+            } else {
+              throw compactionError;
+            }
+          }
         }
       }
 
