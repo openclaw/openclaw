@@ -186,6 +186,13 @@ export function resolveNoteColumns(columns: number | undefined): number {
   return columns;
 }
 
+export function resolveNoteOutputColumns(message: string, columns: number): number {
+  const widestLine = message
+    .split("\n")
+    .reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
+  return Math.max(columns, widestLine + 6);
+}
+
 function createNoteOutput(columns: number): NodeJS.WriteStream {
   if (process.stdout.columns === columns) {
     return process.stdout;
@@ -207,13 +214,9 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  const wrapped = wrapNoteMessage(message, { columns });
-  // Use a wide virtual stream so clack's internal wrap (which runs after our
-  // format callback) does not re-break copy-sensitive tokens that
-  // wrapNoteMessage intentionally kept intact.
-  const wideOutput = createNoteOutput(Math.max(columns, visibleWidth(wrapped) + 12));
-  clackNote(wrapped, stylePromptTitle(title), {
-    output: wideOutput,
+  const wrappedMessage = wrapNoteMessage(message, { columns });
+  clackNote(wrappedMessage, stylePromptTitle(title), {
+    output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
     format: (line) => line,
   });
 }
