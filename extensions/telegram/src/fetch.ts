@@ -473,6 +473,12 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
         : "",
     codes: collectErrorCodes(err),
   };
+  if (ctx.codes.has("EADDRNOTAVAIL") || ctx.message.includes("eaddrnotavail")) {
+    log.warn(
+      "telegram transport encountered local socket allocation failure (EADDRNOTAVAIL) — check ephemeral ports / mbuf zones / network extensions; remote IP rotation will not help",
+    );
+    return false;
+  }
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
   return hasKnownNetworkCode || (hasFetchFailedEnvelope && ctx.codes.size === 0);

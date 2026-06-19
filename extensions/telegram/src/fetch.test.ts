@@ -1193,6 +1193,27 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry on EADDRNOTAVAIL local socket allocation failure", async () => {
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+    undiciFetch.mockRejectedValue(fetchError);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    expectLoggerMessageContaining(
+      loggerWarn,
+      "telegram transport encountered local socket allocation failure (EADDRNOTAVAIL)",
+    );
+  });
+
   it("retries sticky fallback when the local network is down during connect", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))
