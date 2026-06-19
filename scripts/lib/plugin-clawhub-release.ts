@@ -169,6 +169,10 @@ async function fetchClawHubRequest(
   }
 }
 
+async function cancelClawHubResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 function formatClawHubPackageArtifactName(
   plugin: Pick<PublishablePluginPackage, "packageName" | "version">,
 ) {
@@ -426,6 +430,7 @@ async function isPluginVersionPublishedOnClawHub(
       `Failed to query ClawHub for ${packageName}@${version}: ${response.status} ${response.statusText}`,
     );
   } finally {
+    await cancelClawHubResponseBody(response);
     request.clearTimeout();
   }
 }
@@ -460,6 +465,7 @@ async function doesClawHubPackageExist(
 
     return true;
   } finally {
+    await cancelClawHubResponseBody(response);
     request.clearTimeout();
   }
 }

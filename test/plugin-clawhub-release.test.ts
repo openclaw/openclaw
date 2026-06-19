@@ -399,6 +399,59 @@ describe("collectPluginClawHubReleasePlan", () => {
     ]);
   });
 
+  it("cancels unused ClawHub package and version response bodies", async () => {
+    const repoDir = createTempPluginRepo();
+    const canceled: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(requestUrl);
+
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              canceled.push("package");
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              canceled.push("version");
+            },
+          }),
+          { status: 404 },
+        );
+      }
+
+      throw new Error(`Unexpected ClawHub request to ${url.pathname}`);
+    };
+
+    await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(canceled).toEqual(["package", "version"]);
+  });
+
   it("routes missing package rows to bootstrap candidates instead of normal candidates", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({

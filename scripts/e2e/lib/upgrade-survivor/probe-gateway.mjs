@@ -107,7 +107,7 @@ function matchesDegradedReadyExpectation(body) {
 
 async function fetchProbeText() {
   const elapsedMs = Date.now() - startedAt;
-  const remainingMs = Math.max(1, timeoutMs - elapsedMs);
+  const remainingMs = timeoutMs - elapsedMs;
   const controller = new AbortController();
   const attemptDeadlineMs = Math.min(attemptTimeoutMs, remainingMs);
   let timer;
@@ -138,7 +138,7 @@ const startedAt = Date.now();
 let lastError;
 let lastResult;
 
-while (Date.now() - startedAt <= timeoutMs) {
+while (Date.now() - startedAt < timeoutMs) {
   try {
     const { response, text } = await fetchProbeText();
     let body;
@@ -171,9 +171,17 @@ while (Date.now() - startedAt <= timeoutMs) {
   } catch (error) {
     lastError = error instanceof Error ? error.message : String(error);
   }
+  const remainingDelayMs = timeoutMs - (Date.now() - startedAt);
+  if (remainingDelayMs <= 0) {
+    break;
+  }
+  const delayMs = Math.min(500, remainingDelayMs);
   await new Promise((resolve) => {
-    setTimeout(resolve, 500);
+    setTimeout(resolve, delayMs);
   });
+  if (delayMs === remainingDelayMs) {
+    break;
+  }
 }
 
 const suffix = lastResult ? ` (last HTTP ${lastResult.status}: ${lastResult.text})` : "";
