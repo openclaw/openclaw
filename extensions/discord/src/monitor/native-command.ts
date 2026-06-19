@@ -499,7 +499,11 @@ async function dispatchDiscordCommandInteraction(params: {
     model: menuModelContext?.model,
     ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });
-  if (menu) {
+  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
+    command,
+    commandArgs,
+  });
+  if (menu && pickerCommandContext !== "model") {
     const menuPayload = buildDiscordCommandArgMenu({
       command,
       menu,
@@ -591,10 +595,6 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: true, effectiveRoute };
   }
 
-  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
-    command,
-    commandArgs,
-  });
   if (pickerCommandContext) {
     await replyWithDiscordModelPickerProviders({
       interaction,

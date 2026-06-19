@@ -7,6 +7,7 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native"
 import type {
   ChatCommandDefinition,
   CommandArgsParsing,
+  NativeCommandSpec,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -29,6 +30,7 @@ import {
   replyWithDiscordModelPickerProviders,
   type DispatchDiscordCommandInteraction,
 } from "./native-command-ui.js";
+import { createDiscordNativeCommand } from "./native-command.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
@@ -49,8 +51,14 @@ type MockInteraction = {
   followUp: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   editReply: ReturnType<typeof vi.fn>;
+  defer: ReturnType<typeof vi.fn>;
   acknowledge: ReturnType<typeof vi.fn>;
   acknowledged: boolean;
+  options: {
+    getString: ReturnType<typeof vi.fn>;
+    getNumber: ReturnType<typeof vi.fn>;
+    getBoolean: ReturnType<typeof vi.fn>;
+  };
   client: object;
 };
 
@@ -107,8 +115,14 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     update: vi.fn().mockResolvedValue({ ok: true }),
     editReply: vi.fn().mockResolvedValue({ ok: true }),
+    defer: vi.fn().mockResolvedValue({ ok: true }),
     acknowledge: vi.fn(),
     acknowledged: false,
+    options: {
+      getString: vi.fn().mockReturnValue(null),
+      getNumber: vi.fn().mockReturnValue(null),
+      getBoolean: vi.fn().mockReturnValue(null),
+    },
     client: {},
   };
   interaction.acknowledge.mockImplementation(async () => {
@@ -135,6 +149,22 @@ function createModelCommandDefinition(): ChatCommandDefinition {
     argsParsing: "none" as CommandArgsParsing,
     scope: "native",
   };
+}
+
+function createNativeModelCommand(cfg: OpenClawConfig) {
+  return createDiscordNativeCommand({
+    command: {
+      name: "model",
+      description: "Show or set the model",
+      acceptsArgs: true,
+    } satisfies NativeCommandSpec,
+    cfg,
+    discordConfig: cfg.channels?.discord ?? {},
+    accountId: "default",
+    sessionPrefix: "discord:slash",
+    ephemeralDefault: true,
+    threadBindings: createNoopThreadBindingManager("default"),
+  });
 }
 
 function mockModelCommandPipeline(modelCommand: ChatCommandDefinition) {
@@ -353,6 +383,50 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
     expect(interaction.update).not.toHaveBeenCalled();
+  });
+
+  it("opens the Discord model picker for bare /model when model choices are configured", async () => {
+    const context = createModelPickerContext();
+    const cfg = {
+      ...context.cfg,
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "anthropic/claude-sonnet-4-5": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+          },
+          anthropic: {
+            models: [{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const pickerData = createModelsProviderData({
+      openai: ["gpt-5.5"],
+      anthropic: ["claude-sonnet-4-5"],
+    });
+    pickerData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockResolvedValue(pickerData);
+    const command = createNativeModelCommand(cfg);
+    const interaction = createInteraction({ userId: "owner" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
+    expect(interaction.followUp).toHaveBeenCalledTimes(1);
+    const payload = JSON.stringify(firstMockArg(interaction.followUp, "interaction.followUp"));
+    expect(payload).toContain("gpt-5.5");
+    expect(payload).not.toContain("Choose a model for /model.");
   });
 
   it("requires submit click before routing selected model through /model pipeline", async () => {
