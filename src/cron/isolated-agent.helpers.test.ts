@@ -50,6 +50,26 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
+  it("recovers plain tool warnings even when preferFinalAssistantVisibleText is unset", () => {
+    // Regression test for #94846: Feishu and similar channels do not enable
+    // preferFinalAssistantVisibleText, but an agent that recovers from tool
+    // warnings and produces final assistant output should still clear the
+    // fatal error flag so delivery dispatch is reached.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ print lines 1-20 from memory/repro-cron-delivery-skip-2026-06-19.md (agent) failed",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "REPRO_FINAL_OUTPUT_PRESENT",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.deliveryPayloads).toEqual([{ text: "REPRO_FINAL_OUTPUT_PRESENT" }]);
+  });
+
   it("treats transient error payloads as non-fatal when a later success exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
