@@ -73,6 +73,8 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  /** Optional model override. If set, used instead of the agent default. */
+  model?: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
@@ -92,10 +94,12 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    const { provider, model } = resolveDefaultModelForAgent({
+    const { provider: defaultProvider, model: defaultModel } = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId,
     });
+    const provider = params.model?.includes("/") ? params.model.split("/")[0] : defaultProvider;
+    const model = params.model?.includes("/") ? params.model.split("/").slice(1).join("/") : (params.model ?? defaultModel);
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedAgent({
