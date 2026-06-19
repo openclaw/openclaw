@@ -2,6 +2,7 @@
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { streamSessionTranscriptLinesReverse } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
@@ -51,6 +52,66 @@ function resolveInjectedAssistantContent(params: {
     return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
   }
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
+}
+
+/**
+ * Reverse-reads the transcript to find the latest assistant message whose
+ * visible text matches the expected value. Non-message entries (e.g.
+ * `openclaw.cache-ttl` custom markers) are skipped so they don't mask the
+ * canonical assistant reply. Returns the existing message id when found,
+ * or undefined when no match exists.
+ */
+async function findLatestAssistantMessageIdByText(
+  transcriptPath: string,
+  expectedText: string,
+): Promise<string | undefined> {
+  if (!expectedText) {
+    return undefined;
+  }
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: {
+          role?: unknown;
+          content?: unknown;
+        };
+      };
+      const candidate = parsed.message;
+      if (!candidate || candidate.role !== "assistant") {
+        continue;
+      }
+      // Stop at the first assistant message: only the tail entry matters.
+      const candidateText = extractTranscriptContentText(candidate.content);
+      if (candidateText !== expectedText) {
+        return undefined;
+      }
+      return typeof parsed.id === "string" && parsed.id.trim() ? parsed.id : undefined;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function extractTranscriptContentText(content: unknown): string | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const pieces = content
+    .map((block) => {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string"
+      ) {
+        return ((block as { text: string }).text ?? "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
+  return pieces.length > 0 ? pieces.join("\n").trim() : undefined;
 }
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
@@ -116,6 +177,33 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         }
       : {}),
   };
+
+  // Visible text used to deduplicate against the canonical assistant reply
+  // already written by the agent's session manager. Check before acquiring the
+  // write lock so dedup is cheap and TOCTOU risk is negligible (the agent has
+  // already finished writing by the time the gateway injects).
+  const expectedText = resolvedContent
+    .filter(
+      (c): c is { type: string; text: string } =>
+        c && typeof c === "object" && c.type === "text" && typeof c.text === "string",
+    )
+    .map((c) => c.text.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
+  if (expectedText) {
+    const existingId = await findLatestAssistantMessageIdByText(
+      params.transcriptPath,
+      expectedText,
+    );
+    if (existingId) {
+      // Return the existing canonical-assistant id so callers that track the
+      // last transcript message surface still see a stable message id. We do not
+      // re-read the full message record here; the caller already has the text.
+      return { ok: true, messageId: existingId, message: messageBody as Record<string, unknown> };
+    }
+  }
 
   try {
     const turn = await persistSessionTranscriptTurn(

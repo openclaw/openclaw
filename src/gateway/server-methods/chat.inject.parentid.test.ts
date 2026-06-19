@@ -125,4 +125,113 @@ describe("gateway chat.inject transcript writes", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("deduplicates against latest assistant message with matching text", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-dedup-",
+      sessionId: "sess-dedup",
+    });
+
+    try {
+      // Write a canonical assistant reply first (simulating what the agent's
+      // session manager does during a normal turn).
+      const firstAppend = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "Hello from assistant",
+      });
+      expect(firstAppend.ok).toBe(true);
+      const firstMessageId = firstAppend.messageId;
+      expect(firstMessageId).toBeTypeOf("string");
+
+      // Attempt to inject the same text again. Should dedup and return the
+      // existing message ID.
+      const secondAppend = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "Hello from assistant",
+      });
+      expect(secondAppend.ok).toBe(true);
+      // The second append should NOT write a new line but return the existing id.
+      expect(secondAppend.messageId).toBe(firstMessageId);
+
+      // Transcript should still have only the header + one assistant message.
+      const lines = readTranscriptLines(transcriptPath);
+      expect(lines).toHaveLength(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still appends when latest assistant message has different text", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-diff-",
+      sessionId: "sess-diff",
+    });
+
+    try {
+      const firstAppend = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "First reply",
+      });
+      expect(firstAppend.ok).toBe(true);
+
+      const secondAppend = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "Second reply",
+      });
+      expect(secondAppend.ok).toBe(true);
+      expect(secondAppend.messageId).not.toBe(firstAppend.messageId);
+
+      const lines = readTranscriptLines(transcriptPath);
+      // header + 2 assistant messages
+      expect(lines).toHaveLength(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips non-message entries (e.g. openclaw.cache-ttl) when finding latest assistant text for dedup", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-cttl-",
+      sessionId: "sess-cttl",
+    });
+
+    try {
+      // Write the canonical assistant reply first.
+      const canonical = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "Canonical reply",
+      });
+      expect(canonical.ok).toBe(true);
+
+      // Simulate a cache-ttl custom entry written after the canonical reply
+      // (as the agent's session manager does via appendCustomEntry).
+      fs.appendFileSync(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "custom",
+          id: "ttl-marker",
+          parentId: canonical.messageId,
+          customType: "openclaw.cache-ttl",
+          timestamp: new Date().toISOString(),
+          data: { provider: "anthropic", modelId: "claude-sonnet-4-6" },
+        })}\n`,
+        "utf-8",
+      );
+
+      // Now inject the same text. The cache-ttl entry should be skipped and
+      // the dedup should still find the canonical reply.
+      const second = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "Canonical reply",
+      });
+      expect(second.ok).toBe(true);
+      expect(second.messageId).toBe(canonical.messageId);
+
+      // Should still have header + canonical + cache-ttl (no new message).
+      const lines = readTranscriptLines(transcriptPath);
+      expect(lines).toHaveLength(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
