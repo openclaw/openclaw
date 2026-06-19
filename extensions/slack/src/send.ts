@@ -65,6 +65,8 @@ export type SlackSendIdentity = {
   iconEmoji?: string;
 };
 
+const slackDefaultSendIdentities = new Map<string, SlackSendIdentity>();
+
 type SlackUnfurlOptions = {
   unfurlLinks?: boolean;
   unfurlMedia?: boolean;
@@ -129,6 +131,45 @@ type SlackWebApiError = Error & {
 
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
   return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
+}
+
+function normalizeSlackSendIdentity(identity?: SlackSendIdentity): SlackSendIdentity | undefined {
+  const username = normalizeOptionalString(identity?.username);
+  const iconUrl = normalizeOptionalString(identity?.iconUrl);
+  const iconEmoji = normalizeOptionalString(identity?.iconEmoji);
+  const normalized = {
+    ...(username ? { username } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+    ...(iconEmoji ? { iconEmoji } : {}),
+  };
+  return hasCustomIdentity(normalized) ? normalized : undefined;
+}
+
+export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackSendIdentity): void {
+  const normalizedAccountId = normalizeOptionalString(accountId);
+  if (!normalizedAccountId) {
+    return;
+  }
+  const normalizedIdentity = normalizeSlackSendIdentity(identity);
+  if (normalizedIdentity) {
+    slackDefaultSendIdentities.set(normalizedAccountId, normalizedIdentity);
+  } else {
+    slackDefaultSendIdentities.delete(normalizedAccountId);
+  }
+}
+
+export function getSlackDefaultSendIdentity(accountId: string): SlackSendIdentity | undefined {
+  const normalizedAccountId = normalizeOptionalString(accountId);
+  return normalizedAccountId ? slackDefaultSendIdentities.get(normalizedAccountId) : undefined;
+}
+
+function resolveSlackSendIdentity(params: {
+  accountId: string;
+  explicit?: SlackSendIdentity;
+}): SlackSendIdentity | undefined {
+  return (
+    normalizeSlackSendIdentity(params.explicit) ?? getSlackDefaultSendIdentity(params.accountId)
+  );
 }
 
 function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
@@ -549,6 +590,10 @@ export function clearSlackSendQueuesForTest(): void {
   slackSendQueues.clear();
 }
 
+export function clearSlackDefaultSendIdentitiesForTest(): void {
+  slackDefaultSendIdentities.clear();
+}
+
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
@@ -706,6 +751,10 @@ async function sendMessageSlackQueuedInner(params: {
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
   const client = opts.client ?? getSlackWriteClient(token);
+  const identity = resolveSlackSendIdentity({
+    accountId: account.accountId,
+    explicit: opts.identity,
+  });
   if (opts.replyBroadcast && opts.mediaUrl) {
     throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
   }
@@ -738,7 +787,7 @@ async function sendMessageSlackQueuedInner(params: {
       text: fallbackText,
       threadTs: opts.threadTs,
       replyBroadcast: opts.replyBroadcast,
-      identity: opts.identity,
+      identity,
       blocks,
       metadata: opts.metadata,
       unfurl,
@@ -809,7 +858,7 @@ async function sendMessageSlackQueuedInner(params: {
         text: chunk,
         threadTs: opts.threadTs,
         replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
-        identity: opts.identity,
+        identity,
         metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
       });
@@ -828,7 +877,7 @@ async function sendMessageSlackQueuedInner(params: {
         text: chunk,
         threadTs: opts.threadTs,
         replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
-        identity: opts.identity,
+        identity,
         metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
       });
