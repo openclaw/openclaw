@@ -654,6 +654,70 @@ describe("preflightDiscordMessage", () => {
     ).toBe("default");
   });
 
+  it("drops standalone bot operational telemetry before Discord model dispatch", async () => {
+    const channelId = "channel-bot-telemetry";
+    const guildId = "guild-bot-telemetry";
+
+    for (const [index, content] of [
+      '📚 skill_view: "hermes-agent"',
+      '🔍 session_search: "GPT-Trader"',
+      '📖 read_file: "/tmp/example.md"',
+      "💻 terminal ```pnpm test```",
+      "📋 todo: updated task list",
+      "📦 Preflight compression...",
+      "🗜️ Compacting context...",
+      "⏳ Working — 3 min...",
+      "⚡ Interrupting current task...",
+      "💾 Self-improvement review...",
+      "toolResult-only message",
+      "tool calls: read_file, terminal",
+    ].entries()) {
+      const message = createDiscordMessage({
+        id: `m-bot-telemetry-${index}`,
+        channelId,
+        content,
+        author: { id: "hermes-bot", bot: true, username: "Hermes" },
+      });
+
+      await expect(
+        runGuildPreflight({
+          channelId,
+          guildId,
+          message,
+          discordConfig: { allowBots: true } as DiscordConfig,
+          guildEntries: {
+            [guildId]: {
+              requireMention: false,
+              ignoreOtherMentions: false,
+            },
+          },
+        }),
+      ).resolves.toBeNull();
+    }
+  });
+
+  it("keeps conversational bot messages that mention operational terms", async () => {
+    const channelId = "channel-bot-telemetry-keep";
+    const guildId = "guild-bot-telemetry-keep";
+    const message = createDiscordMessage({
+      id: "m-bot-telemetry-keep",
+      channelId,
+      content:
+        "Hermes review: the prior tool calls were useful; Claw check, do you agree? <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: "hermes-bot", bot: true, username: "Hermes" },
+    });
+
+    await expect(
+      runGuildPreflight({
+        channelId,
+        guildId,
+        message,
+        discordConfig: { allowBots: true } as DiscordConfig,
+      }),
+    ).resolves.not.toBeNull();
+  });
+
   it("passes bot-loop protection facts for accepted bot-authored Discord messages (#58789)", async () => {
     const channelId = "channel-bot-loop";
     const guildId = "guild-bot-loop";

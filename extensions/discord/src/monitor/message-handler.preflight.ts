@@ -83,6 +83,38 @@ const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const DISCORD_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
 
+const DISCORD_OPERATIONAL_TELEMETRY_PREFIXES = [
+  "📚 skill_view",
+  "🔍 session_search",
+  "📖 read_file",
+  "💻 terminal",
+  "📋 todo",
+  "📦 preflight compression",
+  "🗜️ compacting context",
+  "⏳ working",
+  "⚡ interrupting current task",
+  "💾 self-improvement review",
+];
+
+function normalizeDiscordOperationalTelemetryText(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function isStandaloneDiscordOperationalTelemetry(text: string) {
+  const normalized = normalizeDiscordOperationalTelemetryText(text);
+  if (!normalized) {
+    return false;
+  }
+  const lower = normalized.toLowerCase();
+  if (DISCORD_OPERATIONAL_TELEMETRY_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
+    return true;
+  }
+  if (/^toolresult-only messages?\b/i.test(normalized)) {
+    return true;
+  }
+  return /^tool calls:\s*\S+/i.test(normalized);
+}
+
 function resolveDiscordPreflightConversationKind(params: {
   isGuildMessage: boolean;
   channelType?: ChannelType;
@@ -304,6 +336,11 @@ export async function preflightDiscordMessage(
     member: params.data.member,
     pluralkitInfo,
   });
+
+  if (author.bot && !sender.isPluralKit && isStandaloneDiscordOperationalTelemetry(messageText)) {
+    logVerbose("discord: drop bot operational telemetry message");
+    return null;
+  }
 
   if (author.bot) {
     if (allowBotsMode === "off" && !sender.isPluralKit) {
