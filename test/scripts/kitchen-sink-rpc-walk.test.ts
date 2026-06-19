@@ -2101,6 +2101,27 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+  it("samples direct POSIX gateway RSS without descendants", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      runCommand: async (command: string, args: string[]) => {
+        expect(command).toBe("ps");
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        return {
+          stdout: " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
+          stderr: "",
+        };
+      },
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
   it("does not truncate malformed POSIX CPU samples", async () => {
     const sample = await sampleProcess(4321, {
       platform: "linux",

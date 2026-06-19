@@ -153,6 +153,7 @@ import {
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { resolveSessionFamilyTranscriptReadTargets } from "../session-history-family.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -169,10 +170,7 @@ import {
   listAgentsForGateway,
   resolveGatewayModelSupportsImages,
   resolveDeletedAgentIdFromSessionKey,
-  resolveSessionHistoryTranscriptPathAsync,
   resolveSessionModelRef,
-  resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -2619,152 +2617,6 @@ function dropLocalHistoryOverreadContextMessage(
   return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
-type SessionTranscriptReadTarget = {
-  sessionId: string;
-  sessionFile?: string;
-  applySessionStartedAtFilter: boolean;
-  isCurrentActive?: boolean;
-};
-
-const MAX_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
-
-function resolveHistoryFamilySessionIds(
-  entry: { usageFamilySessionIds?: string[] } | undefined,
-  currentSessionId: string,
-): string[] {
-  const withoutCurrent = (entry?.usageFamilySessionIds ?? []).filter(
-    (sessionId) => sessionId !== currentSessionId,
-  );
-  return uniqueStrings([currentSessionId, ...withoutCurrent]);
-}
-
-function resolveFirstExistingTranscriptCandidate(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionFile?: string;
-  agentId?: string;
-}): string | undefined {
-  return resolveSessionTranscriptCandidates(
-    params.sessionId,
-    params.storePath,
-    params.sessionFile,
-    params.agentId,
-  ).find((candidate) => fs.existsSync(candidate));
-}
-
-function orderFamilyReadTargetsForOutput(
-  targets: SessionTranscriptReadTarget[],
-  currentSessionId: string,
-): SessionTranscriptReadTarget[] {
-  return targets
-    .map((target, index) => ({ target, index }))
-    .toSorted((left, right) => {
-      const leftRank =
-        left.target.sessionId !== currentSessionId ? 0 : left.target.isCurrentActive ? 2 : 1;
-      const rightRank =
-        right.target.sessionId !== currentSessionId ? 0 : right.target.isCurrentActive ? 2 : 1;
-      return leftRank - rightRank || left.index - right.index;
-    })
-    .map(({ target }) => target);
-}
-
-async function resolveChatHistoryTranscriptReadTargets(params: {
-  entry: { sessionId?: string; sessionFile?: string; usageFamilySessionIds?: string[] } | undefined;
-  sessionId: string | undefined;
-  storePath: string | undefined;
-  agentId?: string;
-  includeFamily: boolean;
-}): Promise<SessionTranscriptReadTarget[]> {
-  if (!params.sessionId) {
-    return [];
-  }
-  const currentSessionId = params.sessionId;
-  const sessionIds = params.includeFamily
-    ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
-    : [currentSessionId];
-  const targets: SessionTranscriptReadTarget[] = [];
-  const seenFiles = new Set<string>();
-  const pushTarget = (target: SessionTranscriptReadTarget): boolean => {
-    if (targets.length >= MAX_CHAT_HISTORY_FAMILY_READ_TARGETS) {
-      return false;
-    }
-    const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
-    if (resolved && seenFiles.has(resolved)) {
-      return true;
-    }
-    if (resolved) {
-      seenFiles.add(resolved);
-    }
-    targets.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
-    return targets.length < MAX_CHAT_HISTORY_FAMILY_READ_TARGETS;
-  };
-  const finalizeTargets = (): SessionTranscriptReadTarget[] =>
-    params.includeFamily ? orderFamilyReadTargetsForOutput(targets, currentSessionId) : targets;
-  for (const familySessionId of sessionIds) {
-    const archivedFiles = params.includeFamily
-      ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
-          familySessionId,
-          params.storePath,
-          familySessionId === params.sessionId ? params.entry?.sessionFile : undefined,
-          params.agentId,
-        )
-      : [];
-    const activeFile =
-      params.includeFamily || familySessionId !== params.sessionId
-        ? resolveFirstExistingTranscriptCandidate({
-            sessionId: familySessionId,
-            storePath: params.storePath,
-            sessionFile:
-              familySessionId === params.sessionId ? params.entry?.sessionFile : undefined,
-            agentId: params.agentId,
-          })
-        : await resolveSessionHistoryTranscriptPathAsync(
-            familySessionId,
-            params.storePath,
-            params.entry?.sessionFile,
-            {
-              agentId: params.agentId,
-              allowResetArchiveFallback: true,
-            },
-          );
-    if (activeFile && familySessionId === params.sessionId) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: activeFile,
-          applySessionStartedAtFilter: true,
-          isCurrentActive: true,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
-    for (const file of archivedFiles) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: file,
-          applySessionStartedAtFilter: false,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
-    if (activeFile && familySessionId !== params.sessionId) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: activeFile,
-          applySessionStartedAtFilter: false,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
-  }
-  return finalizeTargets();
-}
-
 async function handleChatHistoryRequest({
   params,
   respond,
@@ -2853,7 +2705,7 @@ async function handleChatHistoryRequest({
     maxLines: rawHistoryWindow.maxLines + 1,
   };
   const includeFamilyHistory = includeFamily === true && method === "chat.history";
-  const transcriptTargets = await resolveChatHistoryTranscriptReadTargets({
+  const transcriptTargets = await resolveSessionFamilyTranscriptReadTargets({
     entry,
     sessionId,
     storePath,

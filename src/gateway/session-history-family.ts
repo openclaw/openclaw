@@ -12,6 +12,7 @@ export type SessionTranscriptReadTarget = {
   sessionFile?: string;
   applySessionStartedAtFilter: boolean;
   isCurrentActive?: boolean;
+  useStoreEntryFallback?: boolean;
 };
 
 export type SessionHistoryFamilyEntry = {
@@ -127,6 +128,20 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
               allowResetArchiveFallback: true,
             },
           );
+
+    if (!params.includeFamily && familySessionId === currentSessionId && !activeFile) {
+      pushTarget(
+        {
+          sessionId: familySessionId,
+          ...(params.entry?.sessionFile ? { sessionFile: params.entry.sessionFile } : {}),
+          applySessionStartedAtFilter: true,
+          isCurrentActive: true,
+          useStoreEntryFallback: true,
+        },
+        targetLimit,
+      );
+      continue;
+    }
 
     const archiveTargetLimit =
       params.includeFamily && familySessionId === currentSessionId && activeFile

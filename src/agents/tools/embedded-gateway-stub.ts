@@ -3,9 +3,6 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
-import fs from "node:fs";
-import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -13,15 +10,11 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { dropPreSessionStartAnnouncePairs } from "../../gateway/chat-display-projection.js";
-import {
-  resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
-} from "../../gateway/session-transcript-files.fs.js";
+import { resolveSessionFamilyTranscriptReadTargets } from "../../gateway/session-history-family.js";
 import type {
   ReadSessionMessagesAsyncOptions,
   SessionTranscriptReadScope,
 } from "../../gateway/session-transcript-readers.js";
-import { resolveSessionHistoryTranscriptPathAsync } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import {
@@ -99,16 +92,6 @@ interface EmbeddedGatewayRuntime {
 
 let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
-type SessionTranscriptReadTarget = {
-  sessionId: string;
-  sessionFile?: string;
-  applySessionStartedAtFilter?: boolean;
-  isCurrentActive?: boolean;
-  useStoreEntryFallback?: boolean;
-};
-
-const MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
-
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
     // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
@@ -148,157 +131,6 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   return { ok: true, key: resolved.key };
 }
 
-function resolveHistoryFamilySessionIds(
-  entry: { usageFamilySessionIds?: string[] } | undefined,
-  currentSessionId: string,
-): string[] {
-  const withoutCurrent = (entry?.usageFamilySessionIds ?? []).filter(
-    (sessionId) => sessionId !== currentSessionId,
-  );
-  return uniqueStrings([currentSessionId, ...withoutCurrent]);
-}
-
-function resolveFirstExistingTranscriptCandidate(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionFile?: string;
-  agentId?: string;
-}): string | undefined {
-  return resolveSessionTranscriptCandidates(
-    params.sessionId,
-    params.storePath,
-    params.sessionFile,
-    params.agentId,
-  ).find((candidate) => fs.existsSync(candidate));
-}
-
-function orderFamilyReadTargetsForOutput(
-  targets: SessionTranscriptReadTarget[],
-  currentSessionId: string,
-): SessionTranscriptReadTarget[] {
-  return targets
-    .map((target, index) => ({ target, index }))
-    .toSorted((left, right) => {
-      const leftRank =
-        left.target.sessionId !== currentSessionId ? 0 : left.target.isCurrentActive ? 2 : 1;
-      const rightRank =
-        right.target.sessionId !== currentSessionId ? 0 : right.target.isCurrentActive ? 2 : 1;
-      return leftRank - rightRank || left.index - right.index;
-    })
-    .map(({ target }) => target);
-}
-
-async function resolveChatHistoryTranscriptReadTargets(params: {
-  entry: { sessionId?: string; sessionFile?: string; usageFamilySessionIds?: string[] } | undefined;
-  sessionId: string | undefined;
-  storePath: string | undefined;
-  agentId?: string;
-  includeFamily: boolean;
-}): Promise<SessionTranscriptReadTarget[]> {
-  if (!params.sessionId) {
-    return [];
-  }
-  const currentSessionId = params.sessionId;
-  const sessionIds = params.includeFamily
-    ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
-    : [currentSessionId];
-  const targets: SessionTranscriptReadTarget[] = [];
-  const seenFiles = new Set<string>();
-  const pushTarget = (target: SessionTranscriptReadTarget): boolean => {
-    if (targets.length >= MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS) {
-      return false;
-    }
-    const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
-    if (resolved && seenFiles.has(resolved)) {
-      return true;
-    }
-    if (resolved) {
-      seenFiles.add(resolved);
-    }
-    targets.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
-    return targets.length < MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS;
-  };
-  const finalizeTargets = (): SessionTranscriptReadTarget[] =>
-    params.includeFamily ? orderFamilyReadTargetsForOutput(targets, currentSessionId) : targets;
-  for (const familySessionId of sessionIds) {
-    const archivedFiles = params.includeFamily
-      ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
-          familySessionId,
-          params.storePath,
-          familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
-          params.agentId,
-        )
-      : [];
-    const activeFile =
-      params.includeFamily || familySessionId !== currentSessionId
-        ? resolveFirstExistingTranscriptCandidate({
-            sessionId: familySessionId,
-            storePath: params.storePath,
-            sessionFile:
-              familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
-            agentId: params.agentId,
-          })
-        : await resolveSessionHistoryTranscriptPathAsync(
-            familySessionId,
-            params.storePath,
-            params.entry?.sessionFile,
-            {
-              agentId: params.agentId,
-              allowResetArchiveFallback: true,
-            },
-          );
-    if (!params.includeFamily && familySessionId === currentSessionId && !activeFile) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: params.entry?.sessionFile,
-          applySessionStartedAtFilter: true,
-          isCurrentActive: true,
-          useStoreEntryFallback: true,
-        })
-      ) {
-        return finalizeTargets();
-      }
-      continue;
-    }
-    if (familySessionId === currentSessionId && activeFile) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: activeFile,
-          applySessionStartedAtFilter: true,
-          isCurrentActive: true,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
-    for (const file of archivedFiles) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: file,
-          applySessionStartedAtFilter: false,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
-    if (familySessionId !== currentSessionId && activeFile) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: activeFile,
-          applySessionStartedAtFilter: false,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
-  }
-  return finalizeTargets();
-}
-
 async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionKey: string;
   sessionId: string | undefined;
@@ -331,7 +163,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const includeFamilyHistory = params.includeFamily === true;
-  const transcriptTargets = await resolveChatHistoryTranscriptReadTargets({
+  const transcriptTargets = await resolveSessionFamilyTranscriptReadTargets({
     entry,
     sessionId,
     storePath,

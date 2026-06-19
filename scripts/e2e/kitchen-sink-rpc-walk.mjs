@@ -2072,7 +2072,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     const gatewayTitleMatches = descendants.filter((row) =>
       row.command.toLowerCase().includes("openclaw-gateway"),
     );
-    const selected = selectPeakRssProcess(
+    let selected = selectPeakRssProcess(
       commandMatches.length > 0
         ? commandMatches
         : gatewayTitleMatches.length > 0
@@ -2081,6 +2081,14 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
             ? descendants
             : rootCommandMatches,
     );
+    if (!selected) {
+      const root = rootTreeRows.find((row) => row.processId === safePid);
+      const rootCommand = root?.command.toLowerCase() ?? "";
+      const rootMatches =
+        commandLineNeedles.every((needle) => rootCommand.includes(needle.toLowerCase())) ||
+        rootCommand.includes("openclaw-gateway");
+      selected = root && rootMatches ? root : null;
+    }
     if (!selected) {
       return null;
     }
