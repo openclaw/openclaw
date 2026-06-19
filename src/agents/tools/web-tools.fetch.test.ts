@@ -1003,7 +1003,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.title).toContain("Sample Page");
   });
 
-  it("uses body HTML before provider fallback when readability returns only the page title", async () => {
+  it("tries provider fallback before body HTML when readability returns only the page title", async () => {
     extractReadableContentMock.mockResolvedValue({
       text: "Sample Page",
       title: "Sample Page",
@@ -1035,9 +1035,9 @@ describe("web_fetch extraction fallbacks", () => {
     const result = await executeFetch(tool, { url: "https://example.com/body" });
     const details = result?.details as { extractor?: string; text?: string };
 
-    expect(details.extractor).toBe("raw-html");
-    expect(details.text).toContain("Body marker 82685 content.");
-    expect(providerExecute).not.toHaveBeenCalled();
+    expect(details.extractor).toBe("test-fetch");
+    expect(details.text).toContain("provider fallback body");
+    expect(providerExecute).toHaveBeenCalledOnce();
   });
 
   it("uses the provider fallback when direct fetch fails", async () => {

@@ -877,48 +877,39 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           title = readable.title;
           extractor = readable.extractor;
         } else {
+          let payload: Record<string, unknown> | null = null;
+          try {
+            payload = await maybeFetchProviderWebFetchPayload({
+              ...params,
+              urlToFetch: finalUrl,
+              cacheKey,
+              tookMs: Date.now() - start,
+            });
+          } catch {
+            payload = null;
+          }
+          if (payload) {
+            return payload;
+          }
           const basic = readableTitleOnly
             ? await extractBasicHtmlBodyContent({
                 html: body,
                 extractMode: params.extractMode,
               })
-            : null;
+            : await extractBasicHtmlContent({
+                html: body,
+                extractMode: params.extractMode,
+              });
           if (basic?.text) {
             text = basic.text;
             title = basic.title ?? readable?.title;
             extractor = "raw-html";
           } else {
-            let payload: Record<string, unknown> | null = null;
-            try {
-              payload = await maybeFetchProviderWebFetchPayload({
-                ...params,
-                urlToFetch: finalUrl,
-                cacheKey,
-                tookMs: Date.now() - start,
-              });
-            } catch {
-              payload = null;
-            }
-            if (payload) {
-              return payload;
-            }
-            const fallbackBasic = readableTitleOnly
-              ? basic
-              : await extractBasicHtmlContent({
-                  html: body,
-                  extractMode: params.extractMode,
-                });
-            if (fallbackBasic?.text) {
-              text = fallbackBasic.text;
-              title = fallbackBasic.title ?? readable?.title;
-              extractor = "raw-html";
-            } else {
-              const providerLabel =
-                (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-              throw new Error(
-                `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-              );
-            }
+            const providerLabel =
+              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+            throw new Error(
+              `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+            );
           }
         }
       } else {
