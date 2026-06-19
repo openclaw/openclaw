@@ -5,6 +5,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -59,14 +63,18 @@ describe("memory manager reindex recovery", () => {
   });
 
   afterEach(async () => {
-    restoreReindexStateDir();
-    vi.restoreAllMocks();
+
     if (manager) {
       await manager.close();
       manager = null;
     }
     const { closeAllMemorySearchManagers } = await import("./index.js");
     await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    restoreReindexStateDir();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
