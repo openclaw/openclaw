@@ -558,6 +558,8 @@ describe("handleSlackMessageAction", () => {
         action: "member-info",
         cfg: {},
         params: {},
+        accountId: "default",
+        requesterAccountId: "default",
         requesterSenderId: "U123",
         toolContext: { currentChannelProvider: " Slack " },
       } as never,
@@ -573,6 +575,23 @@ describe("handleSlackMessageAction", () => {
   it.each([
     ["has no inbound sender", { toolContext: { currentChannelProvider: "slack" } }],
     ["has no source provider", { requesterSenderId: "U123" }],
+    [
+      "has no source account",
+      {
+        accountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      },
+    ],
+    [
+      "targets another Slack account",
+      {
+        accountId: "other",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+        toolContext: { currentChannelProvider: "slack" },
+      },
+    ],
     [
       "comes from another provider",
       { requesterSenderId: "U123", toolContext: { currentChannelProvider: "telegram" } },
@@ -596,6 +615,8 @@ describe("handleSlackMessageAction", () => {
         action: "member-info",
         cfg: {},
         params: { userId: "U999" },
+        accountId: "other",
+        requesterAccountId: "default",
         requesterSenderId: "U123",
         toolContext: { currentChannelProvider: "telegram" },
       } as never,

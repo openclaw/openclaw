@@ -201,8 +201,12 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "member-info") {
+    const requesterAccountId = normalizeOptionalString(ctx.requesterAccountId);
+    const targetAccountId = normalizeOptionalString(accountId);
     const requesterUserId =
-      normalizeOptionalLowercaseString(ctx.toolContext?.currentChannelProvider) === "slack"
+      normalizeOptionalLowercaseString(ctx.toolContext?.currentChannelProvider) === "slack" &&
+      requesterAccountId !== undefined &&
+      requesterAccountId === targetAccountId
         ? normalizeOptionalString(ctx.requesterSenderId)
         : undefined;
     const userId = readStringParam(actionParams, "userId") ?? requesterUserId;
