@@ -27,6 +27,7 @@ import { resolveModelRefFromString, type ModelRef } from "../agents/model-select
 import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -1878,7 +1879,18 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+    // In message_tool_only mode, raw model output produced without the heartbeat
+    // response tool must not leak to the channel. Suppress it as if empty.
+    // Payloads marked with deliverDespiteSourceReplySuppression — error notices
+    // and system messages — bypass this guard so critical failures still surface.
+    const suppressRawReply =
+      usesHeartbeatResponseTool &&
+      !heartbeatToolResponse &&
+      getReplyPayloadMetadata(replyPayload)?.deliverDespiteSourceReplySuppression !== true;
+    if (
+      !heartbeatToolResponse &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload) || suppressRawReply)
+    ) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
