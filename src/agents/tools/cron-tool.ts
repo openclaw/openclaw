@@ -314,7 +314,10 @@ export function createCronToolSchema(): TSchema {
       patch: createCronPatchObjectSchema(),
       text: Type.Optional(Type.String()),
       mode: optionalStringEnum(CRON_WAKE_MODES),
-      runMode: optionalStringEnum(CRON_RUN_MODES),
+      runMode: optionalStringEnum(CRON_RUN_MODES, {
+        description:
+          'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
+      }),
       contextMessages: Type.Optional(
         Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
       ),
@@ -774,7 +777,7 @@ ACTIONS:
 - add: create job; needs job object
 - update: patch job; needs jobId + patch
 - remove: delete job; needs jobId
-- run: trigger now; needs jobId
+- run: run only if due by default; needs jobId; pass runMode="force" to trigger now
 - runs: run history; needs jobId
 - wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane.
 
