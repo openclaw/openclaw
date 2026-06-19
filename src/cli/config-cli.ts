@@ -23,7 +23,6 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -42,8 +41,10 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -999,6 +1000,46 @@ function pruneInactiveGatewayAuthCredentials(params: {
 
 function toDotPath(path: PathSegment[]): string {
   return path.join(".");
+}
+
+const RESTART_HINT = "Restart the gateway to apply.";
+const HOT_RELOAD_HINT = "Change will apply without restarting the gateway.";
+const NO_RELOAD_HINT = "No gateway restart needed.";
+
+function isPluginEntryConfigPath(path: string): boolean {
+  // CLI hints are operator guidance. Keep plugin entry writes conservative
+  // because the CLI cannot prove every plugin's reload metadata is loaded.
+  return path === "plugins.entries" || path.startsWith("plugins.entries.");
+}
+
+function configApplyHintForPaths(paths: string[]): string {
+  if (paths.length === 0) {
+    return RESTART_HINT;
+  }
+  if (paths.some(isPluginEntryConfigPath)) {
+    return RESTART_HINT;
+  }
+  const plan = buildGatewayReloadPlan(paths);
+  if (plan.restartGateway) {
+    return RESTART_HINT;
+  }
+  if (plan.hotReasons.length > 0) {
+    return HOT_RELOAD_HINT;
+  }
+  return NO_RELOAD_HINT;
+}
+
+function configApplyHintForOperations(
+  operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
+): string {
+  const paths: string[] = [];
+  for (const operation of operations) {
+    if (!operation.requestedPath) {
+      return RESTART_HINT;
+    }
+    paths.push(toDotPath(operation.requestedPath));
+  }
+  return configApplyHintForPaths(paths);
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
@@ -2197,16 +2238,16 @@ async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(
-      info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. Restart the gateway to apply.`),
-    );
+    const hint = configApplyHintForOperations(operations);
+    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
     return;
   }
+  const hint = configApplyHintForOperations(operations);
   if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
     return;
   }
-  runtime.log(info(`Applied ${operations.length} config update(s). Restart the gateway to apply.`));
+  runtime.log(info(`Applied ${operations.length} config update(s). ${hint}`));
 }
 
 function handleConfigMutationError(params: {
@@ -2414,7 +2455,8 @@ export async function runConfigUnset(opts: {
         ? {}
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
-    runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
+    const hint = configApplyHintForPaths([toDotPath(parsedPath)]);
+    runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }
