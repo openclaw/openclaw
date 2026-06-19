@@ -1,6 +1,7 @@
 // Whatsapp tests cover quoted message plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  buildOutboundQuotedMeta,
   cacheInboundMessageMeta,
   lookupInboundMessageMeta,
   lookupInboundMessageMetaForTarget,
@@ -69,6 +70,51 @@ describe("quoted message metadata cache", () => {
       body: "hello from e164 participant",
       fromMe: undefined,
     });
+  });
+
+  it("marks the bot's own outbound group message with fromMe and the bot's participant JID (#91445)", () => {
+    const meta = buildOutboundQuotedMeta({
+      remoteJid: "120363400000000000@g.us",
+      self: { jid: "15551112222@s.whatsapp.net", lid: "99999@lid" },
+      body: "  bot reply text  ",
+    });
+    expect(meta).toEqual({
+      fromMe: true,
+      participant: "15551112222@s.whatsapp.net",
+      body: "bot reply text",
+    });
+
+    // A later swipe-reply to that message must resolve the quote key with the
+    // bot's own identity, not the cache-miss fallback (fromMe:false + replier).
+    cacheInboundMessageMeta("account-self", "120363400000000000@g.us", "bot-msg-1", meta);
+    expect(
+      lookupInboundMessageMeta("account-self", "120363400000000000@g.us", "bot-msg-1"),
+    ).toEqual({
+      participant: "15551112222@s.whatsapp.net",
+      participantE164: undefined,
+      body: "bot reply text",
+      fromMe: true,
+    });
+  });
+
+  it("omits the participant for the bot's own outbound direct-chat message (#91445)", () => {
+    const meta = buildOutboundQuotedMeta({
+      remoteJid: "15559998888@s.whatsapp.net",
+      self: { jid: "15551112222@s.whatsapp.net" },
+      body: "direct reply",
+    });
+    expect(meta).toEqual({ fromMe: true, body: "direct reply" });
+    expect(meta.participant).toBeUndefined();
+  });
+
+  it("falls back to the bot's lid when no self jid is known, and drops empty body", () => {
+    const meta = buildOutboundQuotedMeta({
+      remoteJid: "120363400000000000@g.us",
+      self: { jid: null, lid: "77777@lid" },
+      body: "   ",
+    });
+    expect(meta).toEqual({ fromMe: true, participant: "77777@lid" });
+    expect(meta.body).toBeUndefined();
   });
 
   it("does not recover metadata from another chat when the target conversation differs", () => {
