@@ -2202,8 +2202,7 @@ export async function syncPluginsForUpdateChannel(params: {
         continue;
       }
 
-      loadHelpers.addPath(bundledInfo.localPath);
-
+      // Bundled plugins are auto-discovered — skip redundant plugins.load.paths entry.
       const alreadyBundled =
         record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath, env);
       if (alreadyBundled) {
@@ -2425,7 +2424,7 @@ export async function syncPluginsForUpdateChannel(params: {
       }
       // Keep explicit bundled installs on release channels. Replacing them with
       // npm installs can reintroduce duplicate-id shadowing and packaging drift.
-      loadHelpers.addPath(bundledInfo.localPath);
+      // Note: bundled plugins are auto-discovered so we skip the load path entry.
       const alreadyBundled =
         record.source === "path" &&
         pathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
