@@ -1156,9 +1156,16 @@ function isEligibleInteractiveSession(ctx: {
     return false;
   }
   // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
-  // Broad substring match would also exclude real chat session ids that happen to
-  // contain the phrase (e.g. telegram:group:dreaming-narrative-room).
-  if (/(?:^|:)dreaming-narrative-(?:light|rem|deep)-/i.test(ctx.sessionKey ?? "")) {
+  // Canonical forms: "dreaming-narrative-<phase>-<hash>" or
+  // "agent:<agentId>:dreaming-narrative-<phase>-<hash>".
+  // A colon-delimited match would also exclude real chat session ids whose peer id
+  // begins with a phased dreaming-narrative phrase (e.g.
+  // "agent:main:feishu:group:dreaming-narrative-light-room").
+  const sessionKey = ctx.sessionKey ?? "";
+  if (
+    /^dreaming-narrative-(light|rem|deep)-/i.test(sessionKey) ||
+    /^agent:[^:]+:dreaming-narrative-(light|rem|deep)-/i.test(sessionKey)
+  ) {
     return false;
   }
   if (!ctx.sessionKey && !ctx.sessionId) {

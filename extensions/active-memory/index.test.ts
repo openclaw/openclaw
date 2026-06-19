@@ -878,6 +878,25 @@ describe("active-memory plugin", () => {
     expect(result).not.toBeUndefined();
   });
 
+  it("allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:webchat:dreaming-narrative-light-room",
+        messageProvider: "webchat",
+      },
+    );
+
+    // A real webchat session key whose peer id begins with a phased dreaming-narrative
+    // phrase must not be excluded. Only the canonical bare or agent-prefixed key
+    // shape (dreaming-narrative-<phase>-<hash> directly after agentId or bare) should
+    // be rejected — not the same phrase appearing deeper in the key as a peer id.
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeUndefined();
+  });
+
   it("defaults to direct-style sessions only", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should we order?", messages: [] },
