@@ -640,8 +640,7 @@ export function createSessionsSendTool(opts?: {
           requesterSessionKey: effectiveRequesterKey,
           targetSessionKey: resolvedKey,
         });
-      const skipCronA2AFlow = isRequesterIsolatedCron(effectiveRequesterKey);
-      const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow || skipCronA2AFlow;
+      const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow;
       // When the A2A flow is skipped, no follow-up announcement will fire and
       // the reply (when present) is returned inline via the `reply` field.
       // Reflect that in the metadata so the parent LLM does not wait for a
@@ -649,6 +648,14 @@ export function createSessionsSendTool(opts?: {
       const delivery = skipA2AFlow
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
+
+      // Isolated cron sessions must still run the target announce path so the
+      // message is delivered, but skip the ping-pong requester feedback loop
+      // to prevent the target's reply context from leaking back into the cron
+      // session (#92257).
+      const cronPingPongTurns = isRequesterIsolatedCron(effectiveRequesterKey)
+        ? 0
+        : maxPingPongTurns;
 
       const startA2AFlow = (
         roundOneReply?: string,
@@ -664,7 +671,7 @@ export function createSessionsSendTool(opts?: {
           displayKey: flowDisplayKey,
           message,
           announceTimeoutMs,
-          maxPingPongTurns,
+          maxPingPongTurns: cronPingPongTurns,
           requesterSessionKey,
           requesterChannel,
           baseline: baselineReply,
