@@ -5,7 +5,6 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
-import { resolveSessionDisplayName } from "../session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -839,7 +838,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
-  const keyCellTitle = friendlyKeyLabel ?? resolveSessionDisplayName(row.key, row);
+  const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
@@ -902,7 +901,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td class="data-table-key-col">
         <div
           class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
-          title=${keyCellTitle}
+          title=${hoverTitle}
         >
           ${canLink
             ? html`<a
