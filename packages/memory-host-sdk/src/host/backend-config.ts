@@ -439,8 +439,21 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+
+  // Fix #92302: When memory.qmd.command is a Windows absolute path
+  // (e.g. C:\Users\...\qmd.js), skip POSIX shell parsing which treats
+  // backslashes as escape characters and strips path separators.
+  // Instead, split only on unquoted whitespace to preserve the path.
+  const isWindowsAbsPath =
+    /^[a-zA-Z]:[\\/]/.test(rawCommand) || /^\\\\[^\\]+\\[^\\]/.test(rawCommand);
+  let command: string;
+  if (isWindowsAbsPath) {
+    const parts = rawCommand.split(/\s+/);
+    command = parts[0] || rawCommand;
+  } else {
+    const parsedCommand = splitShellArgs(rawCommand);
+    command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  }
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),

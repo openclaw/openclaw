@@ -166,6 +166,38 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("/Applications/QMD Tools/qmd");
   });
 
+  // Fix #92302: Windows absolute paths must not be mangled by POSIX shell parsing.
+  it("preserves Windows absolute qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "C:\\Users\\test\\.openclaw\\workspace" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command:
+            "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe(
+      "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@tobilu\\qmd\\dist\\cli\\qmd.js",
+    );
+  });
+
+  it("preserves Windows absolute qmd command with UNC path", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "C:\\Users\\test\\.openclaw\\workspace" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: "\\\\server\\share\\qmd\\qmd.js",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("\\\\server\\share\\qmd\\qmd.js");
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {
