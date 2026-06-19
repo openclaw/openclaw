@@ -62,6 +62,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** Optional callback to normalize/repair tool arguments before schema validation and execute(). Applied as prepareArguments on concrete (non-factory) tools. */
+  normalizeArgs?: (args: unknown) => Record<string, unknown>;
 };
 
 export type OpenClawPluginHookOptions = {

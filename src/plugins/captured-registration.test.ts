@@ -153,3 +153,85 @@ describe("captured plugin registration", () => {
     ]);
   });
 });
+
+describe("captured plugin registration normalizeArgs", () => {
+  function makeTool(name: string): AnyAgentTool {
+    return {
+      name,
+      label: name,
+      description: `${name} tool`,
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [], details: {} };
+      },
+    } as unknown as AnyAgentTool;
+  }
+
+  it("wires normalizeArgs as prepareArguments on concrete tools", () => {
+    const tool = makeTool("test-tool");
+    const normalizeArgs = (args: unknown) => ({
+      ...(args as Record<string, unknown>),
+      fixed: true,
+    });
+    const captured = capturePluginRegistration({
+      id: "test-plugin",
+      register(api) {
+        api.registerTool(tool, { normalizeArgs });
+      },
+    });
+    expect(captured.tools).toHaveLength(1);
+    expect(captured.tools[0].prepareArguments).toBeDefined();
+    const raw = { input: "hello" };
+    expect(captured.tools[0].prepareArguments!(raw)).toEqual({ input: "hello", fixed: true });
+  });
+
+  it("chains normalizeArgs with existing prepareArguments", () => {
+    const tool = makeTool("test-tool");
+    tool.prepareArguments = (args: unknown) => ({
+      ...(args as Record<string, unknown>),
+      prepped: true,
+    });
+    const normalizeArgs = (args: unknown) => ({
+      ...(args as Record<string, unknown>),
+      normalized: true,
+    });
+    const captured = capturePluginRegistration({
+      id: "test-plugin",
+      register(api) {
+        api.registerTool(tool, { normalizeArgs });
+      },
+    });
+    expect(captured.tools[0].prepareArguments).toBeDefined();
+    const raw = { input: "hello" };
+    expect(captured.tools[0].prepareArguments!(raw)).toEqual({
+      input: "hello",
+      prepped: true,
+      normalized: true,
+    });
+  });
+
+  it("does not set prepareArguments when normalizeArgs is not provided", () => {
+    const tool = makeTool("test-tool");
+    const captured = capturePluginRegistration({
+      id: "test-plugin",
+      register(api) {
+        api.registerTool(tool);
+      },
+    });
+    expect(captured.tools).toHaveLength(1);
+    expect(captured.tools[0].prepareArguments).toBeUndefined();
+  });
+
+  it("does not set prepareArguments when tool is a factory function", () => {
+    const factory = () => makeTool("factory-tool");
+    const normalizeArgs = (args: unknown) => args as Record<string, unknown>;
+    const captured = capturePluginRegistration({
+      id: "test-plugin",
+      register(api) {
+        api.registerTool(factory, { normalizeArgs });
+      },
+    });
+    // Factory tools are not pushed to captured.tools (only concrete tools are)
+    expect(captured.tools).toHaveLength(0);
+  });
+});

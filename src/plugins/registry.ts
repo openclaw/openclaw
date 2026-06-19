@@ -602,7 +602,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerTool = (
     record: PluginRecord,
     tool: AnyAgentTool | OpenClawPluginToolFactory,
-    opts?: { name?: string; names?: string[]; optional?: boolean },
+    opts?: {
+      name?: string;
+      names?: string[];
+      optional?: boolean;
+      normalizeArgs?: (args: unknown) => Record<string, unknown>;
+    },
   ) => {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
@@ -624,6 +629,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
     if (typeof tool !== "function") {
       names.push(tool.name);
+      if (opts?.normalizeArgs) {
+        const existingPrepare = tool.prepareArguments;
+        tool.prepareArguments = existingPrepare
+          ? (args: unknown) => opts.normalizeArgs!(existingPrepare(args))
+          : opts.normalizeArgs;
+      }
     }
 
     const normalized = normalizePluginToolNames(names);

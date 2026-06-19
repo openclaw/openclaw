@@ -311,8 +311,14 @@ export function createCapturedPluginRegistration(params?: {
           };
         },
         unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-        registerTool(tool) {
+        registerTool(tool, opts) {
           if (typeof tool !== "function") {
+            if (opts?.normalizeArgs) {
+              const existingPrepare = tool.prepareArguments;
+              tool.prepareArguments = existingPrepare
+                ? (args: unknown) => opts.normalizeArgs!(existingPrepare(args))
+                : opts.normalizeArgs;
+            }
             tools.push(tool);
           }
         },
