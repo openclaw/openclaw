@@ -211,6 +211,24 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("C:\\Program Files\\qmd\\bin\\qmd.js");
   });
 
+  it("keeps args support for windows command paths via the quoted form", () => {
+    // A bare windows absolute path is preserved whole (it may contain spaces),
+    // so flags must be passed using the quoted form. Quoted paths still flow
+    // through splitShellArgs, which keeps backslashes inside double quotes and
+    // splits trailing args off — confirming windows users do not lose flags.
+    const cfg = {
+      agents: { defaults: { workspace: "C:\\workspace\\root" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: '"C:\\Program Files\\qmd\\bin\\qmd.js" --flag',
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(requireQmdConfig(resolved).command).toBe("C:\\Program Files\\qmd\\bin\\qmd.js");
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {

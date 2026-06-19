@@ -38,6 +38,9 @@ function isWindowsAbsoluteCommandPath(raw: string): boolean {
 }
 
 function extractQmdCommandToken(rawCommand: string): string {
+  // A bare windows absolute path is returned whole because it may contain
+  // spaces (e.g. "C:\\Program Files\\..."); callers needing trailing flags use
+  // the quoted form, which still flows through splitShellArgs below.
   if (isWindowsAbsoluteCommandPath(rawCommand)) {
     return rawCommand;
   }
