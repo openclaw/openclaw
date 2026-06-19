@@ -362,6 +362,14 @@ export function parseOrdinalSeg(seg: string): number | null {
   return m === null || m[1] === undefined ? null : Number(m[1]);
 }
 
+export function parseArrayIndexSegment(seg: string, length: number): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(seg)) {
+    return null;
+  }
+  const index = Number(seg);
+  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
+}
+
 /** Indexable containers provide `size`; keyed containers provide ordered `keys`. */
 export interface PositionalContainer {
   readonly indexable: boolean;
@@ -538,7 +546,7 @@ export interface PathSegmentLayout {
 
 export function getPathLayout(path: OcPath): PathSegmentLayout {
   // Quote-aware split — `.split('.')` would shred a quoted segment
-  // containing a literal `.` (e.g. `"a.b"`) and break repackPath.
+  // containing a literal `.` (e.g. `"a.b"`).
   const sectionSubs = path.section === undefined ? [] : splitRespectingBrackets(path.section, ".");
   const itemSubs = path.item === undefined ? [] : splitRespectingBrackets(path.item, ".");
   const fieldSubs = path.field === undefined ? [] : splitRespectingBrackets(path.field, ".");
@@ -547,31 +555,6 @@ export function getPathLayout(path: OcPath): PathSegmentLayout {
     sectionLen: sectionSubs.length,
     itemLen: itemSubs.length,
     fieldLen: fieldSubs.length,
-  };
-}
-
-/**
- * Re-pack a concrete sub-segment list into an `OcPath` preserving the
- * pattern's slot boundaries. Throws on length mismatch.
- */
-export function repackPath(pattern: OcPath, subs: readonly string[]): OcPath {
-  const layout = getPathLayout(pattern);
-  if (subs.length !== layout.subs.length) {
-    fail(
-      `repack length mismatch: pattern has ${layout.subs.length} sub-segments, got ${subs.length}`,
-      formatOcPath(pattern),
-      "OC_PATH_REPACK_LENGTH",
-    );
-  }
-  const sectionSubs = subs.slice(0, layout.sectionLen);
-  const itemSubs = subs.slice(layout.sectionLen, layout.sectionLen + layout.itemLen);
-  const fieldSubs = subs.slice(layout.sectionLen + layout.itemLen);
-  return {
-    file: pattern.file,
-    ...(sectionSubs.length > 0 ? { section: sectionSubs.join(".") } : {}),
-    ...(itemSubs.length > 0 ? { item: itemSubs.join(".") } : {}),
-    ...(fieldSubs.length > 0 ? { field: fieldSubs.join(".") } : {}),
-    ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }
 
@@ -644,7 +627,7 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
 /** First top-level occurrence of `ch` in `s`; -1 when absent. */
 export function indexOfTopLevel(s: string, ch: string): number {
   let result = -1;
-  const fail = (): never => {
+  const failLocal = (): never => {
     throw new OcPathError(`Unbalanced bracket/brace in oc:// path: ${s}`, s, "OC_PATH_UNBALANCED");
   };
   scanBracketAware(
@@ -656,7 +639,7 @@ export function indexOfTopLevel(s: string, ch: string): number {
       }
       return undefined;
     },
-    fail,
+    failLocal,
   );
   return result;
 }

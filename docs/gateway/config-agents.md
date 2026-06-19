@@ -103,11 +103,11 @@ Per-agent override: `agents.list[].contextInjection`. Omitted values inherit
 
 ### `agents.defaults.bootstrapMaxChars`
 
-Max characters per workspace bootstrap file before truncation. Default: `12000`.
+Max characters per workspace bootstrap file before truncation. Default: `20000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapMaxChars: 12000 } },
+  agents: { defaults: { bootstrapMaxChars: 20000 } },
 }
 ```
 
@@ -138,7 +138,7 @@ injection behavior from the shared defaults. Omitted fields inherit from
   agents: {
     defaults: {
       contextInjection: "continuation-skip",
-      bootstrapMaxChars: 12000,
+      bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
     },
     list: [
@@ -334,7 +334,7 @@ Higher values preserve more visual detail.
 Image-tool compression/detail preference for images loaded from file paths, URLs, and media references.
 Default: `auto`.
 
-OpenClaw adapts the resize ladder to the selected image model. For example, Claude Opus 4.7, OpenAI GPT-5.5, Qwen VL, and hosted Llama 4 vision models can use larger images than older/default high-detail vision paths, while multi-image turns are compressed more aggressively in `auto` mode to control token and latency cost.
+OpenClaw adapts the resize ladder to the selected image model. For example, Claude Opus 4.8, OpenAI GPT-5.5, Qwen VL, and hosted Llama 4 vision models can use larger images than older/default high-detail vision paths, while multi-image turns are compressed more aggressively in `auto` mode to control token and latency cost.
 
 Values:
 
@@ -438,7 +438,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
   - If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order.
   - If you select a provider/model directly, configure the matching provider auth/API key too.
-  - The bundled Qwen video-generation provider supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
+  - The official Qwen video-generation plugin supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
@@ -450,7 +450,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.5` for OpenAI API-key or Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`).
-  - Use `provider/*` entries such as `"openai-codex/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
+  - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
@@ -483,11 +483,11 @@ Time format in system prompt. Default: `auto` (OS preference).
     defaults: {
       model: "openai/gpt-5.5",
       models: {
-        "anthropic/claude-opus-4-7": {
+        "anthropic/claude-opus-4-8": {
           agentRuntime: { id: "claude-cli" },
         },
         "vllm/*": {
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
         },
       },
     },
@@ -495,12 +495,13 @@ Time format in system prompt. Default: `auto` (OS preference).
 }
 ```
 
-- `id`: `"auto"`, `"pi"`, a registered plugin harness id, or a supported CLI backend alias. The bundled Codex plugin registers `codex`; the bundled Anthropic plugin provides the `claude-cli` CLI backend.
-- `id: "auto"` lets registered plugin harnesses claim supported turns and uses PI when no harness matches. An explicit plugin runtime such as `id: "codex"` requires that harness and fails closed if it is unavailable or fails.
+- `id`: `"auto"`, `"openclaw"`, a registered plugin harness id, or a supported CLI backend alias. The bundled Codex plugin registers `codex`; the bundled Anthropic plugin provides the `claude-cli` CLI backend.
+- `id: "auto"` lets registered plugin harnesses claim supported turns and uses OpenClaw when no harness matches. An explicit plugin runtime such as `id: "codex"` requires that harness and fails closed if it is unavailable or fails.
+- `id: "pi"` is accepted only as a deprecated alias for `openclaw` to preserve shipped configs from v2026.5.22 and earlier. New config should use `openclaw`.
 - Runtime precedence is exact model policy first (`agents.list[].models["provider/model"]`, `agents.defaults.models["provider/model"]`, or `models.providers.<provider>.models[]`), then `agents.list[]` / `agents.defaults.models["provider/*"]`, then provider-wide policy at `models.providers.<provider>.agentRuntime`.
 - Whole-agent runtime keys are legacy. `agents.defaults.agentRuntime`, `agents.list[].agentRuntime`, session runtime pins, and `OPENCLAW_AGENT_RUNTIME` are ignored by runtime selection. Run `openclaw doctor --fix` to remove stale values.
 - OpenAI agent models use the Codex harness by default; provider/model `agentRuntime.id: "codex"` remains valid when you want to make that explicit.
-- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-7"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
+- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-8"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
 - This only controls text agent-turn execution. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -520,7 +521,7 @@ Your configured aliases always win over defaults.
 
 Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinking off` or define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
-Anthropic Claude 4.6 models default to `adaptive` thinking when no explicit thinking level is set.
+Anthropic Claude Opus 4.8 keeps thinking off by default in OpenClaw; when adaptive thinking is explicitly enabled, Anthropic's provider-owned effort default is `high`. Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
 
 ### `agents.defaults.cliBackends`
 
@@ -561,23 +562,9 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   first compaction summary exists. Auth profile or credential-epoch changes
   still never raw-reseed.
 
-### `agents.defaults.systemPromptOverride`
-
-Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at the default level (`agents.defaults.systemPromptOverride`) or per agent (`agents.list[].systemPromptOverride`). Per-agent values take precedence; an empty or whitespace-only value is ignored. Useful for controlled prompt experiments.
-
-```json5
-{
-  agents: {
-    defaults: {
-      systemPromptOverride: "You are a helpful assistant.",
-    },
-  },
-}
-```
-
 ### `agents.defaults.promptOverlays`
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across PI/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
+Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
 
 ```json5
 {
@@ -630,7 +617,7 @@ Periodic heartbeat runs.
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
-- `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds`.
+- `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
@@ -647,13 +634,13 @@ Periodic heartbeat runs.
       compaction: {
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
-        timeoutSeconds: 900,
+        timeoutSeconds: 180,
         reserveTokensFloor: 24000,
         keepRecentTokens: 50000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         qualityGuard: { enabled: true, maxRetries: 1 },
-        midTurnPrecheck: { enabled: false }, // optional Pi tool-loop pressure check
+        midTurnPrecheck: { enabled: false }, // optional tool-loop pressure check
         postCompactionSections: ["Session Startup", "Red Lines"], // opt in to AGENTS.md section reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         truncateAfterCompaction: true, // rotate to a smaller successor JSONL after compaction
@@ -674,21 +661,21 @@ Periodic heartbeat runs.
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
-- `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
-- `keepRecentTokens`: Pi cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
+- `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
+- `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
-- `midTurnPrecheck`: optional Pi tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
+- `midTurnPrecheck`: optional tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Reinjection is disabled when unset or set to `[]`. Explicitly setting `["Session Startup", "Red Lines"]` enables that pair and preserves the legacy `Every Session`/`Safety` fallback. Enable this only when the extra context is worth the risk of duplicating project guidance already captured in the compaction summary.
-- `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
+- `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
 
 ### `agents.defaults.runRetries`
 
-Outer run loop retry iteration boundaries for the embedded Pi runner to prevent infinite execution loops during failure recovery. Note that this setting currently only applies to the embedded agent runtime, not ACP or CLI runtimes.
+Outer run loop retry iteration boundaries for the embedded agent runtime to prevent infinite execution loops during failure recovery. Note that this setting currently only applies to the embedded agent runtime, not ACP or CLI runtimes.
 
 ```json5
 {
@@ -1069,7 +1056,7 @@ for provider examples and precedence.
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         tts: {
           providers: {
-            elevenlabs: { voiceId: "EXAVITQu4vr4xnSDxMaL" },
+            elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
           },
         },
         skills: ["docs-search"], // replaces agents.defaults.skills when set
@@ -1285,7 +1272,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
     maintenance: {
-      mode: "warn", // warn | enforce
+      mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
       maxEntries: 500,
       resetArchiveRetention: "30d", // duration or false
@@ -1324,7 +1311,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`-`20`, default: `5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
-  - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
+  - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
   - `maxEntries`: maximum number of entries in `sessions.json` (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
   - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
@@ -1428,7 +1415,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         elevenlabs: {
           apiKey: "elevenlabs_api_key",
           baseUrl: "https://api.elevenlabs.io",
-          voiceId: "voice_id",
+          speakerVoiceId: "voice_id",
           modelId: "eleven_multilingual_v2",
           seed: 42,
           applyTextNormalization: "auto",
@@ -1442,7 +1429,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
           },
         },
         microsoft: {
-          voice: "en-US-AvaMultilingualNeural",
+          speakerVoice: "en-US-AvaMultilingualNeural",
           lang: "en-US",
           outputFormat: "audio-24khz-48kbitrate-mono-mp3",
         },
@@ -1450,7 +1437,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
           apiKey: "openai_api_key",
           baseUrl: "https://api.openai.com/v1",
           model: "gpt-4o-mini-tts",
-          voice: "alloy",
+          speakerVoice: "alloy",
         },
       },
     },
@@ -1478,7 +1465,7 @@ Defaults for Talk mode (macOS/iOS/Android).
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
-        voiceId: "elevenlabs_voice_id",
+        speakerVoiceId: "elevenlabs_voice_id",
         voiceAliases: {
           Clawd: "EXAVITQu4vr4xnSDxMaL",
           Roger: "CwhRBWXzGAHq8TQ4Fs17",
@@ -1502,7 +1489,7 @@ Defaults for Talk mode (macOS/iOS/Android).
       providers: {
         openai: {
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
         },
       },
       instructions: "Speak warmly and keep answers brief.",

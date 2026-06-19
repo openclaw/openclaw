@@ -1,3 +1,4 @@
+// Codex tests cover schema normalization runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +49,8 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -96,11 +99,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes prepared executable dynamic tool schemas through thread start unchanged", async () => {
+  it("passes prepared executable dynamic tool schemas through legacy thread start specs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const parameterFreeTool = createParameterFreeTool("message");
     const dynamicTool = {
+      type: "function" as const,
       name: parameterFreeTool.name,
       description: parameterFreeTool.description,
       inputSchema: normalizedParameterFreeSchema(),
@@ -126,7 +130,13 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       throw new Error(`expected thread/start request, got ${method}`);
     }
     const startPayload = payload as CodexThreadStartParams | undefined;
-    expect(startPayload?.dynamicTools).toStrictEqual([dynamicTool]);
+    expect(startPayload?.dynamicTools).toStrictEqual([
+      {
+        name: dynamicTool.name,
+        description: dynamicTool.description,
+        inputSchema: dynamicTool.inputSchema,
+      },
+    ]);
     expect(startPayload?.cwd).toBe(workspaceDir);
     expect(startPayload?.model).toBe("gpt-5.4");
     expect(startPayload?.modelProvider).toBeUndefined();
@@ -179,6 +189,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       cwd: workspaceDir,
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Permissive test tool",
           inputSchema: { type: "object" },
@@ -193,6 +204,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       cwd: workspaceDir,
       dynamicTools: [
         {
+          type: "function",
           name: permissiveTool.name,
           description: permissiveTool.description,
           inputSchema: permissiveTool.parameters,

@@ -89,7 +89,7 @@ The `models` root also owns global model-catalog behavior.
 ## MCP
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded Pi and other runtime adapters. The `openclaw mcp list`,
+consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
 `show`, `set`, and `unset` commands manage this block without connecting to the
 target server during config edits.
 
@@ -106,8 +106,22 @@ target server during config edits.
       remote: {
         url: "https://example.com/mcp",
         transport: "streamable-http", // streamable-http | sse
+        timeout: 20,
+        connectTimeout: 5,
+        supportsParallelToolCalls: true,
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
+        },
+        auth: "oauth",
+        oauth: {
+          scope: "docs.read",
+        },
+        sslVerify: true,
+        clientCert: "/path/to/client.crt",
+        clientKey: "/path/to/client.key",
+        toolFilter: {
+          include: ["search_*"],
+          exclude: ["admin_*"],
         },
         // Optional Codex app-server projection controls.
         codex: {
@@ -125,6 +139,26 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
+  while excluding it from embedded OpenClaw MCP discovery and tool projection.
+- `mcp.servers.<name>.timeout` / `requestTimeoutMs`: per-server MCP request
+  timeout in seconds or milliseconds.
+- `mcp.servers.<name>.connectTimeout` / `connectionTimeoutMs`: per-server
+  connection timeout in seconds or milliseconds.
+- `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
+  adapters that can choose whether to issue parallel MCP tool calls.
+- `mcp.servers.<name>.auth`: set `"oauth"` for HTTP MCP servers that require
+  OAuth. Run `openclaw mcp login <name>` to store tokens under OpenClaw state.
+- `mcp.servers.<name>.oauth`: optional OAuth scope, redirect URL, and client
+  metadata URL overrides.
+- `mcp.servers.<name>.sslVerify`, `clientCert`, `clientKey`: HTTP TLS controls
+  for private endpoints and mutual TLS.
+- `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
+  limits the discovered MCP tools to matching names; `exclude` hides matching
+  names. Entries are exact MCP tool names or simple `*` globs. Servers with
+  resources or prompts also generate utility tool names (`resources_list`,
+  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
+  same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -142,6 +176,11 @@ target server during config edits.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
   The next tool discovery/use recreates them from the new config, so removed
   `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
+- Runtime discovery also honors MCP tool-list change notifications by dropping
+  the cached catalog for that session. Servers that advertise resources or
+  prompts get utility tools for listing/reading resources and listing/fetching
+  prompts. Repeated tool-call failures pause the affected server briefly before
+  another call is attempted.
 
 See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 [CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.
@@ -161,6 +200,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       nodeManager: "npm", // npm | pnpm | yarn | bun
       allowUploadedArchives: false,
     },
+    workshop: {
+      allowSymlinkTargetWrites: false,
+    },
     entries: {
       "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
@@ -177,6 +219,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
 - `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
   resolve into when the link lives outside its configured source root.
+- `workshop.allowSymlinkTargetWrites`: allows Skill Workshop apply to write
+  through already-trusted symlink targets (default: false).
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
@@ -197,7 +241,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   plugins: {
     enabled: true,
     allow: ["voice-call"],
-    bundledDiscovery: "allowlist",
     deny: [],
     load: {
       paths: ["~/Projects/oss/voice-call-plugin"],
@@ -215,14 +258,11 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 }
 ```
 
-- Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
+- Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
+- Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
-- `bundledDiscovery`: defaults to `"allowlist"` for new configs, so a non-empty
-  `plugins.allow` also gates bundled provider plugins, including web-search
-  runtime providers. Doctor writes `"compat"` for migrated legacy allowlist
-  configs to preserve existing bundled provider behavior until you opt in.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
@@ -243,7 +283,7 @@ The bundled `codex` plugin owns native Codex app-server harness settings under
 surface and [Codex harness](/plugins/codex-harness) for the runtime model.
 
 `codexPlugins` applies only to sessions that select the native Codex harness.
-It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+It does not enable Codex plugins for OpenClaw provider runs, ACP
 conversation bindings, or any non-Codex harness.
 
 ```json5
@@ -300,7 +340,7 @@ session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
-  - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
+  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).
   - `onlyMainContent`: extract only the main content from pages (default: `true`).
   - `maxAgeMs`: maximum cache age in milliseconds (default: `172800000` / 2 days).
@@ -319,7 +359,7 @@ restart after changing native plugin config.
   - `memory.citations`
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
-- Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
+- Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 
@@ -407,12 +447,17 @@ See [Inferred commitments](/concepts/commitments).
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles can set `cdpUrl` when Chrome is already running
+  behind a DevTools HTTP(S) discovery endpoint or direct WS(S) endpoint. In that
+  mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
+  `userDataDir` is ignored for Chrome MCP launch arguments.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
   `responsebody`, PDF export, download interception, or batch actions.
-- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
-  set `cdpUrl` explicitly for remote CDP.
+- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; set
+  `cdpUrl` explicitly only for remote CDP profiles or existing-session endpoint
+  attach.
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
@@ -507,7 +552,7 @@ See [Inferred commitments](/concepts/commitments).
     tools: {
       // Additional /tools/invoke HTTP denies
       deny: ["browser"],
-      // Remove tools from the default HTTP deny list
+      // Remove tools from the default HTTP deny list for owner/admin callers
       allow: ["gateway"],
     },
     push: {
@@ -542,6 +587,11 @@ See [Inferred commitments](/concepts/commitments).
   value, so repeated failures from one localhost origin do not automatically
   lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
+- `tailscale.serviceName`: optional Tailscale Service name for Serve mode, such
+  as `svc:openclaw`. When set, OpenClaw passes it to `tailscale serve
+--service` so the Control UI can be exposed through a named Service instead
+  of the device hostname. The value must use Tailscale's `svc:<dns-label>`
+  Service name format; startup reports the derived Service URL.
 - `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.
@@ -570,7 +620,10 @@ See [Inferred commitments](/concepts/commitments).
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. Use `allowCommands` to opt into dangerous node commands such as `camera.snap`, `camera.clip`, and `screen.record`; `denyCommands` removes a command even if a platform default or explicit allow would otherwise include it. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
-- `gateway.tools.allow`: remove tool names from the default HTTP deny list.
+- `gateway.tools.allow`: remove tool names from the default HTTP deny list for
+  owner/admin callers. This does not upgrade identity-bearing `operator.write`
+  callers into owner/admin access; `cron`, `gateway`, and `nodes` remain
+  unavailable to non-owner callers even when allowlisted.
 
 </Accordion>
 
@@ -687,8 +740,8 @@ Query-string hook tokens are rejected.
 Validation and safety notes:
 
 - `hooks.enabled=true` requires a non-empty `hooks.token`.
-- `hooks.token` must be distinct from `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`; reusing the Gateway token fails startup validation.
-- `openclaw security audit` also flags `hooks.token` reuse of active Gateway password auth (`gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, or `--auth password --password <password>`) as a critical finding; password-mode reuse stays startup-compatible and should be repaired by rotating one of the secrets.
+- `hooks.token` should be distinct from active Gateway shared-secret auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`); startup logs a non-fatal security warning when it detects reuse.
+- `openclaw security audit` flags hook/Gateway auth reuse as a critical finding, including Gateway password auth supplied only at audit time (`--auth password --password <password>`). Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
@@ -940,11 +993,11 @@ Notes:
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
-      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
+      "openai:personal": { provider: "openai", mode: "oauth" },
     },
     order: {
       anthropic: ["anthropic:default", "anthropic:work"],
-      "openai-codex": ["openai-codex:personal"],
+      openai: ["openai:personal"],
     },
   },
 }
@@ -1043,6 +1096,7 @@ Notes:
       traces: true,
       metrics: true,
       logs: false,
+      logsExporter: "otlp",
       sampleRate: 1.0,
       flushIntervalMs: 5000,
       captureContent: {
@@ -1079,6 +1133,7 @@ Notes:
 - `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
+- `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, `systemPrompt`, and `toolDefinitions` explicitly.
@@ -1254,10 +1309,10 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
-- `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
-- `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
+- `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
+- `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
+- `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
 
 ### `cron.retry`
 
@@ -1273,11 +1328,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`-`10`).
+- `maxAttempts`: maximum retries for cron jobs on transient errors (default: `3`; range: `0`-`10`).
 - `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
 - `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
-Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
+One-shot jobs stay enabled until retry attempts are exhausted, then disable while keeping the final error state. Recurring jobs use the same transient retry policy to run again after backoff before their next scheduled slot; permanent errors or exhausted transient retries fall back to the normal recurring schedule with error backoff.
 
 ### `cron.failureAlert`
 

@@ -1,10 +1,13 @@
+// Loads shell-derived environment variables for provider and command runtimes.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
+import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -36,10 +39,7 @@ function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function resolveTimeoutMs(timeoutMs: number | undefined): number {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return DEFAULT_TIMEOUT_MS;
-  }
-  return Math.max(0, timeoutMs);
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 0);
 }
 
 function readEtcShells(): Set<string> | null {
@@ -222,7 +222,7 @@ type ShellEnvFallbackOptions = {
 };
 
 function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(env, key);
+  return Object.hasOwn(env, key);
 }
 
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
@@ -280,11 +280,11 @@ export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number
   if (!raw) {
     return DEFAULT_TIMEOUT_MS;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_TIMEOUT_MS;
   }
-  return Math.max(0, parsed);
+  return resolveTimeoutMs(parsed);
 }
 
 export function getShellPathFromLoginShell(opts: {
@@ -327,4 +327,9 @@ export function resetShellPathCacheForTests(): void {
 
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
+}
+
+export function clearShellEnvAppliedKeys(keys: readonly string[]): void {
+  const removed = new Set(keys);
+  lastAppliedKeys = lastAppliedKeys.filter((key) => !removed.has(key));
 }

@@ -1,3 +1,4 @@
+// Discord plugin module implements channel behavior.
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
@@ -69,6 +70,7 @@ import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
 } from "./monitor/thread-bindings.session-updates.js";
+import { withAbortTimeout } from "./monitor/timeouts.js";
 import { looksLikeDiscordTargetId, normalizeDiscordMessagingTarget } from "./normalize.js";
 import { discordOutbound } from "./outbound-adapter.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
@@ -314,8 +316,22 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       messaging: {
         targetPrefixes: ["discord"],
         normalizeTarget: normalizeDiscordMessagingTarget,
-        resolveInboundConversation: ({ from, to, conversationId, isGroup }) =>
-          resolveDiscordInboundConversation({ from, to, conversationId, isGroup }),
+        resolveInboundConversation: ({
+          from,
+          to,
+          conversationId,
+          threadId,
+          threadParentId,
+          isGroup,
+        }) =>
+          resolveDiscordInboundConversation({
+            from,
+            to,
+            conversationId,
+            threadId,
+            threadParentId,
+            isGroup,
+          }),
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
@@ -380,10 +396,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               token: account.token,
               inputs,
               missingTokenNote: "missing Discord token",
-              resolveWithToken: async ({ token, inputs }) =>
+              resolveWithToken: async ({ token, inputs: inputsValue }) =>
                 (await loadDiscordResolveChannelsModule()).resolveDiscordChannelAllowlist({
                   token,
-                  entries: inputs,
+                  entries: inputsValue,
                 }),
               mapResolved: (entry) => ({
                 input: entry.input,
@@ -401,10 +417,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             token: account.token,
             inputs,
             missingTokenNote: "missing Discord token",
-            resolveWithToken: async ({ token, inputs }) =>
+            resolveWithToken: async ({ token, inputs: inputsLocal }) =>
               (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({
                 token,
-                entries: inputs,
+                entries: inputsLocal,
               }),
             mapResolved: (entry) => ({
               input: entry.input,
@@ -514,7 +530,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }
           return lines;
         },
-        buildCapabilitiesDiagnostics: async ({ account, target }) => {
+        buildCapabilitiesDiagnostics: async ({ account, target, timeoutMs }) => {
           if (!target?.trim()) {
             return undefined;
           }
@@ -563,12 +579,19 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             },
           };
           try {
-            const perms = await (
-              await loadDiscordSendModule()
-            ).fetchChannelPermissionsDiscord(parsedTarget.id, {
-              cfg: statusCfg,
-              token,
-              accountId: account.accountId ?? undefined,
+            const sendModule = await loadDiscordSendModule();
+            const perms = await withAbortTimeout({
+              timeoutMs,
+              createTimeoutError: () =>
+                new Error(`Capabilities diagnostic timed out after ${timeoutMs}ms`),
+              run: async (signal) =>
+                await sendModule.fetchChannelPermissionsDiscord(parsedTarget.id, {
+                  cfg: statusCfg,
+                  token,
+                  accountId: account.accountId ?? undefined,
+                  signal,
+                  timeoutMs,
+                }),
             });
             const requiredPermissions = resolveRequiredDiscordChannelPermissions(perms.channelType);
             const missingRequired = requiredPermissions.filter(

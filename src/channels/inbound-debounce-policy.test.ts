@@ -1,3 +1,4 @@
+// Inbound debounce policy tests cover channel message coalescing and delay decisions.
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelInboundDebouncer,
@@ -11,6 +12,7 @@ describe("shouldDebounceTextInbound", () => {
     expect(shouldDebounceTextInbound({ text: "   ", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "hello", cfg, hasMedia: true })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "/status", cfg })).toBe(false);
+    expect(shouldDebounceTextInbound({ text: "/status plugins", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "stop", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "abort", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "wait", cfg })).toBe(false);

@@ -1,3 +1,4 @@
+// Feishu tests cover subagent hooks plugin behavior.
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
@@ -5,6 +6,7 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "../subagent-hooks-api.js";
+import { handleFeishuSubagentSpawning } from "./subagent-hooks.js";
 import {
   createFeishuThreadBindingManager,
   testing as threadBindingTesting,
@@ -18,7 +20,10 @@ const baseConfig: ClawdbotConfig = {
 function registerHandlersForTest(config: Record<string, unknown> = baseConfig) {
   return registerHookHandlersForTest<OpenClawPluginApi>({
     config,
-    register: registerFeishuSubagentHooks,
+    register: (api) => {
+      registerFeishuSubagentHooks(api);
+      api.on("subagent_spawning", (event, ctx) => handleFeishuSubagentSpawning(event, ctx));
+    },
   });
 }
 

@@ -1,6 +1,7 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
+/** Public option types for reply generation callbacks, streaming, and delivery policy. */
+import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -18,6 +19,7 @@ export type ModelSelectedContext = {
   thinkLevel: string | undefined;
 };
 
+/** Typing indicator class for channel-owned UX policy. */
 export type TypingPolicy =
   | "auto"
   | "user_message"
@@ -25,6 +27,7 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+/** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
   /** Override implicit reply-to-current behavior for the current turn. */
   implicitCurrentMessage?: "default" | "allow" | "deny";
@@ -32,23 +35,29 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+/** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
   begin: () => (() => void) | void;
 };
 
+/** Lifecycle hooks for queued follow-up replies. */
 export type QueuedReplyLifecycle = {
   onEnqueued?: () => void;
   onComplete?: () => void;
 };
 
+/** Partial assistant payload emitted during streaming or replacement updates. */
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
   replace?: true;
 };
 
+/** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
+  /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
+  promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
@@ -82,6 +91,8 @@ export type GetReplyOptions = {
   shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** Runtime tool allow-list for this turn. Empty means no tools. */
+  toolsAllow?: string[];
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
@@ -91,6 +102,16 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
+  allowToolLifecycleWhenProgressHidden?: boolean;
+  /**
+   * Called before dispatch with a live getter for whether verbose standalone
+   * progress messages are active for this run. Channels that render tool or
+   * commentary progress inside an ephemeral streaming draft should yield those
+   * draft lines while the getter returns true, so progress is not rendered in
+   * both lanes at once.
+   */
+  onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
@@ -105,6 +126,8 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
+    itemId?: string;
+    toolCallId?: string;
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;
@@ -113,6 +136,7 @@ export type GetReplyOptions = {
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
+    toolCallId?: string;
     kind?: string;
     title?: string;
     name?: string;
@@ -124,6 +148,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
+  /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
+  commentaryProgressEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;
@@ -193,6 +219,8 @@ export type GetReplyOptions = {
   queuedFollowupLifecycle?: QueuedReplyLifecycle;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+  /** Called when a suppressed source reply mode observes visible delivery through another path. */
+  onObservedReplyDelivery?: () => Promise<void> | void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

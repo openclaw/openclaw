@@ -1,19 +1,22 @@
+// Implements model listing and provider catalog commands.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
+import { isRetiredModelPickerProvider } from "../../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
-import {
-  isCliRuntimeProvider,
-  listLegacyRuntimeModelProviderAliases,
-} from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -25,15 +28,12 @@ import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -78,18 +78,20 @@ type ParsedModelsCommand =
     };
 
 function isModelsBrowseVisibleProvider(provider: string): boolean {
-  const normalized = normalizeProviderId(provider);
-  return isCliRuntimeProvider(normalized) || isModelPickerVisibleProvider(normalized);
+  return !isRetiredModelPickerProvider(provider);
 }
 
-function usesUnfilteredCatalogModels(provider: string): boolean {
-  return isCliRuntimeProvider(provider);
+function usesUnfilteredCatalogModels(
+  provider: string,
+  cliRuntimeProviders: ReadonlySet<string>,
+): boolean {
+  return cliRuntimeProviders.has(normalizeProviderId(provider));
 }
 
 function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
   if (!normalized || normalized === "auto" || normalized === "default") {
-    return "pi";
+    return "openclaw";
   }
   return normalized;
 }
@@ -106,8 +108,8 @@ function buildRuntimeChoice(params: {
     id,
     label,
     description:
-      id === "pi"
-        ? "Use the built-in OpenClaw Pi runtime."
+      id === "openclaw"
+        ? "Use the built-in OpenClaw runtime."
         : params.cli
           ? `Run ${params.provider} models through ${label}.`
           : `Use the ${label} runtime selected by the effective harness policy.`,
@@ -152,11 +154,24 @@ export async function buildModelsProviderData(
     cfg,
     agentId,
   });
+  const workspaceDir =
+    options.workspaceDir ??
+    (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
+    resolveDefaultAgentWorkspaceDir();
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+    allowScopedSnapshot: true,
+  });
+  const cliRuntimeProviders = new Set(
+    listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
+  );
 
   const catalog = await loadModelCatalogForBrowse({
     cfg,
     view: options.view ?? "default",
-    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly }),
+    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly, metadataSnapshot }),
   });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
@@ -166,18 +181,27 @@ export async function buildModelsProviderData(
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
+  const hasAuth: (provider: string) => Promise<boolean> =
+    options.view === "all"
+      ? async () => true
+      : createProviderAuthChecker({
+          cfg,
+          workspaceDir,
+          agentId,
+          allowPluginSyntheticAuth: false,
+          discoverExternalCliAuth: false,
+          allowPreparedRuntimeAuth: true,
+        });
   const visibleCatalog = await resolveVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
-    workspaceDir:
-      options.workspaceDir ??
-      (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
-      resolveDefaultAgentWorkspaceDir(),
+    workspaceDir,
     view: options.view,
     runtimeAuthDiscovery: false,
+    providerAuthChecker: hasAuth,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -195,7 +219,7 @@ export async function buildModelsProviderData(
     }
     if (
       restrictToProviderWildcards &&
-      !usesUnfilteredCatalogModels(key) &&
+      !usesUnfilteredCatalogModels(key, cliRuntimeProviders) &&
       !visibilityPolicy.allows({ provider: key, model: m })
     ) {
       return;
@@ -255,20 +279,11 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  const hasAuth: (provider: string) => Promise<boolean> =
-    options.view === "all"
-      ? async () => true
-      : createProviderAuthChecker({
-          cfg,
-          workspaceDir:
-            options.workspaceDir ??
-            (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
-            resolveDefaultAgentWorkspaceDir(),
-          agentId,
-        });
-
   for (const entry of catalog) {
-    if (usesUnfilteredCatalogModels(entry.provider) && (await hasAuth(entry.provider))) {
+    if (
+      usesUnfilteredCatalogModels(entry.provider, cliRuntimeProviders) &&
+      (await hasAuth(entry.provider))
+    ) {
       add(entry.provider, entry.id);
     }
   }
@@ -290,8 +305,16 @@ export async function buildModelsProviderData(
   }
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
-  for (const alias of listLegacyRuntimeModelProviderAliases()) {
-    const provider = normalizeProviderId(alias.provider);
+  const runtimeBindings = [
+    { provider: "openai", runtime: "codex", cli: false },
+    ...listCliRuntimeModelBackendBindings().map((binding) => ({
+      provider: binding.provider,
+      runtime: binding.runtime,
+      cli: true,
+    })),
+  ];
+  for (const binding of runtimeBindings) {
+    const provider = normalizeProviderId(binding.provider);
     const defaultModelId =
       provider === normalizeProviderId(resolvedDefault.provider)
         ? resolvedDefault.model
@@ -304,14 +327,14 @@ export async function buildModelsProviderData(
         modelId: defaultModelId,
       }),
     ];
-    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "pi" }));
+    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "openclaw" }));
     addRuntimeChoice(
       choices,
       buildRuntimeChoice({
         cfg,
         provider,
-        runtime: alias.runtime,
-        cli: alias.cli,
+        runtime: binding.runtime,
+        cli: binding.cli,
       }),
     );
     runtimeChoicesByProvider.set(provider, choices);
@@ -336,17 +359,15 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
       continue;
     }
     if (lower.startsWith("page=")) {
-      const value = Number.parseInt(lower.slice("page=".length), 10);
-      if (Number.isFinite(value) && value > 0) {
+      const value = parseStrictPositiveInteger(lower.slice("page=".length));
+      if (value !== undefined) {
         page = value;
       }
       continue;
     }
-    if (/^[0-9]+$/.test(lower)) {
-      const value = Number.parseInt(lower, 10);
-      if (Number.isFinite(value) && value > 0) {
-        page = value;
-      }
+    const pageToken = parseStrictPositiveInteger(lower);
+    if (pageToken !== undefined) {
+      page = pageToken;
     }
   }
 
@@ -355,8 +376,8 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
     const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
-      const value = Number.parseInt(rawValue, 10);
-      if (Number.isFinite(value) && value > 0) {
+      const value = parseStrictPositiveInteger(rawValue);
+      if (value !== undefined) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
       }
     }

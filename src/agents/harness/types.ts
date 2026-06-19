@@ -1,7 +1,10 @@
+/**
+ * Public native agent harness contracts and capability shapes.
+ */
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
-  requestedRuntime: import("../pi-embedded-runner/runtime.js").EmbeddedAgentRuntime;
+  requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
 };
 
 export type AgentHarnessSupport =
@@ -9,15 +12,15 @@ export type AgentHarnessSupport =
   | { supported: false; reason?: string };
 
 export type AgentHarnessAttemptParams =
-  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptParams;
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
 export type AgentHarnessAttemptResult =
-  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptResult;
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
 export type AgentHarnessSideQuestionParams = {
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;
   model: string;
-  runtimeModel?: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+  runtimeModel?: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
   question: string;
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
@@ -25,17 +28,32 @@ export type AgentHarnessSideQuestionParams = {
   storePath?: string;
   resolvedThinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   resolvedReasoningLevel: import("../../auto-reply/thinking.js").ReasoningLevel;
-  blockReplyChunking?: import("../pi-embedded-block-chunker.js").BlockReplyChunking;
+  blockReplyChunking?: import("../embedded-agent-block-chunker.js").BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   opts?: import("../../auto-reply/get-reply-options.types.js").GetReplyOptions;
   isNewSession: boolean;
   sessionId: string;
   sessionFile: string;
+  sandboxSessionKey?: string;
   agentId?: string;
   workspaceDir?: string;
   messageChannel?: string;
   messageProvider?: string;
+  agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: string[];
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  senderIsOwner?: boolean;
   currentChannelId?: string;
+  toolsAllow?: string[];
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
@@ -43,9 +61,9 @@ export type AgentHarnessSideQuestionResult = {
   text: string;
 };
 export type AgentHarnessCompactParams =
-  import("../pi-embedded-runner/compact.types.js").CompactEmbeddedPiSessionParams;
+  import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
 export type AgentHarnessCompactResult =
-  import("../pi-embedded-runner/types.js").EmbeddedPiCompactResult;
+  import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessResetParams = {
   sessionId?: string;
   sessionKey?: string;
@@ -65,7 +83,7 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
-export type AgentHarness = {
+type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
@@ -78,15 +96,33 @@ export type AgentHarness = {
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+};
+
+type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
+};
+
+type AgentHarnessClassificationCapability = {
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: AgentHarnessAttemptParams,
   ): AgentHarnessResultClassification | undefined;
+};
+
+type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
+};
+
+type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   dispose?(): Promise<void> | void;
 };
+
+export type AgentHarness = AgentHarnessRunCapability &
+  AgentHarnessSideQuestionCapability &
+  AgentHarnessClassificationCapability &
+  AgentHarnessCompactionCapability &
+  AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;

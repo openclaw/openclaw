@@ -1,49 +1,92 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+// Covers agent harness selection, fallback behavior, and compaction routing.
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { testing as cliBackendsTesting } from "../cli-backends.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
-} from "../pi-embedded-runner/run/types.js";
+} from "../embedded-agent-runner/run/types.js";
+import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
-  maybeCompactAgentHarnessSession,
-  resolveAvailableAgentHarnessPolicy,
   resolveAgentHarnessPolicy,
+  resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
-import type { AgentHarness } from "./types.js";
+import type {
+  AgentHarness,
+  AgentHarnessCompactParams,
+  AgentHarnessCompactResult,
+} from "./types.js";
 
-const piRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("pi"));
+const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+  createAttemptResult("openclaw"),
+);
+const compactAuthMocks = vi.hoisted(() => ({
+  getApiKeyForModel: vi.fn(),
+  resolveModelAsync: vi.fn(),
+}));
 
-vi.mock("./builtin-pi.js", () => ({
-  createPiAgentHarness: (): AgentHarness => ({
-    id: "pi",
-    label: "PI embedded agent",
-    contextEngineHostCapabilities: [
-      "bootstrap",
-      "assemble-before-prompt",
-      "after-turn",
-      "maintain",
-      "compact",
-      "runtime-llm-complete",
-    ],
+vi.mock("./builtin-openclaw.js", () => ({
+  createOpenClawAgentHarness: (): AgentHarness => ({
+    id: "openclaw",
+    label: "OpenClaw embedded agent",
+    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: piRunAttempt,
+    runAttempt: agentRunAttempt,
   }),
+}));
+vi.mock("../model-auth.js", () => ({
+  getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
+}));
+vi.mock("../embedded-agent-runner/model.js", () => ({
+  resolveModelAsync: compactAuthMocks.resolveModelAsync,
 }));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
   clearAgentHarnesses();
+  compactAuthMocks.resolveModelAsync.mockResolvedValue({
+    model: { id: "gpt-5.5", provider: "openai" },
+  });
+  compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+      {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        pluginId: "google",
+        config: { command: "gemini" },
+      },
+    ],
+  });
 });
 
 afterEach(() => {
   clearAgentHarnesses();
-  piRunAttempt.mockClear();
+  cliBackendsTesting.resetDepsForTest();
+  agentRunAttempt.mockClear();
+  compactAuthMocks.resolveModelAsync.mockReset();
+  compactAuthMocks.getApiKeyForModel.mockReset();
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
@@ -61,7 +104,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
     timeoutMs: 5_000,
     provider: "codex",
     modelId: "gpt-5.4",
-    model: { id: "gpt-5.4", provider: "codex" } as Model<Api>,
+    model: { id: "gpt-5.4", provider: "codex" } as Model,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
@@ -96,6 +139,8 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
 }
 
 function createContextEngineRequiringAssembly(): ContextEngine {
+  // Selection tests use this to prove fallback cannot cross into a harness
+  // that lacks required context-engine host capabilities.
   return {
     info: {
       id: "lossless-claw",
@@ -119,6 +164,8 @@ function createContextEngineRequiringAssembly(): ContextEngine {
 }
 
 function registerFailingCodexHarness(): void {
+  // Forces the selected plugin runtime to throw so fallback behavior is
+  // exercised through runAgentHarnessAttempt, not only selectAgentHarness.
   registerAgentHarness(
     {
       id: "codex",
@@ -149,6 +196,8 @@ function registerSuccessfulCodexHarness(): void {
 }
 
 function groupSenderDenyAllConfig(): OpenClawConfig {
+  // Mirrors Telegram sender policy shape used when selection must preserve
+  // channel/group sender tool constraints across fallback attempts.
   return {
     channels: {
       telegram: {
@@ -225,33 +274,33 @@ describe("runAgentHarnessAttempt", () => {
     await expect(
       runAgentHarnessAttempt(createAttemptParams(providerRuntimeConfig("codex", "codex"))),
     ).rejects.toThrow('Requested agent harness "codex" is not registered.');
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("falls back to the PI harness in auto mode when no plugin harness matches", async () => {
+  it("falls back to the OpenClaw harness in auto mode when no plugin harness matches", async () => {
     const result = await runAgentHarnessAttempt(createAttemptParams());
 
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("allows the selected PI harness to satisfy context-engine pre-prompt assembly", async () => {
+  it("allows the selected OpenClaw harness to satisfy context-engine pre-prompt assembly", async () => {
     const result = await runAgentHarnessAttempt({
-      ...createAttemptParams(providerRuntimeConfig("codex", "pi")),
+      ...createAttemptParams(providerRuntimeConfig("codex", "openclaw")),
       contextEngine: createContextEngineRequiringAssembly(),
     });
 
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces an auto-selected plugin harness failure instead of replaying through PI", async () => {
+  it("surfaces an auto-selected plugin harness failure instead of replaying through OpenClaw", async () => {
     registerFailingCodexHarness();
 
     await expect(runAgentHarnessAttempt(createAttemptParams())).rejects.toThrow(
       "codex startup failed",
     );
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
   it("auto-selects a supporting plugin harness by default", async () => {
@@ -260,16 +309,16 @@ describe("runAgentHarnessAttempt", () => {
     await expect(runAgentHarnessAttempt(createAttemptParams())).rejects.toThrow(
       "codex startup failed",
     );
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("surfaces a forced plugin harness failure instead of replaying through PI", async () => {
+  it("surfaces a forced plugin harness failure instead of replaying through OpenClaw", async () => {
     registerFailingCodexHarness();
 
     await expect(
       runAgentHarnessAttempt(createAttemptParams(providerRuntimeConfig("codex", "codex"))),
     ).rejects.toThrow("codex startup failed");
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
   it("rejects the candidate when the forced plugin harness does not support its provider", async () => {
@@ -285,10 +334,10 @@ describe("runAgentHarnessAttempt", () => {
     await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
       /Requested agent harness "codex" does not support 9router\/cc\/claude-opus-4-6/,
     );
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it.each(["openai", "openai-codex"])(
+  it.each(["openai", "openai"])(
     "does not override forced Codex harness support rejection for %s",
     (provider) => {
       registerFailingCodexHarness();
@@ -300,7 +349,7 @@ describe("runAgentHarnessAttempt", () => {
           agentHarnessRuntimeOverride: "codex",
         }),
       ).toThrow(`Requested agent harness "codex" does not support ${provider}/gpt-5.4`);
-      expect(piRunAttempt).not.toHaveBeenCalled();
+      expect(agentRunAttempt).not.toHaveBeenCalled();
     },
   );
 
@@ -318,16 +367,16 @@ describe("runAgentHarnessAttempt", () => {
       modelId: "gpt-5.4",
     });
     expect(result.sessionIdUsed).toBe("codex");
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("falls back to PI when the implicit OpenAI Codex harness is unavailable", async () => {
+  it("falls back to OpenClaw when the implicit OpenAI Codex harness is unavailable", async () => {
     expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "codex",
       runtimeSource: "implicit",
     });
     expect(resolveAvailableAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
-      runtime: "pi",
+      runtime: "openclaw",
       runtimeSource: "implicit",
     });
 
@@ -337,30 +386,30 @@ describe("runAgentHarnessAttempt", () => {
       modelId: "gpt-5.4",
     });
 
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("honors explicit PI runtime for OpenAI agent model runs", async () => {
+  it("honors explicit OpenClaw runtime for OpenAI agent model runs", async () => {
     const result = await runAgentHarnessAttempt({
-      ...createAttemptParams(providerRuntimeConfig("openai", "pi")),
+      ...createAttemptParams(providerRuntimeConfig("openai", "openclaw")),
       provider: "openai",
       modelId: "gpt-5.4",
     });
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("honors provider wildcard PI runtime policy for OpenAI agent model runs", async () => {
+  it("honors provider wildcard OpenClaw runtime policy for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
 
     const result = await runAgentHarnessAttempt({
-      ...createAttemptParams(agentModelRuntimeConfig("openai/*", "pi")),
+      ...createAttemptParams(agentModelRuntimeConfig("openai/*", "openclaw")),
       provider: "openai",
       modelId: "gpt-5.4",
     });
-    expect(result.sessionIdUsed).toBe("pi");
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("annotates non-ok harness result classifications for outer model fallback", async () => {
@@ -443,7 +492,31 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
   });
 
-  it("leaves PI harness params unchanged for channel group sender deny-all policy", async () => {
+  it.each([
+    {
+      name: "narrow allowlist",
+      config: { tools: { allow: ["message"] } } as OpenClawConfig,
+    },
+    {
+      name: "specific denylist",
+      config: { tools: { deny: ["exec"] } } as OpenClawConfig,
+    },
+    {
+      name: "narrow profile",
+      config: { tools: { profile: "coding" } } as OpenClawConfig,
+    },
+  ])("marks plugin side questions restricted for a $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toEqual([]);
+  });
+
+  it.each([
+    { name: "full tool profile", config: { tools: { profile: "full" } } as OpenClawConfig },
+    { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
+  ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
+  });
+
+  it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {
     await runAgentHarnessAttempt({
       ...createAttemptParams(groupSenderDenyAllConfig()),
       sessionKey: "agent:main:telegram:group:test-deny-room",
@@ -452,25 +525,25 @@ describe("runAgentHarnessAttempt", () => {
       senderId: "test-denied-sender",
     });
 
-    expect(piRunAttempt).toHaveBeenCalledTimes(1);
-    expect(piRunAttempt.mock.calls[0]?.[0].toolsAllow).toBeUndefined();
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
+    expect(agentRunAttempt.mock.calls[0]?.[0].toolsAllow).toBeUndefined();
   });
 
   it("fails for config-forced plugin harnesses when fallback is omitted", async () => {
     await expect(
       runAgentHarnessAttempt(createAttemptParams(providerRuntimeConfig("codex", "codex"))),
     ).rejects.toThrow('Requested agent harness "codex" is not registered');
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("does not let a strict agent model plugin runtime fall back to PI", async () => {
+  it("does not let a strict agent model plugin runtime fall back to OpenClaw", async () => {
     await expect(
       runAgentHarnessAttempt({
         ...createAttemptParams(agentModelRuntimeConfig("codex/gpt-5.4", "codex", "strict")),
         sessionKey: "agent:strict:session-1",
       }),
     ).rejects.toThrow('Requested agent harness "codex" is not registered');
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 });
 
@@ -547,7 +620,7 @@ describe("selectAgentHarness", () => {
     expect(unsupportedSupports).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores session-level PI pins when selecting a harness", () => {
+  it("ignores session-level OpenClaw pins when selecting a harness", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
       id: "codex",
@@ -559,14 +632,34 @@ describe("selectAgentHarness", () => {
     const harness = selectAgentHarness({
       provider: "codex",
       modelId: "gpt-5.4",
-      agentHarnessId: "pi",
+      agentHarnessId: "openclaw",
     });
 
     expect(harness.id).toBe("codex");
     expect(supports).toHaveBeenCalledTimes(1);
   });
 
-  it("honors explicit PI runtime overrides when selecting a harness", async () => {
+  it("honors explicit OpenClaw runtime overrides when selecting a harness", async () => {
+    registerSuccessfulCodexHarness();
+
+    const harness = selectAgentHarness({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+
+    expect(harness.id).toBe("openclaw");
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+    expect(result.sessionIdUsed).toBe("openclaw");
+  });
+
+  it("treats legacy PI runtime overrides as the built-in OpenClaw harness", async () => {
     registerSuccessfulCodexHarness();
 
     const harness = selectAgentHarness({
@@ -575,7 +668,7 @@ describe("selectAgentHarness", () => {
       agentHarnessRuntimeOverride: "pi",
     });
 
-    expect(harness.id).toBe("pi");
+    expect(harness.id).toBe("openclaw");
 
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
@@ -583,7 +676,7 @@ describe("selectAgentHarness", () => {
       modelId: "gpt-5.4",
       agentHarnessRuntimeOverride: "pi",
     });
-    expect(result.sessionIdUsed).toBe("pi");
+    expect(result.sessionIdUsed).toBe("openclaw");
   });
 
   it("allows per-agent model runtime policy overrides", () => {
@@ -598,12 +691,12 @@ describe("selectAgentHarness", () => {
       }),
     ).toThrow('Requested agent harness "codex" is not registered');
     expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
-      "pi",
+      "openclaw",
     );
   });
 
-  it("selects PI when the implicit OpenAI Codex harness is unavailable", () => {
-    expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4" }).id).toBe("pi");
+  it("selects OpenClaw when the implicit OpenAI Codex harness is unavailable", () => {
+    expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4" }).id).toBe("openclaw");
   });
 
   it("ignores legacy agentRuntime as a runtime policy source", () => {
@@ -621,7 +714,7 @@ describe("selectAgentHarness", () => {
         modelId: "sonnet-4.6",
         config,
       }).id,
-    ).toBe("pi");
+    ).toBe("openclaw");
   });
 
   it("ignores legacy agent CLI runtime aliases for OpenAI agent model runs", async () => {
@@ -642,24 +735,24 @@ describe("selectAgentHarness", () => {
       modelId: "gpt-5.4",
     });
     expect(result.sessionIdUsed).toBe("codex");
-    expect(piRunAttempt).not.toHaveBeenCalled();
+    expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("ignores existing session PI pins when provider policy forces a plugin harness", () => {
+  it("ignores existing session OpenClaw pins when provider policy forces a plugin harness", () => {
     registerFailingCodexHarness();
 
     expect(
       selectAgentHarness({
         provider: "codex",
         modelId: "gpt-5.4",
-        agentHarnessId: "pi",
+        agentHarnessId: "openclaw",
         config: providerRuntimeConfig("codex", "codex"),
       }).id,
     ).toBe("codex");
   });
 
-  it("ignores env-forced PI for OpenAI default runtime selection", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "pi";
+  it("ignores env-forced OpenClaw for OpenAI default runtime selection", () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "openclaw";
     registerFailingCodexHarness();
 
     expect(
@@ -715,7 +808,190 @@ describe("selectAgentHarness", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not compact a selected plugin harness through PI when the plugin has no compactor", async () => {
+  it("honors selected plugin harness pins during compaction preflight", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        config: {
+          agents: {
+            list: [{ id: "main", default: true, agentDir: "/tmp/main-agent" }],
+            defaults: {
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).toMatchObject({
+      agentDir: "/tmp/main-agent",
+      agentId: "main",
+    });
+  });
+
+  it("routes internal post-context-engine compaction through the harness private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const compactAfterContextEngine = vi.fn(
+      async (_params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
+        ok: true,
+        compacted: false,
+        result: {
+          summary: "native follow-up queued",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 10,
+          details: { request: "after_context_engine" },
+        },
+      }),
+    );
+    const harness: AgentHarness & {
+      compactAfterContextEngine(
+        params: AgentHarnessCompactParams,
+      ): Promise<AgentHarnessCompactResult | undefined>;
+    } = {
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      compact,
+      compactAfterContextEngine,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+        },
+        { nativeCompactionRequest: "after_context_engine" },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "native follow-up queued",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10,
+        details: { request: "after_context_engine" },
+      },
+    });
+    expect(compact).not.toHaveBeenCalled();
+    expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+        },
+        { nativeCompactionRequest: "after_context_engine" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("keeps compaction recoverable when auth profile lookup fails", async () => {
+    compactAuthMocks.getApiKeyForModel.mockRejectedValue(new Error("missing auth profile"));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        authProfileId: "deleted-profile",
+        agentHarnessId: "codex",
+        config: agentModelRuntimeConfig("openai/gpt-5.5", "openclaw"),
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledWith(
+      "openai",
+      "gpt-5.5",
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({
+        authProfileId: "deleted-profile",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("does not compact a selected plugin harness through OpenClaw when the plugin has no compactor", async () => {
     registerFailingCodexHarness();
 
     await expect(
@@ -736,11 +1012,110 @@ describe("selectAgentHarness", () => {
     });
   });
 
+  it("uses agent-scoped runtime policy during compaction preflight", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:strict:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentId: "strict",
+        config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses sandbox session key for compaction preflight runtime policy", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sandboxSessionKey: "agent:strict:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentId: "main",
+        config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
+  });
+
+  it("keeps explicit agent id for non-agent sandbox policy keys during compaction preflight", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sandboxSessionKey: "global",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentId: "strict",
+        config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     { provider: "anthropic", modelId: "sonnet-4.6", alias: "claude-cli" },
     { provider: "google", modelId: "gemini-3-pro-preview", alias: "google-gemini-cli" },
   ])(
-    "returns PI for explicit CLI runtime alias $alias on $provider instead of throwing MissingAgentHarnessError",
+    "returns OpenClaw for explicit CLI runtime alias $alias on $provider instead of throwing MissingAgentHarnessError",
     ({ provider, modelId, alias }) => {
       expect(
         selectAgentHarness({
@@ -748,7 +1123,7 @@ describe("selectAgentHarness", () => {
           modelId,
           agentHarnessRuntimeOverride: alias,
         }).id,
-      ).toBe("pi");
+      ).toBe("openclaw");
     },
   );
 

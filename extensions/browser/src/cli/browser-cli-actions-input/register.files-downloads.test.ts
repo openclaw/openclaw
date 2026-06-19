@@ -1,3 +1,4 @@
+// Browser tests cover register.files downloads plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
@@ -30,6 +31,10 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
 );
 vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(cliCoreApiModule, "resolveExistingUploadPaths").mockResolvedValue({
+  ok: true,
+  paths: ["/tmp/openclaw/uploads/a.pdf", "/tmp/openclaw/uploads/b.pdf"],
+});
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
@@ -46,8 +51,49 @@ function getLastRequestOptions(): { timeoutMs?: number } | undefined {
 describe("browser action input file/download commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
+    vi.mocked(cliCoreApiModule.resolveExistingUploadPaths).mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
+  });
+
+  it("arms uploads with normalized paths and element targeting options", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "upload",
+        "/tmp/openclaw/uploads/a.pdf",
+        "media://inbound/b",
+        "--input-ref",
+        "file-input",
+        "--element",
+        "input[type=file]",
+        "--target-id",
+        "tab-1",
+        "--timeout-ms",
+        "45000",
+      ],
+      { from: "user" },
+    );
+
+    expect(cliCoreApiModule.resolveExistingUploadPaths).toHaveBeenCalledWith({
+      requestedPaths: ["/tmp/openclaw/uploads/a.pdf", "media://inbound/b"],
+    });
+    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+      | { path?: string; body?: Record<string, unknown> }
+      | undefined;
+    expect(request).toMatchObject({
+      path: "/hooks/file-chooser",
+      body: {
+        paths: ["/tmp/openclaw/uploads/a.pdf", "/tmp/openclaw/uploads/b.pdf"],
+        inputRef: "file-input",
+        element: "input[type=file]",
+        targetId: "tab-1",
+        timeoutMs: 45000,
+      },
+    });
+    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(45000);
   });
 
   it("keeps the outer waitfordownload request open for the advertised default wait", async () => {
@@ -56,6 +102,16 @@ describe("browser action input file/download commands", () => {
     await program.parseAsync(["browser", "waitfordownload"], { from: "user" });
 
     expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(120000);
+  });
+
+  it("accepts signed and zero-padded download timeouts", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(["browser", "waitfordownload", "--timeout-ms", "+025000"], {
+      from: "user",
+    });
+
+    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25_000);
   });
 
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {
@@ -69,6 +125,24 @@ describe("browser action input file/download commands", () => {
     );
 
     expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25000);
+  });
+
+  it("rejects non-decimal file and download timeouts before dispatch", async () => {
+    const downloadProgram = createActionInputProgram();
+    await expect(
+      downloadProgram.parseAsync(
+        ["browser", "download", "ref-1", "file.txt", "--timeout-ms", "1e3"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+
+    const waitProgram = createActionInputProgram();
+    await expect(
+      waitProgram.parseAsync(["browser", "waitfordownload", "--timeout-ms", "0x1000"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting dialog actions without arming the hook", async () => {

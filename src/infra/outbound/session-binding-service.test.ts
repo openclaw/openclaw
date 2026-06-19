@@ -1,3 +1,5 @@
+// Covers session binding adapter registration, generic current-conversation
+// fallback, capability errors, deduping, and duplicate graph teardown.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -215,13 +217,14 @@ describe("session binding service", () => {
         },
         placement: "child",
       })
-      .catch((error) => error);
+      .catch((error: unknown) => error);
 
     expect(isSessionBindingError(rejected)).toBe(true);
-    expectRecordFields(requireRecord(rejected, "session binding error"), {
+    const rejectedRecord = requireRecord(rejected, "session binding error");
+    expectRecordFields(rejectedRecord, {
       code: "BINDING_CAPABILITY_UNSUPPORTED",
     });
-    expectRecordFields(requireRecord(rejected.details, "session binding details"), {
+    expectRecordFields(requireRecord(rejectedRecord.details, "session binding details"), {
       placement: "child",
     });
   });

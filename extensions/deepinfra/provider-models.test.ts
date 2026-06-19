@@ -1,3 +1,4 @@
+// Deepinfra tests cover provider models plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const isProviderApiKeyConfiguredMock = vi.hoisted(() => vi.fn<(p: unknown) => boolean>());
@@ -73,7 +74,7 @@ async function withFetchPathTest(
     if (value === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = value;
+      Reflect.set(process.env, key, value);
     }
   }
   vi.stubGlobal("fetch", mockFetch);
@@ -85,7 +86,7 @@ async function withFetchPathTest(
       if (env[key] === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = env[key];
+        Reflect.set(process.env, key, env[key]);
       }
     }
     if (env.NODE_ENV !== undefined) {
@@ -204,12 +205,11 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [fetchUrl, fetchInit] = requireFirstFetchCall(mockFetch);
       const fetchSignal = Reflect.get(fetchInit ?? {}, "signal");
+      const fetchHeaders = Reflect.get(fetchInit ?? {}, "headers");
       expect(fetchUrl).toBe(DEEPINFRA_MODELS_URL);
       expect(fetchSignal).toBeInstanceOf(AbortSignal);
-      expect(fetchInit).toEqual({
-        headers: { Accept: "application/json" },
-        signal: fetchSignal,
-      });
+      expect(fetchHeaders).toBeInstanceOf(Headers);
+      expect((fetchHeaders as Headers).get("Accept")).toBe("application/json");
       expect(models).toEqual(
         expectedLiveChatCatalog([
           {
@@ -355,6 +355,40 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("does not cache successful responses that produce no live catalog rows", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+      });
+
+    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
+        expectedStaticChatCatalog().map((model) => model.id),
+      );
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
+        expectedLiveChatCatalog([
+          {
+            id: "recovered/model",
+            name: "recovered/model",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 65536,
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+            compat: { supportsUsageInStreaming: true },
+          },
+        ]).map((model) => model.id),
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
@@ -433,6 +467,50 @@ describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
       expect(catalog.videoGen.map((m) => m.id)).toEqual(["Wan-AI/Wan2.6-T2V"]);
       expect(catalog.tts.map((m) => m.id)).toEqual(["Qwen/Qwen3-TTS"]);
       expect(catalog.stt.map((m) => m.id)).toEqual(["openai/whisper-large-v3-turbo"]);
+    });
+  });
+
+  it("drops malformed live numeric metadata", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: [
+            makeAgentModelEntry({
+              id: "bad/chat",
+              metadata: {
+                description: "bad chat",
+                context_length: -1,
+                max_tokens: 1.5,
+                pricing: { input_tokens: 3, output_tokens: 15 },
+                tags: ["chat"],
+              },
+            }),
+            makeAgentModelEntry({
+              id: "bad/image",
+              metadata: {
+                description: "bad image",
+                pricing: { per_image_unit: 0.003 },
+                tags: ["image-gen"],
+                default_width: Number.POSITIVE_INFINITY,
+                default_height: 1024.5,
+                default_iterations: 0,
+              },
+            }),
+          ],
+        }),
+    });
+
+    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      const catalog = await discoverDeepInfraSurfaces();
+
+      expect(catalog.chat[0]).toMatchObject({ id: "bad/chat" });
+      expect(catalog.chat[0]?.contextWindow).toBeUndefined();
+      expect(catalog.chat[0]?.maxTokens).toBeUndefined();
+      expect(catalog.imageGen[0]).toMatchObject({ id: "bad/image" });
+      expect(catalog.imageGen[0]?.defaultWidth).toBeUndefined();
+      expect(catalog.imageGen[0]?.defaultHeight).toBeUndefined();
+      expect(catalog.imageGen[0]?.defaultIterations).toBeUndefined();
     });
   });
 

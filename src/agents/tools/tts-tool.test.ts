@@ -1,3 +1,5 @@
+// TTS tool tests cover guidance, speech runtime arguments, delivery metadata,
+// timeout validation, and reply-directive defusing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ttsRuntime from "../../tts/tts.js";
 import { createTtsTool } from "./tts-tool.js";
@@ -12,6 +14,8 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function latestTextToSpeechArgs(): Record<string, unknown> {
+  // Speech runtime args are the public handoff between the model-facing tool
+  // and provider-specific synthesis backends.
   return requireRecord(textToSpeechSpy.mock.calls.at(-1)?.[0], "text-to-speech args");
 }
 
@@ -90,6 +94,22 @@ describe("createTtsTool", () => {
     expect(args.text).toBe("hello");
     expect(args.timeoutMs).toBe(12_345);
     expect(requireRecord(result.details, "TTS result details").timeoutMs).toBe(12_345);
+  });
+
+  it("rejects fractional timeout before calling speech generation", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool();
+
+    await expect(tool.execute("call-1", { text: "hello", timeoutMs: 12_345.5 })).rejects.toThrow(
+      "timeoutMs must be a positive integer in milliseconds.",
+    );
+    expect(textToSpeechSpy).not.toHaveBeenCalled();
   });
 
   it("passes the active agent id to speech generation", async () => {

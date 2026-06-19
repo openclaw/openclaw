@@ -1,8 +1,9 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Telegram plugin module implements action runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringOrNumberParam,
@@ -41,6 +42,7 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -57,6 +59,7 @@ export const telegramActionRuntime = {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getCacheStats,
   pinMessageTelegram,
@@ -97,7 +100,9 @@ type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[num
 function readTelegramForumTopicIconColor(
   params: Record<string, unknown>,
 ): TelegramForumTopicIconColor | undefined {
-  const iconColor = readNumberParam(params, "iconColor", { integer: true });
+  const iconColor = readPositiveIntegerParam(params, "iconColor", {
+    message: "iconColor must be one of Telegram's supported forum topic colors.",
+  });
   if (iconColor == null) {
     return undefined;
   }
@@ -124,8 +129,12 @@ function readTelegramChatId(params: Record<string, unknown>) {
 
 function readTelegramThreadId(params: Record<string, unknown>) {
   return (
-    readNumberParam(params, "messageThreadId", { integer: true }) ??
-    readNumberParam(params, "threadId", { integer: true })
+    readPositiveIntegerParam(params, "messageThreadId", {
+      message: "messageThreadId must be a positive integer.",
+    }) ??
+    readPositiveIntegerParam(params, "threadId", {
+      message: "threadId must be a positive integer.",
+    })
   );
 }
 
@@ -147,8 +156,12 @@ function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | nul
 
 function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   return (
-    readNumberParam(params, "replyToMessageId", { integer: true }) ??
-    readNumberParam(params, "replyTo", { integer: true })
+    readPositiveIntegerParam(params, "replyToMessageId", {
+      message: "replyToMessageId must be a positive integer.",
+    }) ??
+    readPositiveIntegerParam(params, "replyTo", {
+      message: "replyTo must be a positive integer.",
+    })
   );
 }
 
@@ -353,9 +366,19 @@ export async function handleTelegramAction(
       });
     }
     const chatId = readTelegramChatId(params);
-    const messageId =
-      readNumberParam(params, "messageId", { integer: true }) ??
-      resolveReactionMessageId({ args: params });
+    let explicitMessageId: number | undefined;
+    try {
+      explicitMessageId = readPositiveIntegerParam(params, "messageId", {
+        message: "messageId must be a positive integer.",
+      });
+    } catch {
+      return jsonResult({
+        ok: false,
+        reason: "missing_message_id",
+        hint: "Telegram reaction requires a valid messageId (or inbound context fallback). Do not retry.",
+      });
+    }
+    const messageId = explicitMessageId ?? resolveReactionMessageId({ args: params });
     if (typeof messageId !== "number" || !Number.isFinite(messageId) || messageId <= 0) {
       return jsonResult({
         ok: false,
@@ -547,16 +570,18 @@ export async function handleTelegramAction(
     const allowMultiselect =
       readBooleanParam(params, "allowMultiselect") ?? readBooleanParam(params, "pollMulti");
     const durationSeconds =
-      readNumberParam(params, "durationSeconds", { integer: true }) ??
-      readNumberParam(params, "pollDurationSeconds", {
-        integer: true,
-        strict: true,
+      readPositiveIntegerParam(params, "durationSeconds", {
+        message: "durationSeconds must be a positive integer.",
+      }) ??
+      readPositiveIntegerParam(params, "pollDurationSeconds", {
+        message: "pollDurationSeconds must be a positive integer.",
       });
     const durationHours =
-      readNumberParam(params, "durationHours", { integer: true }) ??
-      readNumberParam(params, "pollDurationHours", {
-        integer: true,
-        strict: true,
+      readPositiveIntegerParam(params, "durationHours", {
+        message: "durationHours must be a positive integer.",
+      }) ??
+      readPositiveIntegerParam(params, "pollDurationHours", {
+        message: "pollDurationHours must be a positive integer.",
       });
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
@@ -607,10 +632,12 @@ export async function handleTelegramAction(
       throw new Error("Telegram deleteMessage is disabled.");
     }
     const chatId = readTelegramChatId(params);
-    const messageId = readNumberParam(params, "messageId", {
-      required: true,
-      integer: true,
+    const messageId = readPositiveIntegerParam(params, "messageId", {
+      message: "messageId must be a positive integer.",
     });
+    if (messageId === undefined) {
+      throw new Error("messageId required");
+    }
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -634,15 +661,21 @@ export async function handleTelegramAction(
       throw new Error("Telegram editMessage is disabled.");
     }
     const chatId = readTelegramChatId(params);
-    const messageId = readNumberParam(params, "messageId", {
-      required: true,
-      integer: true,
+    const messageId = readPositiveIntegerParam(params, "messageId", {
+      message: "messageId must be a positive integer.",
     });
+    if (messageId === undefined) {
+      throw new Error("messageId required");
+    }
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
-      readStringParam(params, "message", { required: true, allowEmpty: false });
+      readStringParam(params, "message", { allowEmpty: false });
+    const caption = readStringParam(params, "caption", { allowEmpty: false });
     const buttons = resolveTelegramButtonsFromParams(params);
-    if (buttons) {
+    if (content == null && caption == null && buttons === undefined) {
+      throw new Error("content required.");
+    }
+    if (buttons !== undefined) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId: accountId ?? undefined,
@@ -659,15 +692,34 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
+    if (content == null && caption == null && buttons !== undefined) {
+      const result = await telegramActionRuntime.editMessageReplyMarkupTelegram(
+        chatId ?? "",
+        messageId ?? 0,
+        buttons,
+        {
+          cfg,
+          token,
+          accountId: accountId ?? undefined,
+          gatewayClientScopes: options?.gatewayClientScopes,
+        },
+      );
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        chatId: result.chatId,
+      });
+    }
     const result = await telegramActionRuntime.editMessageTelegram(
       chatId ?? "",
       messageId ?? 0,
-      content,
+      caption ?? content ?? "",
       {
         cfg,
         token,
         accountId: accountId ?? undefined,
         buttons,
+        editMode: caption != null ? "caption" : "auto",
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
@@ -722,7 +774,10 @@ export async function handleTelegramAction(
       );
     }
     const query = readStringParam(params, "query", { required: true });
-    const limit = readNumberParam(params, "limit", { integer: true }) ?? 5;
+    const limit =
+      readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      }) ?? 5;
     const results = telegramActionRuntime.searchStickers(query, limit);
     return jsonResult({
       ok: true,

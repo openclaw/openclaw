@@ -1,12 +1,13 @@
+// Cron protocol conformance tests cover schema compatibility for cron messages.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 import {
   CronDeliverySchema,
   CronJobStateSchema,
   CronRunLogEntrySchema,
-} from "../gateway/protocol/schema.js";
+} from "../../packages/gateway-protocol/src/schema.js";
+import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;

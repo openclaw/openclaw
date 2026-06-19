@@ -1,4 +1,4 @@
-import type { SkillSnapshot } from "../agents/skills.js";
+// Trajectory metadata helpers capture environment metadata for trajectory files.
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -12,8 +12,11 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
 
+// Runtime metadata capture for trajectory events. This records enough config,
+// plugin, skill, and prompt context to explain a run after logs are exported.
 type BuildTrajectoryRunMetadataParams = {
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
@@ -138,6 +141,8 @@ function buildPluginsFromManifest(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }) {
+  // Startup captures can happen before runtime activation. Fall back to the
+  // manifest snapshot so exported runs still show configured plugin surfaces.
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config ?? {},
     workspaceDir: params.workspaceDir,
@@ -182,6 +187,8 @@ function buildSkillsCapture(
       (skill) => typeof skill.name === "string" && skill.name.length > 0,
     ) ?? [];
   const entries =
+    // Prefer resolved skill files when available; older call sites may only
+    // have the summarized skill catalog, which is still useful for support.
     filteredResolvedSkills.length > 0
       ? filteredResolvedSkills.map((skill) => ({
           id: skill.name,
@@ -300,6 +307,8 @@ export function buildTrajectoryRunMetadata(
   };
 }
 
+// Completion artifact schema mirrored into trajectory export artifacts.json.
+// Keep field names close to runtime event data to make bundle diffs readable.
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {

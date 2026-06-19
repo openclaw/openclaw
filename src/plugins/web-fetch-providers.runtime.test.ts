@@ -1,3 +1,4 @@
+// Covers web fetch provider runtime hooks supplied by plugins.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
@@ -179,7 +180,6 @@ describe("resolvePluginWebFetchProviders", () => {
 
     const providers = resolvePluginWebFetchProviders({
       config: createFirecrawlAllowConfig(),
-      bundledAllowlistCompat: true,
       workspaceDir: DEFAULT_WORKSPACE,
       env: createWebFetchEnv(),
     });
@@ -211,7 +211,6 @@ describe("resolvePluginWebFetchProviders", () => {
     const { config, activationSourceConfig, autoEnabledReasons } =
       webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
         config: rawConfig,
-        bundledAllowlistCompat: true,
         env,
       });
     const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
@@ -231,7 +230,6 @@ describe("resolvePluginWebFetchProviders", () => {
 
     const providers = resolvePluginWebFetchProviders({
       config: rawConfig,
-      bundledAllowlistCompat: true,
       workspaceDir: DEFAULT_WORKSPACE,
       env,
     });
@@ -248,7 +246,6 @@ describe("resolvePluginWebFetchProviders", () => {
     const { config, activationSourceConfig, autoEnabledReasons } =
       webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
         config: rawConfig,
-        bundledAllowlistCompat: true,
         workspaceDir: DEFAULT_WORKSPACE,
         env,
       });
@@ -269,7 +266,6 @@ describe("resolvePluginWebFetchProviders", () => {
 
     const providers = resolvePluginWebFetchProviders({
       config: rawConfig,
-      bundledAllowlistCompat: true,
       env,
     });
 
@@ -292,7 +288,6 @@ describe("resolvePluginWebFetchProviders", () => {
 
     resolvePluginWebFetchProviders({
       config: rawConfig,
-      bundledAllowlistCompat: true,
       env,
     });
 
@@ -324,14 +319,12 @@ describe("resolvePluginWebFetchProviders", () => {
     setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-a");
     resolvePluginWebFetchProviders({
       config,
-      bundledAllowlistCompat: true,
       env,
     });
 
     setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-b");
     resolvePluginWebFetchProviders({
       config,
-      bundledAllowlistCompat: true,
       env,
     });
 

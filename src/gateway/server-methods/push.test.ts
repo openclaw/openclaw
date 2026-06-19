@@ -1,5 +1,7 @@
+// Push method tests cover APNs direct/relay registrations, alert delivery,
+// stale registration cleanup, config resolution, and error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../protocol/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { pushHandlers } from "./push.js";
 
 const mocks = vi.hoisted(() => ({
@@ -121,6 +123,16 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | unde
   return respond.mock.calls[0] as RespondCall | undefined;
 }
 
+function expectSuccessfulPushTestResponse(respond: ReturnType<typeof vi.fn>): ApnsPushResult {
+  expect(sendApnsAlert).toHaveBeenCalledTimes(1);
+  const call = firstRespondCall(respond);
+  expect(call?.[0]).toBe(true);
+  const result = call?.[1] as ApnsPushResult | undefined;
+  expect(result?.ok).toBe(true);
+  expect(result?.status).toBe(200);
+  return result as ApnsPushResult;
+}
+
 describe("push.test handler", () => {
   beforeEach(() => {
     mocks.getRuntimeConfig.mockClear();
@@ -160,12 +172,7 @@ describe("push.test handler", () => {
     });
     await invoke();
 
-    expect(sendApnsAlert).toHaveBeenCalledTimes(1);
-    const call = firstRespondCall(respond);
-    expect(call?.[0]).toBe(true);
-    const result = call?.[1] as ApnsPushResult | undefined;
-    expect(result?.ok).toBe(true);
-    expect(result?.status).toBe(200);
+    expectSuccessfulPushTestResponse(respond);
   });
 
   it("sends push test through relay registrations", async () => {
@@ -209,22 +216,21 @@ describe("push.test handler", () => {
 
     expect(resolveApnsAuthConfigFromEnv).not.toHaveBeenCalled();
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
-    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
-      push: {
-        apns: {
-          relay: {
-            baseUrl: "https://relay.example.com",
-            timeoutMs: 1000,
+    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
+      process.env,
+      {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              timeoutMs: 1000,
+            },
           },
         },
       },
-    });
-    expect(sendApnsAlert).toHaveBeenCalledTimes(1);
-    const call = firstRespondCall(respond);
-    expect(call?.[0]).toBe(true);
-    const result = call?.[1] as ApnsPushResult | undefined;
-    expect(result?.ok).toBe(true);
-    expect(result?.status).toBe(200);
+      { registrationRelayOrigin: undefined },
+    );
+    const result = expectSuccessfulPushTestResponse(respond);
     expect(result?.transport).toBe("relay");
   });
 

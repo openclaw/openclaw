@@ -1,3 +1,4 @@
+// Verifies provider public artifacts extracted from plugin metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,7 @@ describe("provider public artifacts", () => {
       process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
     }
     vi.doUnmock("./bundled-dir.js");
+    vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
     vi.resetModules();
   });
@@ -43,6 +45,34 @@ describe("provider public artifacts", () => {
     ).toBe(providerConfig);
   });
 
+  it("loads MiniMax thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("minimax");
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "minimax", modelId: "MiniMax-M2.7" })
+        ?.defaultLevel,
+    ).toBe("off");
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "minimax", modelId: "MiniMax-M3" })
+        ?.defaultLevel,
+    ).toBe("adaptive");
+  });
+
+  it("loads Moonshot Kimi K2.7 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("moonshot");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.7-code",
+      }),
+    ).toEqual({
+      levels: [{ id: "low", label: "on" }],
+      defaultLevel: "low",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
     const bundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-"));
     const pluginDir = path.join(bundledPluginsDir, "openai");
@@ -52,7 +82,7 @@ describe("provider public artifacts", () => {
       JSON.stringify({
         id: "openai",
         configSchema: { type: "object" },
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
       }),
     );
     fs.writeFileSync(
@@ -89,7 +119,7 @@ describe("provider public artifacts", () => {
         typeof import("./provider-public-artifacts.js")
       >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias");
 
-      const surface = resolvePolicySurface("openai-codex");
+      const surface = resolvePolicySurface("openai");
 
       expect(surface?.resolveThinkingProfile).toBeTypeOf("function");
       expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
@@ -99,7 +129,7 @@ describe("provider public artifacts", () => {
       expect(
         surface
           ?.resolveThinkingProfile?.({
-            provider: "openai-codex",
+            provider: "openai",
             modelId: "gpt-5.5",
           })
           ?.levels.map((level) => level.id),
@@ -107,7 +137,7 @@ describe("provider public artifacts", () => {
       expect(
         surface
           ?.resolveThinkingProfile?.({
-            provider: "openai-codex",
+            provider: "openai",
             modelId: "gpt-4.1",
           })
           ?.levels.map((level) => level.id),
@@ -115,6 +145,129 @@ describe("provider public artifacts", () => {
     } finally {
       fs.rmSync(bundledPluginsDir, { force: true, recursive: true });
     }
+  });
+
+  it("resolves bundled policy artifacts through provider auth aliases", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "openai") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: ({ provider }: { provider: string }) => ({
+          levels: [{ id: provider }],
+        }),
+      };
+    });
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-auth-alias");
+
+    const surface = resolvePolicySurface("openai", {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "openai",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/openai/openclaw.plugin.json",
+            providers: ["openai"],
+            providerAuthAliases: { openai: "openai" },
+            rootDir: "/tmp/openai",
+            skills: [],
+            source: "/tmp/openai/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(surface?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
+      levels: [{ id: "openai" }],
+    });
+    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "openai",
+      artifactBasename: "provider-policy-api.js",
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("resolves bundled policy artifacts for a plugin-owned CLI backend", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "anthropic") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: ({ provider }: { provider: string }) => ({
+          levels: [{ id: provider }],
+        }),
+      };
+    });
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-cli-backend");
+
+    // CLI backend ids use the same provider-policy owner boundary as provider ids.
+    // Without it, claude-cli subagents fall back to the base thinking profile.
+    const surface = resolvePolicySurface("claude-cli", {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "anthropic",
+            channels: [],
+            cliBackends: ["claude-cli"],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/anthropic/openclaw.plugin.json",
+            providers: ["anthropic"],
+            rootDir: "/tmp/anthropic",
+            skills: [],
+            source: "/tmp/anthropic/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "claude-cli", modelId: "claude-opus-4-8" }),
+    ).toEqual({
+      levels: [{ id: "claude-cli" }],
+    });
+    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "anthropic",
+      artifactBasename: "provider-policy-api.js",
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
   it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {

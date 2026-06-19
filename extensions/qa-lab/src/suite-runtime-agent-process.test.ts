@@ -1,5 +1,7 @@
+// Qa Lab tests cover suite runtime agent process plugin behavior.
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -20,6 +22,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));
 
+import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   findManagedDreamingCronJob,
   isManagedDreamingCronJob,
@@ -39,6 +42,7 @@ type MockEmitter = {
 };
 
 type MockChildProcess = MockEmitter & {
+  pid?: number;
   stdout: MockEmitter;
   stderr: MockEmitter;
   kill: ReturnType<typeof vi.fn>;
@@ -48,8 +52,9 @@ function createMockEmitter() {
   return new EventEmitter() as unknown as MockEmitter;
 }
 
-function createSpawnedProcess() {
+function createSpawnedProcess(params: { pid?: number } = {}) {
   const child = createMockEmitter() as MockChildProcess;
+  child.pid = params.pid;
   child.stdout = createMockEmitter();
   child.stderr = createMockEmitter();
   child.kill = vi.fn();
@@ -111,6 +116,70 @@ describe("qa suite runtime agent process helpers", () => {
       "/tmp/runtime",
     );
     expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("caps oversized qa cli timeout timers", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const child = createSpawnedProcess();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: {
+            tempRoot: "/tmp/runtime",
+            runtimeEnv: { PATH: "/usr/bin" },
+          },
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+        { timeoutMs: Number.MAX_SAFE_INTEGER },
+      );
+
+      await waitForSpawnCount(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.stdout.emit("data", Buffer.from("ok\n"));
+      child.emit("exit", 0);
+      await expect(pending).resolves.toBe("ok");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const child = createSpawnedProcess({ pid: 12345 });
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: {
+            tempRoot: "/tmp/runtime",
+            runtimeEnv: { PATH: "/usr/bin" },
+          },
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+        { timeoutMs: 1 },
+      );
+      const timeoutAssertion = expect(pending).rejects.toThrow(
+        "qa cli timed out: openclaw qa suite",
+      );
+
+      await waitForSpawnCount(1);
+      await timeoutAssertion;
+      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("merges isolated env overrides into qa cli runs", async () => {
@@ -244,6 +313,69 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
 
+  it("rejects oversized qa cli stdout instead of parsing truncated output", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit("data", Buffer.alloc(QA_CHILD_STDOUT_MAX_BYTES + 1, "x"));
+    child.emit("exit", 0);
+
+    await expect(pending).rejects.toThrow(
+      `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
+    );
+  });
+
+  it("keeps only a bounded qa cli stderr tail for failure diagnostics", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stderr.emit(
+      "data",
+      Buffer.from(`head-marker\n${"x".repeat(QA_CHILD_STDERR_TAIL_BYTES)}\ntail-marker`),
+    );
+    child.emit("exit", 1);
+
+    const error = await pending.catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("qa cli failed (1):");
+    expect(message).toContain("qa cli stderr truncated to last");
+    expect(message).toContain("tail-marker");
+    expect(message).not.toContain("head-marker");
+  });
+
   it("starts an agent run with transport-derived delivery metadata", async () => {
     const gatewayCall = vi.fn(async () => ({ runId: "run-1" }));
     const env = {
@@ -342,6 +474,20 @@ describe("qa suite runtime agent process helpers", () => {
       "agent.wait",
       { runId: "run-3", timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
+    );
+  });
+
+  it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "ok" }));
+
+    await expect(
+      waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-oversized", 9e15),
+    ).resolves.toEqual({ status: "ok" });
+
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "agent.wait",
+      { runId: "run-oversized", timeoutMs: 9e15 },
+      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });
 

@@ -1,9 +1,14 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+// Lmstudio plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
+  createPlainTextToolCallCompatWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -13,6 +18,7 @@ const log = createSubsystemLogger("extensions/lmstudio/stream");
 
 type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
+
 const preloadInFlight = new Map<string, Promise<void>>();
 
 /**
@@ -87,19 +93,12 @@ function normalizeLmstudioModelKey(modelId: string): string {
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
   const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  const contextTokens =
-    typeof withContextTokens.contextTokens === "number" &&
-    Number.isFinite(withContextTokens.contextTokens)
-      ? Math.floor(withContextTokens.contextTokens)
-      : undefined;
-  if (contextTokens && contextTokens > 0) {
+  const contextTokens = asPositiveSafeInteger(withContextTokens.contextTokens);
+  if (contextTokens !== undefined) {
     return contextTokens;
   }
-  const contextWindow =
-    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-      ? Math.floor(model.contextWindow)
-      : undefined;
-  if (contextWindow && contextWindow > 0) {
+  const contextWindow = asPositiveSafeInteger(model.contextWindow);
+  if (contextWindow !== undefined) {
     return contextWindow;
   }
   return undefined;
@@ -179,7 +178,14 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
 
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
-  const streamWithPlainTextToolCalls = createPlainTextToolCallCompatWrapper(underlying);
+  // LM Studio does not ride the shared OpenAI provider hook stack, so the
+  // thinking-level payload rewrite must be composed here: without it, thinking
+  // "off" leaves the transport's defaulted reasoning_effort (an enabled level)
+  // in requests to binary-thinking servers.
+  const streamWithThinkingLevel = createOpenAICompatibleCompletionsThinkingOffWrapper(
+    createPlainTextToolCallCompatWrapper(underlying),
+    ctx.thinkingLevel,
+  );
   return (model, context, options) => {
     if (model.provider !== LMSTUDIO_PROVIDER_ID) {
       return underlying(model, context, options);
@@ -190,7 +196,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     }
     const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
     if (!shouldPreloadLmstudioModels(providerConfig)) {
-      return streamWithPlainTextToolCalls(withLmstudioUsageCompat(model), context, options);
+      return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
     }
     const providerBaseUrl = providerConfig?.baseUrl;
     const resolvedBaseUrl = resolveLmstudioInferenceBase(
@@ -222,7 +228,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                 () => {
                   recordPreloadSuccess(preloadKey);
                 },
-                (error) => {
+                (error: unknown) => {
                   const entry = recordPreloadFailure(preloadKey, Date.now());
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,
@@ -265,7 +271,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       // LM Studio uses OpenAI-compatible streaming usage payloads when requested via
       // `stream_options.include_usage`. Force this compat flag at call time so usage
       // reporting remains enabled even when catalog entries omitted compat metadata.
-      const stream = streamWithPlainTextToolCalls(withLmstudioUsageCompat(model), context, options);
+      const stream = streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
       const resolvedStream = stream instanceof Promise ? await stream : stream;
       return resolvedStream;
     })();

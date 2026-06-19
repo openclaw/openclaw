@@ -163,6 +163,7 @@ Example:
 | `minHostVersion`             | `string`                            | Minimum supported OpenClaw version in the form `>=x.y.z` or `>=x.y.z-prerelease`. |
 | `expectedIntegrity`          | `string`                            | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
 | `allowInvalidConfigRecovery` | `boolean`                           | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
+| `requiredPlatformPackages`   | `string[]`                          | Required platform-specific npm aliases verified during npm install.               |
 
 <AccordionGroup>
   <Accordion title="Onboarding behavior">
@@ -534,7 +535,7 @@ openclaw plugins install <package-name>
 ```
 
 <Info>
-For npm-sourced installs, `openclaw plugins install` installs the package under `~/.openclaw/npm` with lifecycle scripts disabled. Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
+For npm-sourced installs, `openclaw plugins install` installs the package into a per-plugin project under `~/.openclaw/npm/projects` with lifecycle scripts disabled. Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>
 
 <Note>

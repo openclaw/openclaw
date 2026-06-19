@@ -1,8 +1,17 @@
+// Tests dotenv file loading and environment merge behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -107,6 +116,54 @@ type DotEnvFixture = {
   cwdDir: string;
   stateDir: string;
 };
+
+function emptyOwnerMaps(): PluginMetadataSnapshot["owners"] {
+  return {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
+}
+
+function createManifestBackedProviderSnapshot(
+  plugin: PluginManifestRecord,
+): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  return {
+    policyHash,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [plugin], diagnostics: [] },
+    plugins: [plugin],
+    diagnostics: [],
+    byPluginId: new Map([[plugin.id, plugin]]),
+    normalizePluginId: (pluginId: string) => pluginId,
+    owners: emptyOwnerMaps(),
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 1,
+    },
+  };
+}
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
@@ -382,7 +439,7 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks path-override vars (OPENCLAW_AGENT_DIR, OPENCLAW_BUNDLED_PLUGINS_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
+  it("blocks path-override vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
@@ -391,22 +448,22 @@ describe("loadDotEnv", () => {
           [
             "OPENCLAW_AGENT_DIR=./evil-agent",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
-            "PI_CODING_AGENT_DIR=./evil-coding",
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
+            "PI_CODING_AGENT_DIR=./evil-pi-agent",
           ].join("\n"),
         );
 
         delete process.env.OPENCLAW_AGENT_DIR;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.PI_CODING_AGENT_DIR;
         delete process.env.OPENCLAW_OAUTH_DIR;
+        delete process.env.PI_CODING_AGENT_DIR;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
       });
     });
   });
@@ -633,6 +690,33 @@ describe("loadCliDotEnv", () => {
     });
   });
 
+  it("can defer global dotenv while loading only workspace env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(cwdDir, ".env"), "BAZ=from-workspace\n");
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "BAR=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        delete process.env.BAZ;
+
+        loadCliDotEnv({ loadGlobalEnv: false, quiet: true });
+
+        expect(process.env.FOO).toBeUndefined();
+        expect(process.env.BAR).toBeUndefined();
+        expect(process.env.BAZ).toBe("from-workspace");
+      });
+    });
+  });
+
   it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
@@ -749,6 +833,78 @@ describe("loadCliDotEnv", () => {
 });
 
 describe("workspace .env blocklist completeness", () => {
+  it("keeps trusted global dotenv for global plugin provider auth vars", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        const plugin: PluginManifestRecord = {
+          id: "runtime-cloud",
+          channels: [],
+          providers: ["runtime-cloud"],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "global",
+          rootDir: "/plugins/runtime-cloud",
+          source: "/plugins/runtime-cloud/index.js",
+          manifestPath: "/plugins/runtime-cloud/openclaw.plugin.json",
+          providerAuthEnvVars: {
+            "runtime-cloud": ["RUNTIME_CLOUD_API_KEY"],
+          },
+        };
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "RUNTIME_CLOUD_API_KEY=workspace-plugin-key\n",
+        );
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "RUNTIME_CLOUD_API_KEY=global-plugin-key\n",
+        );
+
+        delete process.env.RUNTIME_CLOUD_API_KEY;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        setCurrentPluginMetadataSnapshot(createManifestBackedProviderSnapshot(plugin), {
+          config: {},
+          env: process.env,
+        });
+
+        try {
+          loadDotEnv({ quiet: true });
+
+          expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
+        } finally {
+          clearCurrentPluginMetadataSnapshot();
+        }
+      });
+    });
+  });
+
+  it("keeps registered provider auth vars from trusted global dotenv", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        const providerAuthKeys = listKnownProviderAuthEnvVarNames().toSorted();
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${providerAuthKeys.map((key) => `${key}=workspace-${key}`).join("\n")}\n`,
+        );
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          `${providerAuthKeys.map((key) => `${key}=global-${key}`).join("\n")}\n`,
+        );
+
+        clearEnv(providerAuthKeys);
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadDotEnv({ quiet: true });
+
+        for (const key of providerAuthKeys) {
+          expect(process.env[key], `${key} should come from trusted global .env`).toBe(
+            `global-${key}`,
+          );
+        }
+      });
+    });
+  });
+
   it("blocks runtime-control variables from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {

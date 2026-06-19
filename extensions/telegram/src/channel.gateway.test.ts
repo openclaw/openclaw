@@ -1,3 +1,4 @@
+// Telegram tests cover channel.gateway plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -228,19 +229,6 @@ function sendMessageOptionsAt(index: number): Record<string, unknown> {
   }
   return options;
 }
-
-async function waitForCondition(check: () => boolean, message: string, timeoutMs = 5_000) {
-  vi.useRealTimers();
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (check()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error(message);
-}
-
 async function waitForMicrotaskCondition(check: () => boolean, message: string, attempts = 100) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (check()) {

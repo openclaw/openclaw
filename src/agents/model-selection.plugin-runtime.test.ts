@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers plugin-owned model id normalization through selection surfaces.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
@@ -27,9 +28,15 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+let createModelSelectionStateForTest: typeof import("../auto-reply/reply/model-selection.js").createModelSelectionState;
+
 describe("model-selection plugin runtime normalization", () => {
+  beforeAll(async () => {
+    ({ createModelSelectionState: createModelSelectionStateForTest } =
+      await import("../auto-reply/reply/model-selection.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     normalizeProviderModelIdWithPluginMock.mockReset();
   });
 
@@ -108,6 +115,8 @@ describe("model-selection plugin runtime normalization", () => {
   });
 
   it("keeps model visibility policy construction off plugin runtime hooks by default", async () => {
+    // Visibility policy is a hot/static path. It preserves configured keys
+    // unless callers explicitly opt into runtime plugin normalization.
     normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
       if (
         provider === "custom-provider" &&
@@ -174,6 +183,8 @@ describe("model-selection plugin runtime normalization", () => {
   });
 
   it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {
+    // Stored session overrides are runtime inputs, so provider-owned
+    // normalization keeps old persisted ids usable without resetting them.
     normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
       if (
         provider === "custom-provider" &&
@@ -184,7 +195,6 @@ describe("model-selection plugin runtime normalization", () => {
       return undefined;
     });
 
-    const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
     const cfg = {
       agents: {
         defaults: {
@@ -203,7 +213,7 @@ describe("model-selection plugin runtime normalization", () => {
     };
     const sessionStore = { [sessionKey]: sessionEntry };
 
-    const state = await createModelSelectionState({
+    const state = await createModelSelectionStateForTest({
       cfg,
       agentCfg: cfg.agents.defaults,
       sessionEntry,
@@ -219,5 +229,37 @@ describe("model-selection plugin runtime normalization", () => {
     expect(state.provider).toBe("custom-provider");
     expect(state.model).toBe("custom-modern-model");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("forwards manifestPlugins to the runtime normalization call so it can skip the slot-or-load disk walk", async () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
+    const preparedPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            custom: { prefixWhenBare: "prepared" },
+          },
+        },
+      },
+    ];
+    const { normalizeModelRef } = await import("./model-selection-normalize.js");
+    normalizeModelRef("custom", "my-model", { manifestPlugins: preparedPlugins });
+    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom",
+        plugins: preparedPlugins,
+      }),
+    );
+  });
+
+  it("omits plugins from the runtime call when no manifestPlugins are prepared (preserves current behavior)", async () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
+    const { normalizeModelRef } = await import("./model-selection-normalize.js");
+    normalizeModelRef("custom", "my-model");
+    const callArgs = normalizeProviderModelIdWithPluginMock.mock.calls[0]?.[0] as
+      | { plugins?: unknown }
+      | undefined;
+    expect(callArgs).toBeDefined();
+    expect(callArgs?.plugins).toBeUndefined();
   });
 });

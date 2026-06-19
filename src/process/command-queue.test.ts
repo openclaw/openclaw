@@ -1,3 +1,4 @@
+// Command queue tests cover bounded command execution and queue ordering.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandLane } from "./lanes.js";
@@ -535,6 +536,69 @@ describe("command queue", () => {
 
       blocker.resolve();
       await expect(first).resolves.toBe("first");
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout switches to a short abort grace period", async () => {
+    const lane = `timeout-abort-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const abortController = new AbortController();
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 48 * 60 * 60 * 1000,
+        taskTimeoutAbortSignal: abortController.signal,
+        taskTimeoutAbortGraceMs: 25,
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      abortController.abort();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(secondRan).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await firstRejected;
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout release signal skips the abort grace period", async () => {
+    const lane = `timeout-release-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const releaseController = new AbortController();
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 48 * 60 * 60 * 1000,
+        taskTimeoutProgressAtMs: () => Date.now(),
+        taskTimeoutAbortGraceMs: 25,
+        taskTimeoutReleaseSignal: releaseController.signal,
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      releaseController.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await firstRejected;
       await expect(second).resolves.toBe("second");
       expect(secondRan).toBe(true);
     } finally {

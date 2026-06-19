@@ -1,7 +1,17 @@
+// Qa Lab plugin module implements model catalog behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+} from "./child-output.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import {
   isPreferredQaLiveFrontierCatalogModel,
@@ -97,6 +107,8 @@ export function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOp
 }
 
 const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
+const CATALOG_ABORT_KILL_GRACE_MS = 1_000;
+const CATALOG_ABORT_POLL_MS = 50;
 
 function createCatalogAbortError() {
   return new Error(CATALOG_ABORT_ERROR_MESSAGE);
@@ -129,6 +141,31 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
       // The process already exited.
     }
   }
+}
+
+function processTreeIsAlive(pid: number | undefined) {
+  if (pid === undefined || process.platform === "win32") {
+    return false;
+  }
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+async function waitForProcessTreeExit(pid: number | undefined, timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!processTreeIsAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, CATALOG_ABORT_POLL_MS);
+    });
+  }
+  return !processTreeIsAlive(pid);
 }
 
 export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
@@ -164,8 +201,8 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    const stdout = createQaChildOutputCapture();
+    const stderr = createQaChildOutputTail();
     const nodeExecPath = await resolveQaNodeExecPath();
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
@@ -184,16 +221,27 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
         detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
       });
-      const cleanup = () => {
+      const cleanupAbortListener = () => {
         params.signal?.removeEventListener("abort", abortCatalogLoad);
+      };
+      const cleanup = () => {
+        cleanupAbortListener();
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
+      };
+      const finishAbortedCatalogLoad = async () => {
+        cleanup();
+        if (processTreeIsAlive(child.pid)) {
+          killProcessTree(child.pid, "SIGKILL");
+          await waitForProcessTreeExit(child.pid, CATALOG_ABORT_KILL_GRACE_MS);
         }
       };
       const abortCatalogLoad = () => {
         aborted = true;
         killProcessTree(child.pid, "SIGTERM");
-        forceKillTimer = setTimeout(() => {
+        forceKillTimer ??= setTimeout(() => {
           killProcessTree(child.pid, "SIGKILL");
         }, 1_000);
         forceKillTimer.unref();
@@ -203,31 +251,40 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       } else {
         params.signal?.addEventListener("abort", abortCatalogLoad, { once: true });
       }
-      child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-      child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+      child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
+      child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
       child.once("error", (error) => {
         cleanup();
         reject(aborted ? createCatalogAbortError() : error);
       });
       child.once("exit", (code) => {
-        cleanup();
+        cleanupAbortListener();
         if (aborted) {
-          reject(createCatalogAbortError());
+          void finishAbortedCatalogLoad().then(
+            () => reject(createCatalogAbortError()),
+            () => reject(createCatalogAbortError()),
+          );
           return;
         }
+        cleanup();
         if (code === 0) {
+          if (stdout.exceeded) {
+            reject(
+              new Error(
+                `qa model catalog stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
+              ),
+            );
+            return;
+          }
           resolve();
           return;
         }
-        reject(
-          new Error(
-            `qa model catalog failed (${code ?? "unknown"}): ${Buffer.concat(stderr).toString("utf8").trim()}`,
-          ),
-        );
+        const stderrText = formatQaChildOutputTail(stderr, "qa model catalog stderr");
+        reject(new Error(`qa model catalog failed (${code ?? "unknown"}): ${stderrText}`));
       });
     });
 
-    return parseQaRunnerModelOptionsOutput(Buffer.concat(stdout).toString("utf8"));
+    return parseQaRunnerModelOptionsOutput(readQaChildOutput(stdout));
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

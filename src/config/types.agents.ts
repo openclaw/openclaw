@@ -1,17 +1,13 @@
+// Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
   AgentModelEntryConfig,
-  EmbeddedPiExecutionContract,
+  EmbeddedAgentExecutionContract,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
-import type {
-  AgentEmbeddedHarnessConfig,
-  AgentModelConfig,
-  AgentRuntimePolicyConfig,
-  AgentSandboxConfig,
-} from "./types.agents-shared.js";
+import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
@@ -89,13 +85,12 @@ export type AgentConfig = {
   description?: string;
   workspace?: string;
   agentDir?: string;
-  /** Optional per-agent full system prompt replacement. */
-  systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
-  /** Optional per-agent agent runtime policy override. */
-  agentRuntime?: AgentRuntimePolicyConfig;
-  /** @deprecated Use agentRuntime. */
-  embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
+  /**
+   * @deprecated Legacy raw config accepted only by doctor/migration repair.
+   * Normal schema parsing rejects this key; use per-model agentRuntime instead.
+   */
+  agentRuntime?: AgentModelEntryConfig["agentRuntime"];
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
@@ -141,15 +136,17 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Per-agent default thinking level for spawned sub-agents. */
+    thinking?: string;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
   /** Optional outer run loop retry boundaries. */
   runRetries?: AgentDefaultsConfig["runRetries"];
-  /** Optional per-agent embedded Pi overrides. */
-  embeddedPi?: {
+  /** Optional per-agent embedded OpenClaw overrides. */
+  embeddedAgent?: {
     /** Optional per-agent execution contract override. */
-    executionContract?: EmbeddedPiExecutionContract;
+    executionContract?: EmbeddedAgentExecutionContract;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

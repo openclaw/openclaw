@@ -1,5 +1,6 @@
+// Mcp Websocket Open tests cover mcp websocket open script behavior.
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForWebSocketOpen } from "../../scripts/e2e/mcp-websocket-open.ts";
 
 class FakeWebSocket extends EventEmitter {
@@ -20,6 +21,10 @@ class FakeWebSocket extends EventEmitter {
 }
 
 describe("mcp channel WebSocket open guard", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("consumes abort errors after open timeouts", async () => {
     const ws = new FakeWebSocket();
     const keepAlive = setTimeout(() => {}, 100);
@@ -29,11 +34,14 @@ describe("mcp channel WebSocket open guard", () => {
     } finally {
       clearTimeout(keepAlive);
     }
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(ws.terminated).toBe(true);
     expect(ws.listenerCount("open")).toBe(0);
     expect(ws.listenerCount("error")).toBe(0);
+    expect(ws.listenerCount("close")).toBe(0);
   });
 
   it("cleans listeners after successful opens", async () => {
@@ -46,5 +54,19 @@ describe("mcp channel WebSocket open guard", () => {
     expect(ws.terminated).toBe(false);
     expect(ws.listenerCount("open")).toBe(0);
     expect(ws.listenerCount("error")).toBe(0);
+    expect(ws.listenerCount("close")).toBe(0);
+  });
+
+  it("rejects immediately when the socket closes before opening", async () => {
+    const ws = new FakeWebSocket();
+    const opened = waitForWebSocketOpen(ws, 1000);
+
+    ws.emit("close", 1006, Buffer.from("bye"));
+
+    await expect(opened).rejects.toThrow("closed before open: 1006 bye");
+    expect(ws.terminated).toBe(false);
+    expect(ws.listenerCount("open")).toBe(0);
+    expect(ws.listenerCount("error")).toBe(0);
+    expect(ws.listenerCount("close")).toBe(0);
   });
 });

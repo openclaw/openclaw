@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+// Context-engine public types define the pluggable context-management lifecycle.
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -46,6 +47,18 @@ export type ContextEngineProjection = {
 
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
+export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
+
+export type ContextEngineSelectionSource = "configured" | "default" | "unknown";
+
+export type ContextEngineRuntimeReasonCode =
+  | "provider_timeout"
+  | "provider_unavailable"
+  | "rate_limited"
+  | "context_overflow"
+  | "runtime_unavailable"
+  | "unknown";
+
 export type ContextEngineHostCapability =
   | "bootstrap"
   | "assemble-before-prompt"
@@ -61,6 +74,54 @@ export type ContextEngineHostRequirements = {
   /** Optional engine-authored guidance appended to the host compatibility error. */
   unsupportedMessage?: string;
 };
+
+export type ContextEngineRuntimeSettings = {
+  schemaVersion: 1;
+  runtime: {
+    host: "openclaw";
+    mode: ContextEngineRuntimeMode;
+    harnessId: string | null;
+    runtimeId: string | null;
+  };
+  model: {
+    requested: string | null;
+    resolved: string | null;
+    provider: string | null;
+    family: string | null;
+  };
+  contextEngineSelection: {
+    selectedId: string | null;
+    source: ContextEngineSelectionSource;
+  };
+  executionHost: {
+    id: string | null;
+    label: string | null;
+  };
+  limits: {
+    promptTokenBudget: number | null;
+    maxOutputTokens: number | null;
+  };
+  diagnostics: {
+    fallbackReason: ContextEngineRuntimeReasonCode | null;
+    degradedReason: ContextEngineRuntimeReasonCode | null;
+  };
+};
+
+export class ContextEngineRuntimeSettingsUnavailableError extends Error {
+  readonly code = "context_engine_runtime_settings_unavailable";
+  constructor(message?: string) {
+    super(message);
+    this.name = "ContextEngineRuntimeSettingsUnavailableError";
+  }
+}
+
+export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
+  readonly code = "context_engine_runtime_settings_unsupported";
+  constructor(message?: string) {
+    super(message);
+    this.name = "ContextEngineRuntimeSettingsUnsupportedError";
+  }
+}
 
 export type CompactResult = {
   ok: boolean;
@@ -196,6 +257,8 @@ export type ContextEnginePromptCacheInfo = {
 };
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
+  cwd?: string;
   /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.
@@ -203,6 +266,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   allowDeferredCompactionExecution?: boolean;
   /** Runtime-resolved context window budget for the active model call. */
   tokenBudget?: number;
+  /** Selected agent harness id when compaction delegates back to the runtime. */
+  agentHarnessId?: string;
   /** Best-effort current prompt/context token estimate for this turn. */
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
@@ -241,18 +306,20 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     sessionFile: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<BootstrapResult>;
 
   /**
    * Run transcript maintenance after bootstrap, successful turns, or compaction.
    *
    * Engines can use runtimeContext.rewriteTranscriptEntries() to request safe
-   * branch-and-reappend transcript rewrites without depending on Pi internals.
+   * branch-and-reappend transcript rewrites without depending on runner internals.
    */
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
     sessionFile: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<ContextEngineMaintenanceResult>;
 
@@ -297,6 +364,7 @@ export interface ContextEngine {
     /** Optional model context token budget for proactive compaction. */
     tokenBudget?: number;
     /** Optional runtime-owned context for engines that need caller state. */
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void>;
 
@@ -318,6 +386,7 @@ export interface ContextEngine {
     model?: string;
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<AssembleResult>;
 
   /**
@@ -343,6 +412,7 @@ export interface ContextEngine {
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
     /** Optional runtime-owned context for engines that need caller state. */
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
     /**
      * Optional abort signal honored before and during compaction. The host

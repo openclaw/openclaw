@@ -1,5 +1,6 @@
+// Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
@@ -25,11 +26,28 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
+  /^(.*?)([\\/])node_modules\2\.pnpm\2openclaw@[^\\/]+\2node_modules\2openclaw\2.+$/;
+
+function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
+  // pnpm can expose argv[1] as a versioned realpath that self-update removes.
+  // Respawn through the stable OpenClaw package wrapper instead.
+  return entryPath.replace(
+    PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
+    "$1$2node_modules$2openclaw$2openclaw.mjs",
+  );
+}
+
 function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
   child: ChildProcess;
   pid?: number;
 } {
-  const args = [...process.execArgv, ...process.argv.slice(1)];
+  const [entryArg, ...entryArgs] = process.argv.slice(1);
+  const args = [
+    ...process.execArgv,
+    ...(entryArg ? [rewritePnpmVersionedOpenClawEntryPath(entryArg)] : []),
+    ...entryArgs,
+  ];
   const child = spawn(process.execPath, args, {
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
     detached: true,
@@ -103,7 +121,9 @@ export function respawnGatewayProcessForUpdate(
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
-  const supervisor = detectRespawnSupervisor(process.env);
+  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (supervisor) {
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();

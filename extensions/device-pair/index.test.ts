@@ -1,3 +1,4 @@
+// Device Pair tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,7 +54,6 @@ vi.mock("./notify.js", () => ({
   armPairNotifyOnce: vi.fn(async () => false),
   formatPendingRequests: vi.fn(() => "No pending device pairing requests."),
   handleNotifyCommand: vi.fn(async () => ({ text: "notify" })),
-  registerPairingNotifierService: vi.fn(),
 }));
 
 import {

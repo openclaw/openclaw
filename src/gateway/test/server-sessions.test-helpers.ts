@@ -1,8 +1,11 @@
+/**
+ * HTTP server session fixtures shared by gateway session tests.
+ */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -12,19 +15,19 @@ import {
   connectOk,
   embeddedRunMock,
   installGatewayTestHooks,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
-  | Promise<typeof import("@earendil-works/pi-coding-agent")>
+  | Promise<typeof import("../../agents/sessions/index.js")>
   | undefined;
 let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
 export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("@earendil-works/pi-coding-agent");
+  sessionManagerModulePromise ??= import("../../agents/sessions/index.js");
   return await sessionManagerModulePromise;
 }
 
@@ -231,7 +234,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
@@ -320,6 +323,128 @@ export function setupGatewaySessionsTestHarness() {
     return { dir, storePath };
   }
 
+  async function createSelectedGlobalSessionStore() {
+    const { dir } = await createSessionStoreDir();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = { scope: "global" };
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    return {
+      dir,
+      storeTemplate,
+      mainStorePath: storeTemplate.replace("{agentId}", "main"),
+      workStorePath: storeTemplate.replace("{agentId}", "work"),
+    };
+  }
+
+  async function createConfiguredGlobalAgentSessionStore({
+    writePrimeStore = false,
+    withTranscripts = false,
+  }: {
+    writePrimeStore?: boolean;
+    withTranscripts?: boolean;
+  } = {}) {
+    const { dir } = await createSessionStoreDir();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = { scope: "global" };
+    if (writePrimeStore) {
+      await writeSessionStore({
+        entries: {},
+        storePath: path.join(dir, "prime-sessions.json"),
+      });
+    }
+
+    const mainStorePath = storeTemplate.replace("{agentId}", "main");
+    const workStorePath = storeTemplate.replace("{agentId}", "work");
+    const mainTranscript = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
+    const workTranscript = path.join(path.dirname(workStorePath), "sess-work-global.jsonl");
+    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+    await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+    if (withTranscripts) {
+      await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
+      await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+    }
+    await fs.writeFile(
+      mainStorePath,
+      JSON.stringify(
+        {
+          global: sessionStoreEntry(
+            "sess-main-global",
+            withTranscripts ? { sessionFile: mainTranscript } : undefined,
+          ),
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      workStorePath,
+      JSON.stringify(
+        {
+          global: sessionStoreEntry(
+            "sess-work-global",
+            withTranscripts
+              ? { authProfileOverride: "github-copilot:work", sessionFile: workTranscript }
+              : undefined,
+          ),
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is required");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          session: { scope: "global", store: storeTemplate },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+      await getGatewayConfigModule();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    return {
+      clearConfigCache,
+      clearRuntimeConfigSnapshot,
+      configPath,
+      getRuntimeConfig,
+      mainStorePath,
+      mainTranscript,
+      workStorePath,
+      workTranscript,
+    };
+  }
+
+  async function resetConfiguredGlobalAgentSessionStore({
+    clearConfigCache,
+    clearRuntimeConfigSnapshot,
+    configPath,
+  }: {
+    clearConfigCache: () => void;
+    clearRuntimeConfigSnapshot: () => void;
+    configPath: string;
+  }) {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+  }
+
   async function seedActiveMainSession() {
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -332,9 +457,12 @@ export function setupGatewaySessionsTestHarness() {
   }
 
   return {
+    createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
+    createSelectedGlobalSessionStore,
     getHarness: requireHarness,
     openClient,
+    resetConfiguredGlobalAgentSessionStore,
     seedActiveMainSession,
   };
 }
@@ -495,8 +623,8 @@ export async function directSessionReq<TPayload = unknown>(
     context: {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => piSdkMock.models,
-      getRuntimeConfig: getRuntimeConfig,
+      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+      getRuntimeConfig,
       ...opts?.context,
     } as never,
     client: opts?.client ?? null,

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements confidence report behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -382,6 +383,15 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       (scenario) =>
         isRecord(scenario) && (scenario.status === "skip" || scenario.status === "skipped"),
     ).length ?? 0;
+  const unknownBlockingScenarioCount =
+    scenarios?.filter(
+      (scenario) =>
+        !isRecord(scenario) ||
+        (scenario.status !== "pass" &&
+          scenario.status !== "fail" &&
+          scenario.status !== "skip" &&
+          scenario.status !== "skipped"),
+    ).length ?? 0;
   const hasScenarioRows = scenarios !== undefined && scenarios.length > 0;
   const gatewayLogSentinels = collectGatewayLogSentinels(payload);
   if (gatewayLogSentinels.length > 0) {
@@ -429,6 +439,13 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
         )}, failed scenarios=${failedScenarios.length}`,
       };
     }
+    if (unknownBlockingScenarioCount > 0) {
+      return {
+        passed: false,
+        status: "unknown",
+        details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
+      };
+    }
     const explicitSkippedCount = readNumber(counts?.skipped);
     const inferredSkippedCount =
       totalCount === undefined || passedCount === undefined
@@ -469,6 +486,21 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const fallbackFailedScenarios = payload.scenarios.filter(
     (scenario) => isRecord(scenario) && scenario.status === "fail",
   );
+  const fallbackUnknownBlockingScenarios = payload.scenarios.filter(
+    (scenario) =>
+      !isRecord(scenario) ||
+      (scenario.status !== "pass" &&
+        scenario.status !== "fail" &&
+        scenario.status !== "skip" &&
+        scenario.status !== "skipped"),
+  );
+  if (fallbackUnknownBlockingScenarios.length > 0) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: `qa-suite-summary has ${fallbackUnknownBlockingScenarios.length} scenario row(s) with unsupported non-pass status`,
+    };
+  }
   return {
     passed: fallbackFailedScenarios.length === 0,
     details: `qa-suite-summary failed scenarios=${fallbackFailedScenarios.length}`,
@@ -955,7 +987,7 @@ function syntheticToolCall(overrides: Partial<RuntimeParityToolCall> = {}): Runt
 
 async function detectRuntimeDrift(params: {
   scenarioId: string;
-  pi: RuntimeParityCell;
+  openclaw: RuntimeParityCell;
   codex: RuntimeParityCell;
   expectedDrift: RuntimeParityDrift;
 }): Promise<boolean> {
@@ -963,7 +995,7 @@ async function detectRuntimeDrift(params: {
     scenarioId: params.scenarioId,
     runCell: async (runtime) => ({
       scenarioStatus: "pass",
-      cell: runtime === "pi" ? params.pi : params.codex,
+      cell: runtime === "openclaw" ? params.openclaw : params.codex,
     }),
   });
   return result.drift === params.expectedDrift;
@@ -1008,7 +1040,7 @@ function detectHarnessDrift(params: {
 }): boolean {
   const left = buildHarnessParityCell({
     variant: { id: "left", label: "Left" },
-    cell: syntheticRuntimeCell("pi", { systemPromptReport: params.leftReport }),
+    cell: syntheticRuntimeCell("openclaw", { systemPromptReport: params.leftReport }),
     tokenUsageSource: "mock-estimate",
   });
   const right = buildHarnessParityCell({
@@ -1026,7 +1058,7 @@ function detectHarnessDrift(params: {
 }
 
 function detectTokenEfficiencyRegression(): boolean {
-  const pi = syntheticRuntimeCell("pi", {
+  const openclaw = syntheticRuntimeCell("openclaw", {
     usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
   });
   const codex = syntheticRuntimeCell("codex", {
@@ -1034,14 +1066,14 @@ function detectTokenEfficiencyRegression(): boolean {
   });
   const runtimeParity: RuntimeParityResult = {
     scenarioId: "token-efficiency-regression",
-    cells: { pi, codex },
+    cells: { openclaw, codex },
     drift: "none",
   };
   const report = buildTokenEfficiencyReport({
     summary: {
       run: {
         providerMode: "live-frontier",
-        runtimePair: ["pi", "codex"],
+        runtimePair: ["openclaw", "codex"],
       },
       scenarios: [
         {
@@ -1127,13 +1159,13 @@ export async function buildQaConfidenceSelfTestSummary(
   });
   const runtimeToolCallDropDetected = await detectRuntimeDrift({
     scenarioId: "runtime-tool-call-drop",
-    pi: syntheticRuntimeCell("pi", { toolCalls: [syntheticToolCall()] }),
+    openclaw: syntheticRuntimeCell("openclaw", { toolCalls: [syntheticToolCall()] }),
     codex: syntheticRuntimeCell("codex", { toolCalls: [] }),
     expectedDrift: "tool-call-shape",
   });
   const toolResultMismatchDetected = await detectRuntimeDrift({
     scenarioId: "tool-result-mismatch",
-    pi: syntheticRuntimeCell("pi", { toolCalls: [syntheticToolCall()] }),
+    openclaw: syntheticRuntimeCell("openclaw", { toolCalls: [syntheticToolCall()] }),
     codex: syntheticRuntimeCell("codex", {
       toolCalls: [syntheticToolCall({ resultHash: "result-b" })],
     }),
@@ -1141,7 +1173,7 @@ export async function buildQaConfidenceSelfTestSummary(
   });
   const failureModeDriftDetected = await detectRuntimeDrift({
     scenarioId: "failure-mode-drift",
-    pi: syntheticRuntimeCell("pi"),
+    openclaw: syntheticRuntimeCell("openclaw"),
     codex: syntheticRuntimeCell("codex", { transportErrorClass: "synthetic-transport" }),
     expectedDrift: "failure-mode",
   });

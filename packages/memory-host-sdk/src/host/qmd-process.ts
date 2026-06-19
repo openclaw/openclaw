@@ -1,5 +1,7 @@
+// Memory Host SDK module implements qmd process behavior.
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
+import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 export type CliSpawnInvocation = {
@@ -7,6 +9,11 @@ export type CliSpawnInvocation = {
   argv: string[];
   shell?: boolean;
   windowsHide?: boolean;
+};
+
+type QmdChildProcess = {
+  pid?: number;
+  kill: (signal?: NodeJS.Signals) => boolean;
 };
 
 export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
@@ -90,22 +97,24 @@ export async function checkQmdBinaryAvailability(params: {
       shell: spawnInvocation.shell,
       windowsHide: spawnInvocation.windowsHide,
       stdio: "ignore",
+      detached: shouldUseQmdProcessGroup(),
     });
+    const timeoutMs = resolveSafeTimeoutDelayMs(params.timeoutMs ?? 2_000, { minMs: 0 });
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      signalQmdProcessTree(child, "SIGKILL");
       finish({
         available: false,
         reason: "binary",
-        error: `spawn ${params.command} timed out after ${params.timeoutMs ?? 2_000}ms`,
+        error: `spawn ${params.command} timed out after ${timeoutMs}ms`,
       });
-    }, params.timeoutMs ?? 2_000);
+    }, timeoutMs);
 
     child.once("error", (err) => {
       finish({ available: false, reason: "binary", error: formatQmdAvailabilityError(err) });
     });
     child.once("spawn", () => {
       didSpawn = true;
-      child.kill();
+      signalQmdProcessTree(child);
       finish({ available: true });
     });
     child.once("close", () => {
@@ -159,17 +168,20 @@ export async function runCliCommand(params: {
       cwd: params.cwd,
       shell: params.spawnInvocation.shell,
       windowsHide: params.spawnInvocation.windowsHide,
+      detached: shouldUseQmdProcessGroup(),
     });
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
     let stderrTruncated = false;
     const discardStdout = params.discardStdout === true;
-    const timer = params.timeoutMs
+    const timeoutMs =
+      params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
+    const timer = timeoutMs
       ? setTimeout(() => {
-          child.kill("SIGKILL");
-          reject(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
-        }, params.timeoutMs)
+          signalQmdProcessTree(child, "SIGKILL");
+          reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`));
+        }, timeoutMs)
       : null;
     child.stdout.on("data", (data) => {
       if (discardStdout) {
@@ -219,6 +231,30 @@ export async function runCliCommand(params: {
   });
 }
 
+function shouldUseQmdProcessGroup(): boolean {
+  return process.platform !== "win32";
+}
+
+function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): void {
+  if (shouldUseQmdProcessGroup() && typeof child.pid === "number") {
+    try {
+      if (signal === undefined) {
+        process.kill(-child.pid);
+      } else {
+        process.kill(-child.pid, signal);
+      }
+      return;
+    } catch {
+      // Fall back to the direct child if the process group already disappeared.
+    }
+  }
+  if (signal === undefined) {
+    child.kill();
+  } else {
+    child.kill(signal);
+  }
+}
+
 class CliCommandError extends Error {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -259,10 +295,11 @@ function appendOutputWithCap(
   maxChars: number,
 ): { text: string; truncated: boolean } {
   const appended = current + chunk;
-  if (appended.length <= maxChars) {
+  const chars = Array.from(appended);
+  if (chars.length <= maxChars) {
     return { text: appended, truncated: false };
   }
-  return { text: appended.slice(-maxChars), truncated: true };
+  return { text: chars.slice(-maxChars).join(""), truncated: true };
 }
 
 function formatQmdAvailabilityError(err: unknown): string {

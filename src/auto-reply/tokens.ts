@@ -1,7 +1,20 @@
+/** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
 import { escapeRegExp } from "../shared/regexp.js";
 
+/** Token that marks a heartbeat response as an acknowledgement with no user notification. */
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+/** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+
+const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
+const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
+
+export function isInternalFormattingArtifact(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return HARMONY_CHANNEL_MARKER_RE.test(text) || BOX_DRAWING_HR_ONLY_RE.test(text);
+}
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
@@ -29,6 +42,7 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+/** Returns true only for token-only silent replies. */
 export function isSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -72,9 +86,9 @@ function isSilentReplyEnvelopeText(
 }
 
 const taggedReasoningPrefixRe =
-  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
+  /^\s*<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
 const openReasoningPrefixRe =
-  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
+  /^\s*<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
 const plainReasoningPrefixRe = /^\s*(?:think(?:ing)?|thought|analysis|reasoning)\s*:?\s*\r?\n/i;
 
 function stripLeadingReasoningBlocks(text: string): string {
@@ -171,6 +185,7 @@ function isReasoningPrefixedSilentReplyText(
   );
 }
 
+/** Returns true for token-only, JSON-envelope, or reasoning-prefixed silent payload text. */
 export function isSilentReplyPayloadText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,

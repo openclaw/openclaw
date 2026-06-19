@@ -529,7 +529,7 @@ Notes:
 - `socketMode` is ignored in HTTP Request URL mode.
 - Base `channels.slack.socketMode` settings apply to all Slack accounts unless overridden. Per-account overrides use `channels.slack.accounts.<accountId>.socketMode`; because this is an object override, include every socket tuning field you want for that account.
 - Only `clientPingTimeout` has an OpenClaw default (`15000`). `serverPingTimeout` and `pingPongLoggingEnabled` are passed to the Slack SDK only when configured.
-- Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Consecutive recoverable start/start-wait failures stop after 12 attempts; after a successful connection, later recoverable disconnects start a fresh retry cycle. Non-recoverable Slack auth errors such as `invalid_auth`, revoked tokens, or missing scopes fail fast instead of retrying forever.
+- Socket Mode restart backoff starts around 2 seconds and caps around 30 seconds. Recoverable start, start-wait, and disconnect failures retry until the channel stops. Permanent account and credential errors such as invalid auth, revoked tokens, or missing scopes fail fast instead of retrying forever.
 
 ## Manifest and scope checklist
 
@@ -1120,6 +1120,8 @@ Hide raw command/exec text while keeping compact progress lines:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
+Slack native progress task cards are opt-in for progress mode. Set `channels.slack.streaming.progress.nativeTaskCards` to `true` with `channels.slack.streaming.mode="progress"` to send a Slack-native plan/task card while work is running, then update the same task card at completion. Without this flag, progress mode keeps the portable draft-preview behavior.
+
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
@@ -1136,6 +1138,24 @@ Use draft preview instead of Slack native text streaming:
       streaming: {
         mode: "partial",
         nativeTransport: false,
+      },
+    },
+  },
+}
+```
+
+Opt in to Slack native progress task cards:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          nativeTaskCards: true,
+          render: "rich",
+        },
       },
     },
   },
@@ -1389,9 +1409,13 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
-- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+- Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - global shortcuts: callback and actor metadata, routed to the actor's direct session
+  - message shortcuts: callback, actor, channel, thread, and selected-message context
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
+
+Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
 ## Configuration reference
 

@@ -1,3 +1,4 @@
+// Codex tests cover run attempt thread cleanup plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -82,8 +83,24 @@ function turnStartResult(turnId = "turn-1") {
   };
 }
 
+function getMockServerVersion() {
+  return "0.132.0";
+}
+
+function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
@@ -92,6 +109,7 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     resetAgentEventsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -116,6 +134,7 @@ describe("Codex app-server main thread cleanup", () => {
 
     const clientFactory: CodexAppServerClientFactory = async () => {
       return {
+        ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: (handler: typeof notify) => {
           notify = handler;
@@ -172,6 +191,7 @@ describe("Codex app-server main thread cleanup", () => {
 
     const clientFactory: CodexAppServerClientFactory = async () => {
       return {
+        ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,

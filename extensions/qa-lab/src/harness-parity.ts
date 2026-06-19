@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements harness parity behavior.
 import { createHash } from "node:crypto";
 import type {
   RuntimeId,
@@ -414,8 +415,8 @@ export function buildHarnessParityResult(params: {
   if (
     compareTranscriptStructure &&
     (leftTranscriptRecords !== rightTranscriptRecords ||
-      (!params.left.finalText && !!params.right.finalText) ||
-      (!!params.left.finalText && !params.right.finalText))
+      (!params.left.finalText && Boolean(params.right.finalText)) ||
+      (Boolean(params.left.finalText) && !params.right.finalText))
   ) {
     return {
       scenarioId: params.scenarioId,
@@ -450,42 +451,4 @@ export function buildHarnessParityResult(params: {
     promptDelta,
     tokenDeltaPercent,
   };
-}
-
-function formatPercent(value: number) {
-  const normalized = Math.abs(value) < 0.05 ? 0 : value;
-  const prefix = normalized > 0 ? "+" : "";
-  return `${prefix}${normalized.toFixed(1)}%`;
-}
-
-export function renderHarnessParityMarkdownReport(report: HarnessParityReport): string {
-  const lines = [
-    `# OpenClaw Harness Parity - ${report.left.label} vs ${report.right.label}`,
-    "",
-    `- Generated at: ${report.generatedAt}`,
-    `- Provider mode: ${report.providerMode}`,
-    `- Verdict: ${report.pass ? "pass" : "fail"}`,
-    "",
-    "| Scenario | Drift | First drift turn | Token delta | Prompt chars delta | Tool count delta | Details |",
-    "| --- | --- | ---: | ---: | ---: | ---: | --- |",
-  ];
-
-  for (const result of report.results) {
-    lines.push(
-      `| ${result.scenarioId} | ${result.drift} | ${result.firstDriftTurn ?? ""} | ${formatPercent(
-        result.tokenDeltaPercent,
-      )} | ${result.promptDelta.systemPromptChars} | ${result.promptDelta.toolCount} | ${
-        result.driftDetails ?? ""
-      } |`,
-    );
-  }
-
-  if (report.failures.length > 0) {
-    lines.push("", "## Gate Failures", "");
-    for (const failure of report.failures) {
-      lines.push(`- ${failure}`);
-    }
-  }
-
-  return `${lines.join("\n").trimEnd()}\n`;
 }

@@ -1,6 +1,8 @@
+// Covers model runtime policy precedence and private QA runtime overrides.
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 
 const ORIGINAL_BUILD_PRIVATE_QA = process.env.OPENCLAW_BUILD_PRIVATE_QA;
@@ -26,11 +28,12 @@ function restoreEnv(
   name: "OPENCLAW_BUILD_PRIVATE_QA" | "OPENCLAW_QA_FORCE_RUNTIME",
   value: string | undefined,
 ): void {
+  // Tests mutate private QA env gates; restore exact process state after each.
   if (value == null) {
-    delete process.env[name];
+    deleteTestEnvValue(name);
     return;
   }
-  process.env[name] = value;
+  setTestEnvValue(name, value);
 }
 
 function makeProviderRuntimeConfig(runtime: string): OpenClawConfig {
@@ -54,8 +57,8 @@ afterEach(() => {
 
 describe("resolveModelRuntimePolicy", () => {
   it("ignores the QA force-runtime override when the private QA gate is unset", () => {
-    delete process.env.OPENCLAW_BUILD_PRIVATE_QA;
-    process.env.OPENCLAW_QA_FORCE_RUNTIME = "pi";
+    deleteTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA");
+    setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
 
     expect(
       resolveModelRuntimePolicy({
@@ -70,8 +73,10 @@ describe("resolveModelRuntimePolicy", () => {
   });
 
   it("respects the QA force-runtime override when the private QA gate is set", () => {
-    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
-    process.env.OPENCLAW_QA_FORCE_RUNTIME = "pi";
+    // The force-runtime override is intentionally gated to private QA builds so
+    // normal users cannot accidentally change model runtime selection via env.
+    setTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
 
     expect(
       resolveModelRuntimePolicy({
@@ -80,14 +85,14 @@ describe("resolveModelRuntimePolicy", () => {
         modelId: "gpt-5.5",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
     });
   });
 
   it("ignores invalid QA force-runtime values even when the private QA gate is set", () => {
-    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
-    process.env.OPENCLAW_QA_FORCE_RUNTIME = "bogus";
+    setTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "bogus");
 
     expect(
       resolveModelRuntimePolicy({
@@ -106,7 +111,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -119,7 +124,7 @@ describe("resolveModelRuntimePolicy", () => {
         modelId: "qwen-local",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
       matchedProvider: "vllm",
     });
@@ -130,7 +135,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -142,18 +147,20 @@ describe("resolveModelRuntimePolicy", () => {
         provider: "vllm",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
       matchedProvider: "vllm",
     });
   });
 
   it("prefers exact agent model runtime policy entries over provider wildcards", () => {
+    // Exact configured model refs beat provider wildcards to keep intentional
+    // per-model runtime routing stable.
     const config = {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
             "vllm/qwen-local": { agentRuntime: { id: "codex" } },
           },
         },
@@ -178,7 +185,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -209,7 +216,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -231,7 +238,7 @@ describe("resolveModelRuntimePolicy", () => {
         modelId: "qwen-local",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
       matchedProvider: "vllm",
     });

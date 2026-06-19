@@ -1,3 +1,6 @@
+// Shared status scan overview used by compact status, status --json, and status --all.
+// It collects config, update, gateway, channel, and local agent state before specialized callers add details.
+
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -12,6 +15,8 @@ import {
 } from "./status.scan.bootstrap-shared.js";
 import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
+
+type StatusGatewayProbeTimeoutResolver = (cfg: OpenClawConfig) => number | undefined;
 
 const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
@@ -84,6 +89,7 @@ async function resolveStatusChannelsStatus(params: {
   useGatewayCallOverrides?: boolean;
 }) {
   if (!params.gatewayReachable) {
+    // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
     return null;
   }
   const { callGateway } = await loadGatewayCallModule();
@@ -129,6 +135,7 @@ export type StatusScanOverviewResult = {
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 };
 
+/** Collects the common status scan data shared by text, JSON, and status-all commands. */
 export async function collectStatusScanOverview(params: {
   commandName: string;
   opts: { timeoutMs?: number; all?: boolean };
@@ -144,6 +151,8 @@ export async function collectStatusScanOverview(params: {
   ) => boolean | Promise<boolean>;
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number | StatusGatewayProbeTimeoutResolver;
   includeChannelSetupRuntimeFallback?: boolean;
   channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
@@ -174,8 +183,8 @@ export async function collectStatusScanOverview(params: {
   } = await loadStatusScanCommandConfig({
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readBestEffortConfig: async () =>
-      (await loadConfigModule()).readBestEffortConfig({
+    readConfigSnapshot: async () =>
+      (await loadConfigModule()).readBestEffortConfigSnapshot({
         skipPluginValidation: params.skipConfigPluginValidation,
       }),
     resolveConfig: async (loadedConfig) =>
@@ -203,6 +212,10 @@ export async function collectStatusScanOverview(params: {
         }),
       );
   const osSummary = resolveOsSummary();
+  const gatewayProbeTimeoutMs =
+    typeof params.gatewayProbeTimeoutMs === "function"
+      ? params.gatewayProbeTimeoutMs(cfg)
+      : params.gatewayProbeTimeoutMs;
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>
   >({
@@ -213,6 +226,8 @@ export async function collectStatusScanOverview(params: {
     skipUpdateCheck: params.skipUpdateCheck,
     fetchGitUpdate: params.fetchGitUpdate,
     includeRegistryUpdate: params.includeRegistryUpdate,
+    includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
@@ -259,7 +274,7 @@ export async function collectStatusScanOverview(params: {
         if (params.labels?.queryingChannelStatus) {
           params.progress?.setLabel(params.labels.queryingChannelStatus);
         }
-        const channelsStatus = includeLiveChannelStatus
+        const channelsStatusLocal = includeLiveChannelStatus
           ? await resolveStatusChannelsStatus({
               cfg,
               gatewayReachable: gatewaySnapshot.gatewayReachable,
@@ -269,25 +284,33 @@ export async function collectStatusScanOverview(params: {
             })
           : null;
         params.progress?.tick();
+        // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
         const { collectChannelStatusIssues, buildChannelsTable } =
           await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
-        const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+        const channelIssuesLocal = channelsStatusLocal
+          ? collectChannelStatusIssues(channelsStatusLocal)
+          : [];
         if (params.labels?.summarizingChannels) {
           params.progress?.setLabel(params.labels.summarizingChannels);
         }
-        const channels = await buildChannelsTable(cfg, {
+        const channelsLocal = await buildChannelsTable(cfg, {
           showSecrets: params.showSecrets,
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
-          liveChannelStatus: channelsStatus,
+          liveChannelStatus: channelsStatusLocal,
           ...(params.channelCredentialResolutionSkipped === true
             ? { credentialResolutionSkipped: true }
             : {}),
         });
         params.progress?.tick();
-        return { channelsStatus, channelIssues, channels };
+        return {
+          channelsStatus: channelsStatusLocal,
+          channelIssues: channelIssuesLocal,
+          channels: channelsLocal,
+        };
       })()
     : {
+        // Some JSON/fast scans only need gateway/config fields; keep channel output structurally empty.
         channelsStatus: null,
         channelIssues: [],
         channels: { rows: [], details: [] },
@@ -313,6 +336,7 @@ export async function collectStatusScanOverview(params: {
   };
 }
 
+/** Resolves the summary object from overview data, preserving cold-start fast-path behavior. */
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
   includeChannelSummary?: boolean;

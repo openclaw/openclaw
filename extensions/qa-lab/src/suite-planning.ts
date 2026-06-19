@@ -1,14 +1,16 @@
+// Qa Lab plugin module implements suite planning behavior.
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
-const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
@@ -27,7 +29,7 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function scenarioMatchesLiveLane(params: {
+function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
@@ -61,7 +63,7 @@ function scenarioMatchesLiveLane(params: {
   return true;
 }
 
-function selectQaSuiteScenarios(params: {
+function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
@@ -78,15 +80,31 @@ function selectQaSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    return [...requestedScenarioIds].map((scenarioId) => scenarioById.get(scenarioId)!);
+    const selectedScenarios = [...requestedScenarioIds].map(
+      (scenarioId) => scenarioById.get(scenarioId)!,
+    );
+    const nonFlowScenarios = selectedScenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
+    );
+    if (nonFlowScenarios.length > 0) {
+      const scenarioList = nonFlowScenarios
+        .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
+        .join(", ");
+      throw new Error(
+        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+      );
+    }
+    return selectedScenarios;
   }
-  return params.scenarios.filter((scenario) =>
-    scenarioMatchesLiveLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
+  return params.scenarios.filter(
+    (scenario) =>
+      scenario.execution.kind === "flow" &&
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        claudeCliAuthMode: params.claudeCliAuthMode,
+      }),
   );
 }
 
@@ -106,34 +124,12 @@ function collectQaSuitePluginIds(
   ];
 }
 
-function isQaPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function applyQaMergePatch(base: unknown, patch: unknown): unknown {
-  if (!isQaPlainObject(patch)) {
-    return patch;
-  }
-  const result = isQaPlainObject(base) ? { ...base } : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (QA_MERGE_PATCH_BLOCKED_KEYS.has(key)) {
-      continue;
-    }
-    if (value === null) {
-      delete result[key];
-      continue;
-    }
-    result[key] = isQaPlainObject(value) ? applyQaMergePatch(result[key], value) : value;
-  }
-  return result;
-}
-
 function collectQaSuiteGatewayConfigPatch(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ): Record<string, unknown> | undefined {
   let merged: Record<string, unknown> | undefined;
   for (const scenario of scenarios) {
-    if (!isQaPlainObject(scenario.gatewayConfigPatch)) {
+    if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
     }
     merged = applyQaMergePatch(merged ?? {}, scenario.gatewayConfigPatch) as Record<
@@ -148,12 +144,21 @@ function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
   let forwardHostHome = false;
+  let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
+    if (scenario.gatewayRuntime?.preserveDebugArtifacts === true) {
+      preserveDebugArtifacts = true;
+    }
   }
-  return forwardHostHome ? { forwardHostHome: true } : undefined;
+  return forwardHostHome || preserveDebugArtifacts
+    ? {
+        ...(forwardHostHome ? { forwardHostHome: true } : {}),
+        ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
+      }
+    : undefined;
 }
 
 function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
@@ -163,7 +168,7 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
   return (
     params.scenarios.length > 1 &&
     (params.concurrency > 1 ||
-      params.scenarios.some((scenario) => isQaPlainObject(scenario.gatewayConfigPatch)))
+      params.scenarios.some((scenario) => isQaMergePatchObject(scenario.gatewayConfigPatch)))
   );
 }
 
@@ -176,11 +181,11 @@ function normalizeQaSuiteConcurrency(
   scenarioCount: number,
   defaultConcurrency = DEFAULT_QA_SUITE_CONCURRENCY,
 ) {
-  const envValue = Number(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
+  const envValue = parseStrictNonNegativeInteger(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
   const raw =
     typeof value === "number" && Number.isFinite(value)
       ? value
-      : Number.isFinite(envValue)
+      : envValue !== undefined
         ? envValue
         : defaultConcurrency;
   return Math.max(1, Math.min(Math.floor(raw), Math.max(1, scenarioCount)));
@@ -197,11 +202,11 @@ function resolveQaSuiteWorkerStartStaggerMs(
   if (raw === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 async function mapQaSuiteWithConcurrency<T, U>(
@@ -219,7 +224,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
   const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
-    opts?.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    opts?.sleepImpl ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
     const currentGate = nextStartGate;
     let releaseNextSlot: (() => void) | undefined;
@@ -282,7 +291,8 @@ export {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  scenarioMatchesQaProviderLane,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

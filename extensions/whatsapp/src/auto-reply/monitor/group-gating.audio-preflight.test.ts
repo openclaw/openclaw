@@ -1,31 +1,41 @@
+// Whatsapp tests cover group gating.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: vi.fn(async () => "mention"),
 }));
 
+import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./group-gating.js";
 
-function makeGroupAudioMsg(): WebInboundMsg {
-  return {
-    id: "msg-1",
-    from: "1203630@g.us",
-    to: "+15550000001",
-    body: "<media:audio>",
-    chatId: "1203630@g.us",
-    chatType: "group",
-    conversationId: "1203630@g.us",
-    mediaType: "audio/ogg; codecs=opus",
-    mediaPath: "/tmp/voice.ogg",
-    timestamp: 1700000000,
-    accountId: "default",
-    sender: { e164: "+15550000002", name: "Alice" },
-  } as WebInboundMsg;
+function makeGroupAudioMsg(): AdmittedWebInboundMessage {
+  return createTestWebAudioInboundMessage({
+    platform: {
+      chatJid: "1203630@g.us",
+      sender: { e164: "+15550000002", name: "Alice" },
+    },
+    admission: {
+      conversation: {
+        kind: "group",
+        id: "1203630@g.us",
+      },
+      sender: {
+        id: "+15550000002",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
+    wasMentioned: false,
+  });
 }
 
-function makeParams(msg: WebInboundMsg, groupHistories: Map<string, GroupHistoryEntry[]>) {
+function makeParams(
+  msg: AdmittedWebInboundMessage,
+  groupHistories: Map<string, GroupHistoryEntry[]>,
+) {
   return {
     cfg: {
       channels: {
@@ -40,7 +50,6 @@ function makeParams(msg: WebInboundMsg, groupHistories: Map<string, GroupHistory
       },
     } as never,
     msg,
-    conversationId: "1203630@g.us",
     groupHistoryKey: "whatsapp:group:1203630",
     agentId: "main",
     sessionKey: "agent:main:whatsapp:group:1203630",

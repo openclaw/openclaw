@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Slack plugin module implements channel actions behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
@@ -13,6 +14,16 @@ type SlackActionInvoke = (
 ) => Promise<AgentToolResult<unknown>>;
 
 let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
+
+const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
+  "deleteMessage",
+  "editMessage",
+  "pinMessage",
+  "react",
+  "sendMessage",
+  "unpinMessage",
+  "uploadFile",
+]);
 
 async function loadSlackActionRuntime() {
   slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
@@ -41,6 +52,8 @@ export function createSlackActions(
   return {
     describeMessageTool: describeSlackMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
+    isToolDeliveryAction: ({ args }) =>
+      typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
     prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({

@@ -1,7 +1,8 @@
+// Collects and verifies package dist inventory metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { readJsonIfExists, writeJson } from "./json-files.js";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
@@ -33,6 +34,9 @@ const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
   `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
 ]);
+// The build keeps source-shaped SDK declarations for local boundary projects,
+// but the npm package ships flat declarations and must not inventory the old tree.
+const OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX = "dist/plugin-sdk/src/";
 const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_PLUGIN_SDK_TEST_FILES = new Set([
   "dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
@@ -72,6 +76,7 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
+  /^dist\/plugin-sdk\/src(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
@@ -105,7 +110,9 @@ async function withPackageDistInventoryFsSlot<T>(
   task: () => Promise<T>,
 ): Promise<T> {
   while (context.activeFsOps >= context.fsConcurrency) {
-    await new Promise<void>((resolve) => context.waiters.push(resolve));
+    await new Promise<void>((resolve) => {
+      context.waiters.push(resolve);
+    });
   }
   context.activeFsOps += 1;
   try {
@@ -143,6 +150,7 @@ function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
   return pluginDependencyDir.toLowerCase() === "node_modules";
 }
 
+/** Detects transient plugin dependency install-stage directories inside packaged extension dist. */
 export function isLegacyPluginDependencyInstallStagePath(relativePath: string): boolean {
   const parts = splitRelativePath(relativePath);
   return (
@@ -275,10 +283,7 @@ function isPackageFilesExcludedDistPath(
   );
 }
 
-function isPackagedDistPath(
-  relativePath: string,
-  rules: PackageDistInventoryRules,
-): boolean {
+function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRules): boolean {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
@@ -306,6 +311,9 @@ function isPackagedDistPath(
   if (isOmittedPluginSdkTestPath(relativePath)) {
     return false;
   }
+  if (relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX)) {
+    return false;
+  }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
@@ -319,10 +327,7 @@ function isPackagedDistPath(
   return true;
 }
 
-function isOmittedDistSubtree(
-  relativePath: string,
-  rules: PackageDistInventoryRules,
-): boolean {
+function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
   return (
     isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
@@ -376,6 +381,7 @@ async function collectRelativeFiles(
   }
 }
 
+/** Collects package dist files that should be present after install/update publication. */
 export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
   const rules = await collectPackageDistInventoryRulesForRoot(packageRoot);
   const scanContext = createPackageDistInventoryScanContext();
@@ -387,6 +393,7 @@ export async function collectPackageDistInventory(packageRoot: string): Promise<
   );
 }
 
+/** Lists legacy plugin dependency staging directories that must not ship in package dist. */
 export async function collectLegacyPluginDependencyStagingDebrisPaths(
   packageRoot: string,
 ): Promise<string[]> {
@@ -462,6 +469,7 @@ export async function collectLegacyPluginDependencyStagingDebrisPaths(
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Fails when transient plugin dependency staging debris remains in package dist. */
 export async function assertNoLegacyPluginDependencyStagingDebris(
   packageRoot: string,
 ): Promise<void> {
@@ -474,6 +482,7 @@ export async function assertNoLegacyPluginDependencyStagingDebris(
   );
 }
 
+/** Writes the current sorted package dist inventory and returns the entries written. */
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
   await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
   const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
@@ -494,12 +503,14 @@ async function readPackageDistInventoryOptional(packageRoot: string): Promise<st
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
+/** Reads an existing package dist inventory, returning null when the inventory is absent. */
 export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {
   return await readPackageDistInventoryOptional(packageRoot);
 }
 
+/** Compares recorded and current package dist inventory entries and returns human-readable errors. */
 export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {
   const expectedFiles = await readPackageDistInventoryIfPresent(packageRoot);
   if (expectedFiles === null) {

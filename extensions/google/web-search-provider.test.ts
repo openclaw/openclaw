@@ -1,3 +1,4 @@
+// Google tests cover web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -133,6 +134,34 @@ describe("google web search provider", () => {
     expect(provider.getConfiguredCredentialValue?.(config)).toBe("AIza-plugin-test");
   });
 
+  it("keeps model-provider fallback config runtime-only when Gemini config was injected", () => {
+    const searchConfig = Object.defineProperty({ provider: "gemini" }, "gemini", {
+      value: { apiKey: "AIza-plugin-test" },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+
+    const merged = testing.withGoogleModelProviderFallbacks(searchConfig, {
+      models: {
+        providers: {
+          google: createGoogleModelProviderConfig({
+            apiKey: "AIza-provider-test",
+            baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+          }),
+        },
+      },
+    });
+
+    expect(merged?.gemini).toEqual({
+      apiKey: "AIza-plugin-test",
+      providerApiKey: "AIza-provider-test",
+      providerBaseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+    });
+    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "gemini")?.enumerable).toBe(false);
+  });
+
   it("defaults the Gemini web search model and trims explicit overrides", () => {
     expect(testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
     expect(testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");
@@ -164,6 +193,54 @@ describe("google web search provider", () => {
     expect(getGeminiFetchUrl(mockFetch)).toBe(
       "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
     );
+  });
+
+  it("accepts Gemini success JSON with empty grounding metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: { parts: [{ text: "Today's date is Sunday, June 7, 2026." }] },
+                    groundingMetadata: {},
+                  },
+                ],
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    const result = await tool?.execute({ query: "current date today" });
+
+    expect(result).toMatchObject({
+      citations: [],
+      model: "gemini-2.5-flash",
+      provider: "gemini",
+    });
+    expect(String(result?.content)).toContain("Today's date is Sunday, June 7, 2026.");
   });
 
   it("reports malformed Gemini API JSON with a stable provider error", async () => {

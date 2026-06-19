@@ -1,13 +1,16 @@
+// Msteams plugin module implements graph behavior.
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
-
-const GRAPH_BETA = "https://graph.microsoft.com/beta";
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
+
+const GRAPH_BETA = "https://graph.microsoft.com/beta";
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type GraphUser = {
   id?: string;
@@ -27,6 +30,50 @@ type GraphChannel = {
 };
 
 export type GraphResponse<T> = { value?: T[] };
+
+function responseWithRelease(response: Response, release: () => Promise<void>): Response {
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await release();
+  };
+
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
+    void releaseOnce();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          await releaseOnce();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
+        await releaseOnce();
+        throw error;
+      }
+    },
+    async cancel(reason) {
+      void reader.cancel(reason).catch(() => undefined);
+      await releaseOnce();
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
@@ -63,21 +110,20 @@ async function requestGraph(params: {
     },
     auditContext: "msteams.graph",
   });
+  let releaseInFinally = true;
   try {
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `${params.errorPrefix ?? "Graph"} ${params.path} failed (${response.status}): ${text || "unknown error"}`,
+      throw await createMSTeamsHttpError(
+        response,
+        `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
       );
     }
-    const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: new Headers(response.headers),
-    });
+    releaseInFinally = false;
+    return responseWithRelease(response, release);
   } finally {
-    await release();
+    if (releaseInFinally) {
+      await release();
+    }
   }
 }
 
@@ -131,10 +177,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   });
   try {
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `Graph ${params.url} failed (${response.status}): ${text || "unknown error"}`,
-      );
+      throw await createMSTeamsHttpError(response, `Graph ${params.url} failed`);
     }
     return await readProviderJsonResponse<T>(response, `Graph ${params.url} failed`);
   } finally {
@@ -214,6 +257,11 @@ export async function resolveGraphToken(
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
+  if (msteamsCfg?.cloud === "China") {
+    throw new Error(
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China until Graph requests are routed through the Azure China Graph endpoint.",
+    );
+  }
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
@@ -228,7 +276,7 @@ export async function resolveGraphToken(
     // Fall through to app-only token
   }
 
-  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));
   const tokenProvider = createMSTeamsTokenProvider(app);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(graphTokenValue);

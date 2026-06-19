@@ -17,7 +17,7 @@ the standard reply-audio pipeline.
 | Property      | Value                                                           |
 | ------------- | --------------------------------------------------------------- |
 | Provider id   | `inworld`                                                       |
-| Plugin        | bundled, `enabledByDefault: true`                               |
+| Plugin        | official external package                                       |
 | Contract      | `speechProviders` (TTS only)                                    |
 | Auth env var  | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)     |
 | Base URL      | `https://api.inworld.ai`                                        |
@@ -26,6 +26,15 @@ the standard reply-audio pipeline.
 | Output        | MP3 (default), OGG_OPUS (voice notes), PCM 22050 Hz (telephony) |
 | Website       | [inworld.ai](https://inworld.ai)                                |
 | Docs          | [docs.inworld.ai/tts/tts](https://docs.inworld.ai/tts/tts)      |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/inworld-speech
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -50,7 +59,7 @@ the standard reply-audio pipeline.
           provider: "inworld",
           providers: {
             inworld: {
-              voiceId: "Sarah",
+              speakerVoiceId: "Sarah",
               modelId: "inworld-tts-1.5-max",
             },
           },
@@ -68,13 +77,13 @@ the standard reply-audio pipeline.
 
 ## Configuration options
 
-| Option        | Path                                         | Description                                                       |
-| ------------- | -------------------------------------------- | ----------------------------------------------------------------- |
-| `apiKey`      | `messages.tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.     |
-| `baseUrl`     | `messages.tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`). |
-| `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`).                               |
-| `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-1.5-max`).                     |
-| `temperature` | `messages.tts.providers.inworld.temperature` | Sampling temperature `0..2` (optional).                           |
+| Option           | Path                                            | Description                                                       |
+| ---------------- | ----------------------------------------------- | ----------------------------------------------------------------- |
+| `apiKey`         | `messages.tts.providers.inworld.apiKey`         | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.     |
+| `baseUrl`        | `messages.tts.providers.inworld.baseUrl`        | Override Inworld API base URL (default `https://api.inworld.ai`). |
+| `speakerVoiceId` | `messages.tts.providers.inworld.speakerVoiceId` | Voice identifier (default `Sarah`).                               |
+| `modelId`        | `messages.tts.providers.inworld.modelId`        | TTS model id (default `inworld-tts-1.5-max`).                     |
+| `temperature`    | `messages.tts.providers.inworld.temperature`    | Sampling temperature `0..2` (optional).                           |
 
 ## Notes
 
@@ -112,7 +121,7 @@ the standard reply-audio pipeline.
     Full config reference including `messages.tts` settings.
   </Card>
   <Card title="Providers" href="/providers" icon="grid">
-    All bundled OpenClaw providers.
+    All supported OpenClaw providers.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     Common issues and debugging steps.

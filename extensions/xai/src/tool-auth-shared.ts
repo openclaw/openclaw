@@ -1,3 +1,4 @@
+// Xai plugin module implements tool auth shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -154,32 +155,6 @@ export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | 
     };
   }
   return readLegacyGrokFallbackAuth(cfg);
-}
-
-export function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  const plugin = readPluginXaiWebSearchApiKeyResult(cfg);
-  if (plugin.status === "available") {
-    return plugin.value;
-  }
-  if (plugin.status === "blocked") {
-    return undefined;
-  }
-  const legacy = readLegacyGrokApiKeyResult(cfg);
-  return legacy.status === "available" ? legacy.value : undefined;
-}
-
-export function resolveXaiToolApiKey(params: {
-  runtimeConfig?: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
-}): string | undefined {
-  const configured = resolveConfiguredXaiToolApiKeyResult(params);
-  if (configured.status === "available") {
-    return configured.value;
-  }
-  if (configured.status === "blocked") {
-    return undefined;
-  }
-  return readProviderEnvValue([XAI_API_KEY_ENV_VAR]);
 }
 
 export async function resolveXaiToolApiKeyWithAuth(params: {

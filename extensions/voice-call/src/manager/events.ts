@@ -1,3 +1,4 @@
+// Voice Call plugin module implements events behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
@@ -9,7 +10,11 @@ import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
+import {
+  ensureMaxDurationTimerForLiveCall,
+  resolveTranscriptWaiter,
+  startMaxDurationTimer,
+} from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -177,7 +182,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           providerCallId: pid,
           reason: "hangup-bot",
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.rejectedProviderCallIds.delete(pid);
           const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
@@ -244,7 +249,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
                 }
               : {}),
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             const message = formatErrorMessage(err);
             console.warn(
               `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
@@ -276,6 +281,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
 
     case "call.speaking":
+      ensureMaxDurationTimerForLiveCall({
+        ctx,
+        call,
+        liveAt: event.timestamp,
+        onTimeout: async (callId) => {
+          await endCall(ctx, callId, { reason: "timeout" });
+        },
+      });
       transitionState(call, "speaking");
       break;
 
@@ -296,6 +309,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         }
         addTranscriptEntry(call, "user", event.transcript);
       }
+      ensureMaxDurationTimerForLiveCall({
+        ctx,
+        call,
+        liveAt: event.timestamp,
+        onTimeout: async (callId) => {
+          await endCall(ctx, callId, { reason: "timeout" });
+        },
+      });
       transitionState(call, "listening");
       break;
 

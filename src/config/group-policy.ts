@@ -1,10 +1,11 @@
-import type { ChannelId } from "../channels/plugins/channel-id.types.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { normalizeAccountId } from "../routing/session-key.js";
+// Normalizes group-policy config for channel and runtime decisions.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import {

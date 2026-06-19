@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare thread context behavior.
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
@@ -21,6 +22,7 @@ import {
   resolveSlackThreadHistoryFilterPolicy,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackMediaModule = typeof import("../media.js");
 let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
@@ -121,9 +123,15 @@ export async function resolveSlackThreadContextData(params: {
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
-  let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: SlackMediaResult[] | null = null;
+  const threadSessionPreviousTimestamp =
+    params.isThreadReply && params.threadTs
+      ? readSessionUpdatedAt({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
 
   if (!params.isThreadReply || !params.threadTs) {
     return {
@@ -187,10 +195,6 @@ export async function resolveSlackThreadContextData(params: {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
 
-  threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-  });
   const isNewThreadSession = !threadSessionPreviousTimestamp;
   const includeBotStarterAsRootContext = shouldIncludeBotThreadStarterContext({
     starterIsCurrentBot,
@@ -310,7 +314,7 @@ export async function resolveSlackThreadContextData(params: {
           formatInboundEnvelope({
             channel: "Slack",
             from: `${msgSenderName} (${role})`,
-            timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
+            timestamp: resolveSlackTimestampMs(historyMsg.ts),
             body: msgWithId,
             chatType: "channel",
             envelope: params.envelopeOptions,

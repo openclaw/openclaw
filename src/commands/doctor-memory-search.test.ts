@@ -24,7 +24,7 @@ const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -135,6 +135,7 @@ function resetMemoryRecallMocks() {
   repairShortTermPromotionArtifacts.mockResolvedValue({
     changed: false,
     removedInvalidEntries: 0,
+    removedOverflowEntries: 0,
     rewroteStore: false,
     removedStaleLock: false,
   });
@@ -174,10 +175,11 @@ describe("noteMemorySearchHealth", () => {
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
-    resolveActiveMemoryBackendConfig.mockImplementation(({ cfg }: { cfg: OpenClawConfig }) =>
-      cfg.memory?.backend === "qmd"
-        ? { backend: "qmd", qmd: cfg.memory.qmd ?? {} }
-        : { backend: "builtin" },
+    resolveActiveMemoryBackendConfig.mockImplementation(
+      ({ cfg: cfgLocal }: { cfg: OpenClawConfig }) =>
+        cfgLocal.memory?.backend === "qmd"
+          ? { backend: "qmd", qmd: cfgLocal.memory.qmd ?? {} }
+          : { backend: "builtin" },
     );
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {
@@ -190,7 +192,7 @@ describe("noteMemorySearchHealth", () => {
     resetMemoryRecallMocks();
   });
 
-  it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
+  it("warns when local provider is set but readiness was not confirmed", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: {},
@@ -199,7 +201,10 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg, {});
 
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain('Memory search provider is set to "local"');
+    expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
@@ -215,7 +220,7 @@ describe("noteMemorySearchHealth", () => {
 
     expect(note).toHaveBeenCalledTimes(1);
     const message = firstNoteMessage();
-    expect(message).toContain("gateway reports local embeddings are not ready");
+    expect(message).toContain("local embeddings are not confirmed ready");
     expect(message).toContain("node-llama-cpp not installed");
   });
 
@@ -233,7 +238,7 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("does not treat an inconclusive gateway timeout as local embeddings not ready", async () => {
+  it("warns when local provider readiness probe is inconclusive", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: {},
@@ -248,10 +253,13 @@ describe("noteMemorySearchHealth", () => {
       },
     });
 
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain("local embeddings are not confirmed ready");
+    expect(message).toContain("gateway timeout after 8000ms");
   });
 
-  it("does not warn when local provider has an explicit hf: modelPath", async () => {
+  it("warns when local provider has an explicit hf: modelPath but readiness was not confirmed", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
@@ -260,7 +268,8 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg, {});
 
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("a local model path is configured");
   });
 
   it("does not emit provider guidance when no memory runtime is active", async () => {
@@ -1041,6 +1050,7 @@ describe("memory recall doctor integration", () => {
     repairShortTermPromotionArtifacts.mockResolvedValueOnce({
       changed: true,
       removedInvalidEntries: 1,
+      removedOverflowEntries: 0,
       rewroteStore: true,
       removedStaleLock: true,
     });

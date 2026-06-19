@@ -1,3 +1,4 @@
+// Program helper tests cover shared command registration and help helpers.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,12 +21,13 @@ describe("program helpers", () => {
     { value: null, expected: undefined },
     { value: "", expected: undefined },
     { value: 5, expected: 5 },
-    { value: 5.9, expected: 5 },
+    { value: 5.9, expected: undefined },
     { value: 0, expected: undefined },
     { value: -1, expected: undefined },
     { value: Number.NaN, expected: undefined },
     { value: "10", expected: 10 },
-    { value: "10ms", expected: 10 },
+    { value: "10ms", expected: undefined },
+    { value: "1.5", expected: undefined },
     { value: "0", expected: undefined },
     { value: "nope", expected: undefined },
     { value: true, expected: undefined },

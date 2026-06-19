@@ -1,6 +1,14 @@
+/**
+ * Browser CLI form fill, wait, and evaluate commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  parseBrowserNonNegativeIntegerOption,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 import {
   callBrowserAct,
@@ -26,6 +34,7 @@ function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undef
   }
 }
 
+/** Registers Browser fill, wait, and evaluate commands. */
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -35,7 +44,7 @@ export function registerBrowserFormWaitEvalCommands(
     .description("Fill a form with JSON field descriptors")
     .option("--fields <json>", "JSON array of field objects")
     .option("--fields-file <path>", "Read JSON array from a file")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -63,7 +72,9 @@ export function registerBrowserFormWaitEvalCommands(
     .command("wait")
     .description("Wait for time, selector, URL, load state, or JS conditions")
     .argument("[selector]", "CSS selector to wait for (visible)")
-    .option("--time <ms>", "Wait for N milliseconds", (v: string) => Number(v))
+    .option("--time <ms>", "Wait for N milliseconds", (v: string) =>
+      parseBrowserNonNegativeIntegerOption(v, "--time"),
+    )
     .option("--text <value>", "Wait for text to appear")
     .option("--text-gone <value>", "Wait for text to disappear")
     .option("--url <pattern>", "Wait for URL (supports globs like **/dash)")
@@ -72,9 +83,9 @@ export function registerBrowserFormWaitEvalCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for each condition (default: 20000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (selector: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -116,15 +127,18 @@ export function registerBrowserFormWaitEvalCommands(
 
   browser
     .command("evaluate")
-    .description("Evaluate a function against the page or a ref")
-    .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
+    .description("Evaluate JavaScript against the page or a ref")
+    .option(
+      "--fn <code>",
+      "Function source, expression, or statement body, e.g. const text = el.textContent; return text;",
+    )
     .option("--ref <id>", "Ref from snapshot")
     .option(
       "--timeout-ms <ms>",
       "How long to allow the evaluate function to run (default: 20000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       if (!opts.fn) {

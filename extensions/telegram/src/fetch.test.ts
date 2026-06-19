@@ -1,7 +1,9 @@
+// Telegram tests cover fetch plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
@@ -281,6 +283,11 @@ function expectStickyAutoSelectDispatcher(
   expect(options?.autoSelectFamilyAttemptTimeout).toBe(300);
 }
 
+function expectTelegramKeepAliveOptions(options: Record<string, unknown> | undefined): void {
+  expect(options?.keepAlive).toBe(true);
+  expect(options?.keepAliveInitialDelay).toBe(30_000);
+}
+
 function expectHttp1OnlyDispatcher(
   dispatcher:
     | {
@@ -424,6 +431,7 @@ describe("resolveTelegramFetch", () => {
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(true);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
@@ -460,8 +468,10 @@ describe("resolveTelegramFetch", () => {
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.proxyTls);
   });
 
   it("adds managed proxy CA trust to Telegram env proxy dispatchers", async () => {
@@ -668,6 +678,38 @@ describe("resolveTelegramFetch", () => {
     expect(pinnedPolicy?.connect?.family).toBe(4);
     expect(pinnedPolicy?.connect?.autoSelectFamily).toBe(false);
     expect(typeof pinnedPolicy?.connect?.lookup).toBe("function");
+  });
+
+  it("skips sticky IPv4 fallback when user explicitly configures network settings", async () => {
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "verbatim",
+      },
+    });
+
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    // Only the default dispatcher — no IPv4 fallback or pinned IP attempts
+    expect(transport.dispatcherAttempts).toHaveLength(1);
+    const [defaultAttempt] = transport.dispatcherAttempts as Array<{
+      dispatcherPolicy?: DirectTelegramDispatcherPolicy;
+    }>;
+    expect(defaultAttempt.dispatcherPolicy?.mode).toBe("direct");
+    expect(defaultAttempt.dispatcherPolicy?.connect?.autoSelectFamily).toBe(true);
+  });
+
+  it("skips sticky IPv4 fallback when the DNS result order env override is verbatim", async () => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "verbatim");
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    const transport = resolveTelegramTransport();
+
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    expect(transport.dispatcherAttempts).toHaveLength(1);
   });
 
   it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
@@ -1038,6 +1080,56 @@ describe("resolveTelegramFetch", () => {
       "telegram transport attempt marked temporarily unhealthy",
     );
     expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
+  });
+
+  it("does not treat fresh transport attempts as unhealthy when the process clock is invalid", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+
+      const resolved = resolveTelegramFetchOrThrow(undefined, {
+        network: {
+          autoSelectFamily: true,
+        },
+      });
+
+      await resolved("https://api.telegram.org/botx/getMe");
+
+      expect(undiciFetch).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(loggerWarn, "temporarily unhealthy");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("does not cool down transport attempts when the expiry exceeds the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+      }
+
+      const resolved = resolveTelegramFetchOrThrow(undefined, {
+        network: {
+          autoSelectFamily: true,
+          dnsResultOrder: "ipv4first",
+        },
+      });
+
+      await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+        "fetch failed",
+      );
+      for (let i = 0; i < 5; i += 1) {
+        await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+          "fetch failed",
+        );
+      }
+
+      expect(undiciFetch).toHaveBeenCalledTimes(8);
+      expectNoLoggerMessageContaining(loggerWarn, "temporarily unhealthy");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

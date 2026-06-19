@@ -1,19 +1,54 @@
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join, win32 } from "node:path";
-import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+// Parallels Smoke Model tests cover parallels smoke model script behavior.
+import { EventEmitter } from "node:events";
 import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { basename, delimiter, join, win32 } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  extractLastOpenClawVersionFromLog,
   modelProviderConfigBatchJson,
+  readPositiveIntEnv,
+  resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
+  resolveMacosVmName,
   resolveSnapshot,
+  ensureVmRunning,
+  shouldSkipSnapshotRestore,
   resolveUbuntuVmName,
   resolveWindowsProviderAuth,
   run,
+  runStreaming,
   shellQuote,
+  SKIP_SNAPSHOT_RESTORE_ENV,
+  validateSnapshotRestoreMode,
+  withProgressOnStderr,
 } from "../../scripts/e2e/parallels/common.ts";
+import { LinuxGuest, MacosGuest } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
+import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
+import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/linux-smoke.ts";
+import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/macos-smoke.ts";
+import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
+import {
+  posixCodexPlatformPackageRepairFunction,
+  windowsCodexPlatformPackageRepairFunction,
+} from "../../scripts/e2e/parallels/plugin-isolation.ts";
+import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
+import { withEnv } from "../../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
@@ -41,6 +76,7 @@ const TS_PATHS = {
   powershell: "scripts/e2e/parallels/powershell.ts",
   providerAuth: "scripts/e2e/parallels/provider-auth.ts",
   snapshots: "scripts/e2e/parallels/snapshots.ts",
+  smokeCommon: "scripts/e2e/parallels/smoke-common.ts",
   windows: "scripts/e2e/parallels/windows-smoke.ts",
   windowsGit: "scripts/e2e/parallels/windows-git.ts",
 };
@@ -74,40 +110,206 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
 
-function withEnv<T>(env: Record<string, string>, callback: () => T): T {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
+class FakeHostServerChild extends EventEmitter {
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  readonly signals: string[] = [];
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.signals.push(String(signal));
+    return true;
   }
-  for (const [key, value] of Object.entries(env)) {
-    process.env[key] = value;
+
+  exit(): void {
+    this.exitCode = 0;
+    this.emit("exit", 0, null);
   }
-  try {
-    return callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+
+  exitWithSignal(signal: NodeJS.Signals): void {
+    this.signalCode = signal;
+    this.emit("exit", null, signal);
   }
 }
 
+class ExhaustedCleanupPhaseRunner {
+  output = "";
+  remainingTimeoutCalls = 0;
+
+  append(text: string): void {
+    this.output += text;
+  }
+
+  remainingTimeoutMs(fallbackMs?: number): number {
+    this.remainingTimeoutCalls += 1;
+    if (this.remainingTimeoutCalls > 2) {
+      throw new Error("phase deadline exceeded before starting guest command");
+    }
+    return fallbackMs ?? 30_000;
+  }
+}
+
+async function unusedLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  if (!address || typeof address === "string") {
+    throw new Error("Expected TCP server address.");
+  }
+  return address.port;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error("condition was not met before timeout");
+}
+
 describe("Parallels smoke model selection", () => {
+  let invalidProviderResult: ReturnType<typeof spawnNodeEvalSync>;
+  let missingProviderKeyResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidModelTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidMacosHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsHostPortRangeResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+
+  it("extracts the last OpenClaw version from a bounded log tail", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-log-tail-"));
+    const logPath = join(tempDir, "phase.log");
+    try {
+      writeFileSync(logPath, ["OpenClaw 0.0.1", "x".repeat(4096), "OpenClaw 2026.6.7"].join("\n"));
+
+      await expect(extractLastOpenClawVersionFromLog(logPath, undefined, 128)).resolves.toBe(
+        "2026.6.7",
+      );
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  beforeAll(() => {
+    invalidProviderResult = spawnNodeEvalSync(
+      `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    missingProviderKeyResult = spawnNodeEvalSync(
+      `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
+      {
+        env: { ...process.env, PARALLELS_TEST_MISSING_KEY: "" },
+        imports: ["tsx"],
+      },
+    );
+    invalidModelTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S = "1800s"; const { resolveParallelsModelTimeoutSeconds } = await import("./${TS_PATHS.common}"); resolveParallelsModelTimeoutSeconds("macos");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.linux}", "--host-port", "1e4"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "0x4800"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidMacosHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "65536"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.linux}", "--host-port", "65536"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsHostPortRangeResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.windows}", "--host-port", "65536"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidLinuxAgentTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S = "1e3"; process.argv = ["node", "${TS_PATHS.linux}"]; await import("./${TS_PATHS.linux}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsAgentTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S = "2700s"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidWindowsUpdateTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S = "12.5"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+  });
+
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
     for (const [platform, wrapperPath] of Object.entries(WRAPPERS)) {
       const wrapper = readFileSync(wrapperPath, "utf8");
+      const scriptPath =
+        platform === "npmUpdate"
+          ? TS_PATHS.npmUpdate
+          : TS_PATHS[platform as "linux" | "macos" | "windows"];
 
-      expect(wrapper, wrapperPath).toContain('exec pnpm --dir "$ROOT_DIR" exec tsx');
-      if (platform === "npmUpdate") {
-        expect(wrapper, wrapperPath).toContain(TS_PATHS.npmUpdate);
-      } else {
-        expect(wrapper, wrapperPath).toContain(TS_PATHS[platform as "linux" | "macos" | "windows"]);
-      }
-      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(5);
+      expect(wrapper, wrapperPath).toContain('cd "$ROOT_DIR"');
+      expect(wrapper, wrapperPath).toContain(`exec node --import tsx ${scriptPath}`);
+      expect(wrapper, wrapperPath).not.toContain("pnpm exec tsx");
+      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(6);
     }
+  });
+
+  it("accepts leading package-manager separators and still honors later terminators", () => {
+    expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
+    expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
+    expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    expect(parseMacosSmokeArgs([]).vmNameExplicit).toBe(false);
+    expect(parseMacosSmokeArgs(["--vm", "macOS"]).vmNameExplicit).toBe(true);
+    expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec).toBe(
+      "openclaw@2026.5.1",
+    );
+    expect(
+      parseNpmUpdateSmokeArgs([
+        "--package-spec",
+        "openclaw@2026.5.1",
+        "--",
+        "--package-spec",
+        "openclaw@latest",
+      ]).packageSpec,
+    ).toBe("openclaw@2026.5.1");
+    expect(parseNpmUpdateSmokeArgs(["--macos-vm", "macOS"]).macosVm).toBe("macOS");
+    expect(parseWindowsSmokeArgs(["--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
+      true,
+    );
+    expect(
+      parseWindowsSmokeArgs(["--mode", "fresh", "--", "--upgrade-from-packed-main"])
+        .upgradeFromPackedMain,
+    ).toBe(false);
   });
 
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
@@ -129,6 +331,20 @@ describe("Parallels smoke model selection", () => {
     }
   });
 
+  it("repairs only the exact missing Codex platform package failure with a fresh npm cache", () => {
+    const posixRepair = posixCodexPlatformPackageRepairFunction();
+    const windowsRepair = windowsCodexPlatformPackageRepairFunction();
+
+    for (const repair of [posixRepair, windowsRepair]) {
+      expect(repair).toContain("Missing optional dependency @openai/codex-");
+      expect(repair).toContain("NPM_CONFIG_CACHE");
+      expect(repair).toContain("--ignore-scripts");
+      expect(repair).toContain("codex-platform-repair: managed npm install completed");
+    }
+    expect(posixRepair).toContain("repair_missing_codex_platform_package");
+    expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
+  });
+
   it("writes full model ids as config map keys in provider batches", () => {
     const batch = JSON.parse(modelProviderConfigBatchJson("openai/gpt-5.5", "windows")) as Array<{
       path: string;
@@ -147,6 +363,7 @@ describe("Parallels smoke model selection", () => {
     const packageArtifact = readFileSync(TS_PATHS.packageArtifact, "utf8");
     const parallelsVm = readFileSync(TS_PATHS.parallelsVm, "utf8");
     const snapshots = readFileSync(TS_PATHS.snapshots, "utf8");
+    const smokeCommon = readFileSync(TS_PATHS.smokeCommon, "utf8");
 
     expect(common).toContain('export * from "./host-command.ts"');
     expect(common).toContain('export * from "./lane-runner.ts"');
@@ -159,20 +376,164 @@ describe("Parallels smoke model selection", () => {
     expect(packageArtifact).toContain("Wait for Parallels package lock");
     expect(packageArtifact).toContain("export async function packageVersionFromTgz");
     expect(packageArtifact).toContain("export async function packOpenClaw");
+    expect(packageArtifact).toContain("function resolveNpmPackTarballFilename");
+    expect(packageArtifact).toContain("filename !== path.basename(filename)");
+    expect(packageArtifact).toContain("filename !== path.win32.basename(filename)");
+    expect(packageArtifact).toContain("npm pack did not report a safe tarball filename");
+    expect(packageArtifact).not.toContain("path.basename(packed)");
     expect(parallelsVm).toContain("export function resolveUbuntuVmName");
+    expect(parallelsVm).toContain("export function resolveMacosVmName");
     expect(parallelsVm).toContain("export function waitForVmStatus");
     expect(hostServer).toContain("export async function startHostServer");
     expect(hostServer).toContain("http.server");
     expect(snapshots).toContain("export function resolveSnapshot");
+    expect(smokeCommon).toContain("runSmokeLane");
+    expect(smokeCommon).toContain("abstract class SmokeRunController");
 
     for (const scriptPath of OS_TS_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain("runSmokeLane");
+      expect(script, scriptPath).toContain(
+        scriptPath === TS_PATHS.macos ? "runSmokeLane" : "SmokeRunController",
+      );
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
+
+  it("bounds host artifact server startup stderr", () => {
+    const retained = hostServerTesting.appendBoundedOutput(
+      "a".repeat(10),
+      Buffer.from("b".repeat(10)),
+      12,
+    );
+    expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it("keeps JSON-mode progress off stdout", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await withProgressOnStderr(async () => {
+        const { say } = await import("../../scripts/e2e/parallels/common.ts");
+        say("progress");
+        process.stdout.write('{"ok":true}\n');
+      });
+
+      expect(stdoutWrite).toHaveBeenCalledTimes(1);
+      expect(stdoutWrite).toHaveBeenCalledWith('{"ok":true}\n');
+      expect(JSON.parse(String(stdoutWrite.mock.calls[0]?.[0]))).toEqual({ ok: true });
+      expect(stderrWrite).toHaveBeenCalledWith("==> progress\n");
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+  });
+
+  it("waits for host artifact server exit after SIGKILL before stop resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeHostServerChild();
+      const stop = hostServerTesting.stopHostServerChild(child as never, 100, 100);
+      expect(child.signals).toEqual(["SIGTERM"]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
+
+      let resolved = false;
+      void stop.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      child.exit();
+      await expect(stop).resolves.toBe(true);
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats signaled host artifact server children as already exited", async () => {
+    const child = new FakeHostServerChild();
+    child.exitWithSignal("SIGTERM");
+
+    await expect(hostServerTesting.stopHostServerChild(child as never, 100, 100)).resolves.toBe(
+      true,
+    );
+    expect(child.signals).toEqual([]);
+  });
+
+  it("uses a temporary npmrc file and cleans it after resolving the latest package version", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-parallels-version-"));
+    let userConfigPath = "";
+    try {
+      const version = resolveLatestVersion("", {
+        createTempDir: (prefix) => {
+          expect(prefix).toBe(join(tmpdir(), "openclaw-npm-"));
+          return mkdtempSync(join(tempRoot, "npm-"));
+        },
+        runCommand: (command, args, options) => {
+          userConfigPath = args.at(-1) ?? "";
+          expect(command).toBe("npm");
+          expect(args).toEqual(["view", "openclaw", "version", "--userconfig", userConfigPath]);
+          expect(options).toEqual({ quiet: true });
+          expect(statSync(userConfigPath).isFile()).toBe(true);
+          return { status: 0, stderr: "", stdout: "2026.6.1\n" };
+        },
+      });
+
+      expect(version).toBe("2026.6.1");
+      expect(basename(userConfigPath)).toBe("npmrc");
+      expect(existsSync(userConfigPath)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports only the bounded host artifact server stderr tail",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-server-"));
+      const fakePython = join(tempDir, "python3");
+      writeFileSync(
+        fakePython,
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf 'BEGIN_MARKER\\n' >&2
+head -c 50000 </dev/zero | tr '\\0' x >&2
+printf '\\nTAIL_MARKER\\n' >&2
+head -c 30000 </dev/zero | tr '\\0' x >&2
+exit 42
+`,
+      );
+      chmodSync(fakePython, 0o755);
+
+      try {
+        const port = await unusedLoopbackPort();
+        const result = spawnNodeEvalSync(
+          `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, artifactPath: "artifact.tgz", label: "artifact" });`,
+          {
+            env: {
+              ...process.env,
+              PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}`,
+            },
+            imports: ["tsx"],
+            maxBuffer: 1024 * 1024,
+          },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("host artifact server exited early");
+        expect(result.stderr).toContain("TAIL_MARKER");
+        expect(result.stderr).not.toContain("BEGIN_MARKER");
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThan(90 * 1024);
+      } finally {
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("quotes shell args and resolves fuzzy snapshot hints through the shared TypeScript helper", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-helper-"));
@@ -269,6 +630,26 @@ if (isPrlctl) {
     }
   });
 
+  it("rejects skip-restore for combined Parallels smoke lanes", () => {
+    expect(withEnv({ [SKIP_SNAPSHOT_RESTORE_ENV]: "1" }, () => shouldSkipSnapshotRestore())).toBe(
+      true,
+    );
+    const invalidSkipBothResult = spawnNodeEvalSync(
+      `process.env.${SKIP_SNAPSHOT_RESTORE_ENV} = "1"; const { validateSnapshotRestoreMode } = await import("./${TS_PATHS.common}"); validateSnapshotRestoreMode("both", "test smoke");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    expect(invalidSkipBothResult.status).toBe(1);
+    expect(invalidSkipBothResult.stderr).toContain(
+      "OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE=1 requires --mode fresh or --mode upgrade",
+    );
+    expect(() =>
+      withEnv({ [SKIP_SNAPSHOT_RESTORE_ENV]: "1" }, () =>
+        validateSnapshotRestoreMode("fresh", "test smoke"),
+      ),
+    ).not.toThrow();
+    expect(() => validateSnapshotRestoreMode("both", "test smoke")).not.toThrow();
+  });
+
   it("uses one Ubuntu VM fallback resolver for Linux lanes", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
     writeFakePrlctl(
@@ -278,6 +659,7 @@ set -euo pipefail
 if [[ "$1" == "list" ]]; then
   cat <<'JSON'
 [
+  {"name": "Ubuntu 9007199254740993.04"},
   {"name": "Ubuntu 26.04"},
   {"name": "Ubuntu 25.10"},
   {"name": "Ubuntu 23.10"},
@@ -295,6 +677,7 @@ const isPrlctl = [process.argv0, process.execPath].some((value) =>
 if (isPrlctl) {
   if (process.argv.some((arg) => arg.includes("list"))) {
     console.log(JSON.stringify([
+      { name: "Ubuntu 9007199254740993.04" },
       { name: "Ubuntu 26.04" },
       { name: "Ubuntu 25.10" },
       { name: "Ubuntu 23.10" },
@@ -316,10 +699,185 @@ if (isPrlctl) {
     }
   });
 
+  it("skips unsafe Ubuntu version names in fallback resolver", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  cat <<'JSON'
+[
+  {"name": "Ubuntu 9007199254740993.04"},
+  {"name": "Ubuntu 23.10"}
+]
+JSON
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([
+      { name: "Ubuntu 9007199254740993.04" },
+      { name: "Ubuntu 23.10" },
+    ]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
+
+      expect(output).toBe("Ubuntu 23.10");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the only macOS VM when the default name is unavailable", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-macos-vm-helper-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  printf '[{"name":"Windows 11"},{"name":"macOS"}]\n'
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([{ name: "Windows 11" }, { name: "macOS" }]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const output = withEnv(fakePrlctlEnv(tempDir), () => resolveMacosVmName("macOS Tahoe"));
+
+      expect(output).toBe("macOS");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("does not infer destructive macOS smoke targets from arbitrary names", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-macos-vm-guard-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  printf '[{"name":"macOS Work"}]\n'
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([{ name: "macOS Work" }]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const result = spawnNodeEvalSync(
+        `const { resolveMacosVmName } = await import("./${TS_PATHS.parallelsVm}"); resolveMacosVmName("macOS Tahoe");`,
+        { env: { ...process.env, ...fakePrlctlEnv(tempDir) }, imports: ["tsx"] },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("select a macOS VM explicitly");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("resumes suspended Parallels VMs", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-resume-"));
+    const statePath = join(tempDir, "state");
+    writeFileSync(statePath, "suspended");
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+state_path="${statePath}"
+if [[ "$1" == "list" ]]; then
+  printf '[{"name":"Suspended VM","status":"%s"}]\n' "$(cat "$state_path")"
+  exit 0
+fi
+if [[ "$1" == "resume" && "$2" == "Suspended VM" ]]; then
+  printf 'running' >"$state_path"
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  const args = process.argv.slice(1);
+  if (args.includes("list")) {
+    console.log(JSON.stringify([{ name: "Suspended VM", status: readFileSync(${JSON.stringify(statePath)}, "utf8") }]));
+    process.exit(0);
+  }
+  if (args.includes("resume")) {
+    writeFileSync(${JSON.stringify(statePath)}, "running");
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+    const sleepPath = join(tempDir, "sleep");
+    writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(sleepPath, 0o755);
+
+    try {
+      withEnv(fakePrlctlEnv(tempDir), () => ensureVmRunning("Suspended VM"));
+      expect(readFileSync(statePath, "utf8")).toBe("running");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("waits for apt locks during Linux snapshot bootstrap", () => {
     const script = readFileSync(TS_PATHS.linux, "utf8");
 
-    expect(script).toContain("DPkg::Lock::Timeout=300");
+    expect(script).toContain("APT_LOCK_RETRY_SECONDS = 900");
+    expect(script).toContain("BOOTSTRAP_TIMEOUT_SECONDS = 1200");
+    expect(script).toContain("command -v wget");
+    expect(script).toContain("run_apt_with_lock_retry");
+    expect(script).toContain('"Could not get lock"');
+    expect(script).toContain('"Unable to acquire the dpkg frontend lock"');
+    expect(script).toContain('"Unable to lock directory"');
+    expect(script).toContain("downloadGuestFile");
+    expect(script).toContain("this.downloadGuestFile(tgzUrl");
   });
 
   it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {
@@ -394,22 +952,11 @@ if (isPrlctl) {
   });
 
   it("rejects invalid providers and missing keys before touching guests", () => {
-    const invalidProvider = spawnNodeEvalSync(
-      `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
-      { env: process.env, imports: ["tsx"] },
-    );
-    expect(invalidProvider.status).toBe(1);
-    expect(invalidProvider.stderr).toContain("invalid --provider: bogus");
+    expect(invalidProviderResult.status).toBe(1);
+    expect(invalidProviderResult.stderr).toContain("invalid --provider: bogus");
 
-    const missingKey = spawnNodeEvalSync(
-      `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
-      {
-        env: { ...process.env, PARALLELS_TEST_MISSING_KEY: "" },
-        imports: ["tsx"],
-      },
-    );
-    expect(missingKey.status).toBe(1);
-    expect(missingKey.stderr).toContain("PARALLELS_TEST_MISSING_KEY is required");
+    expect(missingProviderKeyResult.status).toBe(1);
+    expect(missingProviderKeyResult.stderr).toContain("PARALLELS_TEST_MISSING_KEY is required");
   });
 
   it("seeds agent workspace state before OS smoke agent turns", () => {
@@ -438,7 +985,6 @@ if (isPrlctl) {
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("config set --batch-file");
     expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsAgentTurnConfigPatchScript");
     const powershell = readFileSync(TS_PATHS.powershell, "utf8");
-    expect(powershell).toContain("config set --batch-file");
     expect(powershell).toContain("agents.defaults.skipBootstrap");
     expect(powershell).toContain("tools.profile");
     expect(powershell).toContain("replace(/^\\\\uFEFF/u");
@@ -458,17 +1004,132 @@ if (isPrlctl) {
   it("clears phase timers and applies phase deadlines to guest commands", () => {
     const phaseRunner = readFileSync(TS_PATHS.phaseRunner, "utf8");
     const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
+    const parallelsVm = readFileSync(TS_PATHS.parallelsVm, "utf8");
+    const snapshots = readFileSync(TS_PATHS.snapshots, "utf8");
 
     expect(phaseRunner).toContain("clearTimeout(timer)");
     expect(phaseRunner).toContain("remainingTimeoutMs");
     expect(guestTransports).toContain("this.phases.remainingTimeoutMs");
+    expect(parallelsVm).toContain("PRLCTL_STATUS_TIMEOUT_MS");
+    expect(parallelsVm).toContain("probeTimeoutMs");
+    expect(snapshots).toContain("SNAPSHOT_LIST_TIMEOUT_MS");
 
     for (const scriptPath of OS_TS_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("PhaseRunner");
+      expect(script, scriptPath).toContain("validateSnapshotRestoreMode(this.options.mode");
       expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
+    }
+
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    expect(macos).toContain("currentRunningSnapshotInfo(this.options.vmName)");
+    expect(macos).toContain("shouldSkipSnapshotRestore()");
+    expect(macos).toContain("Skip snapshot restore; using current running VM");
+
+    const linux = readFileSync(TS_PATHS.linux, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+    expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(macos).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
+  });
+
+  it("cleans POSIX guest scripts after the phase deadline is exhausted", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-posix-cleanup-"));
+    const logPath = join(tempDir, "prlctl.log");
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(logPath)}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+if [[ "$args" == *" dd of=/tmp/openclaw-parallels-"* || "$args" == *" /bin/dd of=/tmp/openclaw-parallels-"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$args" == *" bash /tmp/openclaw-parallels-"* || "$args" == *" /bin/bash /tmp/openclaw-parallels-"* ]]; then
+  exit 1
+fi
+if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-"* ]]; then
+  printf 'cleanup\\n' >>"$log_path"
+  exit 0
+fi
+exit 0
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      withEnv(fakePrlctlEnv(tempDir), () => {
+        const linuxPhases = new ExhaustedCleanupPhaseRunner();
+        const linux = new LinuxGuest("Linux VM", linuxPhases as unknown as PhaseRunner);
+
+        expect(() => linux.bash("echo linux")).toThrow(
+          "Linux guest command failed with exit code 1",
+        );
+        expect(linuxPhases.remainingTimeoutCalls).toBe(2);
+
+        const macosPhases = new ExhaustedCleanupPhaseRunner();
+        const macos = new MacosGuest(
+          {
+            getTransport: () => "current-user",
+            getUser: () => "runner",
+            path: "/usr/bin:/bin",
+            resolveDesktopHome: () => "/Users/runner",
+            vmName: "macOS VM",
+          },
+          macosPhases as unknown as PhaseRunner,
+        );
+
+        expect(() => macos.sh("echo macos")).toThrow("macOS guest command failed with exit code 1");
+        expect(macosPhases.remainingTimeoutCalls).toBe(2);
+      });
+
+      const log = readFileSync(logPath, "utf8");
+      expect(log.match(/^cleanup$/gm)).toHaveLength(2);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("streams full phase logs to disk while bounding the failure tail", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-phase-"));
+    const phaseRunner = new PhaseRunner(runDir, 128);
+    const writes: string[] = [];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+
+    try {
+      await expect(
+        phaseRunner.phase("noisy", 30, () => {
+          phaseRunner.append(`old-${"x".repeat(256)}`);
+          phaseRunner.append("recent failure");
+          throw new Error("phase failed");
+        }),
+      ).rejects.toThrow("phase failed");
+
+      const logText = readFileSync(join(runDir, "noisy.log"), "utf8");
+      expect(logText).toContain("old-");
+      expect(logText).toContain("recent failure");
+      const stderr = writes.join("");
+      expect(stderr).toContain("phase log tail truncated");
+      expect(stderr).toContain("recent failure");
+      expect(stderr).not.toContain(`old-${"x".repeat(200)}`);
+    } finally {
+      stderrWrite.mockRestore();
+      rmSync(runDir, { force: true, recursive: true });
     }
   });
 
@@ -476,6 +1137,24 @@ if (isPrlctl) {
     const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
 
     expect(guestTransports.match(/umask 022/g)).toHaveLength(2);
+  });
+
+  it("uses collision-resistant guest script names", () => {
+    const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
+
+    expect(guestTransports).toContain('import { randomUUID } from "node:crypto"');
+    expect(guestTransports).toContain("guestScriptName");
+    expect(guestTransports).not.toContain("Date.now()}.sh");
+    expect(guestTransports).not.toContain("Date.now()}.ps1");
+    expect(guestTransports).not.toContain("Math.random()");
+  });
+
+  it("hardens restored macOS install lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain('rm -rf "$HOME/.npm/_cacache"');
+    expect(macos.match(/\.onboard-ref", 420/g)).toHaveLength(2);
+    expect(macos).toContain('echo "npm install attempt $attempt failed; retrying in 5s"');
   });
 
   it("provisions portable Git before Windows dev update lanes", () => {
@@ -507,10 +1186,19 @@ if (isPrlctl) {
     expect(windows).toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
   });
 
+  it("requires macOS dashboard smoke to load built assets", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain("asset_paths=");
+    expect(macos).toContain("grep -E '(^|/)assets/'");
+    expect(macos).toContain('curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url"');
+  });
+
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 
-    expect(script).toContain("scripts/e2e/parallels/${platform}-smoke.ts");
+    expect(script).toContain("scripts/e2e/parallels-${platform}-smoke.sh");
+    expect(script).toContain('this.formatRerun("bash", args, env)');
     expect(script).toContain('"--model"');
     expect(script).toContain("auth.modelId");
     expect(script).toContain("authForPlatform");
@@ -533,6 +1221,8 @@ if (isPrlctl) {
     expect(orchestrator).toContain("macosUpdateScript");
     expect(orchestrator).toContain("windowsUpdateScript");
     expect(orchestrator).toContain("linuxUpdateScript");
+    expect(orchestrator).toContain('import { randomUUID } from "node:crypto"');
+    expect(orchestrator).not.toContain("process.pid}-${Date.now()");
     expect(orchestrator).not.toContain("Remove-FuturePluginEntries");
     expect(updateScripts).toContain("Remove-FuturePluginEntries");
     expect(updateScripts).toContain("scrub_future_plugin_entries");
@@ -547,6 +1237,8 @@ if (isPrlctl) {
     expect(macos).toContain("MacosDiscordSmoke");
     expect(macos).not.toContain("Authorization: Bot");
     expect(discord).toContain("Authorization: Bot");
+    expect(discord).toContain('import { randomUUID } from "node:crypto"');
+    expect(discord).not.toContain("Math.random()");
     expect(discord).toContain('"--silent"');
     expect(discord).toContain("doctor --fix --yes --non-interactive");
     expect(discord).toContain("channels status --probe --json");
@@ -631,6 +1323,183 @@ if (isPrlctl) {
     expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
+  it.runIf(process.platform !== "win32")("throws checked timed host command timeouts", () => {
+    expect(() =>
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+        quiet: true,
+        timeoutMs: 50,
+      }),
+    ).toThrow(/timed out after 50ms/u);
+  });
+
+  it.runIf(process.platform !== "win32")("preserves child exit 124 in timed host commands", () => {
+    const result = run(process.execPath, ["-e", "process.exit(124)"], {
+      check: false,
+      quiet: true,
+      timeoutMs: 1_000,
+    });
+
+    expect(result.status).toBe(124);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out host command process groups",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-"));
+      const scriptPath = join(tempDir, "spawn-grandchild.mjs");
+      const grandchildPidPath = join(tempDir, "grandchild.pid");
+      let grandchildPid = 0;
+      writeFileSync(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "inherit" });
+writeFileSync(process.argv[2], String(grandchild.pid));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      try {
+        const result = run(process.execPath, [scriptPath, grandchildPidPath], {
+          check: false,
+          quiet: true,
+          timeoutMs: 500,
+        });
+
+        expect(result.status).toBe(124);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("preserves timed host command spawn errors", () => {
+    expect(() =>
+      run("openclaw-definitely-missing-host-command", [], {
+        check: false,
+        quiet: true,
+        timeoutMs: 50,
+      }),
+    ).toThrow(/ENOENT/u);
+  });
+
+  it("rejects streaming host commands when log writes fail", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-log-"));
+    try {
+      await expect(
+        runStreaming(process.execPath, ["-e", "process.stdout.write('ok')"], {
+          logPath: tempDir,
+          quiet: true,
+        }),
+      ).rejects.toThrow(/failed to write Parallels host command log/u);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("clears streaming host command timers when spawn fails", async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(
+        runStreaming("openclaw-definitely-missing-host-command", [], {
+          quiet: true,
+          timeoutMs: 60 * 60 * 1000,
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("streams host command logs instead of retaining them in memory", async () => {
+    const source = readFileSync(TS_PATHS.hostCommand, "utf8");
+    const runStreamingBlock = source.slice(source.indexOf("export async function runStreaming"));
+    expect(runStreamingBlock).toContain("createWriteStream");
+    expect(runStreamingBlock).toContain("child.kill(signal)");
+    expect(runStreamingBlock).toContain("writeLogChunk(chunk)");
+    expect(runStreamingBlock).not.toContain('let log = ""');
+    expect(runStreamingBlock).not.toContain("log += text");
+    expect(runStreamingBlock).not.toContain("writeFile(options.logPath, log");
+
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-log-"));
+    const logPath = join(tempDir, "stream.log");
+    try {
+      const status = await runStreaming(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('x'.repeat(128 * 1024)); process.stderr.write('stream-done');",
+        ],
+        {
+          logPath,
+          quiet: true,
+        },
+      );
+
+      expect(status).toBe(0);
+      expect(statSync(logPath).size).toBeGreaterThan(128 * 1024);
+      expect(readFileSync(logPath, "utf8")).toContain("stream-done");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not treat timed command stderr as wrapper control data",
+    () => {
+      const result = run(
+        process.execPath,
+        ["-e", "process.stderr.write('__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__{}\\n')"],
+        {
+          check: false,
+          quiet: true,
+          timeoutMs: 500,
+        },
+      );
+
+      expect(result.status).toBe(0);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("preserves timed host command output capture", () => {
+    const expected = "x".repeat(256 * 1024);
+    const result = run(process.execPath, ["-e", "process.stdout.write('x'.repeat(256 * 1024))"], {
+      check: false,
+      quiet: true,
+      timeoutMs: 1_000,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(expected);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "ignores broken stdin pipes from timed host commands that exit early",
+    () => {
+      const result = run(process.execPath, ["-e", "process.exit(0)"], {
+        check: false,
+        input: "x".repeat(1024 * 1024),
+        quiet: true,
+        timeoutMs: 1_000,
+      });
+
+      expect(result.status).toBe(0);
+    },
+  );
+
   it("routes Windows host pnpm and npm shims through safe runners", () => {
     const comSpec = "C:\\Windows\\System32\\cmd.exe";
 
@@ -685,7 +1554,9 @@ if (isPrlctl) {
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
-    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700");
+    expect(script).toContain(
+      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"',
+    );
     expect(script).toContain("windowsAgentTurnConfigPatchScript(this.auth.modelId)");
     expect(script).toContain("--model");
     expect(script).toContain('resolveParallelsModelTimeoutSeconds("windows")');
@@ -708,13 +1579,78 @@ if (isPrlctl) {
       windows: 1800,
     });
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
-      "OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700",
+      'this.agentTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S", 2700)',
     );
-    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
-      '--timeout ${resolveParallelsModelTimeoutSeconds("macos")}',
-    );
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("--timeout ${this.modelTimeoutSeconds}");
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain(
       '--timeout ${resolveParallelsModelTimeoutSeconds("linux")}',
+    );
+  });
+
+  it("rejects loose Parallels numeric limits before starting smoke lanes", () => {
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: "1200" }, () =>
+        resolveParallelsModelTimeoutSeconds("linux"),
+      ),
+    ).toBe(1200);
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_NUMERIC_TEST: " 42 " }, () =>
+        readPositiveIntEnv("OPENCLAW_PARALLELS_NUMERIC_TEST", 7),
+      ),
+    ).toBe(42);
+
+    expect(invalidModelTimeoutResult.status).toBe(1);
+    expect(invalidModelTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: 1800s",
+    );
+
+    expect(invalidHostPortResult.status).toBe(1);
+    expect(invalidHostPortResult.stderr).toContain("invalid --host-port: 18425x");
+
+    expect(invalidLinuxHostPortResult.status).toBe(1);
+    expect(invalidLinuxHostPortResult.stderr).toContain("invalid --host-port: 1e4");
+
+    expect(invalidWindowsHostPortResult.status).toBe(1);
+    expect(invalidWindowsHostPortResult.stderr).toContain("invalid --host-port: 0x4800");
+
+    expect(invalidMacosHostPortRangeResult.status).toBe(1);
+    expect(invalidMacosHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidLinuxHostPortRangeResult.status).toBe(1);
+    expect(invalidLinuxHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidWindowsHostPortRangeResult.status).toBe(1);
+    expect(invalidWindowsHostPortRangeResult.stderr).toContain("invalid --host-port: 65536");
+
+    expect(invalidLinuxAgentTimeoutResult.status).toBe(1);
+    expect(invalidLinuxAgentTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S: 1e3",
+    );
+
+    expect(invalidWindowsAgentTimeoutResult.status).toBe(1);
+    expect(invalidWindowsAgentTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S: 2700s",
+    );
+
+    expect(invalidWindowsUpdateTimeoutResult.status).toBe(1);
+    expect(invalidWindowsUpdateTimeoutResult.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
+    );
+
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
+      'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',
+    );
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain(
+      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S"',
+    );
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain(
+      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S"',
+    );
+    expect(readFileSync(TS_PATHS.packageArtifact, "utf8")).toContain(
+      'readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000)',
+    );
+    expect(readFileSync(TS_PATHS.npmUpdate, "utf8")).toContain(
+      'readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200)',
     );
   });
 
@@ -754,15 +1690,11 @@ if (isPrlctl) {
     const windows = readFileSync(TS_PATHS.windows, "utf8");
 
     expect(powershell).toContain("windowsOpenClawResolver");
-    expect(powershell).toContain("providerTimeoutConfigJson");
-    expect(powershell).toContain("models.providers.${providerId}");
-    expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
     expect(powershell).toContain("OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED");
-    expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "pi" }');
+    expect(powershell).toContain("Programs\\nodejs");
+    expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "openclaw" }');
     expect(powershell).toContain("delete selectedModelEntry.agentRuntime");
     expect(powershell).toContain("delete providerEntry.agentRuntime");
-    expect(powershell).toContain("configPathMapKey");
-    expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
     expect(powershell).toContain("$ErrorActionPreference = 'Continue'");

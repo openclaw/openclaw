@@ -30,9 +30,9 @@ Update and plugin tests protect these contracts:
   plugin state.
 - Plugin installs work from local directories, git repos, npm packages, and the
   ClawHub registry path.
-- Plugin npm dependencies are installed in the managed npm root, scanned before
-  trust, and removed through npm during uninstall so hoisted dependencies do not
-  linger.
+- Plugin npm dependencies are installed in one managed npm project per plugin,
+  scanned before trust, and removed through npm during uninstall so hoisted
+  dependencies do not linger.
 - Plugin update is stable when nothing changed: install records, resolved
   source, installed dependency layout, and enabled state stay intact.
 
@@ -175,7 +175,7 @@ Candidate sources:
 
 Full Release Validation uses `source=artifact` by default, built from the
 resolved release SHA. For post-publish proof, pass
-`package_acceptance_package_spec=openclaw@YYYY.M.D` so the same upgrade matrix
+`package_acceptance_package_spec=openclaw@YYYY.M.PATCH` so the same upgrade matrix
 targets the shipped npm package instead.
 
 Release checks call Package Acceptance with the package/update/restart/plugin set:
@@ -276,9 +276,9 @@ can fail for the right reason:
 - Registry/package source behavior: `test:docker:plugins` fixture or ClawHub
   fixture server.
 - Dependency layout or cleanup behavior: assert both runtime execution and the
-  filesystem boundary. npm dependencies may be hoisted under the managed npm
-  root, so tests should prove the root is scanned/cleaned instead of assuming a
-  package-local `node_modules` tree.
+  filesystem boundary. npm dependencies may be hoisted inside the plugin's
+  managed npm project, so tests should prove that project is scanned/cleaned
+  instead of assuming only the plugin package-local `node_modules` tree.
 
 Keep new Docker fixtures hermetic by default. Use local fixture registries and
 fake packages unless the point of the test is live registry behavior.

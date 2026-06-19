@@ -1,3 +1,4 @@
+// Ollama plugin module implements discovery shared behavior.
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,9 +19,6 @@ type OllamaDiscoveryContext = {
   config: {
     models?: {
       providers?: Record<string, ModelProviderConfig | undefined>;
-      ollamaDiscovery?: {
-        enabled?: boolean;
-      };
     };
   };
   env: NodeJS.ProcessEnv;
@@ -42,6 +40,17 @@ function readStringValue(value: unknown): string | undefined {
 
 function isOllamaApiKeyMarker(value: string): boolean {
   return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
+}
+
+export function resolveOllamaRuntimeBaseUrl(params: {
+  api?: ModelProviderConfig["api"];
+  configuredBaseUrl?: string;
+  discoveredBaseUrl: string;
+}): string {
+  if (params.configuredBaseUrl && params.api && params.api !== "ollama") {
+    return params.configuredBaseUrl;
+  }
+  return params.discoveredBaseUrl;
 }
 
 function resolveOllamaDiscoveryApiKey(params: {
@@ -239,8 +248,7 @@ export async function resolveOllamaDiscoveryResult(params: {
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,
   );
-  const discoveryEnabled =
-    params.pluginConfig.discovery?.enabled ?? params.ctx.config.models?.ollamaDiscovery?.enabled;
+  const discoveryEnabled = params.pluginConfig.discovery?.enabled;
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }
@@ -254,10 +262,12 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
   if (hasExplicitModels && explicit) {
-    const baseUrl = resolveOllamaApiBase(readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL);
+    const configuredBaseUrl = readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL;
+    const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
+    const api = explicit.api ?? "ollama";
     const apiKey = resolveOllamaDiscoveryApiKey({
       env: params.ctx.env,
-      baseUrl,
+      baseUrl: discoveredBaseUrl,
       explicitApiKey,
       resolvedApiKey: ollamaKey,
       resolvedDiscoveryApiKey: ollamaDiscoveryKey,
@@ -265,8 +275,8 @@ export async function resolveOllamaDiscoveryResult(params: {
     return {
       provider: {
         ...explicit,
-        baseUrl,
-        api: explicit.api ?? "ollama",
+        baseUrl: resolveOllamaRuntimeBaseUrl({ api, configuredBaseUrl, discoveredBaseUrl }),
+        api,
         ...(apiKey ? { apiKey } : {}),
       },
     };
@@ -310,9 +320,16 @@ export async function resolveOllamaDiscoveryResult(params: {
     resolvedApiKey: ollamaKey,
     resolvedDiscoveryApiKey: ollamaDiscoveryKey,
   });
+  const api = explicit?.api ?? provider.api;
   return {
     provider: {
       ...provider,
+      baseUrl: resolveOllamaRuntimeBaseUrl({
+        api,
+        configuredBaseUrl,
+        discoveredBaseUrl: provider.baseUrl,
+      }),
+      api,
       ...(apiKey ? { apiKey } : {}),
     },
   };

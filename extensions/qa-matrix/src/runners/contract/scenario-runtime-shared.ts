@@ -1,8 +1,9 @@
+// Qa Matrix plugin module implements scenario runtime shared behavior.
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { createMatrixQaRoomObserver } from "../../substrate/sync.js";
-import { type MatrixQaProvisionedTopology } from "../../substrate/topology.js";
+import type { MatrixQaProvisionedTopology } from "../../substrate/topology.js";
 import { resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
 import type {
   MatrixQaCanaryArtifact,
@@ -56,7 +57,7 @@ export type MatrixQaScenarioContext = {
   topology: MatrixQaProvisionedTopology;
   patchGatewayConfig?: (
     patch: Record<string, unknown>,
-    opts?: { restartDelayMs?: number },
+    opts?: { replacePaths?: string[]; restartDelayMs?: number },
   ) => Promise<void>;
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
@@ -65,9 +66,10 @@ const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
-  const raw = process.env[NO_REPLY_WINDOW_ENV];
-  const parsed = raw === undefined ? NO_REPLY_WINDOW_MS : Number(raw);
-  const windowMs = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : NO_REPLY_WINDOW_MS;
+  const raw = process.env[NO_REPLY_WINDOW_ENV]?.trim();
+  const parsed =
+    raw === undefined ? NO_REPLY_WINDOW_MS : /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  const windowMs = Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : NO_REPLY_WINDOW_MS;
   return Math.min(windowMs, timeoutMs);
 }
 
@@ -94,6 +96,7 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
 export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
 export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
   "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
+export const MATRIX_QA_TOOL_PROGRESS_COMMAND = "printf 'matrix-command-progress-start\\n'; sleep 2";
 
 export function buildMatrixToolProgressTaskContent(text: string) {
   return [
@@ -110,6 +113,14 @@ export function buildMatrixToolProgressPrompt(sutUserId: string) {
     `Do not guess or send any marker before the tool result returns.`,
     `Do not read \`HEARTBEAT.md\` for this check.`,
     `After that read completes, reply with only the exact marker from the file and no other text.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressCommandPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${MATRIX_QA_TOOL_PROGRESS_COMMAND}\`.`,
+    `The QA harness must observe that exec command preview and its completion as edits to one Matrix draft.`,
+    `After that exec command completes or fails, reply exactly \`${text}\`.`,
   ].join(" ");
 }
 
@@ -135,9 +146,12 @@ export function buildMatrixBlockStreamingPrompt(
   secondText: string,
 ) {
   return [
-    `${sutUserId} Block streaming QA check: first reply with only this exact marker: \`${firstText}\`.`,
-    "Then use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
-    `After that read completes, reply with only this exact marker: \`${secondText}\`.`,
+    `${sutUserId} Block streaming QA check: complete this whole sequence in one turn.`,
+    `Step 1: send an assistant text block containing only this exact marker: \`${firstText}\`.`,
+    "That first marker block must be emitted before any tool call.",
+    "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+    `Step 3: after that read completes, send a final assistant text block containing only this exact marker: \`${secondText}\`.`,
+    "Never put both markers in the same assistant text block.",
   ].join("\n");
 }
 

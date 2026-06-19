@@ -1,3 +1,4 @@
+// Verifies model-selection CLI provider detection from plugin metadata.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -12,6 +13,8 @@ import { testing as setupRegistryRuntimeTesting } from "../plugins/setup-registr
 import { isCliProvider } from "./model-selection-cli.js";
 
 function setCliBackendMetadataSnapshot(cliBackends: string[]) {
+  // Builds a minimal current plugin metadata snapshot so isCliProvider can use
+  // descriptor metadata without loading setup runtime modules.
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   const index: InstalledPluginIndex = {
     version: 1,
@@ -78,15 +81,13 @@ describe("isCliProvider", () => {
     expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
   });
 
-  it("accepts the anthropic-cli auth-choice id as a Claude CLI provider alias", () => {
-    expect(isCliProvider("anthropic-cli", {} as OpenClawConfig)).toBe(true);
-  });
-
   it("returns false for provider ids", () => {
     expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
   });
 
   it("does not execute setup runtime when descriptor metadata has no matching backend", () => {
+    // Negative checks should stay metadata-only; loading setup runtime here
+    // would make simple provider visibility queries expensive.
     setupRegistryRuntimeTesting.setRuntimeModuleForTest({
       resolvePluginSetupCliBackend: () => {
         throw new Error("setup runtime should not load for CLI provider checks");

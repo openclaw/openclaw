@@ -1,3 +1,4 @@
+// Tests allowlist command edits across legacy and scoped channel configuration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +19,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { type ConfigSnapshotMock } from "./commands.test-harness.js";
+import type { ConfigSnapshotMock } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());

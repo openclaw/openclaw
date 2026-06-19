@@ -3,7 +3,7 @@
 // to bare/functional images, and runs lanes through weighted resource pools.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -31,11 +31,18 @@ import {
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
+const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
+  path.basename(SCRIPT_ROOT_DIR) === ".release-harness" && ROOT_DIR !== SCRIPT_ROOT_DIR
+    ? ".release-harness"
+    : ".";
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 const DEFAULT_LANE_START_STAGGER_MS = 2_000;
 const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
+const CLEANUP_SMOKE_NAME = "cleanup-smoke";
+export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
+export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
@@ -89,22 +96,30 @@ if (IS_MAIN) {
 }
 
 function parsePositiveInt(raw, fallback, label) {
-  if (!raw) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;
 }
 
 function parseNonNegativeInt(raw, fallback, label) {
-  if (!raw) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;
@@ -351,7 +366,7 @@ function withResolvedPnpmCommand(command, env) {
 }
 
 function liveDockerHarnessScriptCommand(script) {
-  return `bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+  return `bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
 }
 
 async function loadTimingStore(file, enabled) {
@@ -442,8 +457,10 @@ async function writeFailureIndex(logDir, summary) {
   const failures = Array.isArray(summary.failures)
     ? summary.failures
     : (summary.lanes ?? []).filter((lane) => lane.status !== 0);
+  const workflowRerunFailures = failures.filter((failure) => failure.targetable !== false);
   const lanes = failures.map((failure) => ({
-    ghWorkflowCommand: githubWorkflowRerunCommand([failure.name], ref),
+    ghWorkflowCommand:
+      failure.targetable === false ? undefined : githubWorkflowRerunCommand([failure.name], ref),
     image: failure.image,
     imageKind: failure.imageKind,
     lane: failure.name,
@@ -452,13 +469,14 @@ async function writeFailureIndex(logDir, summary) {
     noOutputTimedOut: failure.noOutputTimedOut,
     rerunCommand: failure.rerunCommand,
     status: failure.status,
+    targetable: failure.targetable,
     timedOut: failure.timedOut,
   }));
   const failureIndex = {
     combinedGhWorkflowCommand:
-      lanes.length > 0
+      workflowRerunFailures.length > 0
         ? githubWorkflowRerunCommand(
-            lanes.map((lane) => lane.lane),
+            workflowRerunFailures.map((failure) => failure.name),
             ref,
           )
         : undefined,
@@ -524,7 +542,16 @@ export function dockerPreflightContainerNames(raw) {
     );
 }
 
-function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
+export function resolveDockerPreflightPlatform(arch = process.arch) {
+  return arch === "arm64" ? "linux/arm64" : "linux/amd64";
+}
+
+export function dockerPreflightSmokeCommand(arch = process.arch) {
+  const platform = resolveDockerPreflightPlatform(arch);
+  return `docker run --rm --platform ${shellQuote(platform)} alpine:3.20 true`;
+}
+
+export function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
   return new Promise((resolve) => {
     const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
     const child = spawn("bash", ["-c", command], {
@@ -600,6 +627,9 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
+      if (timedOut) {
+        terminateChild(child, "SIGKILL");
+      }
       if (killTimer) {
         clearTimeout(killTimer);
       }
@@ -618,7 +648,15 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
   });
 }
 
-function runShellCaptureCommand({ command, env, label, timeoutMs }) {
+export function appendBoundedShellCapture(current, chunk, maxChars = SHELL_CAPTURE_MAX_CHARS) {
+  const combined = `${current}${String(chunk)}`;
+  if (combined.length <= maxChars) {
+    return { text: combined, truncated: false };
+  }
+  return { text: combined.slice(-maxChars), truncated: true };
+}
+
+export function runShellCaptureCommand({ command, env, label, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
@@ -629,29 +667,52 @@ function runShellCaptureCommand({ command, env, label, timeoutMs }) {
     activeChildren.add(child);
     let stdout = "";
     let stderr = "";
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let timedOut = false;
+    let killTimer;
     const timeoutTimer =
       timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             terminateChild(child, "SIGTERM");
-            setTimeout(() => terminateChild(child, "SIGKILL"), 10_000).unref?.();
+            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+            killTimer.unref?.();
           }, timeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      const next = appendBoundedShellCapture(stdout, chunk);
+      stdout = next.text;
+      stdoutTruncated ||= next.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const next = appendBoundedShellCapture(stderr, chunk);
+      stderr = next.text;
+      stderrTruncated ||= next.truncated;
     });
     child.on("close", (status, signal) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
       }
+      if (timedOut) {
+        terminateChild(child, "SIGKILL");
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       activeChildren.delete(child);
       const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
-      resolve({ label, signal, status: exitCode, stderr, stdout, timedOut });
+      resolve({
+        label,
+        signal,
+        status: exitCode,
+        stderr,
+        stderrTruncated,
+        stdout,
+        stdoutTruncated,
+        timedOut,
+      });
     });
   });
 }
@@ -662,6 +723,85 @@ async function runForeground(label, command, env) {
   if (result.status !== 0) {
     throw new Error(`${label} failed with status ${result.status}`);
   }
+}
+
+async function recordCleanupSmokeFailure(error, baseEnv, logDir, command, startedAtMs) {
+  const status = 1;
+  const logFile = path.join(logDir, `${CLEANUP_SMOKE_NAME}.log`);
+  const message = error instanceof Error ? error.message : String(error);
+  await fs.promises.writeFile(
+    logFile,
+    [
+      `==> [${CLEANUP_SMOKE_NAME}] command: ${command}`,
+      `==> [${CLEANUP_SMOKE_NAME}] status: ${status}`,
+      `==> [${CLEANUP_SMOKE_NAME}] error: ${message}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+  return {
+    command,
+    attempts: [
+      {
+        attempt: 1,
+        elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+        finishedAt: new Date().toISOString(),
+        noOutputTimedOut: false,
+        startedAt: new Date(startedAtMs).toISOString(),
+        status,
+        timedOut: false,
+      },
+    ],
+    elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+    finishedAt: new Date().toISOString(),
+    image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+    logFile,
+    name: CLEANUP_SMOKE_NAME,
+    noOutputTimedOut: false,
+    rerunCommand: command,
+    startedAt: new Date(startedAtMs).toISOString(),
+    status,
+    targetable: false,
+    timedOut: false,
+  };
+}
+
+async function runCleanupSmoke(baseEnv, logDir, command, startedAtMs) {
+  const logFile = path.join(logDir, `${CLEANUP_SMOKE_NAME}.log`);
+  const result = await runShellCommand({
+    command,
+    env: baseEnv,
+    label: CLEANUP_SMOKE_NAME,
+    logFile,
+  });
+  if (result.status === 0) {
+    return undefined;
+  }
+  return {
+    command,
+    attempts: [
+      {
+        attempt: 1,
+        elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+        finishedAt: new Date().toISOString(),
+        noOutputTimedOut: result.noOutputTimedOut,
+        startedAt: new Date(startedAtMs).toISOString(),
+        status: result.status,
+        timedOut: result.timedOut,
+      },
+    ],
+    elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+    finishedAt: new Date().toISOString(),
+    image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+    logFile,
+    name: CLEANUP_SMOKE_NAME,
+    noOutputTimedOut: result.noOutputTimedOut,
+    rerunCommand: command,
+    startedAt: new Date(startedAtMs).toISOString(),
+    status: result.status,
+    targetable: false,
+    timedOut: result.timedOut,
+  };
 }
 
 async function runForegroundGroup(entries, env) {
@@ -742,7 +882,7 @@ async function runDockerPreflight(baseEnv, options) {
 
   const startedAt = Date.now();
   const run = await runShellCommand({
-    command: "docker run --rm alpine:3.20 true",
+    command: dockerPreflightSmokeCommand(),
     env: baseEnv,
     label: "docker-run-smoke",
     timeoutMs: options.runTimeoutMs,
@@ -750,7 +890,7 @@ async function runDockerPreflight(baseEnv, options) {
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   if (run.status !== 0) {
     throw new Error(
-      `Docker preflight failed: docker run alpine:3.20 true status=${run.status} elapsed=${elapsedSeconds}s`,
+      `Docker preflight failed: ${dockerPreflightSmokeCommand()} status=${run.status} elapsed=${elapsedSeconds}s`,
     );
   }
   console.log(`==> Docker preflight run: ${elapsedSeconds}s`);
@@ -981,8 +1121,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
     await waitForLaneStartSlot();
     reserve(poolLane);
     activeLanes.set(poolLane.name, { name: poolLane.name, startedAt: Date.now() });
-    let promise;
-    promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
+    const promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
       .then((result) => ({ lane: poolLane, promise, result }))
       .finally(() => {
         activeLanes.delete(poolLane.name);
@@ -1047,8 +1186,21 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   return { failures, results };
 }
 
-async function tailFile(file, lines) {
-  const content = await readFile(file, "utf8").catch(() => "");
+export async function tailFile(file, lines, maxBytes = LOG_TAIL_MAX_BYTES) {
+  let handle;
+  let content;
+  try {
+    handle = await open(file, "r");
+    const stat = await handle.stat();
+    const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
+    const buffer = Buffer.alloc(bytesToRead);
+    await handle.read(buffer, 0, bytesToRead, stat.size - bytesToRead);
+    content = buffer.toString("utf8");
+  } catch {
+    content = "";
+  } finally {
+    await handle?.close().catch(() => {});
+  }
   const tail = content.split(/\r?\n/).slice(-lines).join("\n");
   return tail.trimEnd();
 }
@@ -1208,6 +1360,19 @@ async function main() {
     upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
     upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
   });
+  if (scheduledLanes.length === 0) {
+    throw new Error(
+      [
+        "resolved zero Docker lanes",
+        `profile=${profile}`,
+        `releaseChunk=${releaseChunk || "<none>"}`,
+        `releaseProfile=${releaseProfile}`,
+        `liveMode=${liveMode}`,
+        `includeOpenWebUI=${includeOpenWebUI ? "1" : "0"}`,
+        `selectedLanes=${selectedLaneNames.length > 0 ? selectedLaneNames.join(",") : "<none>"}`,
+      ].join("; "),
+    );
+  }
 
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
@@ -1396,17 +1561,58 @@ async function main() {
   }
 
   if (profile === DEFAULT_PROFILE && selectedLaneNames.length === 0) {
-    await runPhase(phases, "cleanup-smoke", {}, async () => {
-      await runForeground(
-        "Run cleanup smoke after parallel lanes",
-        "pnpm test:docker:cleanup",
+    const cleanupSmokeCommand = "pnpm test:docker:cleanup";
+    const cleanupStartedAtMs = Date.now();
+    let cleanupFailure;
+    try {
+      await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
+        cleanupFailure = await runCleanupSmoke(
+          baseEnv,
+          logDir,
+          cleanupSmokeCommand,
+          cleanupStartedAtMs,
+        );
+        if (cleanupFailure) {
+          throw new Error(
+            `Run cleanup smoke after parallel lanes failed with status ${cleanupFailure.status}`,
+          );
+        }
+      });
+    } catch (error) {
+      cleanupFailure ??= await recordCleanupSmokeFailure(
+        error,
         baseEnv,
+        logDir,
+        cleanupSmokeCommand,
+        cleanupStartedAtMs,
       );
-    });
+    }
+    if (cleanupFailure) {
+      failures.push(cleanupFailure);
+    }
   } else {
     console.log("==> Cleanup smoke after parallel lanes: skipped for selected/release lanes");
   }
   await writeTimingStore(timingStore, allResults);
+  if (failures.length > 0) {
+    await writeRunSummary(logDir, {
+      chunk: releaseChunk || undefined,
+      failures,
+      image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+      images: {
+        bare: baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE,
+        functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
+      },
+      lanes: allResults,
+      phases,
+      profile,
+      selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
+      startedAt: runStartedAt,
+      status: "failed",
+    });
+    await printFailureSummary(failures, tailLines);
+    process.exit(1);
+  }
   await writeRunSummary(logDir, {
     chunk: releaseChunk || undefined,
     failures,
@@ -1426,8 +1632,10 @@ async function main() {
 }
 
 if (IS_MAIN) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

@@ -1,7 +1,8 @@
+// Googlechat plugin module implements actions behavior.
 import {
   createActionGate,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -101,7 +102,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     mediaReadFile,
   }) => {
     const account = resolveGoogleChatAccount({
-      cfg: cfg,
+      cfg,
       accountId,
     });
     if (account.credentialSource === "none") {
@@ -147,7 +148,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });
-        await sendGoogleChatMessage({
+        const sent = await sendGoogleChatMessage({
           account,
           space,
           text: content,
@@ -161,20 +162,20 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
               ]
             : undefined,
         });
-        return jsonResult({ ok: true, to: space });
+        return jsonResult({ ok: true, to: space, ...sent });
       }
 
       if (action === "upload-file") {
         throw new Error("upload-file requires media, filePath, or path");
       }
 
-      await sendGoogleChatMessage({
+      const sent = await sendGoogleChatMessage({
         account,
         space,
         text: content,
         thread: threadId ?? undefined,
       });
-      return jsonResult({ ok: true, to: space });
+      return jsonResult({ ok: true, to: space, ...sent });
     }
 
     if (action === "react") {
@@ -213,7 +214,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageName = readStringParam(params, "messageId", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit");
       const reactions = await listGoogleChatReactions({
         account,
         messageName,

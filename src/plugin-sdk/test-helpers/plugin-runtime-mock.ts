@@ -1,3 +1,4 @@
+// Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
 import {
   normalizeInboundTextNewlines,
@@ -58,6 +59,7 @@ function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
     createManaged: vi.fn(),
+    tryCreateManaged: vi.fn(),
     get: vi.fn(),
     list: vi.fn(() => []),
     findLatest: vi.fn(),
@@ -139,6 +141,10 @@ export function createPluginRuntimeMediaMock(
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  const runEmbeddedAgentMock = vi.fn().mockResolvedValue({
+    payloads: [],
+    meta: {},
+  }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
   const taskFlow = {
     bindSession: vi.fn(
       createTaskFlowSessionMock,
@@ -184,6 +190,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       onRecordError: record?.onRecordError ?? (() => undefined),
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
+    await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
     const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
@@ -218,6 +225,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           onRecordError: params.record?.onRecordError ?? (() => undefined),
           trackSessionMetaTask: params.record?.trackSessionMetaTask,
         });
+        await params.afterRecord?.();
       } catch (err) {
         try {
           await params.onPreDispatchFailure?.(err);
@@ -401,14 +409,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           { id: "high", label: "high" },
         ],
       })) as unknown as PluginRuntime["agent"]["resolveThinkingPolicy"],
-      runEmbeddedPiAgent: vi.fn().mockResolvedValue({
-        payloads: [],
-        meta: {},
-      }) as unknown as PluginRuntime["agent"]["runEmbeddedPiAgent"],
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [],
-        meta: {},
-      }) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"],
+      runEmbeddedAgent: runEmbeddedAgentMock,
+      runEmbeddedPiAgent: runEmbeddedAgentMock,
       resolveAgentTimeoutMs: vi.fn(
         () => 30_000,
       ) as unknown as PluginRuntime["agent"]["resolveAgentTimeoutMs"],
@@ -766,6 +768,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: vi.fn(() => {
+        throw new Error("openSyncKeyedStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
+      openChannelIngressQueue: vi.fn(() => {
+        throw new Error("openChannelIngressQueue mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
     },
     tasks: {
       runs: {

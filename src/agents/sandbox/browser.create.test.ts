@@ -1,3 +1,5 @@
+// Sandbox browser creation tests cover Docker args, bridge auth, noVNC access,
+// config hashing, and cached bridge invalidation.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,8 +26,6 @@ const dockerMocks = vi.hoisted(() => ({
   execDocker: vi.fn(),
   readDockerContainerEnvVar: vi.fn(),
   readDockerContainerLabel: vi.fn(),
-  readDockerNetworkDriver: vi.fn(),
-  readDockerNetworkGateway: vi.fn(),
   readDockerPort: vi.fn(),
 }));
 
@@ -55,8 +55,6 @@ vi.mock("./docker.js", async () => {
     execDocker: dockerMocks.execDocker,
     readDockerContainerEnvVar: dockerMocks.readDockerContainerEnvVar,
     readDockerContainerLabel: dockerMocks.readDockerContainerLabel,
-    readDockerNetworkDriver: dockerMocks.readDockerNetworkDriver,
-    readDockerNetworkGateway: dockerMocks.readDockerNetworkGateway,
     readDockerPort: dockerMocks.readDockerPort,
   };
 });
@@ -211,8 +209,6 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.execDocker.mockClear();
     dockerMocks.readDockerContainerEnvVar.mockClear();
     dockerMocks.readDockerContainerLabel.mockClear();
-    dockerMocks.readDockerNetworkDriver.mockClear();
-    dockerMocks.readDockerNetworkGateway.mockClear();
     dockerMocks.readDockerPort.mockClear();
     registryMocks.readBrowserRegistry.mockClear();
     registryMocks.updateBrowserRegistry.mockClear();
@@ -228,8 +224,6 @@ describe("ensureSandboxBrowser create args", () => {
     });
     dockerMocks.readDockerContainerLabel.mockResolvedValue(null);
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
-    dockerMocks.readDockerNetworkDriver.mockResolvedValue("bridge");
-    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
     dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
       if (port === 9222) {
         return 49100;
@@ -290,6 +284,8 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("publishes noVNC on loopback and injects noVNC password env", async () => {
+    // noVNC password stays in the container environment; external access uses a
+    // short-lived observer token so URLs do not carry the password.
     const result = await ensureTestSandboxBrowser({
       scopeKey: "session:test",
       workspaceDir: "/tmp/workspace",
@@ -327,6 +323,8 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("applies read-only skill overlays after browser custom binds", async () => {
+    // Browser sandboxes share workspace mount semantics with shell sandboxes:
+    // protected skill overlays must win over custom binds.
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -610,6 +608,8 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("force-removes the browser container when CDP never becomes reachable", async () => {
+    // A browser container that starts but never exposes CDP is unusable; remove
+    // it immediately so the next attempt recreates from a clean state.
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("timeout"));
     bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
       await params.onEnsureAttachTarget?.({});
@@ -645,8 +645,6 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("requires auth for the sandbox CDP relay without auto-derived source ranges", async () => {
-    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
-
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
       workspaceDir: "/tmp/workspace",
@@ -661,8 +659,6 @@ describe("ensureSandboxBrowser create args", () => {
     );
     expect(authEntry).toMatch(/^OPENCLAW_BROWSER_CDP_AUTH_TOKEN=[0-9a-f]{48}$/);
     expect(envEntries).not.toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=172.21.0.1/32");
-    expect(dockerMocks.readDockerNetworkDriver).not.toHaveBeenCalled();
-    expect(dockerMocks.readDockerNetworkGateway).not.toHaveBeenCalled();
 
     const token = requireValue(authEntry, "CDP auth env").slice(
       "OPENCLAW_BROWSER_CDP_AUTH_TOKEN=".length,
@@ -676,7 +672,6 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("passes explicit cdpSourceRange as an additional relay filter", async () => {
-    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
     const cfg = buildConfig(false);
     cfg.browser.cdpSourceRange = "10.0.0.0/24";
 
@@ -690,7 +685,6 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
     const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
     expect(envEntries).toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=10.0.0.0/24");
-    expect(dockerMocks.readDockerNetworkGateway).not.toHaveBeenCalled();
   });
 
   it("recreates existing browser containers that do not expose relay auth", async () => {
@@ -712,7 +706,6 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("does not inject a source range for network=none by default", async () => {
-    dockerMocks.readDockerNetworkGateway.mockResolvedValue(null);
     const cfg = buildConfig(false);
     cfg.browser.network = "none";
 

@@ -1,3 +1,4 @@
+// Control UI tests cover exec approval behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   addExecApproval,
@@ -89,22 +90,6 @@ describe("parsePluginApprovalRequested", () => {
       pluginId: "sage",
       agentId: "agent-1",
       sessionKey: "sess-1",
-      allowedDecisions: ["deny"],
-      actions: [
-        {
-          kind: "command",
-          label: "Verify with World",
-          style: "primary",
-          command: "/agentkit approve plugin-1 allow-once",
-        },
-        {
-          kind: "decision",
-          label: "Deny",
-          style: "danger",
-          decision: "deny",
-          command: "/approve plugin-1 deny",
-        },
-      ],
     },
   };
 
@@ -115,22 +100,6 @@ describe("parsePluginApprovalRequested", () => {
     expect(result?.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
     expect(result?.pluginSeverity).toBe("high");
     expect(result?.pluginId).toBe("sage");
-    expect(result?.allowedDecisions).toEqual(["deny"]);
-    expect(result?.actions).toEqual([
-      {
-        kind: "command",
-        label: "Verify with World",
-        style: "primary",
-        command: "/agentkit approve plugin-1 allow-once",
-      },
-      {
-        kind: "decision",
-        label: "Deny",
-        style: "danger",
-        decision: "deny",
-        command: "/approve plugin-1 deny",
-      },
-    ]);
     expect(result?.request.command).toBe("Dangerous command detected");
     expect(result?.request.agentId).toBe("agent-1");
     expect(result?.request.sessionKey).toBe("sess-1");

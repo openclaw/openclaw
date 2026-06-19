@@ -1,3 +1,4 @@
+// Telegram plugin module implements setup core behavior.
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
@@ -38,9 +39,6 @@ export function getTelegramUserIdHelpLines(): string[] {
     t("wizard.telegram.website", { url: "https://openclaw.ai" }),
   ];
 }
-
-export const TELEGRAM_TOKEN_HELP_LINES = getTelegramTokenHelpLines();
-export const TELEGRAM_USER_ID_HELP_LINES = getTelegramUserIdHelpLines();
 
 function normalizeTelegramAllowFromInput(raw: string): string {
   return raw

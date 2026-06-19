@@ -1,4 +1,6 @@
+// Feishu plugin module implements wiki behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
@@ -10,6 +12,8 @@ import {
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
 type ObjType = "doc" | "sheet" | "mindnote" | "bitable" | "file" | "docx" | "slides";
+
+const WIKI_PAGE_SIZE = 50;
 
 // ============ Actions ============
 
@@ -39,8 +43,19 @@ function optionalWikiSpaceId(value: unknown, fieldName: string): string | undefi
   return requireWikiSpaceId(value, fieldName);
 }
 
-async function listSpaces(client: Lark.Client) {
-  const res = await client.wiki.space.list({});
+function readWikiPageSize(params: Record<string, unknown>): number {
+  return (
+    readPositiveIntegerParam(params, "page_size", {
+      max: WIKI_PAGE_SIZE,
+      message: "page_size must be a positive integer between 1 and 50",
+    }) ?? WIKI_PAGE_SIZE
+  );
+}
+
+async function listSpaces(client: Lark.Client, pageSize: number, pageToken?: string) {
+  const res = await client.wiki.space.list({
+    params: { page_size: pageSize, page_token: pageToken },
+  });
   if (res.code !== 0) {
     throw new Error(res.msg);
   }
@@ -55,14 +70,28 @@ async function listSpaces(client: Lark.Client) {
 
   return {
     spaces,
-    ...(spaces.length === 0 && { hint: WIKI_ACCESS_HINT }),
+    has_more: res.data?.has_more ?? false,
+    page_token: res.data?.page_token,
+    ...(spaces.length === 0 &&
+      pageToken === undefined &&
+      res.data?.has_more !== true && { hint: WIKI_ACCESS_HINT }),
   };
 }
 
-async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?: string) {
+async function listNodes(
+  client: Lark.Client,
+  spaceId: string,
+  parentNodeToken: string | undefined,
+  pageSize: number,
+  pageToken?: string,
+) {
   const res = await client.wiki.spaceNode.list({
     path: { space_id: spaceId },
-    params: { parent_node_token: parentNodeToken },
+    params: {
+      parent_node_token: parentNodeToken,
+      page_size: pageSize,
+      page_token: pageToken,
+    },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -77,6 +106,8 @@ async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?:
         title: n.title,
         has_child: n.has_child,
       })) ?? [],
+    has_more: res.data?.has_more ?? false,
+    page_token: res.data?.page_token,
   };
 }
 
@@ -207,14 +238,23 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
                 api,
                 executeParams: p,
                 defaultAccountId,
+                requiredTool: { family: "wiki", label: "Wiki" },
               });
             switch (p.action) {
               case "spaces":
-                return jsonToolResult(await listSpaces(createClient()));
+                return jsonToolResult(
+                  await listSpaces(createClient(), readWikiPageSize(p), p.page_token),
+                );
               case "nodes": {
                 const spaceId = requireWikiSpaceId(p.space_id, "space_id");
                 return jsonToolResult(
-                  await listNodes(createClient(), spaceId, p.parent_node_token),
+                  await listNodes(
+                    createClient(),
+                    spaceId,
+                    p.parent_node_token,
+                    readWikiPageSize(p),
+                    p.page_token,
+                  ),
                 );
               }
               case "get":

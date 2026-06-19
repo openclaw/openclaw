@@ -1,6 +1,8 @@
+// Shared harness for dispatch-from-config tests and mocked runtimes.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
@@ -31,6 +33,13 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
   markDiagnosticSessionProgress: vi.fn(),
+  requestStuckDiagnosticSessionRecovery: vi.fn<() => Promise<StuckSessionRecoveryOutcome>>(
+    async () => ({
+      status: "skipped" as const,
+      action: "keep_lane" as const,
+      reason: "active_reply_work" as const,
+    }),
+  ),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -50,6 +59,7 @@ const hookMocks = vi.hoisted(() => ({
     runReplyDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
+    runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -59,6 +69,9 @@ const internalHookMocks = vi.hoisted(() => ({
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
   readAcpSessionEntry: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
+    () => null,
+  ),
+  readAcpSessionMeta: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
     () => null,
   ),
   getAcpRuntimeBackend: vi.fn<() => unknown>(() => null),
@@ -200,6 +213,19 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
+    config?.diagnostics?.enabled !== false,
+  requestStuckDiagnosticSessionRecovery: diagnosticMocks.requestStuckDiagnosticSessionRecovery,
+  resolveStuckSessionWarnMs: (config?: { diagnostics?: { stuckSessionWarnMs?: number } }) =>
+    config?.diagnostics?.stuckSessionWarnMs ?? 120_000,
+  resolveStuckSessionAbortMs: (
+    config: { diagnostics?: { stuckSessionAbortMs?: number } } | undefined,
+    stuckSessionWarnMs: number,
+  ) =>
+    Math.max(
+      stuckSessionWarnMs,
+      config?.diagnostics?.stuckSessionAbortMs ?? Math.max(300_000, stuckSessionWarnMs * 3),
+    ),
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -225,6 +251,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
   readAcpSessionEntry: acpMocks.readAcpSessionEntry,
+  readAcpSessionMeta: acpMocks.readAcpSessionMeta,
   upsertAcpSessionMeta: acpMocks.upsertAcpSessionMeta,
 }));
 vi.mock("../../acp/runtime/registry.js", () => ({
@@ -253,7 +280,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
 }));
-vi.mock("./runtime-plugins.runtime.js", () => ({
+vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
 }));
 vi.mock("./conversation-binding-input.js", () => {

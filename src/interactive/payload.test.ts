@@ -1,3 +1,4 @@
+// Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
 import {
   hasReplyChannelData,
@@ -163,6 +164,63 @@ describe("interactive payload helpers", () => {
     expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
       "- Launch: https://example.com/app",
     );
+  });
+
+  it("normalizes typed presentation actions and bridges them to legacy values", () => {
+    const normalized = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(presentationToInteractiveReply(normalized!)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+              value: "/codex plugins menu",
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+              value: "/approve req allow-once",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("converts only presentation controls for native component renderers", () => {

@@ -1,3 +1,5 @@
+// Covers channel/target inference, legacy target rewrite, target validation,
+// and plugin alias-aware message-action normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
@@ -63,6 +65,28 @@ describe("normalizeMessageActionInput", () => {
         },
       },
       expectedFields: { target: "channel:C1", to: "channel:C1" },
+    },
+    {
+      input: {
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "user:U1",
+          currentChannelProvider: "slack",
+        },
+      },
+      expectedFields: { target: "user:U1", to: "user:U1" },
+    },
+    {
+      input: {
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "user:U1",
+          currentChannelProvider: "slack",
+        },
+      },
+      expectedFields: { target: "user:U1", to: "user:U1" },
     },
     {
       input: {

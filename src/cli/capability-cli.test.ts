@@ -1,3 +1,4 @@
+// Capability CLI tests cover capability command registration and output formatting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn(() => []),
+  resolveApiKeyForProvider: vi.fn(),
   resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
   updateAuthProfileStoreWithLock: vi.fn(
     async ({ updater }: { updater: (store: any) => boolean }) => {
@@ -96,6 +98,7 @@ const mocks = vi.hoisted(() => ({
   })),
   setTtsProvider: vi.fn(),
   setTtsPersona: vi.fn(),
+  resolveTtsConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -149,10 +152,10 @@ const mocks = vi.hoisted(() => ({
       options?: { providerId?: string },
     ) => {
       const providerId = options?.providerId ?? config.tools?.web?.search?.provider ?? "tavily";
-      const path = `plugins.entries.${providerId}.config.webSearch.apiKey`;
+      const pathValue = `plugins.entries.${providerId}.config.webSearch.apiKey`;
       return {
-        targetIds: new Set([path]),
-        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+        targetIds: new Set([pathValue]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([pathValue]) } : {}),
       };
     },
   ),
@@ -161,13 +164,13 @@ const mocks = vi.hoisted(() => ({
       _config: { tools?: { web?: { fetch?: { provider?: string } } } },
       options?: { providerId?: string },
     ) => {
-      const path =
+      const pathLocal =
         options?.providerId === "firecrawl"
           ? "plugins.entries.firecrawl.config.webSearch.apiKey"
           : "plugins.entries.firecrawl.config.webFetch.apiKey";
       return {
-        targetIds: new Set([path]),
-        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+        targetIds: new Set([pathLocal]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([pathLocal]) } : {}),
       };
     },
   ),
@@ -246,6 +249,11 @@ vi.mock("../agents/auth-profiles.js", () => ({
     mocks.loadAuthProfileStoreForRuntime as unknown as typeof import("../agents/auth-profiles.js").loadAuthProfileStoreForRuntime,
   listProfilesForProvider:
     mocks.listProfilesForProvider as typeof import("../agents/auth-profiles.js").listProfilesForProvider,
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider:
+    mocks.resolveApiKeyForProvider as typeof import("../agents/model-auth.js").resolveApiKeyForProvider,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => ({
@@ -338,7 +346,8 @@ vi.mock("../tts/tts.js", () => ({
   getTtsProvider: vi.fn(() => "openai"),
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
-  resolveTtsConfig: vi.fn(() => ({})),
+  resolveTtsConfig:
+    mocks.resolveTtsConfig as unknown as typeof import("../tts/tts.js").resolveTtsConfig,
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
   setTtsPersona: mocks.setTtsPersona as typeof import("../tts/tts.js").setTtsPersona,
@@ -459,7 +468,9 @@ describe("capability cli", () => {
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
+    mocks.resolveApiKeyForProvider.mockReset().mockRejectedValue(new Error("no auth profile"));
     mocks.resolveAgentDir.mockClear();
+    mocks.resolveTtsConfig.mockReset().mockReturnValue({});
     mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock
@@ -724,7 +735,7 @@ describe("capability cli", () => {
     const preparedParams = firstPreparedModelParams();
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
-    expect(preparedParams?.skipPiDiscovery).toBe(true);
+    expect(preparedParams?.skipAgentDiscovery).toBe(true);
     const call = firstCompletionCall();
     expect(call?.context?.messages?.[0]?.role).toBe("user");
     expect(call?.context?.messages?.[0]?.content).toBe("hello");
@@ -737,7 +748,7 @@ describe("capability cli", () => {
     const params = firstPreparedModelParams();
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
-    expect(params?.skipPiDiscovery).toBe(true);
+    expect(params?.skipAgentDiscovery).toBe(true);
   });
 
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
@@ -787,17 +798,17 @@ describe("capability cli", () => {
     expect(inputs[0]?.mimeType).toBe("image/png");
   });
 
-  it("adds minimal instructions only for openai-codex local model probes", async () => {
+  it("adds minimal instructions only for openai local model probes", async () => {
     mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
       selection: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         agentDir: "/tmp/agent",
       },
       model: {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         maxTokens: 128,
       },
       auth: {
@@ -814,7 +825,7 @@ describe("capability cli", () => {
         "model",
         "run",
         "--model",
-        "openai-codex/gpt-5.5",
+        "openai/gpt-5.5",
         "--prompt",
         "hello",
         "--json",
@@ -976,7 +987,7 @@ describe("capability cli", () => {
       model: {
         provider: "codex",
         id: "gpt-5.4",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
       },
       auth: {
         apiKey: "codex-app-server",
@@ -1592,7 +1603,47 @@ describe("capability cli", () => {
     expect(generationCall?.providerOptions).toBeUndefined();
   });
 
-  it("passes image output format and OpenAI background hints through to edit runtime", async () => {
+  it("passes image quality and OpenAI moderation hints through to generation runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "draft.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "low-cost draft",
+        "--quality",
+        "low",
+        "--openai-moderation",
+        "low",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    expect(generationCall?.prompt).toBe("low-cost draft");
+    expect(generationCall?.quality).toBe("low");
+    expect(generationCall?.providerOptions).toEqual({
+      openai: {
+        moderation: "low",
+      },
+    });
+  });
+
+  it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1.5",
@@ -1624,6 +1675,10 @@ describe("capability cli", () => {
         "png",
         "--openai-background",
         "transparent",
+        "--openai-moderation",
+        "auto",
+        "--quality",
+        "high",
         "--json",
       ],
     });
@@ -1633,10 +1688,12 @@ describe("capability cli", () => {
     expect(generationCall?.prompt).toBe("make background transparent");
     expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
     expect(generationCall?.outputFormat).toBe("png");
+    expect(generationCall?.quality).toBe("high");
     expect(generationCall?.background).toBeUndefined();
     expect(generationCall?.providerOptions).toEqual({
       openai: {
         background: "transparent",
+        moderation: "auto",
       },
     });
     expect(inputImages).toHaveLength(1);
@@ -1701,6 +1758,46 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       "Error: --background must be one of transparent, opaque, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--quality",
+          "expensive",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --quality must be one of low, medium, high, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--openai-moderation",
+          "none",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --openai-moderation must be one of low or auto",
     );
   });
 
@@ -1778,6 +1875,33 @@ describe("capability cli", () => {
       "--output-format",
       "--background",
       "--openai-background",
+      "--openai-moderation",
+      "--quality",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ]);
+  });
+
+  it("reports the expanded image.generate flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.generate", "--json"],
+    });
+
+    expect(firstJsonOutput()?.id).toBe("image.generate");
+    expect(firstJsonOutput()?.flags).toEqual([
+      "--prompt",
+      "--model",
+      "--count",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--openai-moderation",
+      "--quality",
       "--timeout-ms",
       "--output",
       "--json",
@@ -1926,8 +2050,54 @@ describe("capability cli", () => {
         argv: ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
       }),
     ).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("--timeout-ms must be a finite number");
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
     expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "image generate",
+      ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image edit",
+      [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        "photo.png",
+        "--prompt",
+        "crop it",
+        "--timeout-ms",
+        "1000ms",
+      ],
+    ],
+    [
+      "image describe",
+      ["capability", "image", "describe", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image describe-many",
+      ["capability", "image", "describe-many", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "video generate",
+      ["capability", "video", "generate", "--prompt", "clip", "--timeout-ms", "1000ms"],
+    ],
+  ])("rejects malformed %s timeout before provider dispatch", async (_name, argv) => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv,
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.describeImageFileWithModel).not.toHaveBeenCalled();
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {
@@ -1966,7 +2136,7 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
         "models.providers.*.apiKey",
       ),
     ).toBe(true);
@@ -2074,6 +2244,261 @@ describe("capability cli", () => {
     expect(mocks.setTtsProvider).not.toHaveBeenCalled();
   });
 
+  it("hydrates local TTS provider config from API-key auth profiles", async () => {
+    const rawConfig = { messages: { tts: { providers: { openai: { voice: "coral" } } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "tts",
+        "convert",
+        "--text",
+        "hello",
+        "--model",
+        "openai/gpt-4o-mini-tts",
+        "--json",
+      ],
+    });
+
+    expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        cfg: rawConfig,
+        credentialPrecedence: "profile-first",
+      }),
+    );
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string; voice?: string } } } };
+    };
+    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+      apiKey: "profile-openai-key",
+      voice: "coral",
+    });
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
+  });
+
+  it("hydrates local TTS default provider config from API-key auth profiles", async () => {
+    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--json"],
+    });
+
+    expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        cfg: rawConfig,
+        credentialPrecedence: "profile-first",
+      }),
+    );
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+    };
+    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+      apiKey: "profile-openai-key",
+    });
+  });
+
+  it("hydrates local TTS channel provider config from API-key auth profiles", async () => {
+    const rawConfig = { channels: { discord: { tts: { provider: "openai" } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--channel", "discord", "--json"],
+    });
+
+    expect(mocks.resolveTtsConfig).toHaveBeenCalledWith(rawConfig, { channelId: "discord" });
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: "discord" }),
+    );
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+    };
+    expect(cfg.messages?.tts?.providers?.openai).toMatchObject({
+      apiKey: "profile-openai-key",
+    });
+  });
+
+  it("hydrates local TTS channel direct provider config from API-key auth profiles", async () => {
+    const rawConfig = {
+      channels: {
+        discord: {
+          tts: {
+            openai: { speakerVoice: "nova" },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--channel", "discord", "--json"],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      channels?: {
+        discord?: { tts?: { openai?: { apiKey?: string; speakerVoice?: string } } };
+      };
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+    };
+    expect(cfg.channels?.discord?.tts?.openai).toMatchObject({
+      apiKey: "profile-openai-key",
+      speakerVoice: "nova",
+    });
+    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
+  });
+
+  it("does not override inherited local TTS channel provider API keys", async () => {
+    const rawConfig = {
+      messages: { tts: { providers: { openai: { apiKey: "config-key" } } } },
+      channels: {
+        discord: {
+          tts: {
+            providers: { openai: { speakerVoice: "nova" } },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveTtsConfig.mockReturnValue({
+      providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } },
+    });
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--channel", "discord", "--json"],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      channels?: {
+        discord?: { tts?: { providers?: { openai?: { apiKey?: string; speakerVoice?: string } } } };
+      };
+    };
+    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBe("config-key");
+    expect(cfg.channels?.discord?.tts?.providers?.openai).toEqual({ speakerVoice: "nova" });
+    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not hydrate local TTS provider config from token auth profiles", async () => {
+    const rawConfig = { messages: { tts: { provider: "openai" } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-token",
+      source: "profile:openai:token",
+      mode: "token",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--json"],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+    };
+    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBeUndefined();
+  });
+
+  it("does not override existing TTS provider API keys with different casing", async () => {
+    const rawConfig = { messages: { tts: { providers: { OpenAI: { apiKey: "config-key" } } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "tts",
+        "convert",
+        "--text",
+        "hello",
+        "--model",
+        "openai/gpt-4o-mini-tts",
+        "--json",
+      ],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: {
+        tts?: { providers?: { openai?: { apiKey?: string }; OpenAI?: { apiKey?: string } } };
+      };
+    };
+    expect(cfg.messages?.tts?.providers?.OpenAI?.apiKey).toBe("config-key");
+    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+  });
+
+  it("does not override existing direct TTS provider API keys", async () => {
+    const rawConfig = { messages: { tts: { openai: { apiKey: "config-key" } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "tts",
+        "convert",
+        "--text",
+        "hello",
+        "--model",
+        "openai/gpt-4o-mini-tts",
+        "--json",
+      ],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: {
+        tts?: {
+          openai?: { apiKey?: string };
+          providers?: { openai?: { apiKey?: string } };
+        };
+      };
+    };
+    expect(cfg.messages?.tts?.openai?.apiKey).toBe("config-key");
+    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+  });
+
   it("disables TTS fallback when explicit provider or voice/model selection is requested", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -2179,7 +2604,7 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
         "models.providers.*.apiKey",
       ),
     ).toBe(true);

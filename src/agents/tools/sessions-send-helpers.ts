@@ -1,3 +1,8 @@
+/**
+ * sessions_send helper logic.
+ *
+ * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
+ */
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -12,7 +17,7 @@ export {
   isReplySkip,
 } from "./sessions-send-tokens.js";
 
-const DEFAULT_PING_PONG_TURNS = 5;
+const DEFAULT_AGENTNG_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 20;
 
 export type AnnounceTarget = {
@@ -22,6 +27,7 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
+/** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
@@ -32,6 +38,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   const channel = normalizedChannel ?? parsed.channel;
   const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
   const genericTarget = parsed.kind === "channel" ? `channel:${parsed.id}` : `group:${parsed.id}`;
+  // Prefer plugin-owned target normalization so channel-specific IDs and topics survive routing.
   const normalized =
     plugin?.messaging?.resolveSessionTarget?.({
       kind: parsed.kind,
@@ -52,17 +59,19 @@ function buildAgentSessionLines(params: {
   targetChannel?: string;
 }): string[] {
   return [
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
+    // Session keys are high-cardinality (thread/run ids), so concrete values churn the
+    // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
+    // low-cardinality and inform reply formatting, so they stay concrete.
+    params.requesterSessionKey ? "Agent 1 (requester) session: <REQUESTER_SESSION>." : undefined,
     params.requesterChannel
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
+    "Agent 2 (target) session: <TARGET_SESSION>.",
     params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
   ].filter((line): line is string => Boolean(line));
 }
 
+/** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -74,6 +83,7 @@ export function buildAgentToAgentMessageContext(params: {
   return lines.join("\n");
 }
 
+/** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -95,6 +105,7 @@ export function buildAgentToAgentReplyContext(params: {
   return lines.join("\n");
 }
 
+/** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -119,9 +130,10 @@ export function buildAgentToAgentAnnounceContext(params: {
   return lines.join("\n");
 }
 
+/** Resolves the configured A2A ping-pong turn limit with a hard runtime cap. */
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   const raw = cfg?.session?.agentToAgent?.maxPingPongTurns;
-  const fallback = DEFAULT_PING_PONG_TURNS;
+  const fallback = DEFAULT_AGENTNG_PONG_TURNS;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return fallback;
   }

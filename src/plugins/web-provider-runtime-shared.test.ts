@@ -1,3 +1,4 @@
+// Covers shared web provider runtime helpers.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -172,6 +173,7 @@ describe("web-provider-runtime-shared", () => {
         env: { BRAVE_API_KEY: "key" },
         onlyPluginIds: ["brave", "firecrawl"],
         origin: "bundled",
+        sandboxed: true,
         workspaceDir: "/workspace",
       },
       {
@@ -192,6 +194,7 @@ describe("web-provider-runtime-shared", () => {
       env: { BRAVE_API_KEY: "key" },
       onlyPluginIds: ["brave", "firecrawl"],
       origin: "bundled",
+      sandboxed: true,
     });
     expect(mapRegistryProviders).toHaveBeenCalledWith({
       registry: activeRegistry,

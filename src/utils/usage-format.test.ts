@@ -1,3 +1,4 @@
+// Usage format tests cover display formatting for token and cost usage.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +10,7 @@ import {
   setGatewayModelPricingForTest,
 } from "../gateway/model-pricing-cache-state.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resetUsageFormatCachesForTest,
   estimateUsageCost,
@@ -16,10 +18,10 @@ import {
   formatUsd,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
-  type PricingTier,
 } from "./usage-format.js";
 
 type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
+type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
 
 function requireCostConfig(
   cost: ReturnType<typeof resolveModelCostConfig>,
@@ -42,12 +44,12 @@ function requireTieredPricing(
 }
 
 describe("usage-format", () => {
-  const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let agentDir: string;
   let stateDir: string;
 
   beforeEach(async () => {
+    envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "OPENCLAW_STATE_DIR"]);
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
     agentDir = path.join(stateDir, "agents", "main", "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -58,16 +60,8 @@ describe("usage-format", () => {
   });
 
   afterEach(async () => {
-    if (originalAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
-    }
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
     resetUsageFormatCachesForTest();
     resetGatewayModelPricingCacheForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -702,7 +696,7 @@ describe("usage-format", () => {
     const tiers: PricingTier[] = [
       { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32_000] },
       { input: 0.7, output: 3.5, cacheRead: 0, cacheWrite: 0, range: [32_000, 128_000] },
-      { input: 1.4, output: 7.0, cacheRead: 0, cacheWrite: 0, range: [128_000, 256_000] },
+      { input: 1.4, output: 7, cacheRead: 0, cacheWrite: 0, range: [128_000, 256_000] },
     ];
     const cost = { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
 
@@ -768,9 +762,9 @@ describe("usage-format", () => {
   it("bills overflow at last tier when only a single small-range tier exists (e.g. <30K)", () => {
     // Only one tier covering [0, 30000), input is 100000
     const tiers: PricingTier[] = [
-      { input: 1.0, output: 3.0, cacheRead: 0.5, cacheWrite: 0, range: [0, 30_000] },
+      { input: 1, output: 3, cacheRead: 0.5, cacheWrite: 0, range: [0, 30_000] },
     ];
-    const cost = { input: 1.0, output: 3.0, cacheRead: 0.5, cacheWrite: 0, tieredPricing: tiers };
+    const cost = { input: 1, output: 3, cacheRead: 0.5, cacheWrite: 0, tieredPricing: tiers };
 
     // 100000 input exceeds the only range, so Tier 1 is the whole-request fallback.
     // Total = 0.1 + 0.015 + 0.001 = 0.116

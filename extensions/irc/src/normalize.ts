@@ -1,3 +1,4 @@
+// Irc helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -60,10 +61,6 @@ export function normalizeIrcAllowEntry(raw: string): string {
     value = value.slice("user:".length);
   }
   return value.trim();
-}
-
-export function normalizeIrcAllowlist(entries?: Array<string | number>): string[] {
-  return (entries ?? []).map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean);
 }
 
 export function buildIrcAllowlistCandidates(

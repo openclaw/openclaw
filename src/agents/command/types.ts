@@ -1,3 +1,6 @@
+/**
+ * Public option and metadata types for agent command execution.
+ */
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
@@ -16,6 +19,7 @@ export type ImageContent = {
 };
 export type { AgentStreamParams } from "./shared-types.js";
 
+/** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
@@ -24,8 +28,10 @@ export type AgentCommandResultMetaOverrides = {
   fallbackSessionKey?: string;
 };
 
-export type AcpTurnSource = "manual_spawn";
+/** ACP turn source markers accepted by trusted command callsites. */
+type AcpTurnSource = "manual_spawn";
 
+/** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -34,10 +40,13 @@ export type AgentRunContext = {
   groupSpace?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentInboundAudio?: boolean;
+  senderId?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
 
+/** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
@@ -99,6 +108,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  /** Immutable gateway lifecycle ownership captured when this run was admitted. */
+  lifecycleGeneration?: string;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
@@ -120,14 +131,20 @@ export type AgentCommandOpts = {
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
+  cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
   cleanupCliLiveSessionOnRunEnd?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void;
+  /** Called when compaction rotates the active run onto a successor session. */
+  onSessionIdChanged?: (sessionId: string) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */
@@ -138,6 +155,7 @@ export type AgentCommandOpts = {
   suppressPromptPersistence?: boolean;
 };
 
+/** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"

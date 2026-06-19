@@ -1,10 +1,12 @@
-import { resolveEnvApiKey } from "../agents/model-auth-env.js";
-import type { OpenClawConfig } from "../config/types.js";
-import type { SecretInput } from "../config/types.secrets.js";
+/** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import {
@@ -27,31 +29,36 @@ export {
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
+/** Normalizes pasted API-key input, including shell assignment forms. */
 export function normalizeApiKeyInput(raw: string): string {
   const trimmed = normalizeStringifiedOptionalString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
 
-  const assignmentMatch = trimmed.match(/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/);
-  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : trimmed;
+  const normalizedPaste = normalizeSecretInput(trimmed);
+  const assignmentMatch = normalizedPaste.match(
+    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
+  );
+  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : normalizedPaste;
+  const withoutSemicolon = valuePart.endsWith(";") ? valuePart.slice(0, -1).trim() : valuePart;
 
   const unquoted =
-    valuePart.length >= 2 &&
-    ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
-      (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
-      (valuePart.startsWith("`") && valuePart.endsWith("`")))
-      ? valuePart.slice(1, -1)
-      : valuePart;
+    withoutSemicolon.length >= 2 &&
+    ((withoutSemicolon.startsWith('"') && withoutSemicolon.endsWith('"')) ||
+      (withoutSemicolon.startsWith("'") && withoutSemicolon.endsWith("'")) ||
+      (withoutSemicolon.startsWith("`") && withoutSemicolon.endsWith("`")))
+      ? withoutSemicolon.slice(1, -1)
+      : withoutSemicolon;
 
-  const withoutSemicolon = unquoted.endsWith(";") ? unquoted.slice(0, -1) : unquoted;
-
-  return withoutSemicolon.trim();
+  return normalizeSecretInput(unquoted);
 }
 
+/** Validates required API-key input for setup prompts. */
 export const validateApiKeyInput = (value: string) =>
   normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
 
+/** Formats a redacted API-key preview for setup confirmation prompts. */
 export function formatApiKeyPreview(
   raw: string,
   opts: { head?: number; tail?: number } = {},
@@ -73,12 +80,14 @@ export function formatApiKeyPreview(
   return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
 }
 
+/** Normalizes a token-provider selector from CLI/options input. */
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
   return normalizeOptionalLowercaseString(tokenProvider);
 }
 
+/** Normalizes secret input mode values accepted by provider setup. */
 export function normalizeSecretInputModeInput(
   secretInputMode: string | null | undefined,
 ): SecretInputMode | undefined {
@@ -89,6 +98,7 @@ export function normalizeSecretInputModeInput(
   return undefined;
 }
 
+/** Applies a CLI-provided API key when its provider selector matches this auth method. */
 export async function maybeApplyApiKeyFromOption(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
@@ -109,6 +119,7 @@ export async function maybeApplyApiKeyFromOption(params: {
   return apiKey;
 }
 
+/** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
@@ -156,6 +167,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   });
 }
 
+/** Resolves an API key from environment or interactive prompt and records the chosen secret mode. */
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

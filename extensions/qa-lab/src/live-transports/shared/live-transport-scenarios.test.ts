@@ -1,3 +1,6 @@
+// Qa Lab tests cover live transport scenarios plugin behavior.
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { __testing as discordTesting } from "../discord/discord-live.runtime.js";
 import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
@@ -12,6 +15,16 @@ import {
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
+  it("uses the public live transport scenario SDK seam", () => {
+    const source = fs.readFileSync(
+      fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("openclaw/plugin-sdk/qa-live-transport-scenarios");
+    expect(source).not.toContain("openclaw/plugin-sdk/qa-runtime");
+  });
+
   it("keeps the repo-wide baseline contract ordered", () => {
     expect(LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
@@ -95,9 +108,16 @@ describe("live transport scenario helpers", () => {
       standardId: "thread-follow-up",
       scenarioId: "slack-thread-follow-up",
     });
+    expect(lanes.find((lane) => lane.transportId === "whatsapp")?.members).toContainEqual({
+      standardId: "allowlist-block",
+      scenarioId: "whatsapp-group-allowlist-block",
+    });
     expect(
       lanes.find((lane) => lane.transportId === "discord")?.baselineMissingStandardScenarioIds,
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
+    expect(
+      lanes.find((lane) => lane.transportId === "whatsapp")?.baselineMissingStandardScenarioIds,
+    ).toEqual([]);
   });
 
   it("keeps coverage report lane summaries aligned with runtime lanes", () => {

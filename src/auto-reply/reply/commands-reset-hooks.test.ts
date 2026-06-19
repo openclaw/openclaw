@@ -1,3 +1,4 @@
+// Tests reset hook emission and cleanup around reset commands.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -208,9 +209,16 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("uses gateway session reset for bound ACP sessions", async () => {
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({
+      ok: true,
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      sessionId: "session-after-acp-reset",
+      storePath: "/tmp/claude-sessions.json",
+    });
     resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
+    const onSessionPrepared = vi.fn();
     const params = buildResetParams(
       "/reset",
       {
@@ -223,6 +231,7 @@ describe("handleCommands reset hooks", () => {
         CommandSource: "native",
       },
     );
+    params.opts = { onSessionPrepared } as never;
 
     const result = await maybeHandleResetCommand(params);
 
@@ -244,6 +253,11 @@ describe("handleCommands reset hooks", () => {
     });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(params.command.resetHookTriggered).toBe(true);
+    expect(onSessionPrepared).toHaveBeenCalledWith({
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      sessionId: "session-after-acp-reset",
+      storePath: "/tmp/claude-sessions.json",
+    });
   });
 
   it("keeps tail dispatch after a bound ACP reset", async () => {
@@ -459,7 +473,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("acknowledges bare /reset without falling through to model execution", async () => {
-    const params = buildResetParams("/reset", {
+    const params = buildResetParams("/RESET", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
@@ -474,7 +488,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("acknowledges bare /new without falling through to model execution", async () => {
-    const params = buildResetParams("/new", {
+    const params = buildResetParams("/NEW", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
@@ -489,7 +503,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {
-    const params = buildResetParams("/new take notes", {
+    const params = buildResetParams("/Reset take notes", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
@@ -497,6 +511,6 @@ describe("handleCommands reset hooks", () => {
     const result = await maybeHandleResetCommand(params);
 
     expect(result).toBeNull();
-    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
+    expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
 });

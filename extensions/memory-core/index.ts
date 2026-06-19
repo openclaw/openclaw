@@ -1,3 +1,4 @@
+// Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
   resolveMemorySearchConfig,
@@ -11,7 +12,9 @@ import {
   type AnyAgentTool,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
+import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
@@ -26,6 +29,7 @@ type MemoryToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  oneShotCliRun?: boolean;
 };
 
 let memoryToolsModulePromise: Promise<MemoryToolsModule> | undefined;
@@ -62,7 +66,7 @@ const MemorySearchSchema = {
   type: "object",
   properties: {
     query: { type: "string" },
-    maxResults: { type: "number" },
+    maxResults: { type: "integer", minimum: 1 },
     minScore: { type: "number" },
     corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
   },
@@ -74,8 +78,8 @@ const MemoryGetSchema = {
   type: "object",
   properties: {
     path: { type: "string" },
-    from: { type: "number" },
-    lines: { type: "number" },
+    from: { type: "integer", minimum: 1 },
+    lines: { type: "integer", minimum: 1 },
     corpus: { type: "string", enum: ["memory", "wiki", "all"] },
   },
   required: ["path"],
@@ -151,6 +155,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
+    oneShotCliRun: ctx.oneShotCliRun,
   };
 }
 
@@ -177,6 +182,9 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
+    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options),
+    );
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
     api.registerMemoryCapability({

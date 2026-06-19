@@ -1,3 +1,4 @@
+// Memory Core tests cover embeddings plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -209,6 +210,12 @@ describe("createEmbeddingProvider", () => {
 
     expect(result.provider?.id).toBe("legacy");
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([0]);
+  });
+
+  it("reports the llama.cpp plugin install command when local is unregistered", async () => {
+    await expect(createEmbeddingProvider(createOptions("local"))).rejects.toThrow(
+      "openclaw plugins install @openclaw/llama-cpp-provider",
+    );
   });
 
   it("does not auto-select generic providers by priority policy", async () => {

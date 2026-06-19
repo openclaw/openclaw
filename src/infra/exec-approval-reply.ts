@@ -1,3 +1,8 @@
+// Builds reply payloads for exec approval prompts and outcomes.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   InteractiveReply,
@@ -6,10 +11,6 @@ import type {
   MessagePresentationButton,
 } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,
@@ -34,18 +35,11 @@ export type ExecApprovalReplyMetadata = {
   approvalKind: "exec" | "plugin";
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
-  actions?: readonly ExecApprovalActionDescriptor[];
   sessionKey?: string;
-  title?: string;
-  description?: string;
-  severity?: "info" | "warning" | "critical";
-  toolName?: string;
-  pluginId?: string;
 };
 
 export type ExecApprovalActionDescriptor = {
-  kind?: "decision" | "command";
-  decision?: ExecApprovalReplyDecision;
+  decision: ExecApprovalReplyDecision;
   label: string;
   style: NonNullable<MessagePresentationButton["style"]>;
   command: string;
@@ -130,7 +124,6 @@ export function buildExecApprovalActionDescriptors(params: {
   const descriptors: ExecApprovalActionDescriptor[] = [];
   if (allowedDecisions.includes("allow-once")) {
     descriptors.push({
-      kind: "decision",
       decision: "allow-once",
       label: "Allow Once",
       style: "success",
@@ -142,7 +135,6 @@ export function buildExecApprovalActionDescriptors(params: {
   }
   if (allowedDecisions.includes("allow-always")) {
     descriptors.push({
-      kind: "decision",
       decision: "allow-always",
       label: "Allow Always",
       style: "primary",
@@ -154,7 +146,6 @@ export function buildExecApprovalActionDescriptors(params: {
   }
   if (allowedDecisions.includes("deny")) {
     descriptors.push({
-      kind: "decision",
       decision: "deny",
       label: "Deny",
       style: "danger",
@@ -172,6 +163,7 @@ function buildApprovalInteractiveButtons(
 ): InteractiveReplyButton[] {
   return descriptors.map((descriptor) => ({
     label: descriptor.label,
+    action: { type: "command", command: descriptor.command },
     value: descriptor.command,
     style: descriptor.style,
   }));
@@ -182,6 +174,7 @@ function buildApprovalPresentationButtons(
 ): MessagePresentationButton[] {
   return descriptors.map((descriptor) => ({
     label: descriptor.label,
+    action: { type: "command", command: descriptor.command },
     value: descriptor.command,
     style: descriptor.style,
   }));
@@ -318,45 +311,6 @@ function buildFence(text: string, language?: string): string {
   return `${fence}${languagePrefix}\n${text}\n${fence}`;
 }
 
-function normalizeActionDescriptors(raw: unknown): ExecApprovalActionDescriptor[] | undefined {
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  const actions: ExecApprovalActionDescriptor[] = [];
-  for (const value of raw) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      continue;
-    }
-    const record = value as Record<string, unknown>;
-    const label = normalizeOptionalString(record.label);
-    const command = normalizeOptionalString(record.command);
-    const style =
-      record.style === "primary" ||
-      record.style === "secondary" ||
-      record.style === "success" ||
-      record.style === "danger"
-        ? record.style
-        : undefined;
-    if (!label || !command || !style) {
-      continue;
-    }
-    const decision =
-      record.decision === "allow-once" ||
-      record.decision === "allow-always" ||
-      record.decision === "deny"
-        ? record.decision
-        : undefined;
-    actions.push({
-      kind: record.kind === "command" ? "command" : "decision",
-      label,
-      style,
-      command,
-      ...(decision ? { decision } : {}),
-    });
-  }
-  return actions.length > 0 ? actions : undefined;
-}
-
 export function getExecApprovalReplyMetadata(
   payload: ReplyPayload,
 ): ExecApprovalReplyMetadata | null {
@@ -381,18 +335,9 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
-  const actions = normalizeActionDescriptors(record.actions);
   const agentId = normalizeOptionalString(record.agentId);
   const sessionKey = normalizeOptionalString(record.sessionKey);
-  const title = normalizeOptionalString(record.title);
-  const description = normalizeOptionalString(record.description);
-  const severity =
-    record.severity === "info" || record.severity === "warning" || record.severity === "critical"
-      ? record.severity
-      : undefined;
-  const toolName = normalizeOptionalString(record.toolName);
-  const pluginId = normalizeOptionalString(record.pluginId);
-  const metadata: ExecApprovalReplyMetadata = {
+  return {
     approvalId,
     approvalSlug,
     approvalKind,
@@ -400,25 +345,6 @@ export function getExecApprovalReplyMetadata(
     allowedDecisions,
     sessionKey,
   };
-  if (actions) {
-    metadata.actions = actions;
-  }
-  if (title) {
-    metadata.title = title;
-  }
-  if (description) {
-    metadata.description = description;
-  }
-  if (severity) {
-    metadata.severity = severity;
-  }
-  if (toolName) {
-    metadata.toolName = toolName;
-  }
-  if (pluginId) {
-    metadata.pluginId = pluginId;
-  }
-  return metadata;
 }
 
 export function buildExecApprovalPendingReplyPayload(

@@ -1,3 +1,5 @@
+// SSRF pinning tests cover DNS pinning behavior, blocked DNS results, hostname
+// allowlists, and IPv4/IPv6 address ordering.
 import { describe, expect, it, vi } from "vitest";
 import {
   createPinnedLookup,
@@ -27,7 +29,7 @@ describe("ssrf pinning", () => {
         if (err) {
           reject(err);
         } else {
-          resolve({ address: address, family });
+          resolve({ address, family });
         }
       });
     });
@@ -60,7 +62,7 @@ describe("ssrf pinning", () => {
           if (err) {
             reject(err);
           } else {
-            resolve({ address: address, family });
+            resolve({ address, family });
           }
         });
       });
@@ -70,7 +72,7 @@ describe("ssrf pinning", () => {
           if (err) {
             reject(err);
           } else {
-            resolve({ address: address, family });
+            resolve({ address, family });
           }
         });
       });
@@ -136,7 +138,7 @@ describe("ssrf pinning", () => {
         if (err) {
           reject(err);
         } else {
-          resolve({ address: address });
+          resolve({ address });
         }
       });
     });

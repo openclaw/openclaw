@@ -1,14 +1,17 @@
-import { withProgress } from "../cli/progress.js";
+// Main `openclaw status` command orchestrator.
+// It routes all/json/deep modes, collects scan/runtime state, and delegates formatting to report builders.
+
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { withProgress } from "../cli/progress.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
-import { type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
@@ -31,9 +34,6 @@ const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.
 const statusCommandTextRuntimeLoader = createLazyImportLoader(
   () => import("./status.command.text-runtime.js"),
 );
-const statusGatewayConnectionRuntimeLoader = createLazyImportLoader(
-  () => import("./status.gateway-connection.runtime.js"),
-);
 const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
 function loadStatusScanModule() {
@@ -52,14 +52,11 @@ function loadStatusCommandTextRuntime() {
   return statusCommandTextRuntimeLoader.load();
 }
 
-function loadStatusGatewayConnectionRuntime() {
-  return statusGatewayConnectionRuntimeLoader.load();
-}
-
 function loadStatusNodeModeModule() {
   return statusNodeModeModuleLoader.load();
 }
 
+/** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
 export function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
@@ -79,6 +76,7 @@ export function resolvePairingRecoveryContext(params: {
         : null,
     };
   }
+  // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
@@ -93,6 +91,7 @@ export function resolvePairingRecoveryContext(params: {
   };
 }
 
+/** Runs `openclaw status`, including JSON/all routing and optional deep probes. */
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -105,6 +104,7 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   if (opts.all && !opts.json) {
+    // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await loadStatusAllModule().then(({ statusAllCommand }) =>
       statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
     );
@@ -228,7 +228,8 @@ export async function statusCommand(
   });
 
   if (opts.verbose) {
-    const { buildGatewayConnectionDetails } = await loadStatusGatewayConnectionRuntime();
+    // Verbose status prints the raw gateway target resolution before the report tables.
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
     logGatewayConnectionDetails({
       runtime,
@@ -241,6 +242,7 @@ export async function statusCommand(
   const tableWidth = getTerminalTableWidth();
 
   if (secretDiagnostics.length > 0) {
+    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
     for (const entry of secretDiagnostics) {
       runtime.log(`- ${entry}`);

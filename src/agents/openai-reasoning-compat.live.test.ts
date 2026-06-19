@@ -1,10 +1,13 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+// Live checks for OpenAI reasoning compatibility and repaired tool replay payloads.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
   completeSimpleWithTimeout,
   isLiveProfileKeyModeEnabled,
@@ -15,12 +18,10 @@ import {
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const DEFAULT_TARGET_MODEL_REF = "openai-codex/gpt-5.4-mini";
+const DEFAULT_TARGET_MODEL_REF = "openai/gpt-5.4-mini";
 const TARGET_MODEL_REF =
   process.env.OPENCLAW_LIVE_OPENAI_REASONING_COMPAT_MODEL?.trim() || DEFAULT_TARGET_MODEL_REF;
 const describeLive = LIVE ? describe : describe.skip;
@@ -28,10 +29,11 @@ const describeLive = LIVE ? describe : describe.skip;
 const logProgress = logLiveProgress;
 
 async function completeReplyWithRetry(params: {
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   message: string;
 }): Promise<{ text: string; errorMessage?: string }> {
+  // Some reasoning targets spend the first tiny budget without visible text.
   const runOnce = async (maxTokens: number) => {
     const response = await completeSimpleWithTimeout(
       params.model,
@@ -74,6 +76,7 @@ async function completeReplyWithRetry(params: {
 }
 
 function isKnownLiveBlocker(errorMessage: string): boolean {
+  // Live lane should skip account/usage blockers rather than fail unrelated compat checks.
   return (
     /not supported when using codex with a chatgpt account/i.test(errorMessage) ||
     /hit your chatgpt usage limit/i.test(errorMessage)
@@ -81,6 +84,7 @@ function isKnownLiveBlocker(errorMessage: string): boolean {
 }
 
 function resolveTargetModelRef(): { provider: string; modelId: string } {
+  // Keep env override parsing strict so live runs never silently target the wrong model.
   const [provider, ...rest] = TARGET_MODEL_REF.split("/");
   const modelId = rest.join("/").trim();
   if (!provider?.trim() || !modelId) {
@@ -105,7 +109,7 @@ describeLive("openai reasoning compat live", () => {
       const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+      const model = modelRegistry.find(provider, modelId) as Model | null;
 
       if (!model) {
         logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
@@ -165,7 +169,7 @@ describeLive("openai reasoning compat live", () => {
       const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+      const model = modelRegistry.find(provider, modelId) as Model | null;
 
       if (!model) {
         logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
@@ -237,7 +241,7 @@ describeLive("openai reasoning compat live", () => {
         provider: model.provider,
         modelId: model.id,
         sessionManager: SessionManager.inMemory(),
-        sessionId: "openai-codex-tool-replay-live",
+        sessionId: "openai-chatgpt-tool-replay-live",
       });
 
       expect(sanitized.map((message) => message.role)).toEqual([

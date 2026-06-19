@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for native command specs, parsing, and authorization helpers.
+ */
 export {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -35,5 +38,5 @@ export {
 } from "../auto-reply/command-auth.js";
 export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
-export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+export { listSkillCommandsForAgents } from "../skills/discovery/chat-commands.js";
 export { listProviderPluginCommandSpecs } from "../plugins/command-specs.js";

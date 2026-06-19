@@ -1,6 +1,7 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Discord plugin module implements handle action behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -42,6 +43,7 @@ export async function handleDiscordMessageAction(
     | "cfg"
     | "accountId"
     | "requesterSenderId"
+    | "senderIsOwner"
     | "toolContext"
     | "mediaAccess"
     | "mediaLocalRoots"
@@ -187,10 +189,7 @@ export async function handleDiscordMessageAction(
     });
     const answers = readStringArrayParam(params, "pollOption", { required: true });
     const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readNumberParam(params, "pollDurationHours", {
-      integer: true,
-      strict: true,
-    });
+    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
     const result = await handleDiscordAction(
       {
         action: "poll",
@@ -235,7 +234,7 @@ export async function handleDiscordMessageAction(
 
   if (action === "reactions") {
     const messageId = readStringParam(params, "messageId", { required: true });
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(
       {
         action: "reactions",
@@ -250,7 +249,7 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "read") {
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(
       {
         action: "readMessages",
@@ -327,9 +326,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
-      integer: true,
-    });
+    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
       {

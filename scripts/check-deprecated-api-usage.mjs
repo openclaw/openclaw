@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Scans source files for usage of deprecated API markers.
 import fs from "node:fs";
 import path from "node:path";
 import { collectDeprecatedInternalConfigApiViolations } from "./lib/deprecated-config-api-guard.mjs";
@@ -145,7 +146,6 @@ const rules = [
   {
     id: "extension-plugin-sdk-compat-subpaths",
     roots: ["extensions"],
-    skippedFilePatterns: [],
     moduleSpecifiers: buildDeprecatedPluginSdkModuleSpecifiers(),
     message: "extensions must use focused non-deprecated plugin SDK subpaths",
   },

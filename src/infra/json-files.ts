@@ -1,3 +1,4 @@
+// Wraps fs-safe JSON reads and atomic writes with OpenClaw defaults.
 import "./fs-safe-defaults.js";
 import {
   JsonFileReadError,
@@ -5,6 +6,11 @@ import {
   readJsonIfExists as readJsonIfExistsImpl,
 } from "@openclaw/fs-safe/json";
 import { replaceFileAtomic } from "./replace-file.js";
+
+type WriteTextAtomicBeforeRename = (params: {
+  filePath: string;
+  tempPath: string;
+}) => Promise<void>;
 
 export {
   JsonFileReadError,
@@ -19,6 +25,7 @@ export {
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
 
+/** Reads and parses JSON, wrapping unexpected read failures in JsonFileReadError. */
 export async function readJson<T>(filePath: string): Promise<T> {
   try {
     return await readJsonImpl<T>(filePath);
@@ -27,10 +34,12 @@ export async function readJson<T>(filePath: string): Promise<T> {
   }
 }
 
+/** Strict JSON read alias for callers that must fail on missing or invalid files. */
 export async function readJsonFileStrict<T>(filePath: string): Promise<T> {
   return readJson<T>(filePath);
 }
 
+/** Reads JSON when the file exists, returning null only for a missing path. */
 export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   try {
     return await readJsonIfExistsImpl<T>(filePath);
@@ -42,6 +51,7 @@ export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** Durable JSON read alias that keeps parse/read errors visible to callers. */
 export async function readDurableJsonFile<T>(filePath: string): Promise<T | null> {
   return readJsonIfExists<T>(filePath);
 }
@@ -60,6 +70,7 @@ export async function tryReadJson<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** Optional JSON read that returns null for missing, invalid, or racing files. */
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   return tryReadJson<T>(filePath);
 }
@@ -71,6 +82,7 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
+  beforeRename?: WriteTextAtomicBeforeRename;
   /**
    * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
    * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
@@ -79,6 +91,7 @@ export type WriteTextAtomicOptions = {
   tempPrefix?: string;
 };
 
+/** Writes text through the repo atomic replace helper with durable fsync by default. */
 export async function writeTextAtomic(
   filePath: string,
   content: string,
@@ -93,6 +106,7 @@ export async function writeTextAtomic(
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
+    ...(options?.beforeRename ? { beforeRename: options.beforeRename } : {}),
     ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }

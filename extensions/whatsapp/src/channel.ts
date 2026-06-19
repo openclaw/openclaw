@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -107,6 +108,19 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
       },
       commands: whatsappCommandPolicy,
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) => {
+          const normalized = normalizeWhatsAppTarget(conversationId);
+          return normalized ? { conversationId: normalized } : null;
+        },
+        matchInboundConversation: ({ compiledBinding, conversationId }) => {
+          const normalizedConversationId = normalizeWhatsAppTarget(conversationId);
+          if (normalizedConversationId === compiledBinding.conversationId) {
+            return { conversationId: compiledBinding.conversationId, matchPriority: 2 };
+          }
+          return null;
+        },
+      },
       agentPrompt: {
         reactionGuidance: ({ cfg, accountId }) => {
           const level = resolveWhatsAppAgentReactionGuidance({

@@ -1,4 +1,10 @@
+// Builds channel status rows and account details for `openclaw status --all`.
+// This layer stays plugin-generic: channel-specific auth rules live in plugin config/status hooks.
+
 import fs from "node:fs";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
@@ -21,8 +27,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
-import { asRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   summarizeTokenConfig,
   type ChannelAccountTokenSummaryRow,
@@ -61,6 +65,7 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
+/** Resolves one configured/default account into the normalized row shape used by status rendering. */
 async function resolveChannelAccountRow(
   params: ResolvedChannelAccountRowParams,
 ): Promise<ChannelAccountRow> {
@@ -147,6 +152,7 @@ const buildAccountNotes = (params: {
   const allowFrom =
     plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ?? snapshot.allowFrom;
   if (allowFrom?.length) {
+    // Cap allow-list output so large channel policies do not dominate the status table.
     const formatted = formatChannelAllowFrom({
       plugin,
       cfg,
@@ -167,6 +173,7 @@ function resolveLinkFields(summary: unknown): {
   authAgeMs: number | null;
   selfE164: string | null;
 } {
+  // Plugin summaries are optional extension data; normalize only the fields the core table understands.
   const rec = asRecord(summary);
   const statusState = typeof rec.statusState === "string" ? rec.statusState : null;
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
@@ -189,6 +196,7 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
       "dbPath",
       "authDir",
     ]) {
+      // Account config and snapshots can each expose file-backed credential paths.
       const raw =
         (accountRec[key] as string | undefined) ?? (snapshotRec[key] as string | undefined);
       const ok = existsSyncMaybe(raw);
@@ -213,8 +221,7 @@ function formatLoadFailureDetail(message: string): string {
   return `plugin load failed: ${reason}; run openclaw doctor --fix`;
 }
 
-// `status --all` channels table.
-// Keep this generic: channel-specific rules belong in the channel plugin.
+/** Builds the `status --all` channel summary and per-account detail tables. */
 export async function buildChannelsTable(
   cfg: OpenClawConfig,
   opts?: {
@@ -248,6 +255,7 @@ export async function buildChannelsTable(
     includeSetupFallbackPlugins,
   });
   for (const plugin of readOnlyPlugins.plugins) {
+    // Use the plugin's default account even when no accounts are configured so setup guidance is concrete.
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -287,6 +295,7 @@ export async function buildChannelsTable(
         hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId }))
         ? {
             ...entry,
+            // Fast-mode scans may not resolve local secrets; runtime evidence can still prove availability.
             account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
           }
         : entry,
@@ -317,6 +326,7 @@ export async function buildChannelsTable(
     const label = plugin.meta.label ?? plugin.id;
 
     const state = (() => {
+      // Precedence matches operator actionability: disabled, local file breakage, plugin issues, auth, link.
       if (!anyEnabled) {
         return "off";
       }
@@ -496,6 +506,10 @@ export async function buildChannelsTable(
       ...listExplicitConfiguredChannelIdsForConfig(cfg),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
+  const explicitConfiguredChannelIds = new Set([
+    ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
+    ...listExplicitConfiguredChannelIdsForConfig(cfg),
+  ]);
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
       continue;
@@ -506,6 +520,17 @@ export async function buildChannelsTable(
       channelId,
     });
     if (!hint || hint.channelId !== channelId) {
+      if (!includeSetupFallbackPlugins && explicitConfiguredChannelIds.has(channelId)) {
+        // Fast mode intentionally skips setup fallback plugins, but configured ids still deserve visibility.
+        rows.push({
+          id: channelId,
+          label: sanitizeForLog(channelId).trim() || "configured-channel",
+          enabled: true,
+          state: "setup",
+          detail: "configured; status unavailable in fast mode",
+        });
+        visibleChannelIds.add(channelId);
+      }
       continue;
     }
     rows.push({
@@ -516,6 +541,24 @@ export async function buildChannelsTable(
       detail: `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
     });
     visibleChannelIds.add(channelId);
+  }
+
+  if (!includeSetupFallbackPlugins) {
+    for (const channelId of readOnlyPlugins.missingConfiguredChannelIds.toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
+      if (visibleChannelIds.has(channelId)) {
+        continue;
+      }
+      rows.push({
+        id: channelId,
+        label: sanitizeForLog(channelId).trim() || "configured-channel",
+        enabled: true,
+        state: "setup",
+        detail: "configured; status unavailable in fast mode",
+      });
+      visibleChannelIds.add(channelId);
+    }
   }
 
   return {

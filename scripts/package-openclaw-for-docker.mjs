@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
@@ -13,6 +14,9 @@ const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
+const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -20,6 +24,13 @@ const SIGNAL_EXIT_CODES = {
   SIGTERM: 143,
 };
 let forwardedSignalExitCode;
+
+class ForwardedSignalExitError extends Error {
+  constructor(exitCode) {
+    super(`forwarded signal requested exit ${exitCode}`);
+    this.exitCode = exitCode;
+  }
+}
 
 for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
   process.on(signal, () => {
@@ -44,14 +55,60 @@ function resolveTimeoutMs(envName, defaultValue) {
   if (raw === undefined || raw === "") {
     return defaultValue;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!/^[0-9]+$/u.test(raw)) {
     throw new Error(`${envName} must be a positive timeout in milliseconds`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${envName} must be a positive timeout in milliseconds`);
+  }
+  return parsed;
 }
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+function readEqualsOptionValue(value, optionName) {
+  if (value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
+}
+
+function resolvePackedOpenClawFileName(value) {
+  const filename = value.trim();
+  if (
+    !filename.endsWith(".tgz") ||
+    (!filename.startsWith("openclaw-") &&
+      !filename.includes(":") &&
+      !filename.includes("/") &&
+      !filename.includes("\\"))
+  ) {
+    return "";
+  }
+  if (
+    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    throw new Error(`npm pack reported unsafe OpenClaw tarball filename: ${filename}`);
+  }
+  return filename;
+}
+
+export function parseArgs(argv) {
   const options = {
     outputDir: "",
     outputName: "",
@@ -61,22 +118,31 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      options.outputDir = argv[(index += 1)] ?? "";
+      options.outputDir = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
-      options.outputDir = arg.slice("--output-dir=".length);
+      options.outputDir = readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir");
     } else if (arg === "--output-name") {
-      options.outputName = argv[(index += 1)] ?? "";
+      options.outputName = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg?.startsWith("--output-name=")) {
-      options.outputName = arg.slice("--output-name=".length);
+      options.outputName = readEqualsOptionValue(
+        arg.slice("--output-name=".length),
+        "--output-name",
+      );
     } else if (arg === "--skip-build") {
       options.skipBuild = true;
     } else if (arg === "--source-dir") {
-      options.sourceDir = argv[(index += 1)] ?? "";
+      options.sourceDir = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg?.startsWith("--source-dir=")) {
-      options.sourceDir = arg.slice("--source-dir=".length);
+      options.sourceDir = readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir");
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
+  }
+  if (options.outputName) {
+    validateOutputName(options.outputName);
   }
   return options;
 }
@@ -91,9 +157,15 @@ function run(command, args, cwd, options = {}) {
       detached: useProcessGroup,
     });
     let timedOut = false;
+    let outputLimitExceeded = false;
     let stdout = "";
+    let stdoutBytes = 0;
     let settled = false;
-    let timeout;
+    let forceKillTimeout;
+    const maxCapturedStdoutBytes = Math.max(
+      1,
+      options.maxCapturedStdoutBytes ?? DEFAULT_CAPTURED_STDOUT_MAX_BYTES,
+    );
     const finish = (error, value = "") => {
       if (settled) {
         return;
@@ -104,10 +176,14 @@ function run(command, args, cwd, options = {}) {
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (forwardedSignalExitCode !== undefined && ACTIVE_CHILD_KILLERS.size === 0) {
+        if (options.deferForwardedSignalExit) {
+          reject(new ForwardedSignalExitError(forwardedSignalExitCode));
+          return;
+        }
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve(value);
@@ -123,22 +199,73 @@ function run(command, args, cwd, options = {}) {
       }
       child.kill(signal);
     };
+    const processGroupAlive = () => {
+      if (!useProcessGroup || !child.pid) {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    };
+    const waitForProcessGroupExit = async (timeoutMs) => {
+      const deadlineAt = Date.now() + timeoutMs;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+        });
+      }
+      return !processGroupAlive();
+    };
+    const terminateChild = () => {
+      killChild("SIGTERM");
+      forceKillTimeout = setTimeout(() => {
+        forceKillTimeout = undefined;
+        if (settled && !processGroupAlive()) {
+          return;
+        }
+        killChild("SIGKILL");
+      }, options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
+      forceKillTimeout.unref?.();
+    };
     ACTIVE_CHILD_KILLERS.add(killChild);
-    timeout =
+    const timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
-            killChild("SIGTERM");
-            setTimeout(
-              () => killChild("SIGKILL"),
-              options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
-            ).unref?.();
+            terminateChild();
           }, options.timeoutMs);
     timeout?.unref?.();
+    const finishAfterTeardown = async (error, value = "") => {
+      if (processGroupAlive()) {
+        await waitForProcessGroupExit(options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
+      }
+      if (processGroupAlive()) {
+        killChild("SIGKILL");
+        await waitForProcessGroupExit(POST_FORCE_KILL_WAIT_MS);
+      }
+      finish(error, value);
+    };
     if (options.captureStdout) {
       child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
+        if (outputLimitExceeded) {
+          return;
+        }
+        const chunkText = String(chunk);
+        const chunkBytes = Buffer.byteLength(chunkText);
+        if (stdoutBytes + chunkBytes > maxCapturedStdoutBytes) {
+          outputLimitExceeded = true;
+          terminateChild();
+          return;
+        }
+        stdout += chunkText;
+        stdoutBytes += chunkBytes;
       });
     } else {
       child.stdout.pipe(process.stderr, { end: false });
@@ -147,7 +274,17 @@ function run(command, args, cwd, options = {}) {
     child.on("error", (error) => finish(error));
     child.on("close", (status, signal) => {
       if (timedOut) {
-        finish(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        void finishAfterTeardown(
+          new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`),
+        );
+        return;
+      }
+      if (outputLimitExceeded) {
+        void finishAfterTeardown(
+          new Error(
+            `${command} ${args.join(" ")} exceeded captured stdout limit (${maxCapturedStdoutBytes} bytes)`,
+          ),
+        );
         return;
       }
       if (status === 0) {
@@ -194,9 +331,9 @@ async function runCapture(command, args, cwd, options = {}) {
 async function newestOpenClawTarball(outputDir, packOutput) {
   let fromOutput = "";
   for (const line of packOutput.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (/^openclaw-.*\.tgz$/u.test(trimmed)) {
-      fromOutput = trimmed;
+    const filename = resolvePackedOpenClawFileName(line);
+    if (filename) {
+      fromOutput = filename;
     }
   }
   if (fromOutput) {
@@ -205,13 +342,45 @@ async function newestOpenClawTarball(outputDir, packOutput) {
 
   const entries = await fs.readdir(outputDir);
   const packed = entries
-    .filter((entry) => /^openclaw-.*\.tgz$/u.test(entry))
+    .filter((entry) => {
+      try {
+        return resolvePackedOpenClawFileName(entry) === entry;
+      } catch {
+        return false;
+      }
+    })
     .toSorted()
     .at(-1);
   if (!packed) {
     throw new Error(`missing packed OpenClaw tarball in ${outputDir}`);
   }
   return path.join(outputDir, packed);
+}
+
+export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
+  const runCaptureImpl = options.runCaptureImpl ?? runCapture;
+  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
+  const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
+  console.error("==> Packing OpenClaw package");
+  await prepareChangelog(sourceDir);
+  let packOutput;
+  try {
+    packOutput = await runCaptureImpl(
+      "npm",
+      ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
+      sourceDir,
+      {
+        deferForwardedSignalExit: true,
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      },
+    );
+  } finally {
+    await restoreChangelog(sourceDir);
+  }
+  return await newestOpenClawTarball(outputDir, packOutput);
 }
 
 async function main() {
@@ -246,19 +415,7 @@ async function main() {
     },
   );
 
-  console.error("==> Packing OpenClaw package");
-  const packOutput = await runCapture(
-    "npm",
-    ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
-    sourceDir,
-    {
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-      ),
-    },
-  );
-  let tarball = await newestOpenClawTarball(outputDir, packOutput);
+  let tarball = await packOpenClawPackageForDocker(sourceDir, outputDir);
 
   if (options.outputName) {
     const target = path.join(outputDir, options.outputName);
@@ -290,8 +447,24 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+    },
+  );
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

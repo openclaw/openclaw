@@ -1,3 +1,6 @@
+/**
+ * Tests the registered gateway server method list and exported method names.
+ */
 import { describe, expect, it } from "vitest";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 
@@ -12,6 +15,12 @@ describe("GATEWAY_EVENTS", () => {
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
+  });
+
+  it("advertises ClawHub skill trust methods", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("skills.securityVerdicts");
+    expect(methods).toContain("skills.skillCard");
   });
 
   it("does not advertise hidden core handlers", () => {

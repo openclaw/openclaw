@@ -1,13 +1,42 @@
-import { describe, expect, it } from "vitest";
+// Verifies provider HTTP error parsing, redaction, and response-size limits.
+import { describe, expect, it, vi } from "vitest";
 import {
   assertOkOrThrowProviderError,
   assertOkOrThrowHttpError,
+  createProviderHttpError,
   extractProviderErrorDetail,
-  extractProviderErrorInfo,
   extractProviderRequestId,
   ProviderHttpError,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
+  readResponseTextLimited,
 } from "./provider-http-errors.js";
+
+function createStreamingBinaryResponse(params: {
+  chunkCount: number;
+  chunkSize: number;
+  byte: number;
+}): { response: Response; getReadCount: () => number } {
+  // Streaming fixture proves oversized binary reads stop before buffering everything.
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "audio/mpeg" },
+    }),
+    getReadCount: () => reads,
+  };
+}
 
 describe("provider error utils", () => {
   it("formats nested provider error details with request ids", async () => {
@@ -39,7 +68,89 @@ describe("provider error utils", () => {
     expect(extractProviderRequestId(response)).toBe("fallback_req");
   });
 
+  it("preserves OAuth error descriptions as actionable details", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: "invalid_request",
+        error_description: "AADSTS7000215: Invalid client secret provided.",
+      }),
+      { status: 400 },
+    );
+
+    await expect(
+      assertOkOrThrowProviderError(response, "OAuth token exchange failed"),
+    ).rejects.toThrow(
+      "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
+    );
+  });
+
+  it("keeps HTTP status metadata when error body reads fail", async () => {
+    const response = {
+      ok: false,
+      status: 503,
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: async () => {
+            throw new Error("broken response stream");
+          },
+          cancel: async () => undefined,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(
+      assertOkOrThrowProviderError(response, "Provider API error"),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 503,
+      statusCode: 503,
+      message: "Provider API error (503)",
+    } satisfies Partial<ProviderHttpError>);
+  });
+
+  it("releases provider error body reader locks after bounded reads complete", async () => {
+    const releaseLock = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
+      { done: false, value: new TextEncoder().encode("provider error") },
+      { done: true, value: undefined },
+    ];
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => chunks.shift() ?? { done: true, value: undefined },
+          cancel,
+          releaseLock,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(readResponseTextLimited(response, 64)).resolves.toBe("provider error");
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels and releases provider error body readers after diagnostic truncation", async () => {
+    const releaseLock = vi.fn();
+    const cancel = vi.fn(async () => undefined);
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: false, value: new TextEncoder().encode("provider error") }),
+          cancel,
+          releaseLock,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(readResponseTextLimited(response, 8)).resolves.toBe("provider");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches structured provider error metadata", async () => {
+    // API-key-like substrings must be redacted from stored error bodies.
     const response = new Response(
       JSON.stringify({
         error: {
@@ -54,19 +165,8 @@ describe("provider error utils", () => {
       },
     );
 
-    const info = await extractProviderErrorInfo(response.clone());
-    expect(info).toMatchObject({
-      code: "insufficient_quota",
-      type: "rate_limit_error",
-      requestId: "req_456",
-    });
-    expect(info.detail).toContain("Quota exceeded");
-    expect(info.body).toContain("Quota exceeded");
-    expect(info.body).not.toContain("sk-secret1234567890abcd");
-
-    await expect(
-      assertOkOrThrowProviderError(response, "Provider API error"),
-    ).rejects.toMatchObject({
+    const error = await createProviderHttpError(response, "Provider API error");
+    expect(error).toMatchObject({
       name: "ProviderHttpError",
       status: 429,
       statusCode: 429,
@@ -75,6 +175,10 @@ describe("provider error utils", () => {
       errorType: "rate_limit_error",
       requestId: "req_456",
     } satisfies Partial<ProviderHttpError>);
+    const providerError = error as ProviderHttpError;
+    expect(providerError.message).toContain("Quota exceeded");
+    expect(providerError.errorBody).toContain("Quota exceeded");
+    expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
   });
 
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
@@ -105,5 +209,21 @@ describe("provider error utils", () => {
     await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
       "Provider catalog failed: malformed JSON response",
     );
+  });
+
+  it("caps successful binary responses instead of buffering oversized bodies", async () => {
+    const streamed = createStreamingBinaryResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+      byte: 121,
+    });
+
+    await expect(
+      readProviderBinaryResponse(streamed.response, "Provider TTS failed", "audio", {
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Provider TTS failed: audio response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 });

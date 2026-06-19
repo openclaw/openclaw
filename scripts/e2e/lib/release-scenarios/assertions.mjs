@@ -1,10 +1,23 @@
+// Assertions for release scenario E2E packages and plugin state.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import {
+  ERROR_DETAIL_TAIL_BYTES,
+  fileContainsText,
+  readJson,
+} from "../release-assertion-files.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 
@@ -12,10 +25,6 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function configPath() {
@@ -40,13 +49,45 @@ function authProfilesPath() {
   );
 }
 
+function authProfilesDatabasePath() {
+  return path.join(
+    process.env.HOME ?? "",
+    ".openclaw",
+    "agents",
+    "main",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
+}
+
+function readAuthProfileStoreSqliteText() {
+  const dbPath = authProfilesDatabasePath();
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
+
 function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
-  return paths.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  return [...paths.map((file) => fs.readFileSync(file, "utf8")), readAuthProfileStoreSqliteText()]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function configureMockOpenAi() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort, includeImageDefaults: true });
   writeConfig(cfg);
@@ -54,10 +95,14 @@ function configureMockOpenAi() {
 
 function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
-  const state = readStateText();
-  assert(state.includes("OPENAI_API_KEY"), "OpenAI env ref was not persisted");
-  assert(!state.includes(rawKey), "raw OpenAI key was persisted");
   assert(fs.existsSync(configPath()), "openclaw.json missing");
+  assertOpenAiEnvAuthProfileStore(readAuthProfileStoreSqliteText(), {
+    missingMessage: "OpenAI env ref was not persisted",
+    envRefMessage: "OpenAI env ref was not persisted",
+    rawKeyMessage: "raw OpenAI key was persisted",
+    rawKeyNeedle: rawKey,
+  });
+  assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
 }
 
 function assertAgentTurn() {
@@ -71,8 +116,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }
 
 function assertPackageVersion() {
@@ -98,8 +145,10 @@ function assertImageDescribe() {
   const output = payload.outputs?.[0];
   assert(output?.text?.includes("OPENCLAW_E2E_OK"), "image description marker missing");
   assert(output.provider === "openai", `unexpected image provider: ${output?.provider}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(requestLog.includes("/v1/responses"), "image describe did not hit Responses API");
+  assert(
+    fileContainsText(requestLogPath, "/v1/responses"),
+    "image describe did not hit Responses API",
+  );
 }
 
 function assertImageGenerate() {
@@ -112,8 +161,10 @@ function assertImageGenerate() {
   assert(output?.path && fs.existsSync(output.path), `generated image missing: ${output?.path}`);
   assert(output.mimeType === "image/png", `unexpected generated mime type: ${output.mimeType}`);
   assert(payload.provider === "openai", `unexpected generation provider: ${payload.provider}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(requestLog.includes("/v1/images/generations"), "image generation endpoint was not used");
+  assert(
+    fileContainsText(requestLogPath, "/v1/images/generations"),
+    "image generation endpoint was not used",
+  );
 }
 
 function assertMemorySearch() {
@@ -128,9 +179,7 @@ function assertPluginUninstalled() {
   const pluginId = process.argv[3];
   const cliRoot = process.argv[4];
   const cfg = readJson(configPath());
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  const installRecords = records.installRecords ?? records.records ?? {};
+  const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
   assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
   const managedRoot = path.join(
@@ -142,7 +191,7 @@ function assertPluginUninstalled() {
   );
   assert(!fs.existsSync(managedRoot), `managed plugin directory still present: ${managedRoot}`);
   if (cliRoot) {
-    const list = JSON.stringify(records);
+    const list = JSON.stringify(installRecords);
     assert(!list.includes(cliRoot), `install records still mention CLI root ${cliRoot}`);
   }
 }

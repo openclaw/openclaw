@@ -1,5 +1,12 @@
+/**
+ * Bundled channel package-state probes.
+ *
+ * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
+ */
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -13,8 +20,6 @@ import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -31,7 +36,10 @@ type ChannelPackageStateMetadata = {
   };
 };
 
-export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
+/**
+ * Metadata keys that can declare a lightweight package-state checker.
+ */
+type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
 const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
@@ -52,6 +60,8 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     if (!isSourceModulePath(params.modulePath)) {
       throw error;
     }
+    // Local source checkers can run through the cached TS loader; built JS
+    // paths must still load through the boundary-safe module loader above.
     const loader = getCachedPluginModuleLoader({
       cache: sourcePackageStateLoaderCache,
       modulePath: params.modulePath,
@@ -100,6 +110,8 @@ function listBuiltBundledPackageStateModules(params: {
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
   if (isBundledSourceOverlayPluginRoot(params.rootDir)) {
+    // Source overlays intentionally shadow built artifacts; probing dist would
+    // mix old built code with the active source overlay.
     return [];
   }
   const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
@@ -134,6 +146,8 @@ function listChannelPackageStateModuleLocations(params: {
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
   const source = resolveChannelPackageStateModuleLocation(params);
+  // Prefer built bundled artifacts when present so probes match shipped runtime
+  // behavior, then fall back to source for local development.
   const built = listBuiltBundledPackageStateModules({
     rootDir: params.entry.rootDir,
     specifier: params.specifier,
@@ -155,6 +169,8 @@ function resolveChannelPackageStateMetadata(
   const allOf = normalizeTrimmedStringList(envMetadata?.allOf);
   const anyOf = normalizeTrimmedStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
+  // A checker can be module-backed or env-backed. Ignore empty metadata so
+  // catalog entries without usable probes do not appear as state-capable.
   if ((!specifier || !exportName) && !env) {
     return null;
   }
@@ -188,6 +204,8 @@ function resolveChannelPackageStateChecker(params: {
     return ({ env }) => {
       const allOf = metadata.env?.allOf ?? [];
       const anyOf = metadata.env?.anyOf ?? [];
+      // `allOf` expresses required credentials; `anyOf` expresses alternatives
+      // where at least one non-empty value proves package state.
       return (
         allOf.every((key) => hasNonEmptyEnvValue(env, key)) &&
         (anyOf.length === 0 || anyOf.some((key) => hasNonEmptyEnvValue(env, key)))
@@ -228,6 +246,9 @@ function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string 
   return normalizeOptionalString(entry.channel.id);
 }
 
+/**
+ * Lists bundled channel ids that declare the requested package-state metadata.
+ */
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
   discovery?: PluginDiscoveryResult,
@@ -238,6 +259,9 @@ export function listBundledChannelIdsForPackageState(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Returns whether a bundled channel reports configured/auth package state.
+ */
 export function hasBundledChannelPackageState(params: {
   metadataKey: ChannelPackageStateMetadataKey;
   channelId: string;

@@ -1,14 +1,18 @@
+// Bench Cli Startup script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
   id: string;
   name: string;
   args: string[];
   presets: readonly string[];
+  expectedExitCodes?: readonly number[];
+  expectedNonzeroOutputIncludes?: readonly string[];
   firstOutputBudgetMs?: number;
   exitBudgetMs?: number;
 };
@@ -19,6 +23,7 @@ type Sample = {
   maxRssMb: number | null;
   exitCode: number | null;
   signal: string | null;
+  timedOut?: boolean;
   stdoutTail?: string;
   stderrTail?: string;
 };
@@ -45,6 +50,8 @@ type SuiteResult = {
     id: string;
     name: string;
     args: string[];
+    expectedExitCodes?: number[];
+    expectedNonzeroOutputIncludes?: string[];
     contract: {
       firstOutputBudgetMs: number | null;
       exitBudgetMs: number | null;
@@ -54,8 +61,36 @@ type SuiteResult = {
   }>;
 };
 
+type BenchmarkReport = {
+  primary: SuiteResult;
+  secondary?: SuiteResult | null;
+};
+
+type CaseDelta = {
+  id: string;
+  name: string;
+  durationAvgDeltaMs: number;
+  durationAvgDeltaPct: number;
+  maxRssAvgDeltaMb: number | null;
+  maxRssAvgDeltaPct: number | null;
+};
+
+type BenchmarkComparison = {
+  baseline: string;
+  candidate: string;
+  deltas: CaseDelta[];
+};
+
+type BenchmarkComparisonResult = {
+  baseline: SuiteResult;
+  candidate: SuiteResult;
+  comparison: BenchmarkComparison;
+};
+
 type CliOptions = {
   cases: CommandCase[];
+  compareBaseline?: string;
+  compareCandidate?: string;
   entryPrimary: string;
   entrySecondary?: string;
   runs: number;
@@ -306,8 +341,22 @@ const COMMAND_CASES: readonly CommandCase[] = [
     firstOutputBudgetMs: 2_500,
     exitBudgetMs: 6_000,
   },
-  { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
-  { id: "healthJson", name: "health --json", args: ["health", "--json"], presets: ["startup"] },
+  {
+    id: "health",
+    name: "health",
+    args: ["health"],
+    presets: ["startup", "real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ["Gateway target:"],
+  },
+  {
+    id: "healthJson",
+    name: "health --json",
+    args: ["health", "--json"],
+    presets: ["startup"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
+  },
   {
     id: "statusJson",
     name: "status --json",
@@ -363,12 +412,16 @@ const COMMAND_CASES: readonly CommandCase[] = [
     name: "gateway health --json",
     args: ["gateway", "health", "--json"],
     presets: ["real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
     id: "configGetGatewayPort",
     name: "config get gateway.port",
     args: ["config", "get", "gateway.port"],
     presets: ["real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ["Config path not found: gateway.port"],
   },
 ] as const;
 
@@ -377,7 +430,11 @@ function parseFlagValue(flag: string): string | undefined {
   if (idx === -1) {
     return undefined;
   }
-  return process.argv[idx + 1];
+  const value = process.argv[idx + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
 }
 
 function hasFlag(flag: string): boolean {
@@ -394,26 +451,32 @@ function parseRepeatableFlag(flag: string): string[] {
   return values;
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return parsed;
+function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
 }
 
-function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
+function parseNonNegativeInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
+}
+
+function parseGatewayPortEnv(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) {
+    return 32123;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
+  const bracketHostMatch = /^\[[^\]]+\]:(\d+)$/u.exec(value);
+  if (bracketHostMatch) {
+    return parsePositiveInt(bracketHostMatch[1], 32123, "OPENCLAW_GATEWAY_PORT");
   }
-  return parsed;
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return 32123;
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount > 1) {
+    return 32123;
+  }
+  const portRaw = colonCount === 1 ? value.split(":")[1] : value;
+  return parsePositiveInt(portRaw, 32123, "OPENCLAW_GATEWAY_PORT");
 }
 
 function parsePresets(raw: string | undefined): string[] {
@@ -518,6 +581,26 @@ function collectExitSummary(samples: Sample[]): string {
   return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
 }
 
+function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  if (
+    commandCase.id !== "configGetGatewayPort" &&
+    commandCase.id !== "gatewayHealthJson" &&
+    commandCase.id !== "health" &&
+    commandCase.id !== "healthJson"
+  ) {
+    return null;
+  }
+  const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
+  return {
+    gateway: {
+      auth: { mode: "none" },
+      bind: "loopback",
+      mode: "local",
+      port,
+    },
+  };
+}
+
 function buildRssHook(tmpDir: string): string {
   const rssHookPath = path.join(tmpDir, "measure-rss.mjs");
   writeFileSync(
@@ -570,6 +653,11 @@ async function runSample(params: {
   const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
+  const configFixture = buildConfigFixture(params.commandCase);
+  if (configFixture) {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
+  }
   const nodeArgs = [
     "--import",
     params.rssHookPath,
@@ -585,6 +673,7 @@ async function runSample(params: {
   let stdout = "";
   let stderr = "";
   let settled = false;
+  let timedOut = false;
   const maxOutputLength = 32 * 1024 * 1024;
 
   try {
@@ -615,6 +704,7 @@ async function runSample(params: {
           ms,
           firstOutputMs,
           maxRssMb: parseMaxRssMb(stderr),
+          ...(timedOut ? { timedOut } : {}),
           ...sample,
         });
       };
@@ -626,6 +716,7 @@ async function runSample(params: {
       };
 
       const timeout = setTimeout(() => {
+        timedOut = true;
         try {
           proc.kill("SIGTERM");
         } catch {
@@ -734,8 +825,26 @@ function printSuite(result: SuiteResult): void {
 }
 
 function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
-  const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
+  const deltas = buildCaseDeltas(primary, secondary);
   console.log("Delta (secondary - primary, avg)");
+  for (const delta of deltas) {
+    const durationDelta = delta.durationAvgDeltaMs;
+    const durationPct = delta.durationAvgDeltaPct;
+    const durationSign = durationDelta > 0 ? "+" : "";
+    let line = `${delta.name.padEnd(24)} ${durationSign}${formatMs(durationDelta)} (${durationSign}${durationPct.toFixed(1)}%)`;
+    if (delta.maxRssAvgDeltaMb != null && delta.maxRssAvgDeltaPct != null) {
+      const rssDelta = delta.maxRssAvgDeltaMb;
+      const rssPct = delta.maxRssAvgDeltaPct;
+      const rssSign = rssDelta > 0 ? "+" : "";
+      line += ` rss ${rssSign}${formatMb(rssDelta)} (${rssSign}${rssPct.toFixed(1)}%)`;
+    }
+    console.log(line);
+  }
+}
+
+function buildCaseDeltas(primary: SuiteResult, secondary: SuiteResult): CaseDelta[] {
+  const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
+  const deltas: CaseDelta[] = [];
   for (const commandCase of secondary.cases) {
     const baseline = primaryById.get(commandCase.id);
     if (!baseline) {
@@ -746,17 +855,24 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
       baseline.summary.durationMs.avg > 0
         ? (durationDelta / baseline.summary.durationMs.avg) * 100
         : 0;
-    const durationSign = durationDelta > 0 ? "+" : "";
-    let line = `${commandCase.name.padEnd(24)} ${durationSign}${formatMs(durationDelta)} (${durationSign}${durationPct.toFixed(1)}%)`;
-    if (baseline.summary.maxRssMb && commandCase.summary.maxRssMb) {
-      const rssDelta = commandCase.summary.maxRssMb.avg - baseline.summary.maxRssMb.avg;
-      const rssPct =
-        baseline.summary.maxRssMb.avg > 0 ? (rssDelta / baseline.summary.maxRssMb.avg) * 100 : 0;
-      const rssSign = rssDelta > 0 ? "+" : "";
-      line += ` rss ${rssSign}${formatMb(rssDelta)} (${rssSign}${rssPct.toFixed(1)}%)`;
-    }
-    console.log(line);
+    const rssDelta =
+      baseline.summary.maxRssMb && commandCase.summary.maxRssMb
+        ? commandCase.summary.maxRssMb.avg - baseline.summary.maxRssMb.avg
+        : null;
+    const rssPct =
+      rssDelta != null && baseline.summary.maxRssMb && baseline.summary.maxRssMb.avg > 0
+        ? (rssDelta / baseline.summary.maxRssMb.avg) * 100
+        : null;
+    deltas.push({
+      id: commandCase.id,
+      name: commandCase.name,
+      durationAvgDeltaMs: durationDelta,
+      durationAvgDeltaPct: durationPct,
+      maxRssAvgDeltaMb: rssDelta,
+      maxRssAvgDeltaPct: rssPct,
+    });
   }
+  return deltas;
 }
 
 export function collectFailedSamples(result: SuiteResult): string[] {
@@ -768,10 +884,27 @@ export function collectFailedSamples(result: SuiteResult): string[] {
     }
     for (const [sampleIndex, sample] of commandCase.samples.entries()) {
       const label = `${result.entry} ${commandCase.id} sample ${sampleIndex + 1}`;
-      if (sample.signal !== null) {
+      const expectedExitCodes = new Set(commandCase.expectedExitCodes ?? [0]);
+      if (sample.timedOut === true) {
+        failures.push(`${label}: timed out`);
+      } else if (sample.signal !== null) {
         failures.push(`${label}: exited via signal ${sample.signal}`);
-      } else if (sample.exitCode !== 0) {
+      } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
         failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
+      } else if (sample.maxRssMb === null) {
+        failures.push(`${label}: did not report max RSS`);
+      } else if (sample.exitCode !== 0) {
+        const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
+        const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(
+          (snippet) => !output.includes(snippet),
+        );
+        if (missing.length > 0) {
+          failures.push(
+            `${label}: exited with expected code ${String(
+              sample.exitCode,
+            )} but output did not match expected clean-state markers (${missing.join(", ")})`,
+          );
+        }
       }
     }
   }
@@ -799,6 +932,12 @@ async function buildSuiteResult(params: {
       id: commandCase.id,
       name: commandCase.name,
       args: commandCase.args,
+      ...(commandCase.expectedExitCodes && commandCase.expectedExitCodes.some((code) => code !== 0)
+        ? { expectedExitCodes: [...commandCase.expectedExitCodes] }
+        : {}),
+      ...(commandCase.expectedNonzeroOutputIncludes
+        ? { expectedNonzeroOutputIncludes: [...commandCase.expectedNonzeroOutputIncludes] }
+        : {}),
       contract:
         commandCase.firstOutputBudgetMs != null || commandCase.exitBudgetMs != null
           ? {
@@ -824,11 +963,13 @@ function parseOptions(): CliOptions {
   });
   return {
     cases,
+    compareBaseline: parseFlagValue("--compare-baseline"),
+    compareCandidate: parseFlagValue("--compare-candidate"),
     entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
+    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
@@ -852,6 +993,8 @@ Options:
   --warmup <n>                 Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>            Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --output <path>              Write machine-readable JSON to a file
+  --compare-baseline <path>    Read a saved JSON report as the baseline
+  --compare-candidate <path>   Read a saved JSON report as the candidate and print deltas
   --cpu-prof-dir <dir>         Write V8 CPU profiles for each run
   --heap-prof-dir <dir>        Write V8 heap profiles for each run
   --json                       Emit machine-readable JSON
@@ -862,6 +1005,39 @@ Case ids:
 `);
 }
 
+function readBenchmarkReport(filePath: string): BenchmarkReport {
+  return JSON.parse(readFileSync(filePath, "utf8")) as BenchmarkReport;
+}
+
+function writeJsonOutput(filePath: string, value: unknown): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function readBenchmarkComparison(
+  baselinePath: string,
+  candidatePath: string,
+): BenchmarkComparisonResult {
+  const baseline = readBenchmarkReport(baselinePath);
+  const candidate = readBenchmarkReport(candidatePath);
+  return {
+    baseline: baseline.primary,
+    candidate: candidate.primary,
+    comparison: {
+      baseline: baselinePath,
+      candidate: candidatePath,
+      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
+    },
+  };
+}
+
+function readBenchmarkComparisonForTesting(
+  baselinePath: string,
+  candidatePath: string,
+): { comparison: unknown } {
+  return readBenchmarkComparison(baselinePath, candidatePath);
+}
+
 async function main(): Promise<void> {
   if (hasFlag("--help")) {
     printUsage();
@@ -869,6 +1045,24 @@ async function main(): Promise<void> {
   }
 
   const options = parseOptions();
+  if (options.compareBaseline || options.compareCandidate) {
+    if (!options.compareBaseline || !options.compareCandidate) {
+      throw new Error("--compare-baseline and --compare-candidate must be provided together");
+    }
+    const { baseline, candidate, comparison } = readBenchmarkComparison(
+      options.compareBaseline,
+      options.compareCandidate,
+    );
+    if (options.output) {
+      writeJsonOutput(options.output, comparison);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(comparison, null, 2));
+      return;
+    }
+    printDelta(baseline, candidate);
+    return;
+  }
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
   const rssHookPath = buildRssHook(tmpDir);
   try {
@@ -901,8 +1095,7 @@ async function main(): Promise<void> {
     ];
 
     if (options.output) {
-      mkdirSync(path.dirname(options.output), { recursive: true });
-      writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+      writeJsonOutput(options.output, report);
     }
 
     if (options.json) {
@@ -949,9 +1142,13 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  buildConfigFixture,
   collectFailedSamples,
+  parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
+  readBenchmarkComparison: readBenchmarkComparisonForTesting,
+  writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

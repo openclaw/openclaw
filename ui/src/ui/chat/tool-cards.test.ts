@@ -10,32 +10,6 @@ import {
   renderToolCardSidebar,
 } from "./tool-cards.ts";
 
-vi.mock("../icons.ts", () => ({
-  icons: {
-    check: "✓",
-    chevronDown: "",
-    panelRightOpen: "",
-    x: "✕",
-    zap: "",
-  },
-}));
-
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
-    name,
-    label: name
-      .split(/[._-]/g)
-      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-      .join(" "),
-    icon: "zap",
-    detail:
-      args && typeof args === "object" && "detail" in args
-        ? String((args as { detail: unknown }).detail)
-        : undefined,
-  }),
-}));
-
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
   label: string,
@@ -121,10 +95,36 @@ describe("tool-cards", () => {
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Sessions Spawn",
+      "Sub-agent",
     );
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("keeps tool display labels primary for collapsed result rows with action details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:5a:call-5a",
+          name: "skill_workshop",
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
+          outputText: "Proposal created",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Skill Workshop",
+    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "create",
+    );
+    expect(summaryButton?.textContent).not.toContain("output");
   });
 
   it("cleans connector copy from collapsed summaries without changing raw details", () => {
@@ -313,7 +313,6 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
-
   describe("isToolErrorOutput", () => {
     it("flags JSON payloads that carry a top-level error string", () => {
       expect(
@@ -512,7 +511,6 @@ describe("tool-cards", () => {
     expect(card?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(action?.classList.contains("chat-tool-card__action--error")).toBe(true);
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -533,7 +531,6 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -554,7 +551,6 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -576,5 +572,35 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toContain("Tool error");
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+  });
+  it("does not add a full-message request for ambiguous tool details", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:tool:full",
+          name: "browser.open",
+          outputText: "Opened page",
+          messageId: "msg-tool-full",
+        },
+        {
+          expanded: true,
+          sessionKey: "main",
+          agentId: "work",
+          onToggleExpanded: vi.fn(),
+          onOpenSidebar,
+        },
+      ),
+      container,
+    );
+
+    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
+    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+    sidebarButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toBeUndefined();
   });
 });

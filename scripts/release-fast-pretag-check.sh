@@ -12,6 +12,7 @@ pnpm plugins:sync:check
 pnpm release:generated:check
 pnpm release:plugins:npm:check -- --selection-mode all-publishable
 pnpm release:plugins:clawhub:check -- --selection-mode all-publishable
+node --import tsx scripts/plugin-release-pretag-pack-check.ts
 pnpm build
 pnpm ui:build
 pnpm release:openclaw:npm:check

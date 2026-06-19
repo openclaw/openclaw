@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements runtime tool metadata behavior.
 import {
   asBoolean as readBoolean,
   isRecord,
@@ -56,11 +57,6 @@ export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] =
   "openclaw-dynamic-searchable",
   "optional-profile-or-plugin",
   "structural-text",
-] as const;
-
-export const QA_CODEX_TOOL_LOADING_MODES: readonly QaCodexToolLoading[] = [
-  "direct",
-  "searchable",
 ] as const;
 
 const DEFAULT_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeToolExpectedLayer> = {
@@ -171,26 +167,4 @@ export function readScenarioRuntimeToolCoverageMetadata(
     config: scenario.execution.config,
     runtimeParityTier: scenario.runtimeParityTier,
   });
-}
-
-export function runtimeToolComparisonModeForScenario(
-  scenario: QaSeedScenarioWithSource,
-): RuntimeParityComparisonMode {
-  const explicit = readString(scenario.execution.config?.runtimeParityComparison);
-  if (explicit) {
-    if (
-      explicit !== "default" &&
-      explicit !== "codex-native-workspace" &&
-      explicit !== "outcome-only"
-    ) {
-      throw new Error(
-        `unknown runtime parity comparison mode: ${explicit}; expected default, codex-native-workspace, outcome-only`,
-      );
-    }
-    return explicit;
-  }
-  return readScenarioRuntimeToolCoverageMetadata(scenario).expectedLayer ===
-    "codex-native-workspace"
-    ? "codex-native-workspace"
-    : "default";
 }

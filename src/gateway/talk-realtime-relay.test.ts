@@ -1,8 +1,11 @@
+/**
+ * Tests talk realtime relay event forwarding and connection cleanup.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveEmbeddedRun,
   testing as embeddedRunTesting,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import {
@@ -41,11 +44,31 @@ describe("talk realtime gateway relay", () => {
     };
   }
 
+  it("rejects session creation when relay expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    expect(() =>
+      createTalkRealtimeRelaySession({
+        context: {} as never,
+        connId: "conn-1",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      }),
+    ).toThrow("Realtime relay session expiry is outside the supported Date range");
+  });
+
   function createAbortableRelayRunFixture(provider = createIdleRelayProvider()) {
     const abortController = new AbortController();
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
+    const chatDeltaSentAt = new Map<string, number>();
+    const chatDeltaLastBroadcastLen = new Map<string, number>();
+    const chatDeltaLastBroadcastText = new Map<string, string>();
     const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
     const bufferedAgentEvents = new Map([
       [
@@ -77,13 +100,23 @@ describe("talk realtime gateway relay", () => {
           },
         ],
       ]),
-      chatRunBuffers: new Map([["run-1", "partial answer"]]),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatDeltaLastBroadcastText: new Map(),
+      chatRunBuffers,
+      chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
+      chatDeltaLastBroadcastText,
       agentDeltaSentAt,
       bufferedAgentEvents,
       chatAbortedRuns: new Map(),
+      clearChatRunState: (runId: string) => {
+        chatRunBuffers.delete(runId);
+        chatDeltaSentAt.delete(runId);
+        chatDeltaLastBroadcastLen.delete(runId);
+        chatDeltaLastBroadcastText.delete(runId);
+        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+          agentDeltaSentAt.delete(key);
+          bufferedAgentEvents.delete(key);
+        }
+      },
       removeChatRun,
       agentRunSeq: new Map(),
     } as never;
@@ -202,10 +235,20 @@ describe("talk realtime gateway relay", () => {
         return bridge;
       },
     };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const events: Array<{
+      event: string;
+      payload: unknown;
+      connIds: string[];
+      opts?: { dropIfSlow?: boolean };
+    }> = [];
     const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
+      broadcastToConnIds: (
+        event: string,
+        payload: unknown,
+        connIds: ReadonlySet<string>,
+        opts?: { dropIfSlow?: boolean },
+      ) => {
+        events.push({ event, payload, connIds: [...connIds], opts });
       },
     } as never;
 
@@ -237,8 +280,8 @@ describe("talk realtime gateway relay", () => {
       providerConfig: { model: "provider-model" },
       audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       instructions: "be brief",
-      autoRespondToAudio: false,
-      interruptResponseOnInputAudio: false,
+      autoRespondToAudio: true,
+      interruptResponseOnInputAudio: true,
     });
 
     const readyPayload = findEventPayload(events, (payload) => payload.type === "ready");
@@ -257,6 +300,7 @@ describe("talk realtime gateway relay", () => {
     });
     const readyEvent = events.find((entry) => entry.payload === readyPayload);
     expectRecordFields(readyEvent, { event: "talk.event", connIds: ["conn-1"] });
+    expectRecordFields(readyEvent?.opts, { dropIfSlow: false });
 
     const audioPayload = findEventPayload(events, (payload) => payload.type === "audio");
     expectRecordFields(audioPayload, {
@@ -265,6 +309,8 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("audio-out").toString("base64"),
     });
     expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
+    const audioEvent = events.find((entry) => entry.payload === audioPayload);
+    expectRecordFields(audioEvent?.opts, { dropIfSlow: true });
 
     const userTranscript = findEventPayload(
       events,
@@ -345,7 +391,7 @@ describe("talk realtime gateway relay", () => {
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
-    expect(bridge.sendUserMessage).toHaveBeenCalledWith("hello");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
       1,
@@ -446,7 +492,239 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
   });
 
-  it("preserves provider-direct replies unless forced consult routing is configured", async () => {
+  it("emits generic issue details when relay connect fails", async () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: () => ({
+        connect: vi.fn(async () => {
+          throw new Error("OpenAI API key rejected with 401");
+        }),
+        sendAudio: vi.fn(),
+        setMediaTimestamp: vi.fn(),
+        handleBargeIn: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        isConnected: vi.fn(() => false),
+      }),
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      model: "gpt-realtime-2",
+    });
+    await Promise.resolve();
+
+    const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
+    expectRecordFields(errorPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "error",
+      message: "OpenAI API key rejected with 401",
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+    expectRecordFields(errorPayload.talkEvent, {
+      type: "session.error",
+      final: true,
+    });
+    expectRecordFields((errorPayload.talkEvent as Record<string, unknown>).payload, {
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+  });
+
+  it("emits an issue when the provider closes before ready", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          handleBargeIn: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      model: "gpt-realtime-2",
+    });
+
+    bridgeRequest?.onClose?.("error");
+
+    const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
+    expectRecordFields(errorPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "error",
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+    const closePayload = findEventPayload(events, (payload) => payload.type === "close");
+    expectRecordFields(closePayload, {
+      relaySessionId: session.relaySessionId,
+      type: "close",
+      reason: "error",
+    });
+  });
+
+  it("does not replace provider errors with pre-ready close issues", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          handleBargeIn: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      model: "gpt-realtime-2",
+    });
+
+    bridgeRequest?.onError?.(new Error("OpenAI API key rejected with 401"));
+    bridgeRequest?.onClose?.("error");
+
+    const errorPayloads = events
+      .map((entry) => entry.payload)
+      .filter(
+        (payload): payload is Record<string, unknown> =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "error",
+      );
+    expect(errorPayloads).toHaveLength(1);
+    expectRecordFields(errorPayloads[0], {
+      type: "error",
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+  });
+
+  it("does not route assistant echo transcripts back into the realtime model", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    bridgeRequest?.onTranscript?.(
+      "assistant",
+      "I am checking the latest status for you now.",
+      true,
+    );
+    bridgeRequest?.onTranscript?.("user", "checking the latest status for you now", true);
+
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall"
+        );
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves provider-direct audio replies to server VAD unless forced consult routing is configured", async () => {
     vi.useFakeTimers();
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -490,7 +768,7 @@ describe("talk realtime gateway relay", () => {
     await Promise.resolve();
 
     bridgeRequest?.onTranscript?.("user", "Can you answer directly?", true);
-    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith("Can you answer directly?");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
     expect(
       events.some((entry) => {
         const payload = entry.payload;
@@ -549,6 +827,8 @@ describe("talk realtime gateway relay", () => {
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
+
+    expectRecordFields(bridgeRequest, { autoRespondToAudio: false });
 
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("Can you check this?");
@@ -1179,7 +1459,7 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
-  it("forwards control-like transcripts when the linked relay run is already gone", async () => {
+  it("does not duplicate control-like transcripts when the linked relay run is already gone", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const bridge = {
       connect: vi.fn(async () => undefined),
@@ -1223,7 +1503,7 @@ describe("talk realtime gateway relay", () => {
 
     bridgeRequest?.onTranscript?.("user", "status", true);
 
-    expect(bridge.sendUserMessage).toHaveBeenCalledWith("status");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
     expect(bridge.submitToolResult).not.toHaveBeenCalled();
   });
 
@@ -1251,6 +1531,10 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
+    const chatDeltaSentAt = new Map<string, number>();
+    const chatDeltaLastBroadcastLen = new Map<string, number>();
+    const chatDeltaLastBroadcastText = new Map<string, string>();
     const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
     const bufferedAgentEvents = new Map([
       [
@@ -1300,13 +1584,23 @@ describe("talk realtime gateway relay", () => {
           },
         ],
       ]),
-      chatRunBuffers: new Map([["run-1", "partial answer"]]),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatDeltaLastBroadcastText: new Map(),
+      chatRunBuffers,
+      chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
+      chatDeltaLastBroadcastText,
       agentDeltaSentAt,
       bufferedAgentEvents,
       chatAbortedRuns: new Map(),
+      clearChatRunState: (runId: string) => {
+        chatRunBuffers.delete(runId);
+        chatDeltaSentAt.delete(runId);
+        chatDeltaLastBroadcastLen.delete(runId);
+        chatDeltaLastBroadcastText.delete(runId);
+        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+          agentDeltaSentAt.delete(key);
+          bufferedAgentEvents.delete(key);
+        }
+      },
       removeChatRun,
       agentRunSeq: new Map(),
     } as never;

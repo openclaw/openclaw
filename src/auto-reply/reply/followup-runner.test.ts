@@ -1,8 +1,10 @@
+// Tests follow-up runner delivery, transcript persistence, and no-reply contracts.
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -11,12 +13,13 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
-const runEmbeddedPiAgentMock = vi.fn();
+const runEmbeddedAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
-const compactEmbeddedPiSessionMock = vi.fn();
+const compactEmbeddedAgentSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
+const runReplyPayloadSendingHookMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
@@ -36,7 +39,11 @@ let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntime
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
+let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
+let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRegistry;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
+let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
+let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -300,7 +307,9 @@ async function persistRunSessionUsageForFollowupTest(
     return;
   }
   const preserveSessionModelState =
-    params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+    params.isHeartbeat === true ||
+    params.preserveRuntimeModel === true ||
+    params.preserveUserFacingSessionModelState === true;
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const nextEntry: SessionEntry = {
     ...entry,
@@ -309,7 +318,7 @@ async function persistRunSessionUsageForFollowupTest(
       ? entry.modelProvider
       : (params.providerUsed ?? entry.modelProvider),
     model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
-    contextTokens: preserveUserFacingRunState
+    contextTokens: preserveSessionModelState
       ? entry.contextTokens
       : (params.contextTokensUsed ?? entry.contextTokens),
     systemPromptReport: preserveUserFacingRunState
@@ -332,6 +341,9 @@ async function persistRunSessionUsageForFollowupTest(
     nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
     nextEntry.totalTokensFresh = promptTokens > 0;
   }
+  if (params.cliSessionBinding && params.providerUsed && !preserveUserFacingRunState) {
+    setCliSessionBinding(nextEntry, params.providerUsed, params.cliSessionBinding);
+  }
   store[sessionKey] = nextEntry;
   if (registeredStore) {
     return;
@@ -351,15 +363,15 @@ async function loadFreshFollowupRunnerModuleForTest() {
     })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
   }));
-  vi.doMock("../../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: vi.fn(async () => false),
-    compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
-    isEmbeddedPiRunActive: vi.fn(() => false),
-    isEmbeddedPiRunStreaming: vi.fn(() => false),
-    queueEmbeddedPiMessage: vi.fn(async () => undefined),
+  vi.doMock("../../agents/embedded-agent.js", () => ({
+    abortEmbeddedAgentRun: vi.fn(async () => false),
+    compactEmbeddedAgentSession: (params: unknown) => compactEmbeddedAgentSessionMock(params),
+    isEmbeddedAgentRunActive: vi.fn(() => false),
+    isEmbeddedAgentRunStreaming: vi.fn(() => false),
+    queueEmbeddedAgentMessage: vi.fn(async () => undefined),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-    waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
+    runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
+    waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
   }));
   vi.doMock("../../agents/cli-runner.js", () => ({
     runCliAgent: (params: unknown) => runCliAgentMock(params),
@@ -385,6 +397,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("./route-reply.js", () => ({
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  }));
+  vi.doMock("./reply-payload-sending-hook.js", () => ({
+    runReplyPayloadSendingHook: (...args: unknown[]) => runReplyPayloadSendingHookMock(...args),
   }));
   vi.doMock("../../plugins/provider-runtime.js", async () => {
     const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
@@ -442,6 +457,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
       };
     },
   }));
+  ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
+  setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
@@ -450,8 +467,35 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
-  ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
-    await import("./reply-run-registry.js"));
+  ({
+    abortActiveReplyRuns: abortActiveReplyRunsForTest,
+    createReplyOperation: createReplyOperationForTest,
+    replyRunRegistry: replyRunRegistryForTest,
+    testing: replyRunTestingForTest,
+  } = await import("./reply-run-registry.js"));
+  ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
+    await import("../reply-payload.js"));
+}
+
+function setFastFollowupCliBackendDeps(): void {
+  cliBackendsTestingForTest.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
 }
 
 const ROUTABLE_TEST_CHANNELS = new Set([
@@ -469,9 +513,10 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
-  runEmbeddedPiAgentMock.mockReset();
+  runEmbeddedAgentMock.mockReset();
   runCliAgentMock.mockReset();
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockImplementation(
@@ -489,9 +534,13 @@ beforeEach(() => {
       model: params.model,
     }),
   );
-  compactEmbeddedPiSessionMock.mockReset();
+  compactEmbeddedAgentSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
+  runReplyPayloadSendingHookMock.mockReset();
+  runReplyPayloadSendingHookMock.mockImplementation(
+    async (params: { payload: unknown }) => params.payload,
+  );
   resolveQueuedReplyExecutionConfigMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
@@ -524,6 +573,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
@@ -566,8 +616,8 @@ describe("createFollowupRunner reply-lane admission", () => {
       MediaPath: "/tmp/image.png",
       MediaType: "image/png",
     } as never;
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "done" }],
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
       meta: {},
     });
     const runner = createFollowupRunner({
@@ -583,12 +633,14 @@ describe("createFollowupRunner reply-lane admission", () => {
         run: {
           provider: "anthropic",
           model: "claude",
+          cwd: "/tmp/task-repo",
         },
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.cwd).toBe("/tmp/task-repo");
     const recorder = requireRecord(call.userTurnTranscriptRecorder, "embedded user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });
@@ -600,7 +652,7 @@ describe("createFollowupRunner reply-lane admission", () => {
       resetTriggered: false,
     });
     active.setPhase("preflight_compacting");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: { agentMeta: { provider: "anthropic", model: "claude" } },
     });
@@ -630,7 +682,9 @@ describe("createFollowupRunner reply-lane admission", () => {
         },
       }),
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
@@ -640,9 +694,181 @@ describe("createFollowupRunner reply-lane admission", () => {
     active.complete();
     await pending;
 
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.sessionId).toBe("post-compact-session");
     expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+
+  it("uses an admission session hint while refreshing the queued session file", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+    });
+    const sessionStore = {
+      main: {
+        sessionId: "rotated-session",
+        sessionFile: "/tmp/rotated.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        admissionSessionId: "rotated-session",
+        run: {
+          sessionId: "queued-stale-session",
+          sessionFile: "/tmp/stale.jsonl",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.sessionId).toBe("rotated-session");
+    expect(call.sessionFile).toBe("/tmp/rotated.jsonl");
+  });
+
+  it("registers the admitted session id when the local session store is stale", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    let observedRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { runId: string; sessionId?: string }) => {
+        observedRunId = params.runId;
+        expect(params.sessionId).toBe("post-compact-session");
+        return {
+          payloads: [],
+          meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+        };
+      },
+    );
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        run: {
+          sessionId: "queued-stale-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    active.updateSessionId("post-compact-session");
+    active.complete();
+    await pending;
+
+    expect(observedRunId).toBeDefined();
+    expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe(
+      "post-compact-session",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+  });
+
+  it("routes preflight compaction failures before starting queued followup runs", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        originatingChatType: "group",
+        run: {
+          messageProvider: "discord",
+          provider: "anthropic",
+          model: "claude",
+          verboseLevel: "off",
+          sessionKey: "main",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        payload: expect.objectContaining({
+          text: expect.stringContaining("auto-compaction could not recover"),
+        }),
+      }),
+    );
+  });
+
+  it("preserves non-compaction preflight failures for queued followup runs", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(new Error("session load failed"));
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: {
+            messageProvider: "discord",
+            provider: "anthropic",
+            model: "claude",
+            sessionKey: "main",
+          },
+        }),
+      ),
+    ).rejects.toThrow("session load failed");
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 });
 
@@ -658,7 +884,7 @@ function mockCompactionRun(params: {
     meta: Record<string, unknown>;
   };
 }) {
-  runEmbeddedPiAgentMock.mockImplementationOnce(
+  runEmbeddedAgentMock.mockImplementationOnce(
     async (args: {
       onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
     }) => {
@@ -688,7 +914,7 @@ describe("createFollowupRunner auto fallback primary probes", () => {
       modelOverrideFallbackOriginModel: "claude",
     };
     const sessionStore = { [sessionKey]: sessionEntry };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: { agentMeta: { provider: "anthropic", model: "claude" } },
     });
@@ -718,7 +944,7 @@ describe("createFollowupRunner auto fallback primary probes", () => {
       }),
     );
 
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.provider).toBe("anthropic");
     expect(call.model).toBe("claude");
     expect(sessionEntry.providerOverride).toBeUndefined();
@@ -752,7 +978,7 @@ describe("createFollowupRunner auto fallback primary probes", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
     const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
     markAutoFallbackPrimaryProbe({ probe, sessionKey });
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: { agentMeta: { provider: "openai", model: "gpt-5.4" } },
     });
@@ -787,7 +1013,7 @@ describe("createFollowupRunner auto fallback primary probes", () => {
       }),
     );
 
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.provider).toBe("openai");
     expect(call.model).toBe("gpt-5.4");
     expect(call.authProfileId).toBe("openai:fallback");
@@ -844,17 +1070,29 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         originatingChannel: "telegram",
+        originatingTo: "telegram:-100123:topic:42",
+        originatingThreadId: "42",
+        originatingReplyToId: "reply-42",
+        messageId: "queued-message-1",
         run: {
           config: runtimeConfig,
           sessionId: "session-cli-followup",
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          senderId: "sender-42",
+          senderIsOwner: true,
+          cwd: "/tmp/task-repo",
+          inputProvenance: {
+            kind: "internal_system",
+            sourceChannel: "telegram",
+            sourceTool: "restart-sentinel",
+          },
         },
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.provider).toBe("claude-cli");
@@ -862,15 +1100,236 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+    expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
+    expect(call.currentThreadTs).toBe("42");
+    expect(call.currentMessageId).toBe("reply-42");
+    expect(call.senderId).toBe("sender-42");
+    expect(call.senderIsOwner).toBe(true);
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
       agentId: "agent",
       workspaceDir: "/tmp",
+      cwd: "/tmp/task-repo",
       config: runtimeConfig,
       suppressNextUserMessagePersistence: false,
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
+  });
+
+  it("reuses CLI session bindings for queued room-event followups", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-room-event",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          cliSessionBinding: {
+            sessionId: "cli-session-1",
+          },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundAudio: true,
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-room-event",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          allowEmptyAssistantReplyAsSilent: true,
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.persistAssistantTranscript).toBe(false);
+    expect(call.currentInboundAudio).toBe(true);
+    expect(call.suppressNextUserMessagePersistence).toBe(true);
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(call.cliSessionId).toBe("cli-session-1");
+    expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
+  });
+
+  it("stores queued room-event CLI sessions created from the first ambient run", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const storePath = "/tmp/openclaw-followup-room-event-cli.json";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-room-event",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          sessionId: "cli-session-1",
+          cliSessionBinding: {
+            sessionId: "cli-session-1",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-room-event",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.cliSessionId).toBeUndefined();
+    expect(sessionStore.main.cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "cli-session-1",
+      authProfileId: "profile",
+    });
+  });
+
+  it("does not replace queued room-event CLI session bindings when reuse fails", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-room-event",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+        },
+      },
+    };
+    const sessionStore = { main: sessionEntry };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          sessionId: "transient-cli-session",
+          cliSessionBinding: {
+            sessionId: "transient-cli-session",
+          },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-room-event",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.cliSessionId).toBe("cli-session-1");
+    expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
+    expect(sessionStore.main.cliSessionBindings?.["claude-cli"]).toBeUndefined();
   });
 
   it("passes prepared media user turns to CLI runtime dispatch", async () => {
@@ -901,6 +1360,7 @@ describe("createFollowupRunner runtime config", () => {
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionKey: "main",
+      storePath: "/tmp/sessions.json",
       defaultModel: "anthropic/claude-opus-4-7",
     });
 
@@ -917,8 +1377,188 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(mediaCall.persistAssistantTranscript).toBe(true);
+    expect(mediaCall.storePath).toBe("/tmp/sessions.json");
     const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
+  });
+
+  it("disables routed delivery mirrors for CLI-owned followup payloads", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [
+        setReplyPayloadMetadataForTest(
+          { text: "persisted CLI followup" },
+          { assistantTranscriptOwned: true },
+        ),
+      ],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "persisted CLI followup" },
+        mirror: false,
+      }),
+    );
+  });
+
+  it("keeps queued CLI tool progress quiet when verbose progress is disabled", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onToolStart = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "start", name: "web_search", args: { query: "hidden" } },
+      });
+      return {
+        payloads: [{ text: "final" }],
+        meta: {
+          agentMeta: {
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onItemEvent = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        expect(params.emitCommentaryText).toBe(true);
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Let me check the files.",
+          },
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+            },
+          },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onItemEvent, commentaryProgressEnabled: true },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        progressText: "Let me check the files.",
+        itemId: "commentary-1",
+      }),
+    );
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
@@ -958,22 +1598,38 @@ describe("createFollowupRunner runtime config", () => {
       },
     );
     runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
-    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: Date.now() },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "lifecycle",
-        data: { phase: "end", endedAt: Date.now() },
-      });
-      return {
-        payloads: [{ text: "fallback ok" }],
-        meta: {},
-      };
-    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        expect(params.deferTerminalLifecycle).toBe(true);
+        const startedAt = Date.now();
+        const startEvent = {
+          stream: "lifecycle",
+          data: { phase: "start", startedAt },
+        };
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          ...startEvent,
+        });
+        await params.onAgentEvent?.(startEvent);
+        const finishingEvent = {
+          stream: "lifecycle",
+          data: { phase: "finishing", endedAt: Date.now() },
+        };
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          ...finishingEvent,
+        });
+        await params.onAgentEvent?.(finishingEvent);
+        return {
+          payloads: [{ text: "fallback ok" }],
+          meta: {},
+        };
+      },
+    );
 
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
@@ -1000,10 +1656,289 @@ describe("createFollowupRunner runtime config", () => {
     }
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const embeddedCall = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
-    expect(lifecyclePhases).toEqual(["start", "start", "end"]);
+    expect(lifecyclePhases).toEqual(["start", "start", "finishing", "end"]);
+  });
+
+  it("delivers an exhausted embedded followup as a failed lifecycle", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        outcome: "exhausted",
+        result: await params.run("anthropic", "claude-opus-4-7"),
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        expect(params.deferTerminalLifecycle).toBe(true);
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1_000 },
+        });
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "finishing", endedAt: 1_500 },
+        });
+        return {
+          payloads: [{ text: "Terminal tool summary", isError: true }],
+          meta: {
+            error: {
+              kind: "incomplete_turn",
+              message: "raw exhausted provider detail should stay private",
+            },
+          },
+        };
+      },
+    );
+    let operationResultDuringCompletion:
+      | import("./reply-run-registry.js").ReplyOperation["result"]
+      | undefined;
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          queuedLifecycle: {
+            onComplete: () => {
+              operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
+            },
+          },
+          run: {
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "Terminal tool summary", isError: true }),
+      }),
+    );
+    expect(operationResultDuringCompletion).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          startedAt: 1_000,
+          fallbackExhaustedFailure: true,
+        }),
+      ]),
+    );
+    expect(lifecycleEvents.some((event) => event.phase === "end")).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw exhausted provider detail");
+  });
+
+  it("delivers a completed non-fallbackable error followup as a failed lifecycle", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        outcome: "completed",
+        result: await params.run("anthropic", "claude-opus-4-7"),
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase: "finishing",
+            error: "Command may have changed state",
+            replayInvalid: true,
+          },
+        });
+        return {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: {
+            replayInvalid: true,
+            error: {
+              kind: "incomplete_turn",
+              message: "raw provider detail should stay private",
+              fallbackSafe: false,
+            },
+          },
+        };
+      },
+    );
+    let operationResultDuringCompletion:
+      | import("./reply-run-registry.js").ReplyOperation["result"]
+      | undefined;
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          queuedLifecycle: {
+            onComplete: () => {
+              operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
+            },
+          },
+          run: {
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Command may have changed state",
+          isError: true,
+        }),
+      }),
+    );
+    expect(operationResultDuringCompletion).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        }),
+      ]),
+    );
+    expect(
+      lifecycleEvents.some(
+        (event) => event.phase === "end" || event.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
+  });
+
+  it("suppresses deferred CLI success after restart cancellation", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    let resolveCli: (() => void) | undefined;
+    runCliAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCli = () =>
+            resolve({
+              payloads: [{ text: "completed after restart" }],
+              meta: {
+                agentMeta: {
+                  provider: "claude-cli",
+                  model: "claude-opus-4-7",
+                },
+              },
+            });
+        }),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          run: {
+            config: runtimeConfig,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      });
+      expect(abortActiveReplyRunsForTest({ mode: "all" })).toBe(true);
+      resolveCli?.();
+      await pending;
+    } finally {
+      unsubscribe();
+    }
+
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "end",
+          aborted: true,
+          stopReason: "restart",
+        }),
+      ]),
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
@@ -1034,7 +1969,7 @@ describe("createFollowupRunner runtime config", () => {
       },
     };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1055,7 +1990,7 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.config).toBe(runtimeConfig);
   });
 
@@ -1083,7 +2018,7 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
@@ -1091,7 +2026,7 @@ describe("createFollowupRunner runtime config", () => {
 
   it("passes the admitted reply abort signal into followup fallback and agent runs", async () => {
     const abortController = new AbortController();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1104,6 +2039,7 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundAudio: true,
         abortSignal: abortController.signal,
         run: {
           provider: "openai",
@@ -1117,16 +2053,18 @@ describe("createFollowupRunner runtime config", () => {
       runWithModelFallbackMock,
       "run with model fallback",
     );
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(fallbackCall.abortSignal).toBeInstanceOf(AbortSignal);
     expect(fallbackCall.abortSignal).not.toBe(abortController.signal);
+    expect(fallbackCall.sessionId).toBe("session");
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
+    expect(call.currentInboundAudio).toBe(true);
   });
 
   it("does not inherit source abort signals for queued user followups", async () => {
     const sourceAbortController = new AbortController();
     sourceAbortController.abort();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1152,7 +2090,7 @@ describe("createFollowupRunner runtime config", () => {
       runWithModelFallbackMock,
       "run with model fallback",
     );
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(fallbackCall.abortSignal).toBeInstanceOf(AbortSignal);
     expect(fallbackCall.abortSignal).not.toBe(sourceAbortController.signal);
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
@@ -1160,7 +2098,7 @@ describe("createFollowupRunner runtime config", () => {
 
   it("keeps queued delivery correlations active during followup agent runs", async () => {
     const events: string[] = [];
-    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
       events.push("run");
       return {
         payloads: [],
@@ -1226,7 +2164,7 @@ describe("createFollowupRunner runtime config", () => {
       targetStatesByPath: { "skills.entries.whisper.apiKey": "resolved_local" },
       hadUnresolvedTargets: false,
     });
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1248,12 +2186,12 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(queued.run.config).toBe(runtimeConfig);
     expect(requireMockCallArg(runPreflightCompactionIfNeededMock, 0).cfg).toBe(runtimeConfig);
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.config).toBe(runtimeConfig);
   });
 
   it("passes queued origin scope into queued execution-config resolution", async () => {
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1286,7 +2224,7 @@ describe("createFollowupRunner runtime config", () => {
   });
 
   it("passes queued images into queued embedded followup runs", async () => {
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1309,13 +2247,40 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.images).toBe(images);
     expect(call.imageOrder).toBe(imageOrder);
   });
 });
 
 describe("createFollowupRunner progress forwarding", () => {
+  it("records queued thread id on follow-up reply operations", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "slack",
+      originatingTo: "user:U1",
+      originatingThreadId: "501.000",
+      run: {
+        messageProvider: "slack",
+      },
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: { replyOperation?: { routeThreadId?: string | number } }) => {
+        expect(args.replyOperation?.routeThreadId).toBe("501.000");
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {
     const onToolStart = vi.fn(async () => {});
     const queued = createQueuedRun({
@@ -1330,7 +2295,7 @@ describe("createFollowupRunner progress forwarding", () => {
       },
     });
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         onToolResult?: (payload: { text: string }) => Promise<void>;
@@ -1344,6 +2309,8 @@ describe("createFollowupRunner progress forwarding", () => {
         await args.onAgentEvent?.({
           stream: "tool",
           data: {
+            itemId: "tool:queued-progress",
+            toolCallId: "queued-progress",
             phase: "start",
             name: "exec",
             args: { command: "echo queued-progress" },
@@ -1365,6 +2332,8 @@ describe("createFollowupRunner progress forwarding", () => {
     await runner(queued);
 
     expect(onToolStart).toHaveBeenCalledWith({
+      itemId: "tool:queued-progress",
+      toolCallId: "queued-progress",
       name: "exec",
       phase: "start",
       args: { command: "echo queued-progress" },
@@ -1378,6 +2347,7 @@ describe("createFollowupRunner progress forwarding", () => {
         accountId: "acct-1",
         threadId: "thread-1",
         mirror: false,
+        replyKind: "tool",
         payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
       }),
     );
@@ -1407,7 +2377,7 @@ describe("createFollowupRunner progress forwarding", () => {
       );
     });
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: { onToolResult?: (payload: { text: string }) => Promise<void> }) => {
         void args.onToolResult?.({ text: "🛠️ Exec: echo queued-progress" });
         return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
@@ -1442,6 +2412,7 @@ describe("createFollowupRunner progress forwarding", () => {
 
   it("preserves queued verbose progress when default tool progress is suppressed", async () => {
     const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
     const queued = createQueuedRun({
       originatingChannel: "discord",
@@ -1455,7 +2426,7 @@ describe("createFollowupRunner progress forwarding", () => {
       },
     });
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         onToolResult?: (payload: { text: string }) => Promise<void>;
@@ -1473,6 +2444,18 @@ describe("createFollowupRunner progress forwarding", () => {
           },
         });
         await args.onAgentEvent?.({
+          stream: "item",
+          data: {
+            itemId: "command:queued-suppressed-preview",
+            toolCallId: "queued-suppressed-preview",
+            kind: "command",
+            name: "exec",
+            phase: "update",
+            status: "running",
+            progressText: "queued output",
+          },
+        });
+        await args.onAgentEvent?.({
           stream: "command_output",
           data: { phase: "chunk", output: "queued output" },
         });
@@ -1482,7 +2465,12 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { suppressDefaultToolProgressMessages: true, onToolStart, onCommandOutput },
+      opts: {
+        suppressDefaultToolProgressMessages: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "claude",
@@ -1497,6 +2485,15 @@ describe("createFollowupRunner progress forwarding", () => {
       args: { command: "echo queued-suppressed-preview" },
       detailMode: "raw",
     });
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:queued-suppressed-preview",
+        toolCallId: "queued-suppressed-preview",
+        kind: "command",
+        name: "exec",
+        phase: "update",
+      }),
+    );
     expect(onCommandOutput).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "chunk", output: "queued output" }),
     );
@@ -1509,6 +2506,179 @@ describe("createFollowupRunner progress forwarding", () => {
         threadId: "thread-1",
         mirror: false,
         payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-suppressed-preview" }),
+      }),
+    );
+  });
+
+  it("forwards queued Codex command tool results as command output completion", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "result",
+            itemId: "command:queued-exec",
+            toolCallId: "queued-exec",
+            name: "exec",
+            status: "completed",
+            result: {
+              exitCode: 0,
+              durationMs: 24,
+            },
+          },
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      itemId: "command:queued-exec",
+      phase: "end",
+      title: undefined,
+      toolCallId: "queued-exec",
+      name: "exec",
+      output: undefined,
+      status: "completed",
+      exitCode: 0,
+      durationMs: 24,
+      cwd: undefined,
+    });
+  });
+
+  it("marks queued Codex command tool result errors as failed command output", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "result",
+            itemId: "command:queued-exec",
+            toolCallId: "queued-exec",
+            name: "exec",
+            isError: true,
+            result: {
+              content: [{ type: "text", text: "command failed" }],
+            },
+          },
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:queued-exec",
+        phase: "end",
+        toolCallId: "queued-exec",
+        name: "exec",
+        status: "failed",
+      }),
+    );
+  });
+
+  it("does not synthesize queued command output from bare exec tool results", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "exec",
+            toolCallId: "queued-exec",
+            isError: false,
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            itemId: "command:queued-exec",
+            phase: "end",
+            title: "command ls",
+            toolCallId: "queued-exec",
+            name: "exec",
+            status: "completed",
+            exitCode: 0,
+          },
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:queued-exec",
+        phase: "end",
+        status: "completed",
       }),
     );
   });
@@ -1530,7 +2700,7 @@ describe("createFollowupRunner progress forwarding", () => {
     const onCompactionEnd = vi.fn(async () => {});
     registerFollowupTestSessionStore(storePath, sessionStore);
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         shouldEmitToolResult?: () => boolean;
@@ -1587,11 +2757,68 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
+  it("forwards opted-in queued tool lifecycle feedback while verbose progress is disabled", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: { phase: "start", itemId: "item-1", title: "hidden item" },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "hidden output" },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+  });
+
   it("keeps queued follow-up progress quiet when verbose state is missing", async () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         onToolResult?: (payload: { text: string }) => Promise<void>;
@@ -1638,7 +2865,7 @@ describe("createFollowupRunner progress forwarding", () => {
   it("does not reuse dispatch-scoped tool-error suppression across queued follow-ups", async () => {
     const onCommandOutput = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock
+    runEmbeddedAgentMock
       .mockImplementationOnce(
         async (args: {
           onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
@@ -1699,7 +2926,7 @@ describe("createFollowupRunner progress forwarding", () => {
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {
     const onCommandOutput = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
@@ -1741,7 +2968,7 @@ describe("createFollowupRunner progress forwarding", () => {
   });
 
   it("keeps queued tool-error fallbacks when failed progress has no callback", async () => {
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
@@ -1788,7 +3015,7 @@ describe("createFollowupRunner progress forwarding", () => {
     const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
     const onToolStart = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         shouldEmitToolResult?: () => boolean;
@@ -1934,7 +3161,7 @@ describe("createFollowupRunner compaction", () => {
     const onBlockReply = vi.fn(async () => {});
     registerFollowupTestSessionStore(storePath, sessionStore);
 
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
@@ -1989,7 +3216,7 @@ describe("createFollowupRunner compaction", () => {
     };
     registerFollowupTestSessionStore(storePath, sessionStore);
 
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
@@ -2069,7 +3296,7 @@ describe("createFollowupRunner compaction", () => {
       },
     });
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(async (args) => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (args) => {
       args.onAgentEvent?.({
         stream: "compaction",
         data: { phase: "end", willRetry: false, completed: false },
@@ -2132,8 +3359,9 @@ describe("createFollowupRunner compaction", () => {
       main: sessionEntry,
     };
     registerFollowupTestSessionStore(storePath, sessionStore);
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
 
-    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       result: {
@@ -2151,7 +3379,7 @@ describe("createFollowupRunner compaction", () => {
         sessionKey?: string;
         storePath?: string;
       }) => {
-        await compactEmbeddedPiSessionMock({
+        await compactEmbeddedAgentSessionMock({
           sessionFile: transcriptPath,
           workspaceDir,
         });
@@ -2187,15 +3415,13 @@ describe("createFollowupRunner compaction", () => {
     );
 
     const embeddedCalls: Array<{ extraSystemPrompt?: string }> = [];
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: { extraSystemPrompt?: string }) => {
-        embeddedCalls.push({ extraSystemPrompt: params.extraSystemPrompt });
-        return {
-          payloads: [{ text: "final" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      },
-    );
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: { extraSystemPrompt?: string }) => {
+      embeddedCalls.push({ extraSystemPrompt: params.extraSystemPrompt });
+      return {
+        payloads: [{ text: "final" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
 
     const runner = createFollowupRunner({
       opts: { onBlockReply: vi.fn(async () => {}) },
@@ -2218,16 +3444,157 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
+    expect(requireMockCallArg(persistSpy, 0).preserveFreshTotalTokensOnStaleUsage).toBe(true);
+    persistSpy.mockRestore();
+  });
+
+  it("registers the post-preflight session id for lifecycle event stamping", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const sessionEntry: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: Date.now(),
+      sessionFile: "/tmp/old-session.jsonl",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        followupRun: FollowupRun;
+        sessionEntry?: SessionEntry;
+        sessionStore?: Record<string, SessionEntry>;
+        sessionKey?: string;
+      }) => {
+        const updatedEntry: SessionEntry = {
+          ...(params.sessionEntry ?? sessionEntry),
+          sessionId: "new-session",
+          sessionFile: "/tmp/new-session.jsonl",
+          updatedAt: Date.now(),
+        };
+        params.followupRun.run.sessionId = updatedEntry.sessionId;
+        params.followupRun.run.sessionFile = "/tmp/new-session.jsonl";
+        if (params.sessionKey && params.sessionStore) {
+          params.sessionStore[params.sessionKey] = updatedEntry;
+        }
+        return updatedEntry;
+      },
+    );
+
+    let observedRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { runId: string; sessionId?: string }) => {
+        observedRunId = params.runId;
+        expect(params.sessionId).toBe("new-session");
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(createQueuedRun());
+
+    expect(observedRunId).toBeDefined();
+    expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
+    realAgentEvents.resetAgentRunContextForTest();
+  });
+
+  it("captures follow-up lifecycle ownership before asynchronous preflight", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const initialGeneration = realAgentEvents.getAgentEventLifecycleGeneration();
+    let releasePreflight: (() => void) | undefined;
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        await new Promise<void>((resolve) => {
+          releasePreflight = resolve;
+        });
+        return params.sessionEntry;
+      },
+    );
+    let observedLifecycleGeneration: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { lifecycleGeneration?: string }) => {
+        observedLifecycleGeneration = params.lifecycleGeneration;
+        if (params.lifecycleGeneration !== realAgentEvents.getAgentEventLifecycleGeneration()) {
+          const error = new Error("Agent run belongs to a stale gateway lifecycle");
+          error.name = "AbortError";
+          throw error;
+        }
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "preflight-session",
+        updatedAt: Date.now(),
+      },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          run: {
+            sessionId: "preflight-session",
+            sessionKey: "main",
+            provider: "anthropic",
+            model: "claude",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+      });
+      const [registeredRun] = realAgentEvents.listAgentRunsForSession({
+        sessionKey: "main",
+        sessionId: "preflight-session",
+      });
+      expect(registeredRun).toEqual(
+        expect.objectContaining({
+          lifecycleGeneration: initialGeneration,
+        }),
+      );
+
+      realAgentEvents.rotateAgentEventLifecycleGeneration();
+      releasePreflight?.();
+      await pending;
+
+      expect(observedLifecycleGeneration).toBe(initialGeneration);
+      expect(realAgentEvents.getAgentRunContext(registeredRun?.runId ?? "")).toBeUndefined();
+    } finally {
+      realAgentEvents.resetAgentRunContextForTest();
+    }
   });
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {
   it("passes stored warning signature history to embedded followup runs", async () => {
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -2278,7 +3645,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
 
     await runner(baseQueuedRun());
 
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.allowGatewaySubagentBinding).toBe(true);
     expect(call.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(call.bootstrapPromptWarningSignature).toBe("sig-b");
@@ -2321,7 +3688,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     }>;
   }) {
     const onBlockReply = createAsyncReplySpy();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: {},
       ...params.agentResult,
     });
@@ -2407,7 +3774,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       },
     };
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       meta: {
         agentMeta: {
@@ -2452,7 +3819,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       meta: {
         agentMeta: {
@@ -2505,7 +3872,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       contextTokens: 200_000,
       inputTokens: 1_234,
@@ -2518,7 +3885,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "internal announce complete" }],
       meta: {
         agentMeta: {
@@ -2534,7 +3901,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       opts: { onBlockReply: createAsyncReplySpy() },
       typing: createMockTypingController(),
       typingMode: "instant",
-      defaultModel: "openai-codex/gpt-5.5",
+      defaultModel: "openai/gpt-5.5",
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -2558,7 +3925,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const persistCall = requireMockCallArg(persistSpy, 0);
     expect(persistCall.preserveUserFacingSessionModelState).toBe(true);
-    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
     expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
     expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
     expect(sessionStore[sessionKey]?.inputTokens).toBe(1_234);
@@ -2613,6 +3980,26 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectNoBlockReplyTextIncludes(onBlockReply, "could not deliver it to the originating channel");
   });
 
+  it("leaves same-channel route-failure fallback hooks to downstream delivery", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(runReplyPayloadSendingHookMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
   it("uses dispatcher when origin routing metadata is incomplete", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
@@ -2624,6 +4011,38 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
+  it("leaves dispatcher followup hooks to downstream delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(runReplyPayloadSendingHookMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
+  it("does not run dispatcher followup hooks before downstream delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(runReplyPayloadSendingHookMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectBlockReplyText(onBlockReply, "hello world!");
   });
@@ -2643,7 +4062,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    const runArg = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const runArg = requireMockCallArg(runEmbeddedAgentMock, 0);
     expect(runArg.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(runArg.forceMessageTool).toBe(true);
     expect(routeReplyMock).not.toHaveBeenCalled();
@@ -2697,7 +4116,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
   it("suppresses exact NO_REPLY followups without origin or dispatcher delivery", async () => {
     const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  ` }],
       meta: {},
     });
@@ -2716,7 +4135,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
     const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText }],
       meta: {},
     });
@@ -2813,14 +4232,284 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeArg.to).toBe("channel:C1");
     expect(routeArg.accountId).toBe("work");
     expect(routeArg.threadId).toBe("1739142736.000100");
+    expect(routeArg.replyKind).toBe("final");
+    expect(routeArg.runId).toEqual(expect.any(String));
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("routes queued compaction notices through the durable origin path", async () => {
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        onCompactionNotice?: (phase: "start" | "end") => Promise<void> | void;
+        sessionEntry?: SessionEntry;
+      }) => {
+        await params.onCompactionNotice?.("start");
+        await params.onCompactionNotice?.("end");
+        return params.sessionEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+      messageId: "current-msg-1",
+      originatingReplyToId: "quoted-parent-1",
+      run: {
+        config: {
+          channels: { discord: { replyToMode: "all" } },
+          agents: { defaults: { compaction: { notifyUser: true } } },
+        },
+        messageProvider: "discord",
+      },
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    const startRoute = requireMockCallArg(routeReplyMock, 0);
+    const endRoute = requireMockCallArg(routeReplyMock, 1);
+    expect(startRoute).toMatchObject({
+      channel: "discord",
+      to: "channel:C1",
+      accountId: "work",
+      threadId: "1739142736.000100",
+      replyKind: "block",
+      mirror: false,
+    });
+    expect(requireRecord(startRoute.payload, "start payload")).toMatchObject({
+      text: "🧹 Compacting context...",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(endRoute.replyKind).toBe("block");
+    expect(endRoute.mirror).toBe(false);
+    expect(requireRecord(endRoute.payload, "end payload")).toMatchObject({
+      text: "🧹 Compaction complete",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+  });
+
+  it("routes queued compaction hook messages alongside notifyUser notices (#90185)", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start", messages: ["Hook before"] },
+        });
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true, messages: ["Hook after"] },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        messageId: "current-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(4);
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "hook start"),
+    ).toMatchObject({
+      text: "Hook before",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 1).payload, "notice start"),
+    ).toMatchObject({
+      text: "🧹 Compacting context...",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(requireRecord(requireMockCallArg(routeReplyMock, 2).payload, "hook end")).toMatchObject({
+      text: "Hook after",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 3).payload, "notice end"),
+    ).toMatchObject({
+      text: "🧹 Compaction complete",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+  });
+
+  it("applies reply-to mode filtering to queued compaction notices", async () => {
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        onCompactionNotice?: (phase: "start") => Promise<void> | void;
+        sessionEntry?: SessionEntry;
+      }) => {
+        await params.onCompactionNotice?.("start");
+        return params.sessionEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingReplyToId: "reply-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "off" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload");
+    expect(payload).toMatchObject({
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expect(payload.replyToId).toBeUndefined();
+  });
+
+  it("plans queued compaction notices with the active fallback candidate", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        run: (provider: string, model: string) => Promise<{ payloads: unknown[]; meta: object }>;
+      }) => ({
+        result: await params.run("google", "gemini-2.5-flash"),
+        provider: "google",
+        model: "gemini-2.5-flash",
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          config: { agents: { defaults: { compaction: { notifyUser: true } } } },
+          provider: "anthropic",
+          model: "claude",
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    const routeArg = requireMockCallArg(resolveProviderFollowupFallbackRouteMock, 0);
+    expect(routeArg.provider).toBe("google");
+    const context = requireRecord(routeArg.context, "provider fallback context");
+    expect(context.provider).toBe("google");
+    expect(context.modelId).toBe("gemini-2.5-flash");
+    expect(requireRecord(context.payload, "provider fallback payload")).toMatchObject({
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+  });
+
+  it("suppresses queued compaction completion notices while compaction will retry", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: {
+            phase: "end",
+            completed: true,
+            willRetry: true,
+            messages: ["compaction hook says done"],
+          },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingReplyToId: "reply-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 });
 
 describe("createFollowupRunner typing cleanup", () => {
   async function runTypingCase(agentResult: Record<string, unknown>) {
     const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: {},
       ...agentResult,
     });
@@ -2853,7 +4542,7 @@ describe("createFollowupRunner typing cleanup", () => {
 
   it("calls both markRunComplete and markDispatchIdle on agent error", async () => {
     const typing = createMockTypingController();
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
 
     const runner = createFollowupRunner({
       opts: { onBlockReply: vi.fn(async () => {}) },
@@ -2870,7 +4559,7 @@ describe("createFollowupRunner typing cleanup", () => {
   it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {
     const typing = createMockTypingController();
     const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       meta: {},
     });
@@ -2890,10 +4579,10 @@ describe("createFollowupRunner typing cleanup", () => {
 });
 
 describe("createFollowupRunner agentDir forwarding", () => {
-  it("passes queued run agentDir to runEmbeddedPiAgent", async () => {
-    runEmbeddedPiAgentMock.mockClear();
+  it("passes queued run agentDir to runEmbeddedAgent", async () => {
+    runEmbeddedAgentMock.mockClear();
     const onBlockReply = vi.fn(async () => {});
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
       meta: {},
@@ -2914,15 +4603,15 @@ describe("createFollowupRunner agentDir forwarding", () => {
       },
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.agentDir).toBe(agentDir);
   });
 });
 
 describe("createFollowupRunner queued user message idempotency across fallback", () => {
   it("suppresses queued user message persistence after first fallback candidate persists it", async () => {
-    runEmbeddedPiAgentMock.mockClear();
+    runEmbeddedAgentMock.mockClear();
     runWithModelFallbackMock.mockReset();
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
@@ -2934,7 +4623,7 @@ describe("createFollowupRunner queued user message idempotency across fallback",
         };
       },
     );
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onUserMessagePersisted?: (message: {
           role: "user";
@@ -2948,7 +4637,7 @@ describe("createFollowupRunner queued user message idempotency across fallback",
         throw new Error("upstream 500");
       },
     );
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
     });
@@ -2969,15 +4658,15 @@ describe("createFollowupRunner queued user message idempotency across fallback",
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
-    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
-    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedAgentMock, 1);
     expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressNextUserMessagePersistence).toBe(true);
   });
 
   it("only persists assistant error stub on the first fallback candidate", async () => {
-    runEmbeddedPiAgentMock.mockClear();
+    runEmbeddedAgentMock.mockClear();
     runWithModelFallbackMock.mockReset();
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
@@ -2990,7 +4679,7 @@ describe("createFollowupRunner queued user message idempotency across fallback",
         };
       },
     );
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAssistantErrorMessagePersisted?: (message: {
           role: "assistant";
@@ -3006,8 +4695,8 @@ describe("createFollowupRunner queued user message idempotency across fallback",
         throw new Error("upstream 500");
       },
     );
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
     });
@@ -3027,17 +4716,17 @@ describe("createFollowupRunner queued user message idempotency across fallback",
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
-    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
-    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
-    const thirdAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 2);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
+    const firstAttempt = requireMockCallArg(runEmbeddedAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedAgentMock, 1);
+    const thirdAttempt = requireMockCallArg(runEmbeddedAgentMock, 2);
     expect(firstAttempt.suppressAssistantErrorPersistence).toBe(false);
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(true);
     expect(thirdAttempt.suppressAssistantErrorPersistence).toBe(true);
   });
 
   it("does not suppress when no fallback candidate persisted the queued message", async () => {
-    runEmbeddedPiAgentMock.mockClear();
+    runEmbeddedAgentMock.mockClear();
     runWithModelFallbackMock.mockReset();
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
@@ -3049,8 +4738,8 @@ describe("createFollowupRunner queued user message idempotency across fallback",
         };
       },
     );
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream early"));
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream early"));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
     });
@@ -3071,9 +4760,9 @@ describe("createFollowupRunner queued user message idempotency across fallback",
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
-    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
-    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedAgentMock, 1);
     expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);

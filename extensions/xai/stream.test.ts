@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
-import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/openai-responses";
+// Xai tests cover stream plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple, type Api, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
@@ -113,7 +113,7 @@ async function captureXaiResponsesPayloadWithThinking(): Promise<Record<string, 
       () => reject(new Error("provider payload callback was not invoked")),
       1_000,
     );
-    const stream = streamSimpleOpenAIResponses(
+    const stream = streamSimple(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       {
@@ -168,6 +168,41 @@ describe("xai stream wrappers", () => {
 
     runXaiGrok4ResponseStream(wrapped);
     expectXaiFastToolStreamShaping(capture);
+  });
+
+  it("leaves tool-call argument html entities untouched, delegating decode to the core path", async () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call_1",
+      name: "write",
+      arguments: { content: "&amp;amp;" },
+    };
+    const assistant = {
+      role: "assistant",
+      content: [toolCall],
+      stopReason: "toolUse",
+    };
+    const baseStream = buildEventStreamFn([
+      { type: "toolcall_end", contentIndex: 0, toolCall, partial: assistant },
+      { type: "done", reason: "toolUse", message: assistant },
+    ]);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStream,
+      extraParams: { tool_stream: false },
+    } as never);
+
+    const events = await collectEvents(
+      wrapped!(
+        { api: "openai-responses", provider: "xai", id: "grok-4.3" } as Model<"openai-responses">,
+        { messages: [], tools: [] } as unknown as Context,
+        {},
+      ),
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<{ arguments?: { content?: string } }> };
+    };
+    expect(done.message?.content?.[0]?.arguments?.content).toBe("&amp;amp;");
   });
 
   it("promotes standalone Grok-style tool text to a structured tool call", async () => {
@@ -309,7 +344,7 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
-  it("keeps native xAI Responses thinking efforts before pi-ai dispatches payloads", async () => {
+  it("keeps native xAI Responses thinking efforts before the shared runtime dispatches payloads", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });

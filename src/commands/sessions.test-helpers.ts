@@ -1,3 +1,4 @@
+// Session command test helpers create temporary homes, session stores, and runtime fixtures.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,8 +10,8 @@ const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknow
   loadConfig: () => ({
     agents: {
       defaults: {
-        model: { primary: "pi:opus" },
-        models: { "pi:opus": {} },
+        model: { primary: "test:opus" },
+        models: { "test:opus": {} },
         contextTokens: 32000,
       },
     },
@@ -22,6 +23,18 @@ const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => sessionsConfigState.loadConfig(),
   loadConfig: () => sessionsConfigState.loadConfig(),
+}));
+
+vi.mock("../infra/state-migrations.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
+    "../infra/state-migrations.js",
+  )),
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
 }));
 
 export function mockSessionsConfig() {

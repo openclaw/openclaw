@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements docker harness behavior.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -59,6 +60,9 @@ ${imageBlock}    pull_policy: never
       timeout: 5s
       retries: 6
       start_period: 3s
+    environment:
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+      OPENCLAW_PROFILE: ""
     command:
       - node
       - dist/index.js
@@ -87,6 +91,9 @@ ${params.bindUiDist ? `      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : 
       retries: 6
       start_period: 5s
     environment:
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+      OPENCLAW_CONFIG_PATH: /opt/openclaw-scaffold/openclaw.json
+      OPENCLAW_STATE_DIR: /tmp/openclaw/state
       OPENCLAW_SKIP_GMAIL_WATCHER: "1"
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
       OPENCLAW_SKIP_CANVAS_HOST: "1"
@@ -311,7 +318,7 @@ export async function writeQaDockerHarnessFiles(params: {
       path.join(params.outputDir, "state", "seed-workspace", "IDENTITY.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
     ],
   };
 }
@@ -336,7 +343,7 @@ export async function buildQaDockerHarnessImage(
       return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
         execFile(command, args, { cwd }, (error, stdout, stderr) => {
           if (error) {
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
             return;
           }
           resolve({ stdout, stderr });
@@ -360,4 +367,18 @@ export async function buildQaDockerHarnessImage(
   );
 
   return { imageName };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

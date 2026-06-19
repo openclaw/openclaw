@@ -1,3 +1,4 @@
+// Slack plugin module implements channel behavior.
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
@@ -70,6 +71,7 @@ import {
   slackConfigAdapter,
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
+import { slackContextTargetsMatch } from "./targets.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
@@ -648,10 +650,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               normalizeOptionalString(account.botToken),
             inputs,
             missingTokenNote: "missing Slack token",
-            resolveWithToken: async ({ token, inputs }) =>
+            resolveWithToken: async ({ token, inputs: inputsValue }) =>
               (await loadSlackResolveChannelsModule()).resolveSlackChannelAllowlist({
                 token,
-                entries: inputs,
+                entries: inputsValue,
               }),
             mapResolved: (entry) =>
               toResolvedTarget(entry, entry.archived ? "archived" : undefined),
@@ -663,10 +665,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
             normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
-          resolveWithToken: async ({ token, inputs }) =>
+          resolveWithToken: async ({ token, inputs: inputsLocal }) =>
             (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({
               token,
-              entries: inputs,
+              entries: inputsLocal,
             }),
           mapResolved: (entry) => toResolvedTarget(entry, entry.note),
         });
@@ -795,6 +797,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   security: slackSecurityAdapter,
   threading: {
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      slackContextTargetsMatch(target, toolContext),
     scopedAccountReplyToMode: {
       resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
@@ -810,10 +814,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId }) => ({
-      replyToId: resolveSlackThreadTsValue({ replyToId, threadId }),
-      threadId: null,
-    }),
+    resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+      const resolvedReplyToId = resolveSlackThreadTsValue({
+        replyToId: replyDelivery?.replyToMode === "off" ? undefined : replyToId,
+        threadId,
+      });
+      return {
+        replyToId:
+          replyDelivery?.replyToMode === "off" && !resolvedReplyToId ? null : resolvedReplyToId,
+        threadId: null,
+      };
+    },
   },
   outbound: slackChannelOutbound,
 });

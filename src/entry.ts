@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Boots the OpenClaw CLI entry point under Node.
+// CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
@@ -25,6 +27,9 @@ const ENTRY_WRAPPER_PAIRS = [
 
 type PrecomputedCommandHelpName = "browser" | "secrets" | "nodes";
 type OutputPrecomputedHelpText = () => boolean;
+
+const loadRootHelpLiveConfigModule = async () => await import("./cli/root-help-live-config.js");
+const loadRootHelpMetadataModule = async () => await import("./cli/root-help-metadata.js");
 
 function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   const tokens = argv.slice(2).filter((token) => token.length > 0 && !token.startsWith("-"));
@@ -187,13 +192,12 @@ export async function tryHandleRootHelpFastPath(
   try {
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
       deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
-      (await import("./cli/root-help-live-config.js"))
-        .loadRootHelpRenderOptionsForConfigSensitivePlugins;
+      (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
     const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(deps.env);
     if (!liveRootHelpOptions) {
       const outputPrecomputedRootHelpText =
         deps.outputPrecomputedRootHelpText ??
-        (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
+        (await loadRootHelpMetadataModule()).outputPrecomputedRootHelpText;
       if (outputPrecomputedRootHelpText()) {
         return true;
       }
@@ -251,8 +255,7 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
     if (commandName === "nodes") {
       const loadRootHelpRenderOptionsForConfigSensitivePlugins =
         deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
-        (await import("./cli/root-help-live-config.js"))
-          .loadRootHelpRenderOptionsForConfigSensitivePlugins;
+        (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
       const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
       if (liveRootHelpOptions) {
         return false;
@@ -261,18 +264,18 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
     if (commandName === "browser") {
       const outputPrecomputedBrowserHelpText =
         deps.outputPrecomputedBrowserHelpText ??
-        (await import("./cli/root-help-metadata.js")).outputPrecomputedBrowserHelpText;
+        (await loadRootHelpMetadataModule()).outputPrecomputedBrowserHelpText;
       return outputPrecomputedBrowserHelpText();
     }
     if (commandName === "secrets") {
       const outputPrecomputedSecretsHelpText =
         deps.outputPrecomputedSecretsHelpText ??
-        (await import("./cli/root-help-metadata.js")).outputPrecomputedSecretsHelpText;
+        (await loadRootHelpMetadataModule()).outputPrecomputedSecretsHelpText;
       return outputPrecomputedSecretsHelpText();
     }
     const outputPrecomputedNodesHelpText =
       deps.outputPrecomputedNodesHelpText ??
-      (await import("./cli/root-help-metadata.js")).outputPrecomputedNodesHelpText;
+      (await loadRootHelpMetadataModule()).outputPrecomputedNodesHelpText;
     return outputPrecomputedNodesHelpText();
   } catch {
     return false;

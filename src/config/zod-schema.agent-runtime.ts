@@ -1,15 +1,16 @@
+// Defines Zod schema fragments for per-agent runtime configuration.
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -72,6 +73,12 @@ export const AgentRunRetriesConfigSchema = z
     },
     { message: "max must be greater than or equal to min", path: ["max"] },
   );
+
+const AgentEntryEmbeddedAgentConfigSchema = z
+  .object({
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+  })
+  .strict();
 
 export const HeartbeatSchema = z
   .object({
@@ -547,6 +554,7 @@ const ToolExecSafeBinProfileSchema = z
 
 const ToolExecBaseShape = {
   host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
+  mode: z.enum(["deny", "allowlist", "ask", "auto", "full"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
@@ -556,6 +564,13 @@ const ToolExecBaseShape = {
   commandHighlighting: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
+  reviewer: z
+    .object({
+      model: AgentModelSchema.optional(),
+      timeoutMs: z.number().int().positive().optional(),
+    })
+    .strict()
+    .optional(),
   backgroundMs: z.number().int().positive().optional(),
   timeoutSec: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
@@ -564,15 +579,34 @@ const ToolExecBaseShape = {
   applyPatch: ToolExecApplyPatchSchema,
 } as const;
 
+function addExecPolicyModeConflictIssue(
+  value: { mode?: unknown; security?: unknown; ask?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.mode === undefined || (value.security === undefined && value.ask === undefined)) {
+    return;
+  }
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["mode"],
+    message: "tools.exec.mode cannot be combined with tools.exec.security or tools.exec.ask",
+  });
+}
+
 const AgentToolExecSchema = z
   .object({
     ...ToolExecBaseShape,
     approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
   })
   .strict()
+  .superRefine(addExecPolicyModeConflictIssue)
   .optional();
 
-const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
+const ToolExecSchema = z
+  .object(ToolExecBaseShape)
+  .strict()
+  .superRefine(addExecPolicyModeConflictIssue)
+  .optional();
 
 const ToolFsSchema = z
   .object({
@@ -642,7 +676,7 @@ const ToolSearchSchema = z
     z
       .object({
         enabled: z.boolean().optional(),
-        mode: z.enum(["code", "tools"]).optional(),
+        mode: z.enum(["code", "tools", "directory"]).optional(),
         codeTimeoutMs: z.number().int().positive().optional(),
         searchDefaultLimit: z.number().int().positive().optional(),
         maxSearchLimit: z.number().int().positive().optional(),
@@ -870,7 +904,6 @@ export const MemorySearchSchema = z
     store: z
       .object({
         driver: z.literal("sqlite").optional(),
-        path: z.string().optional(),
         fts: z
           .object({
             tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
@@ -981,19 +1014,21 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-export const AgentEmbeddedHarnessSchema = z
-  .object({
-    runtime: z.string().optional(),
-  })
-  .strict()
-  .optional();
-
 export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })
   .strict()
   .optional();
+
+export const AgentModelRuntimeEntrySchema = z
+  .object({
+    alias: z.string().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: AgentRuntimePolicySchema,
+    streaming: z.boolean().optional(),
+  })
+  .strict();
 
 export const AgentEntrySchema = z
   .object({
@@ -1003,23 +1038,8 @@ export const AgentEntrySchema = z
     description: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
-    agentRuntime: AgentRuntimePolicySchema,
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            params: z.record(z.string(), z.unknown()).optional(),
-            agentRuntime: AgentRuntimePolicySchema,
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
@@ -1059,12 +1079,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    embeddedPi: z
-      .object({
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
+    embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,

@@ -1,7 +1,9 @@
+// Builds detached, platform-specific restart scripts for update handoff.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
@@ -14,7 +16,6 @@ import {
   resolveGatewayRestartLogPath,
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -71,8 +72,8 @@ export async function prepareRestartScript(
   const timestamp = Date.now();
   const platform = process.platform;
 
-  let scriptContent = "";
-  let filename = "";
+  let scriptContent;
+  let filename;
 
   try {
     if (platform === "linux") {

@@ -1,109 +1,18 @@
-import type { InteractiveButtonStyle } from "../interactive/payload.js";
+// Defines plugin approval request/resolution payloads and actions.
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
-export type PluginApprovalActionKind = "decision" | "command";
-export type PluginApprovalActionStyle = InteractiveButtonStyle;
-
-export type PluginApprovalDecisionActionTemplate = {
-  kind: "decision";
+// Plugin approval types and renderers mirror exec approval decisions while
+// keeping plugin-facing request text and action metadata separate.
+/** Button/action metadata shown with a plugin approval request. */
+export type PluginApprovalActionView = {
+  kind?: "command" | "decision";
   label: string;
-  style: PluginApprovalActionStyle;
-  decision: ExecApprovalDecision;
-  commandTemplate: string;
-};
-
-export type PluginApprovalCommandActionTemplate = {
-  kind: "command";
-  label: string;
-  style: PluginApprovalActionStyle;
-  commandTemplate: string;
-};
-
-export type PluginApprovalActionTemplate =
-  | PluginApprovalDecisionActionTemplate
-  | PluginApprovalCommandActionTemplate;
-
-export type PluginApprovalDecisionActionDescriptor = Omit<
-  PluginApprovalDecisionActionTemplate,
-  "commandTemplate"
-> & {
   command: string;
+  decision?: ExecApprovalDecision;
+  style?: "primary" | "secondary" | "success" | "danger";
 };
 
-export type PluginApprovalCommandActionDescriptor = Omit<
-  PluginApprovalCommandActionTemplate,
-  "commandTemplate"
-> & {
-  command: string;
-};
-
-export type PluginApprovalActionDescriptor =
-  | PluginApprovalDecisionActionDescriptor
-  | PluginApprovalCommandActionDescriptor;
-
-type PluginApprovalActionBase = {
-  kind: PluginApprovalActionKind;
-  label: string;
-  style: PluginApprovalActionStyle;
-};
-
-type NormalizedPluginApprovalActionTemplate =
-  | (PluginApprovalActionBase & {
-      kind: "decision";
-      decision: ExecApprovalDecision;
-      commandTemplate: string;
-    })
-  | (PluginApprovalActionBase & {
-      kind: "command";
-      commandTemplate: string;
-    });
-
-function isApprovalDecision(value: unknown): value is ExecApprovalDecision {
-  return value === "allow-once" || value === "allow-always" || value === "deny";
-}
-
-export function validatePluginApprovalActionTemplates(
-  actions: readonly PluginApprovalActionTemplate[],
-): string | null {
-  for (const [index, action] of actions.entries()) {
-    const decision = (action as { decision?: unknown }).decision;
-    if (action.kind === "command" && decision !== undefined) {
-      return `actions[${index}] command actions must not include decision`;
-    }
-    if (action.kind === "decision" && !isApprovalDecision(decision)) {
-      return `actions[${index}] decision actions must include a valid decision`;
-    }
-  }
-  return null;
-}
-
-function normalizePluginApprovalActionTemplate(
-  action: PluginApprovalActionTemplate,
-): NormalizedPluginApprovalActionTemplate | null {
-  const decision = (action as { decision?: unknown }).decision;
-  if (action.kind === "command" && decision !== undefined) {
-    return null;
-  }
-  if (action.kind === "command") {
-    return {
-      kind: "command",
-      label: action.label,
-      style: action.style,
-      commandTemplate: action.commandTemplate,
-    };
-  }
-  if (action.kind === "decision" && isApprovalDecision(decision)) {
-    return {
-      kind: "decision",
-      label: action.label,
-      style: action.style,
-      decision,
-      commandTemplate: action.commandTemplate,
-    };
-  }
-  return null;
-}
-
+/** Request payload supplied by plugin approval callers. */
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
@@ -112,7 +21,7 @@ export type PluginApprovalRequestPayload = {
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
-  actions?: readonly PluginApprovalActionDescriptor[] | null;
+  actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
   turnSourceChannel?: string | null;
@@ -121,6 +30,7 @@ export type PluginApprovalRequestPayload = {
   turnSourceThreadId?: string | number | null;
 };
 
+/** Timed plugin approval request persisted while awaiting a decision. */
 export type PluginApprovalRequest = {
   id: string;
   request: PluginApprovalRequestPayload;
@@ -128,6 +38,7 @@ export type PluginApprovalRequest = {
   expiresAtMs: number;
 };
 
+/** Resolved plugin approval decision plus optional request snapshot. */
 export type PluginApprovalResolved = {
   id: string;
   decision: ExecApprovalDecision;
@@ -140,15 +51,22 @@ export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
-export const PLUGIN_APPROVAL_ACTION_LABEL_MAX_LENGTH = 40;
-export const PLUGIN_APPROVAL_ACTION_COMMAND_TEMPLATE_MAX_LENGTH = 200;
-export const MAX_PLUGIN_APPROVAL_ACTIONS = 6;
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
+/** Clamp a plugin approval timeout to the supported runtime bounds. */
+export function resolvePluginApprovalTimeoutMs(value: unknown): number {
+  const candidate =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+  return Math.min(MAX_PLUGIN_APPROVAL_TIMEOUT_MS, Math.max(1, Math.floor(candidate)));
+}
+
+/** Format an approval decision for user-facing messages. */
 export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -159,6 +77,7 @@ export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
   return "denied";
 }
 
+/** Resolve explicit plugin approval decisions or fall back to defaults. */
 export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
@@ -176,45 +95,7 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
 }
 
-export function expandPluginApprovalActionTemplates(params: {
-  approvalId: string;
-  actions?: readonly PluginApprovalActionTemplate[] | null;
-}): readonly PluginApprovalActionDescriptor[] | undefined {
-  if (!Array.isArray(params.actions) || params.actions.length === 0) {
-    return undefined;
-  }
-
-  const expanded: PluginApprovalActionDescriptor[] = [];
-  for (const rawAction of params.actions) {
-    const action = normalizePluginApprovalActionTemplate(rawAction);
-    if (!action) {
-      continue;
-    }
-    const label = action.label.trim();
-    const command = action.commandTemplate.replaceAll("{id}", params.approvalId).trim();
-    if (!label || !command) {
-      continue;
-    }
-    if (action.kind === "decision") {
-      expanded.push({
-        kind: "decision",
-        label,
-        style: action.style,
-        decision: action.decision,
-        command,
-      });
-      continue;
-    }
-    expanded.push({
-      kind: "command",
-      label,
-      style: action.style,
-      command,
-    });
-  }
-  return expanded.length > 0 ? expanded : undefined;
-}
-
+/** Build the pending plugin approval message. */
 export function buildPluginApprovalRequestMessage(
   request: PluginApprovalRequest,
   nowMsValue: number,
@@ -237,28 +118,22 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
-  const actionCommands = request.request.actions
-    ?.map((action) => action.command.trim())
-    .filter((command) => command.length > 0);
-  if (actionCommands && actionCommands.length > 0) {
-    lines.push("Reply with one of:");
-    lines.push(actionCommands.join("\n"));
-  } else {
-    lines.push(
-      `Reply with: /approve <id> ${resolvePluginApprovalRequestAllowedDecisions(
-        request.request,
-      ).join("|")}`,
-    );
-  }
+  lines.push(
+    `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
+      request.request,
+    ).join("|")}`,
+  );
   return lines.join("\n");
 }
 
+/** Build the plugin approval resolution message. */
 export function buildPluginApprovalResolvedMessage(resolved: PluginApprovalResolved): string {
   const base = `✅ Plugin approval ${approvalDecisionLabel(resolved.decision)}.`;
   const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
   return `${base}${by} ID: ${resolved.id}`;
 }
 
+/** Build the plugin approval expiration message. */
 export function buildPluginApprovalExpiredMessage(request: PluginApprovalRequest): string {
   return `⏱️ Plugin approval expired. ID: ${request.id}`;
 }

@@ -1,3 +1,6 @@
+/**
+ * Canvas host server and static-file/live-reload handler implementation.
+ */
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -27,8 +30,11 @@ import {
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
+export const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
 type ChokidarWatch = typeof import("chokidar").watch;
 
+/** Options for Canvas host creation. */
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
@@ -40,17 +46,20 @@ export type CanvasHostOpts = {
   webSocketServerClass?: typeof WebSocketServer;
 };
 
+/** Options for starting a standalone Canvas host HTTP server. */
 export type CanvasHostServerOpts = CanvasHostOpts & {
   handler?: CanvasHostHandler;
   ownsHandler?: boolean;
 };
 
+/** Running Canvas host server handle. */
 export type CanvasHostServer = {
   port: number;
   rootDir: string;
   close: () => Promise<void>;
 };
 
+/** Options for creating only the Canvas host request handler. */
 export type CanvasHostHandlerOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
@@ -61,6 +70,7 @@ export type CanvasHostHandlerOpts = {
   webSocketServerClass?: typeof WebSocketServer;
 };
 
+/** Canvas host handler for HTTP requests, WebSocket upgrades, and teardown. */
 export type CanvasHostHandler = {
   rootDir: string;
   basePath: string;
@@ -185,7 +195,12 @@ function isDisabledByEnv() {
 
 function normalizeBasePath(rawPath: string | undefined) {
   const trimmed = (rawPath ?? CANVAS_HOST_PATH).trim();
-  const normalized = normalizeUrlPath(trimmed || CANVAS_HOST_PATH);
+  let normalized: string;
+  try {
+    normalized = normalizeUrlPath(trimmed || CANVAS_HOST_PATH);
+  } catch {
+    normalized = normalizeUrlPath(CANVAS_HOST_PATH);
+  }
   if (normalized === "/") {
     return "/";
   }
@@ -239,6 +254,7 @@ function resolveDefaultWatchFactory(): ChokidarWatch {
   throw new Error("chokidar.watch unavailable");
 }
 
+/** Creates a Canvas static-file handler with optional live reload. */
 export async function createCanvasHostHandler(
   opts: CanvasHostHandlerOpts,
 ): Promise<CanvasHostHandler> {
@@ -262,11 +278,22 @@ export async function createCanvasHostHandler(
   const writeStabilityThresholdMs = testMode ? 12 : 75;
   const writePollIntervalMs = testMode ? 5 : 10;
   const WebSocketServerClass = opts.webSocketServerClass ?? WebSocketServer;
-  const wss = liveReload ? new WebSocketServerClass({ noServer: true }) : null;
+  const wss = liveReload
+    ? new WebSocketServerClass({
+        noServer: true,
+        // Live reload clients never need to send application payloads; cap frames
+        // before ws buffers oversized input on this long-lived upgrade route.
+        maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
+      })
+    : null;
   const sockets = new Set<WebSocket>();
   if (wss) {
     wss.on("connection", (ws) => {
       sockets.add(ws);
+      // ws emits error for maxPayload rejections; close handles final cleanup.
+      ws.on("error", () => {
+        sockets.delete(ws);
+      });
       ws.on("close", () => sockets.delete(ws));
     });
   }
@@ -438,12 +465,15 @@ export async function createCanvasHostHandler(
         }
       }
       if (wss) {
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
     },
   };
 }
 
+/** Starts a standalone loopback Canvas host HTTP server. */
 export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<CanvasHostServer> {
   if (isDisabledByEnv() && opts.allowInTests !== true) {
     return { port: 0, rootDir: "", close: async () => {} };
@@ -480,7 +510,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       opts.runtime.error(`Canvas host request failed: ${String(err)}`);
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -523,9 +553,9 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       if (ownsHandler) {
         await handler.close();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
     },
   };
 }

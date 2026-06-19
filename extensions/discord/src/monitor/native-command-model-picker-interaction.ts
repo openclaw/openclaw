@@ -1,3 +1,4 @@
+// Discord plugin module implements native command model picker interaction behavior.
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -236,7 +237,7 @@ function resolveDiscordModelPickerRuntimeForProvider(params: {
   }
   const choices = params.data.runtimeChoicesByProvider?.get(params.provider);
   if (!choices?.length) {
-    return runtime === "pi" ? runtime : undefined;
+    return runtime === "openclaw" ? runtime : undefined;
   }
   return choices.some((choice) => choice.id === runtime) ? runtime : undefined;
 }

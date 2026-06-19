@@ -1,8 +1,14 @@
+/**
+ * System prompt runtime parameter resolver.
+ *
+ * Collects repository, time, timezone, channel, shell, and active-process facts for prompt rendering.
+ */
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
@@ -13,6 +19,8 @@ import {
 
 type RuntimeInfoInput = {
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
   host: string;
   os: string;
   arch: string;
@@ -21,6 +29,7 @@ type RuntimeInfoInput = {
   defaultModel?: string;
   shell?: string;
   channel?: string;
+  chatType?: ChatType;
   capabilities?: string[];
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];

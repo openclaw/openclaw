@@ -1,3 +1,4 @@
+// Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { mapCaptureEventForQa, probeTcpReachability } from "./lab-server-capture.js";
@@ -41,9 +42,9 @@ describe("qa-lab server capture helpers", () => {
     });
     cleanups.push(
       async () =>
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        ),
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
     );
 
     const address = server.address();

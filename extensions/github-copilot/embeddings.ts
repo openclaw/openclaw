@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements embeddings behavior.
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
@@ -6,6 +7,7 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
@@ -26,6 +28,7 @@ const COPILOT_HEADERS_STATIC: Record<string, string> = {
   "Content-Type": "application/json",
   ...buildCopilotIdeHeaders(),
 };
+const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
@@ -94,9 +97,8 @@ async function discoverEmbeddingModels(params: {
   });
   try {
     if (!response.ok) {
-      throw new Error(
-        `GitHub Copilot model discovery HTTP ${response.status}: ${await response.text()}`,
-      );
+      const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
+      throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
     }
     let payload: unknown;
     try {
@@ -240,9 +242,8 @@ async function createGitHubCopilotEmbeddingProvider(
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          throw new Error(
-            `GitHub Copilot embeddings HTTP ${response.status}: ${await response.text()}`,
-          );
+          const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
+          throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }
 
         let payload: unknown;

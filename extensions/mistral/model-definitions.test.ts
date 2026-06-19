@@ -1,10 +1,8 @@
+// Mistral tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMistralCatalogModels,
   buildMistralModelDefinition,
-  MISTRAL_DEFAULT_CONTEXT_WINDOW,
-  MISTRAL_DEFAULT_COST,
-  MISTRAL_DEFAULT_MAX_TOKENS,
   MISTRAL_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
 
@@ -17,19 +15,35 @@ function catalogModelById(models: ReturnType<typeof buildMistralCatalogModels>, 
 }
 
 describe("mistral model definitions", () => {
-  it("uses current Pi pricing for the bundled default model", () => {
+  it("uses current OpenClaw pricing for the bundled default model", () => {
     const model = buildMistralModelDefinition();
     expect(model.id).toBe(MISTRAL_DEFAULT_MODEL_ID);
-    expect(model.contextWindow).toBe(MISTRAL_DEFAULT_CONTEXT_WINDOW);
-    expect(model.maxTokens).toBe(MISTRAL_DEFAULT_MAX_TOKENS);
-    expect(model.cost).toEqual(MISTRAL_DEFAULT_COST);
-
-    expect(MISTRAL_DEFAULT_COST).toEqual({
+    expect(model.contextWindow).toBe(262144);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({
       input: 0.5,
       output: 1.5,
-      cacheRead: 0,
+      cacheRead: 0.05,
       cacheWrite: 0,
     });
+  });
+
+  it("prices cached Mistral input tokens at ten percent of standard input tokens", () => {
+    const models = buildMistralCatalogModels();
+
+    for (const model of models) {
+      expect(model.cost.cacheRead).toBeCloseTo(model.cost.input * 0.1, 10);
+      expect(model.cost.cacheWrite).toBe(0);
+    }
+  });
+
+  it("charges nonzero cost for cached-token usage on the default model", () => {
+    const model = buildMistralModelDefinition();
+    const cacheReadTokens = 20_000;
+    const cacheReadCost = (model.cost.cacheRead / 1_000_000) * cacheReadTokens;
+
+    expect(cacheReadCost).toBeCloseTo(0.001, 10);
+    expect(cacheReadCost).toBeGreaterThan(0);
   });
 
   it("publishes a curated set of current Mistral catalog models", () => {

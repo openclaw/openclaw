@@ -1,8 +1,15 @@
+// Doctor warnings for plugin allowlists that make configured tool policies ineffective.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -14,9 +21,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { sortUniqueStrings, uniqueStrings } from "../../../shared/string-normalization.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -543,7 +547,10 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
         !sandboxPolicyAllowsAllMcpServers(policy, serverNames) &&
         !sandboxPolicyIntentionallyDeniesAllMcpServers(policy, serverNames),
     )
-    .filter(({ nonSandboxToolPolicyBlocksMcp }) => !nonSandboxToolPolicyBlocksMcp)
+    .filter(
+      ({ nonSandboxToolPolicyBlocksMcp: nonSandboxToolPolicyBlocksMcpLocal }) =>
+        !nonSandboxToolPolicyBlocksMcpLocal,
+    )
     .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {
     return [];
@@ -567,6 +574,7 @@ function addIssue(issues: Map<string, Set<string>>, key: string, sourceLabel: st
   issues.set(key, sources);
 }
 
+/** Collect warnings when plugin allowlists block tools referenced by active tool policies. */
 export function collectPluginToolAllowlistWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -654,22 +662,4 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   return warnings;
-}
-
-export function collectBundledProviderAllowlistPolicyWarnings(params: {
-  cfg: OpenClawConfig;
-}): string[] {
-  if (params.cfg.plugins?.enabled === false) {
-    return [];
-  }
-  const allow = params.cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return [];
-  }
-  if (params.cfg.plugins?.bundledDiscovery !== "compat") {
-    return [];
-  }
-  return [
-    '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
-  ];
 }

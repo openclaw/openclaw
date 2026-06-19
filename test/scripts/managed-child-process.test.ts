@@ -1,3 +1,4 @@
+// Managed Child Process tests cover managed child process script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,6 +27,7 @@ describe("managed-child-process", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
     expect(signalExitCode("SIGINT")).toBe(130);
     expect(signalExitCode("SIGTERM")).toBe(143);
+    expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
   it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
@@ -169,7 +171,7 @@ process.exitCode = await runManagedCommand({
       const result = await waitForClose(runner);
 
       expect(result).toEqual({ code: 143, signal: null });
-      await waitFor(() => !isProcessAlive(childPid), 10_000);
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
     } finally {
       if (isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");

@@ -1,3 +1,4 @@
+// Clickclack tests cover inbound plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
@@ -26,7 +27,7 @@ vi.mock("./outbound.js", () => ({
 function createRuntime(): PluginRuntime {
   return createPluginRuntimeMock({
     agent: {
-      runEmbeddedPiAgent: vi.fn().mockResolvedValue({
+      runEmbeddedAgent: vi.fn().mockResolvedValue({
         payloads: [{ text: "service bot online" }],
         meta: {},
       }),
@@ -177,7 +178,7 @@ describe("handleClickClackInbound", () => {
     });
 
     expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
-    expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
@@ -216,6 +217,38 @@ describe("handleClickClackInbound", () => {
     const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
     expect(dispatchReply).toHaveBeenCalledTimes(1);
     expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("propagates account toolsAllow into agent reply dispatch", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+      tools: {
+        allow: ["*"],
+      },
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        toolsAllow: ["message"],
+      }),
+      config: cfg,
+      message: createMessage(),
+    });
+
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+    const dispatchParams = dispatchReply.mock.calls[0]?.[0] as
+      | (Record<string, unknown> & {
+          toolsAllow?: unknown;
+        })
+      | undefined;
+    expect(dispatchParams?.toolsAllow).toEqual(["message"]);
   });
 
   it("accepts ClickClack DM target syntax in allowFrom", async () => {

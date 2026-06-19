@@ -1,7 +1,9 @@
+// Gateway auxiliary method handlers.
+// Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
-import { type PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
@@ -59,6 +61,7 @@ function createLazyHandler(
   };
 }
 
+/** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(params: {
   log: GatewayAuxHandlerLogger;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
@@ -133,7 +136,7 @@ export function createGatewayAuxHandlers(params: {
                 params.sharedGatewaySessionGenerationState.current;
               const previousSharedGatewaySessionGenerationRequired =
                 params.sharedGatewaySessionGenerationState.required;
-              let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
+              let nextSharedGatewaySessionGeneration;
               let sharedGatewaySessionGenerationChanged = false;
               const stoppedChannels: ChannelKind[] = [];
               const restartedChannels = new Set<ChannelKind>();

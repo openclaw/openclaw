@@ -1,3 +1,4 @@
+// Control UI controller manages agent files gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentFileEntry,
@@ -60,12 +61,12 @@ export async function loadAgentFileContent(
   agentId: string,
   name: string,
   opts?: { force?: boolean; preserveDraft?: boolean },
-) {
+): Promise<boolean> {
   if (!state.client || !state.connected || state.agentFilesLoading) {
-    return;
+    return false;
   }
   if (!opts?.force && Object.hasOwn(state.agentFileContents, name)) {
-    return;
+    return true;
   }
   state.agentFilesLoading = true;
   state.agentFilesError = null;
@@ -88,12 +89,15 @@ export async function loadAgentFileContent(
       ) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
+      return true;
     }
   } catch (err) {
     state.agentFilesError = String(err);
+    return false;
   } finally {
     state.agentFilesLoading = false;
   }
+  return false;
 }
 
 export async function saveAgentFile(

@@ -1,15 +1,19 @@
-import { completeSimple, type TextContent } from "@earendil-works/pi-ai";
+// Generates short labels for sessions from conversation context.
+import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { requireApiKey } from "../../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { resolveModelAsync } from "../../agents/pi-embedded-runner/model.js";
+import { applyPreparedRuntimeAuthToModel } from "../../agents/provider-request-config.js";
 import { prepareModelForSimpleCompletion } from "../../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { completeSimple } from "../../llm/stream.js";
+import type { TextContent } from "../../llm/types.js";
 import { getRuntimeAuthForModel } from "../../plugins/runtime/runtime-model-auth.runtime.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
 const TIMEOUT_MS = 15_000;
 
+/** Inputs for generating a short conversation label from the active model. */
 export type ConversationLabelParams = {
   userMessage: string;
   prompt: string;
@@ -24,7 +28,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 }
 
 function isCodexSimpleCompletionModel(model: { api?: string; provider?: string }): boolean {
-  return model.provider === "openai-codex" || model.api === "openai-codex-responses";
+  return model.api === "openai-chatgpt-responses";
 }
 
 function extractSimpleCompletionError(result: {
@@ -37,6 +41,7 @@ function extractSimpleCompletionError(result: {
   return result.errorMessage?.trim() || "unknown error";
 }
 
+/** Generates a bounded human-readable label for a session, or null on failure. */
 export async function generateConversationLabel(
   params: ConversationLabelParams,
 ): Promise<string | null> {
@@ -57,20 +62,20 @@ export async function generateConversationLabel(
   }
   const completionModel = prepareModelForSimpleCompletion({ model: resolved.model, cfg });
 
-  const apiKey = requireApiKey(
-    await getRuntimeAuthForModel({
-      model: completionModel,
-      cfg,
-      workspaceDir: agentDir,
-    }),
-    modelRef.provider,
-  );
+  const runtimeAuth = await getRuntimeAuthForModel({
+    model: completionModel,
+    cfg,
+    workspaceDir: agentDir,
+  });
+  const apiKey = requireApiKey(runtimeAuth, modelRef.provider);
+  const runtimeModel = applyPreparedRuntimeAuthToModel(completionModel, runtimeAuth);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    // Label generation should never block normal reply handling for long.
     const result = await completeSimple(
-      completionModel,
+      runtimeModel,
       {
         systemPrompt: prompt,
         messages: [
@@ -84,7 +89,7 @@ export async function generateConversationLabel(
       {
         apiKey,
         maxTokens: 100,
-        ...(isCodexSimpleCompletionModel(completionModel) ? {} : { temperature: 0.3 }),
+        ...(isCodexSimpleCompletionModel(runtimeModel) ? {} : { temperature: 0.3 }),
         signal: controller.signal,
       },
     );

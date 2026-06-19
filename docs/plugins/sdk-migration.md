@@ -30,13 +30,13 @@ anything they needed from a single entry point:
   window.
 - **`openclaw/extension-api`** - a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
-- **`api.registerEmbeddedExtensionFactory(...)`** - a removed Pi-only bundled
+- **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only bundled
   extension hook that could observe embedded-runner events such as
   `tool_result`.
 
 The broad import surfaces are now **deprecated**. They still work at runtime,
 but new plugins must not use them, and existing plugins should migrate before
-the next major release removes them. The Pi-only embedded extension factory
+the next major release removes them. The embedded-runner-only extension factory
 registration API has been removed; use tool-result middleware instead.
 
 OpenClaw does not remove or reinterpret documented plugin behavior in the same
@@ -48,7 +48,7 @@ registration behavior.
 <Warning>
   The backwards-compatibility layer will be removed in a future major release.
   Plugins that still import from these surfaces will break when that happens.
-  Pi-only embedded extension factory registrations already no longer load.
+  Legacy embedded extension factory registrations already no longer load.
 </Warning>
 
 ## Why this changed
@@ -294,17 +294,17 @@ releases.
 
   </Step>
 
-  <Step title="Migrate Pi tool-result extensions to middleware">
-    Bundled plugins must replace Pi-only
+  <Step title="Migrate embedded tool-result extensions to middleware">
+    Bundled plugins must replace embedded-runner-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
     runtime-neutral middleware.
 
     ```typescript
-    // Pi and Codex runtime dynamic tools
+    // OpenClaw and Codex runtime dynamic tools
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
-      runtimes: ["pi", "codex"],
+      runtimes: ["openclaw", "codex"],
     });
     ```
 
@@ -313,13 +313,15 @@ releases.
     ```json
     {
       "contracts": {
-        "agentToolResultMiddleware": ["pi", "codex"]
+        "agentToolResultMiddleware": ["openclaw", "codex"]
       }
     }
     ```
 
-    External plugins cannot register tool-result middleware because it can
-    rewrite high-trust tool output before the model sees it.
+    Installed plugins can also register tool-result middleware when they are
+    explicitly enabled and declare every targeted runtime in
+    `contracts.agentToolResultMiddleware`. Undeclared installed middleware
+    registrations are rejected.
 
   </Step>
 
@@ -406,11 +408,11 @@ releases.
 
     ```typescript
     // Before (deprecated extension-api bridge)
-    import { runEmbeddedPiAgent } from "openclaw/extension-api";
-    const result = await runEmbeddedPiAgent({ sessionId, prompt });
+    import { runEmbeddedAgent } from "openclaw/extension-api";
+    const result = await runEmbeddedAgent({ sessionId, prompt });
 
     // After (injected runtime)
-    const result = await api.runtime.agent.runEmbeddedPiAgent({ sessionId, prompt });
+    const result = await api.runtime.agent.runEmbeddedAgent({ sessionId, prompt });
     ```
 
     The same pattern applies to other legacy bridge helpers:
@@ -568,6 +570,7 @@ releases.
   | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory dedupe caches |
   | `plugin-sdk/file-access-runtime` | File access helpers | Safe local-file/media path helpers |
   | `plugin-sdk/transport-ready-runtime` | Transport readiness helpers | `waitForTransportReady` |
+  | `plugin-sdk/exec-approvals-runtime` | Exec approval policy helpers | `loadExecApprovals`, `resolveExecApprovalsFromFile`, `ExecApprovalsFile` |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, `isApprovalNotFoundError`, error graph helpers |
@@ -651,6 +654,7 @@ releases.
   | `plugin-sdk/zod` | Deprecated Zod compatibility re-export | Import `zod` from `zod` directly |
   | `plugin-sdk/memory-core` | Bundled memory-core helpers | Memory manager/config/file/CLI helper surface |
   | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
+  | `plugin-sdk/memory-core-host-embedding-registry` | Memory embedding registry | Lightweight memory embedding provider registry helpers |
   | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
   | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory embedding contracts, registry access, local provider, and generic batch/remote helpers; concrete remote providers live in their owning plugins |
   | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
@@ -791,6 +795,35 @@ canonical replacement.
 
   </Accordion>
 
+  <Accordion title="subagent_spawning hook → core thread binding">
+    **Old**: `api.on("subagent_spawning", handler)` returning
+    `threadBindingReady` or `deliveryOrigin`.
+
+    **New**: let core prepare `thread: true` subagent bindings through the
+    channel session-binding adapter. Use `api.on("subagent_spawned", handler)`
+    only for post-launch observation.
+
+    ```typescript
+    // Before
+    api.on("subagent_spawning", async () => ({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: { channel: "discord", to: "channel:123", threadId: "456" },
+    }));
+
+    // After
+    api.on("subagent_spawned", async (event) => {
+      await observeSubagentLaunch(event);
+    });
+    ```
+
+    `subagent_spawning`, `PluginHookSubagentSpawningEvent`,
+    `PluginHookSubagentSpawningResult`, and
+    `SubagentLifecycleHookRunner.runSubagentSpawning(...)` remain only as
+    deprecated compatibility surfaces while external plugins migrate.
+
+  </Accordion>
+
   <Accordion title="Provider discovery types → provider catalog types">
     Four discovery type aliases are now thin wrappers over the
     catalog-era types:
@@ -828,13 +861,12 @@ canonical replacement.
 
   </Accordion>
 
-  <Accordion title="External OAuth provider fallback → contracts.externalAuthProviders">
-    **Old**: implementing `resolveExternalOAuthProfiles(...)` without
-    declaring the provider in the plugin manifest.
+  <Accordion title="External auth providers → contracts.externalAuthProviders">
+    **Old**: implementing external auth hooks without declaring the provider
+    in the plugin manifest.
 
     **New**: declare `contracts.externalAuthProviders` in the plugin manifest
-    **and** implement `resolveExternalAuthProfiles(...)`. The old "auth
-    fallback" path emits a warning at runtime and will be removed.
+    **and** implement `resolveExternalAuthProfiles(...)`.
 
     ```json
     {
@@ -919,8 +951,8 @@ canonical replacement.
   </Accordion>
 
   <Accordion title="Embedded extension factories → agent tool-result middleware">
-    Covered in "How to migrate → Migrate Pi tool-result extensions to
-    middleware" above. Included here for completeness: the removed Pi-only
+    Covered in "How to migrate → Migrate embedded tool-result extensions to
+    middleware" above. Included here for completeness: the removed embedded-runner-only
     `api.registerEmbeddedExtensionFactory(...)` path is replaced by
     `api.registerAgentToolResultMiddleware(...)` with an explicit runtime
     list in `contracts.agentToolResultMiddleware`.

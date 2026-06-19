@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor plugin behavior.
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
@@ -16,8 +17,6 @@ import {
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
-  shouldFinalizeMattermostPreviewAfterDispatch,
-  shouldClearMattermostDraftPreview,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
@@ -368,35 +367,6 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
   });
 });
 
-describe("shouldClearMattermostDraftPreview", () => {
-  it("deletes the preview after successful normal final delivery", () => {
-    expect(
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: false,
-        finalReplyDelivered: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps the preview when final delivery failed", () => {
-    expect(
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: false,
-        finalReplyDelivered: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps the preview when it already became the final reply", () => {
-    expect(
-      shouldClearMattermostDraftPreview({
-        finalizedViaPreviewPost: true,
-        finalReplyDelivered: true,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("deliverMattermostReplyWithDraftPreview", () => {
   it("suppresses reasoning-prefixed finals before preview finalization", async () => {
     const draftStream = createDraftStreamMock();
@@ -731,35 +701,6 @@ describe("formatMattermostFinalDeliveryOutcomeLog", () => {
   });
 });
 
-describe("shouldFinalizeMattermostPreviewAfterDispatch", () => {
-  it("reuses the preview only for a single eligible final payload", () => {
-    expect(
-      shouldFinalizeMattermostPreviewAfterDispatch({
-        finalCount: 1,
-        canFinalizeInPlace: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("falls back to normal sends for multi-payload finals", () => {
-    expect(
-      shouldFinalizeMattermostPreviewAfterDispatch({
-        finalCount: 2,
-        canFinalizeInPlace: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("falls back to normal sends when the final cannot be edited into the preview", () => {
-    expect(
-      shouldFinalizeMattermostPreviewAfterDispatch({
-        finalCount: 1,
-        canFinalizeInPlace: false,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("resolveMattermostEffectiveReplyToId", () => {
   it("keeps an existing thread root", () => {
     expect(
@@ -772,13 +713,23 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("thread-root-456");
   });
 
-  it("suppresses existing thread roots when replyToMode is off", () => {
+  it("keeps an existing thread root when replyToMode is off", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "channel",
         postId: "post-123",
         replyToMode: "off",
         threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("does not start a new thread for top-level messages when replyToMode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "off",
       }),
     ).toBeUndefined();
   });
@@ -857,7 +808,7 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps threaded messages top-level when replyToMode is off", () => {
+  it("keeps threaded messages in their Mattermost thread when replyToMode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:chan-1",
@@ -865,6 +816,21 @@ describe("resolveMattermostThreadSessionContext", () => {
         postId: "post-123",
         replyToMode: "off",
         threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "root-456",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps top-level messages on the base session when replyToMode is off", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "off",
       }),
     ).toEqual({
       effectiveReplyToId: undefined,

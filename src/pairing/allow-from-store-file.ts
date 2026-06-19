@@ -1,14 +1,15 @@
+// Reads and writes allow-from pairing entries from channel store files.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 
 export type AllowFromStore = {
@@ -233,7 +234,7 @@ export async function readAllowFromFileWithExists(params: {
     return { entries: [], exists: false };
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = await fs.promises.readFile(params.filePath, "utf8");
   } catch (err) {
@@ -244,7 +245,7 @@ export async function readAllowFromFileWithExists(params: {
     throw err;
   }
 
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = params.normalizeStore(JSON.parse(raw) as AllowFromStore);
   } catch {
@@ -290,7 +291,7 @@ export function readAllowFromFileSyncWithExists(params: {
     return { entries: [], exists: false };
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = fs.readFileSync(params.filePath, "utf8");
   } catch (err) {

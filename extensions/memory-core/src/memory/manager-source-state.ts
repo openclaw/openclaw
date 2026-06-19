@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager source state behavior.
 import type { SQLInputValue } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
@@ -15,8 +16,8 @@ type MemorySourceStateDb = {
   };
 };
 
-export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash, mtime, size FROM files WHERE source = ?`;
-export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM files WHERE path = ? AND source = ?`;
+export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash, mtime, size FROM memory_index_sources WHERE source = ?`;
+export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?`;
 
 export function loadMemorySourceFileState(params: {
   db: MemorySourceStateDb;

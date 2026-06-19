@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   isKnownEnvApiKeyMarker,
@@ -5,6 +6,7 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasConfiguredSecretInput,
@@ -56,6 +58,7 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+const OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const QUERY_INSTRUCTION_TEMPLATES = [
   {
@@ -339,7 +342,11 @@ export async function createOllamaEmbeddingProvider(
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          throw new Error(`Ollama embed HTTP ${response.status}: ${await response.text()}`);
+          const detail = await readResponseTextLimited(
+            response,
+            OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES,
+          ).catch(() => "unknown error");
+          throw new Error(`Ollama embed HTTP ${response.status}: ${detail}`);
         }
         return await readOllamaEmbeddingJsonResponse(response);
       },
@@ -369,15 +376,18 @@ export async function createOllamaEmbeddingProvider(
     return embedding;
   };
 
-  const embedQuery = async (text: string, options?: { signal?: AbortSignal }): Promise<number[]> =>
-    await embedOne(applyQueryInstructionTemplate(client.model, text), options?.signal);
+  const embedQuery = async (
+    text: string,
+    optionsValue?: { signal?: AbortSignal },
+  ): Promise<number[]> =>
+    await embedOne(applyQueryInstructionTemplate(client.model, text), optionsValue?.signal);
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
     embedQuery,
-    embedBatch: async (texts, options) =>
-      texts.length === 0 ? [] : await embedMany(texts, options?.signal),
+    embedBatch: async (texts, optionsLocal) =>
+      texts.length === 0 ? [] : await embedMany(texts, optionsLocal?.signal),
   };
 
   return {

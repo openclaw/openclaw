@@ -1,4 +1,5 @@
-import { type IncomingMessage, type ServerResponse } from "node:http";
+// Mattermost tests cover interactions plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
@@ -9,7 +10,6 @@ import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   generateInteractionToken,
-  getInteractionCallbackUrl,
   getInteractionSecret,
   resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
@@ -193,21 +193,6 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
 
     expect(verifyInteractionToken(context, tokenA, "acct-a")).toBe(true);
     expect(verifyInteractionToken(context, tokenA, "acct-b")).toBe(false);
-  });
-});
-
-// ── Callback URL registry ────────────────────────────────────────────
-
-describe("callback URL registry", () => {
-  it("stores and retrieves callback URLs", () => {
-    setInteractionCallbackUrl("acct1", "http://localhost:18789/mattermost/interactions/acct1");
-    expect(getInteractionCallbackUrl("acct1")).toBe(
-      "http://localhost:18789/mattermost/interactions/acct1",
-    );
-  });
-
-  it("returns undefined for unknown account", () => {
-    expect(getInteractionCallbackUrl("nonexistent-account-id")).toBeUndefined();
   });
 });
 

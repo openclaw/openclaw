@@ -1,15 +1,11 @@
+// Discord plugin module implements message handler.process behavior.
 import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
-import {
-  formatReasoningMessage,
-  resolveAckReaction,
-  resolveHumanDelayConfig,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
   logAckFailure,
-  logTypingFailure,
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -37,6 +33,7 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
+  isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -48,9 +45,14 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
+import {
+  discordTextHasBroadcastMention,
+  discordTextHasTargetedMention,
+  rewriteDiscordKnownMentions,
+} from "../mentions.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
@@ -65,11 +67,12 @@ import { createDiscordDraftPreviewController } from "./message-handler.draft-pre
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { resolveForwardedMediaList, resolveMediaList } from "./message-utils.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
+import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
 } from "./timeouts.js";
-import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -77,7 +80,6 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
 let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 
 async function loadReplyRuntime() {
@@ -104,7 +106,14 @@ function formatDiscordReplyDeliveryFailure(params: {
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
-type DiscordReplySkipReason = "aborted before delivery" | "reasoning payload";
+function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
+  if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
+    return false;
+  }
+  return !resolveSendableOutboundReplyParts(payload).hasMedia;
+}
+
+type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
 
 export function formatDiscordReplySkip(params: {
   kind: "tool" | "block" | "final";
@@ -147,6 +156,17 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
+  try {
+    await processDiscordMessageInner(ctx, observer);
+  } finally {
+    ctx.replyTypingFeedback?.onCleanup?.();
+  }
+}
+
+async function processDiscordMessageInner(
+  ctx: DiscordMessagePreflightContext,
+  observer?: DiscordMessageProcessObserver,
+) {
   const dispatchStartedAt = Date.now();
   const {
     cfg,
@@ -176,6 +196,7 @@ export async function processDiscordMessage(
     discordRestFetch,
     abortSignal,
     botLoopProtection,
+    replyTypingFeedback,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
@@ -391,14 +412,24 @@ export async function processDiscordMessage(
     statusReactionsActive = true;
     void statusReactions.setQueued();
   };
-  queueInitialDiscordAckReaction({
-    enabled: statusReactionsEnabled,
-    shouldSendAckReaction,
-    ackReaction,
-    statusReactions,
-    reactionAdapter: discordAdapter,
-    target: `${messageChannelId}/${message.id}`,
-  });
+  let initialAckReactionQueued = false;
+  const queueInitialAckReactionAfterRecord = () => {
+    if (initialAckReactionQueued) {
+      return;
+    }
+    initialAckReactionQueued = true;
+    if (statusReactionsEnabled) {
+      statusReactionsActive = true;
+    }
+    queueInitialDiscordAckReaction({
+      enabled: statusReactionsEnabled,
+      shouldSendAckReaction,
+      ackReaction,
+      statusReactions,
+      reactionAdapter: discordAdapter,
+      target: `${messageChannelId}/${message.id}`,
+    });
+  };
   const processContext = await buildDiscordMessageProcessContext({
     ctx,
     text,
@@ -424,25 +455,32 @@ export async function processDiscordMessage(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
+  // Deliver target can move into a thread after preflight accepted the message.
+  // The typing owner follows the final target before reply dispatch starts.
+  const typingFeedback =
+    replyTypingFeedback ??
+    createDiscordReplyTypingFeedback({
+      cfg,
+      token,
+      accountId,
+      channelId: typingChannelId,
+      rest: feedbackRest,
+      log: logVerbose,
+    });
+  if (replyTypingFeedback) {
+    // A carried prestart only covers queue wait time; dispatch needs a fresh
+    // controller after retargeting so an expired TTL cannot silence the run.
+    replyTypingFeedback.restartForDispatch(typingChannelId);
+  } else {
+    typingFeedback.updateChannelId(typingChannelId);
+  }
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
-    typing: {
-      start: () => sendTyping({ rest: feedbackRest, channelId: typingChannelId }),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: "discord",
-          target: typingChannelId,
-          error: err,
-        });
-      },
-      // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
-      maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
-    },
+    typingCallbacks: typingFeedback,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -526,6 +564,10 @@ export async function processDiscordMessage(
     chunkMode,
     log: logVerbose,
   });
+  // While the durable verbose commentary lane is active (dispatch reports it
+  // via onVerboseProgressVisibility), the ephemeral draft yields its commentary
+  // lines so commentary is not rendered in both lanes.
+  let verboseProgressActive: () => boolean = () => false;
   const finalPreviewFlags =
     (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
@@ -536,6 +578,18 @@ export async function processDiscordMessage(
     finalReplyStartNotified = true;
     draftPreview.markFinalReplyStarted();
     observer?.onFinalReplyStart?.();
+  };
+  let userFacingFinalDelivered = false;
+  let userFacingFinalDeliveryFailed = false;
+  let pendingToolWarningFinal:
+    | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
+    | undefined;
+  const markUserFacingFinalDelivered = () => {
+    userFacingFinalDelivered = true;
+    userFacingFinalDeliveryFailed = false;
+    pendingToolWarningFinal = undefined;
+    draftPreview.markFinalReplyDelivered();
+    observer?.onFinalReplyDelivered?.();
   };
   const beforeDiscordPayloadDelivery = (
     payload: ReplyPayload,
@@ -552,25 +606,13 @@ export async function processDiscordMessage(
       );
       return null;
     }
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return null;
-    }
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && !payload.isError) {
         return null;
       }
     }
-    if (info.kind === "final") {
+    if (info.kind === "final" && !isFallbackOnlyToolWarningFinal(payload)) {
       draftPreview.markFinalReplyStarted();
     }
     return payload;
@@ -579,10 +621,11 @@ export async function processDiscordMessage(
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
+    options?: { allowFallbackOnlyToolWarning?: boolean },
   ) => {
     if (isProcessAborted(abortSignal)) {
       // Surface so operators don't chase missing replies when an abort
-      // drops a model-produced text payload (see PR for the incident).
+      // drops a model-produced text payload.
       logVerbose(
         formatDiscordReplySkip({
           kind: info.kind,
@@ -594,16 +637,17 @@ export async function processDiscordMessage(
       return { visibleReplySent: false };
     }
     const isFinal = info.kind === "final";
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
+    if (
+      isFinal &&
+      !options?.allowFallbackOnlyToolWarning &&
+      isFallbackOnlyToolWarningFinal(payload)
+    ) {
+      if (
+        !userFacingFinalDelivered &&
+        (!finalReplyStartNotified || userFacingFinalDeliveryFailed)
+      ) {
+        pendingToolWarningFinal = { payload, info };
+      }
       return { visibleReplySent: false };
     }
     if (isFinal) {
@@ -617,10 +661,24 @@ export async function processDiscordMessage(
           })
         : payload.text;
     const effectivePayload = finalText !== payload.text ? { ...payload, text: finalText } : payload;
+    const [deliverablePayload] = sanitizeDiscordFrontChannelReplyPayloads([effectivePayload], {
+      kind: info.kind,
+    });
+    if (!deliverablePayload) {
+      logVerbose(
+        formatDiscordReplySkip({
+          kind: info.kind,
+          reason: "internal-only payload",
+          target: deliverTarget,
+          sessionKey: ctxPayload.SessionKey,
+        }),
+      );
+      return { visibleReplySent: false };
+    }
     const draftStream = draftPreview.draftStream;
     if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
-      const reply = resolveSendableOutboundReplyParts(effectivePayload);
-      if (!reply.hasMedia && !payload.isError) {
+      const reply = resolveSendableOutboundReplyParts(deliverablePayload);
+      if (!reply.hasMedia && !deliverablePayload.isError) {
         return { visibleReplySent: false };
       }
     }
@@ -628,22 +686,22 @@ export async function processDiscordMessage(
       draftStream &&
       isFinal &&
       (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
-      !payload.isError;
+      !deliverablePayload.isError;
     if (shouldFinalizeDraftPreview) {
-      const reply = resolveSendableOutboundReplyParts(effectivePayload);
+      const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       const hasMedia = reply.hasMedia;
-      const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);
-      const previewSourceText = finalText ?? ttsSupplement?.spokenText;
+      const ttsSupplement = getReplyPayloadTtsSupplement(deliverablePayload);
+      const previewSourceText = deliverablePayload.text ?? ttsSupplement?.spokenText;
       const previewFinalText = draftPreview.resolvePreviewFinalText(previewSourceText);
       const previewReplyToId = replyReference.peek();
       const hasExplicitReplyDirective =
-        Boolean(effectivePayload.replyToTag || effectivePayload.replyToCurrent) ||
+        Boolean(deliverablePayload.replyToTag || deliverablePayload.replyToCurrent) ||
         (typeof previewSourceText === "string" &&
           /\[\[\s*reply_to(?:_current|\s*:)/i.test(previewSourceText));
 
       const result = await deliverWithFinalizableLivePreviewAdapter({
         kind: info.kind,
-        payload: effectivePayload,
+        payload: deliverablePayload,
         adapter: defineFinalizableLivePreviewAdapter({
           draft: {
             flush: () => draftPreview.flush(),
@@ -658,7 +716,18 @@ export async function processDiscordMessage(
               (hasMedia && !ttsSupplement) ||
               typeof previewFinalText !== "string" ||
               hasExplicitReplyDirective ||
-              payload.isError
+              deliverablePayload.isError
+            ) {
+              return undefined;
+            }
+            // Discord pings only on create, not edits: send a targeted mention fresh, but keep mixed @everyone/@here in place so the create cannot escalate a broadcast.
+            const rewrittenFinal = rewriteDiscordKnownMentions(previewFinalText, {
+              accountId,
+              mentionAliases: resolveDiscordAccount({ cfg, accountId }).config.mentionAliases,
+            });
+            if (
+              discordTextHasTargetedMention(rewrittenFinal) &&
+              !discordTextHasBroadcastMention(rewrittenFinal)
             ) {
               return undefined;
             }
@@ -679,13 +748,12 @@ export async function processDiscordMessage(
             });
           },
           onPreviewFinalized: () => {
-            draftPreview.markFinalReplyDelivered();
+            markUserFacingFinalDelivered();
             draftPreview.markPreviewFinalized();
             replyReference.markSent();
-            observer?.onFinalReplyDelivered?.();
           },
           buildSupplementalPayload: () =>
-            ttsSupplement ? buildTtsSupplementMediaPayload(effectivePayload) : undefined,
+            ttsSupplement ? buildTtsSupplementMediaPayload(deliverablePayload) : undefined,
           deliverSupplemental: async (supplementalPayload) => {
             if (isProcessAborted(abortSignal)) {
               return false;
@@ -732,9 +800,9 @@ export async function processDiscordMessage(
           const fallbackPayload =
             ttsSupplement &&
             ttsSupplement.visibleTextAlreadyDelivered !== true &&
-            !effectivePayload.text?.trim()
-              ? { ...effectivePayload, text: ttsSupplement.spokenText }
-              : effectivePayload;
+            !deliverablePayload.text?.trim()
+              ? { ...deliverablePayload, text: ttsSupplement.spokenText }
+              : deliverablePayload;
           const replyToId = replyReference.use();
           notifyFinalReplyStart();
           await deliverDiscordReply({
@@ -759,9 +827,8 @@ export async function processDiscordMessage(
           return true;
         },
         onNormalDelivered: () => {
-          draftPreview.markFinalReplyDelivered();
+          markUserFacingFinalDelivered();
           replyReference.markSent();
-          observer?.onFinalReplyDelivered?.();
         },
       });
       if (result.kind !== "normal-skipped") {
@@ -788,7 +855,7 @@ export async function processDiscordMessage(
     }
     await deliverDiscordReply({
       cfg,
-      replies: [effectivePayload],
+      replies: [deliverablePayload],
       target: deliverTarget,
       token,
       accountId,
@@ -806,13 +873,15 @@ export async function processDiscordMessage(
       kind: info.kind,
     });
     replyReference.markSent();
-    if (isFinal && payload.isError !== true) {
-      draftPreview.markFinalReplyDelivered();
-      observer?.onFinalReplyDelivered?.();
+    if (isFinal && deliverablePayload.isError !== true) {
+      markUserFacingFinalDelivered();
     }
     return { visibleReplySent: true };
   };
   const onDiscordDeliveryError = (err: unknown, info: { kind: string }) => {
+    if (info.kind === "final" && finalReplyStartNotified && !userFacingFinalDelivered) {
+      userFacingFinalDeliveryFailed = true;
+    }
     runtime.error(
       danger(
         formatDiscordReplyDeliveryFailure({
@@ -837,6 +906,22 @@ export async function processDiscordMessage(
     null;
   let dispatchError = false;
   let dispatchAborted = false;
+  const deliverPendingToolWarningFinalIfNeeded = async () => {
+    if (!pendingToolWarningFinal || userFacingFinalDelivered || isProcessAborted(abortSignal)) {
+      return undefined;
+    }
+    const pending = pendingToolWarningFinal;
+    pendingToolWarningFinal = undefined;
+    try {
+      return await deliverDiscordPayload(pending.payload, pending.info, {
+        allowFallbackOnlyToolWarning: true,
+      });
+    } catch (err) {
+      dispatchError = true;
+      onDiscordDeliveryError(err, pending.info);
+      return { visibleReplySent: false };
+    }
+  };
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -851,12 +936,14 @@ export async function processDiscordMessage(
       storePath: turn.storePath,
       ctxPayload,
       recordInboundSession,
+      afterRecord: queueInitialAckReactionAfterRecord,
       dispatchReplyWithBufferedBlockDispatcher,
       dispatcherOptions: {
         ...replyPipeline,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         beforeDeliver: beforeDiscordPayloadDelivery,
         onReplyStart: onDiscordReplyStart,
+        onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
       },
       delivery: {
         deliver: deliverDiscordPayload,
@@ -878,9 +965,7 @@ export async function processDiscordMessage(
         queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
         suppressTyping: isRoomEvent ? true : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:
-          sourceRepliesAreToolOnly && draftPreview.draftStream && draftPreview.isProgressMode
-            ? true
-            : undefined,
+          sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled ? true : undefined,
         disableBlockStreaming: sourceRepliesAreToolOnly
           ? true
           : (draftPreview.disableBlockStreamingForDraft ??
@@ -898,13 +983,23 @@ export async function processDiscordMessage(
           ? () => draftPreview.handleAssistantMessageBoundary()
           : undefined,
         onModelSelected,
-        suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
-          ? true
+        suppressDefaultToolProgressMessages:
+          (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
+          draftPreview.suppressDefaultToolProgressMessages
+            ? true
+            : undefined,
+        allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
+        commentaryProgressEnabled: draftPreview.isProgressMode
+          ? draftPreview.commentaryProgressEnabled
           : undefined,
+        onVerboseProgressVisibility: (isActive) => {
+          verboseProgressActive = isActive;
+        },
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();
-          const formattedText = payload?.text ? formatReasoningMessage(payload.text) : undefined;
-          await draftPreview.pushReasoningProgress(formattedText);
+          await draftPreview.pushReasoningProgress(payload?.text, {
+            snapshot: payload?.isReasoningSnapshot === true,
+          });
         },
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
@@ -917,6 +1012,8 @@ export async function processDiscordMessage(
               discordConfig,
               {
                 event: "tool",
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 name: payload.name,
                 phase: payload.phase,
                 args: payload.args,
@@ -927,10 +1024,22 @@ export async function processDiscordMessage(
           );
         },
         onItemEvent: async (payload) => {
+          if (payload.kind === "preamble") {
+            if (verboseProgressActive()) {
+              return;
+            }
+            if (draftPreview.commentaryProgressEnabled && payload.progressText) {
+              await draftPreview.pushCommentaryProgress(payload.progressText, {
+                itemId: payload.itemId,
+              });
+            }
+            return;
+          }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLineForEntry(discordConfig, {
               event: "item",
               itemId: payload.itemId,
+              toolCallId: payload.toolCallId,
               itemKind: payload.kind,
               title: payload.title,
               name: payload.name,
@@ -978,6 +1087,8 @@ export async function processDiscordMessage(
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLine({
               event: "command-output",
+              itemId: payload.itemId,
+              toolCallId: payload.toolCallId,
               phase: payload.phase,
               title: payload.title,
               name: payload.name,
@@ -993,6 +1104,8 @@ export async function processDiscordMessage(
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLine({
               event: "patch",
+              itemId: payload.itemId,
+              toolCallId: payload.toolCallId,
               phase: payload.phase,
               title: payload.title,
               name: payload.name,

@@ -1,3 +1,4 @@
+// Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
 vi.mock("./shared.js", () => ({
@@ -26,6 +28,10 @@ vi.mock("./shared.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
   getChannelPlugin: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -123,6 +129,7 @@ describe("channelsCapabilitiesCommand", () => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,
@@ -176,6 +183,39 @@ describe("channelsCapabilitiesCommand", () => {
         "User scopes (auth.scopes): users:read",
       ].join("\n"),
     ]);
+  });
+
+  it("prints an empty all-channel report when no channels are configured", async () => {
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    expect(errors).toStrictEqual([]);
+    expect(logs).toStrictEqual([JSON.stringify({ channels: [] }, null, 2)]);
+  });
+
+  it("rejects malformed timeouts before capability probes", async () => {
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+      probe: { ok: true },
+    });
+    plugin.status = { ...plugin.status, probeAccount };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await expect(
+      channelsCapabilitiesCommand({ channel: "slack", timeout: "10s" }, runtime),
+    ).rejects.toThrow('Received: "10s"');
+    expect(probeAccount).not.toHaveBeenCalled();
   });
 
   it("prints Teams Graph permission hints when present", async () => {

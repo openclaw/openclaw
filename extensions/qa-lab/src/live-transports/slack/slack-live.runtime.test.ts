@@ -1,10 +1,16 @@
+// Qa Lab tests cover slack live plugin behavior.
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resolves env credential payloads", () => {
     expect(
       testing.resolveSlackQaRuntimeEnv({
@@ -48,7 +54,7 @@ describe("Slack live QA runtime helpers", () => {
     });
   });
 
-  it("reports standard live transport scenario coverage", () => {
+  it("reports live transport standard scenario coverage", () => {
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "mention-gating",
@@ -66,7 +72,7 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
-  it("selects native approval scenarios by id without changing standard coverage", () => {
+  it("selects native approval scenarios by id without changing standard scenario coverage", () => {
     expect(
       testing
         .findScenario(["slack-approval-exec-native", "slack-approval-plugin-native"])
@@ -104,6 +110,27 @@ describe("Slack live QA runtime helpers", () => {
       target: "channel",
     });
     expect(account?.channels?.C123456789?.users).toEqual(["U999999999"]);
+  });
+
+  it("overrides both owner and channel allowlists for block scenarios", () => {
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: {
+          allowFrom: ["U_NEVER_ALLOWED"],
+          users: ["U_NEVER_ALLOWED"],
+        },
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    const account = cfg.channels?.slack?.accounts?.sut;
+    expect(account?.allowFrom).toEqual(["U_NEVER_ALLOWED"]);
+    expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
   });
 
   it("extracts Slack native approval button values from blocks", () => {
@@ -229,6 +256,20 @@ describe("Slack live QA runtime helpers", () => {
         },
       }),
     ).toBe(3_500);
+  });
+
+  it("resolves Slack readiness timeout from the shared transport env", () => {
+    expect(testing.resolveSlackQaReadyTimeoutMs({})).toBe(45_000);
+    expect(
+      testing.resolveSlackQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      testing.resolveSlackQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(45_000);
   });
 
   it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {
@@ -396,15 +437,25 @@ describe("Slack live QA runtime helpers", () => {
     expect(result.scenarios[0]?.status).toBe("fail");
     expect(result.scenarios[0]?.details).toContain("Missing OPENCLAW_QA_CONVEX_SITE_URL");
     await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
+    expect(path.basename(result.summaryPath)).toBe(QA_EVIDENCE_FILENAME);
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      channelId: string;
-      credentials: { kind: string; role?: string; source: string };
+      entries: Array<{
+        result: { failure?: { reason?: string }; status: string };
+        test: { id: string };
+      }>;
+      kind: string;
     };
-    expect(summary.channelId).toBe("<unavailable>");
-    expect(summary.credentials).toEqual({
-      kind: "slack",
-      role: "ci",
-      source: "convex",
+    expect(summary.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+    expect(summary.entries[0]).toMatchObject({
+      test: {
+        id: "slack-canary",
+      },
+      result: {
+        status: "fail",
+        failure: {
+          reason: expect.stringContaining("Missing OPENCLAW_QA_CONVEX_SITE_URL"),
+        },
+      },
     });
   });
 });

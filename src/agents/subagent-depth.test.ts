@@ -1,9 +1,12 @@
+// Subagent depth tests cover depth recovery from persisted session metadata and
+// timer-safe timeout normalization for spawned agent runs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -16,7 +19,31 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
+  it("normalizes signed decimal stored spawnDepth strings", () => {
+    const key = "agent:main:subagent:flat";
+    const depth = getSubagentDepthFromSessionStore(key, {
+      store: {
+        [key]: { spawnDepth: "+02" },
+      },
+    });
+    expect(depth).toBe(2);
+  });
+
+  it("ignores non-decimal and unsafe stored spawnDepth strings", () => {
+    const key = "agent:main:subagent:flat";
+    for (const spawnDepth of ["1e3", "0x10", "1.5", "9007199254740993"]) {
+      const depth = getSubagentDepthFromSessionStore(key, {
+        store: {
+          [key]: { spawnDepth },
+        },
+      });
+      expect(depth).toBe(1);
+    }
+  });
+
   it("derives depth from spawnedBy ancestry when spawnDepth is missing", () => {
+    // Ancestry fallback keeps restored sessions useful when old stores predate
+    // the explicit spawnDepth field.
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";
     const key3 = "agent:main:subagent:three";
@@ -116,17 +143,16 @@ describe("getSubagentDepthFromSessionStore", () => {
 
 describe("resolveAgentTimeoutMs", () => {
   it("defaults to 48 hours when config does not override the timeout", () => {
-    expect(resolveAgentTimeoutSeconds()).toBe(48 * 60 * 60);
     expect(resolveAgentTimeoutMs({})).toBe(48 * 60 * 60 * 1000);
   });
 
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
-    expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(2_147_000_000);
-    expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(2_147_000_000);
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("clamps very large timeout overrides to timer-safe values", () => {
-    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_147_000_000);
-    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_147_000_000);
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 });

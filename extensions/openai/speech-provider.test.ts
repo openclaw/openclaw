@@ -1,3 +1,4 @@
+// Openai tests cover speech provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
@@ -97,6 +98,64 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("drops malformed speech speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openai: {
+            speed: 4.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.speed).toBeUndefined();
+  });
+
+  it("passes custom endpoint speech speeds through", () => {
+    const provider = buildOpenAISpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openai: {
+            baseUrl: "https://tts.example.com/v1",
+            speed: 4.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.speed).toBe(4.5);
+  });
+
+  it("uses talk base url overrides when validating speech speed", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    const resolvedConfig = provider.resolveTalkConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      baseTtsConfig: {
+        providers: {
+          openai: {
+            apiKey: "sk-base",
+          },
+        },
+      },
+      talkProviderConfig: {
+        baseUrl: "https://tts.example.com/v1",
+        speed: 4.5,
+      },
+    });
+
+    expect(resolvedConfig?.baseUrl).toBe("https://tts.example.com/v1");
+    expect(resolvedConfig?.speed).toBe(4.5);
+  });
+
   it("parses OpenAI directive tokens against the resolved base url", () => {
     const provider = buildOpenAISpeechProvider();
 
@@ -132,6 +191,189 @@ describe("buildOpenAISpeechProvider", () => {
     ).toEqual({
       handled: false,
     });
+  });
+
+  it("parses preferred-OpenAI speed directive within the supported range", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 1.5 },
+    });
+  });
+
+  it("parses explicit openai_speed alias", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "openai_speed",
+        value: "0.75",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 0.75 },
+    });
+  });
+
+  it("ignores OpenAI speed directives when allowVoiceSettings is disabled", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: false,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+    });
+  });
+
+  it("warns on non-numeric OpenAI speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "fast",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid OpenAI speed "fast" (0.25-4.0)'],
+    });
+  });
+
+  it("warns on partial OpenAI speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5abc",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid OpenAI speed "1.5abc" (0.25-4.0)'],
+    });
+  });
+
+  it("warns on OpenAI speed values outside the supported 0.25..4 range", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid OpenAI speed "5" (0.25-4.0)'],
+    });
+  });
+
+  it("passes custom endpoint OpenAI-compatible speed directives through", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "4.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://tts.example.com/v1",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 4.5 },
+    });
+  });
+
+  it("uses OPENAI_TTS_BASE_URL when parsing OpenAI-compatible speed directives", () => {
+    const previousBaseUrl = process.env.OPENAI_TTS_BASE_URL;
+    process.env.OPENAI_TTS_BASE_URL = "https://tts.example.com/v1";
+    try {
+      const provider = buildOpenAISpeechProvider();
+
+      expect(
+        provider.parseDirectiveToken?.({
+          key: "speed",
+          value: "4.5",
+          policy: {
+            allowVoice: true,
+            allowModelId: true,
+            allowVoiceSettings: true,
+          },
+          providerConfig: {},
+        } as never),
+      ).toEqual({
+        handled: true,
+        overrides: { speed: 4.5 },
+      });
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_TTS_BASE_URL;
+      } else {
+        process.env.OPENAI_TTS_BASE_URL = previousBaseUrl;
+      }
+    }
   });
 
   it("preserves talk responseFormat overrides", () => {
@@ -231,6 +473,33 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
     expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("applies the configured media byte cap to synthesized audio", async () => {
+    const provider = buildOpenAISpeechProvider();
+    globalThis.fetch = vi.fn(
+      async () => new Response(new Uint8Array(2048), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 0.001,
+            },
+          },
+        } as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI TTS audio response exceeds");
   });
 
   it("applies provider overrides to telephony synthesis", async () => {

@@ -1,4 +1,5 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
+// Provides shared helpers for plugin hook tests.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";

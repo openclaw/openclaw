@@ -28,6 +28,7 @@ export type ProviderThinkingModelCompat = {
  */
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
   reasoning?: boolean;
+  params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
 };
 

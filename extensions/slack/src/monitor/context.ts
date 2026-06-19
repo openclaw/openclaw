@@ -1,3 +1,4 @@
+// Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
@@ -307,20 +308,19 @@ export function createSlackMonitorContext(params: {
     threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
-    if (!channelId) {
-      return params.mainKey;
-    }
+    const senderId = normalizeOptionalString(p.senderId) ?? "";
     const channelType = normalizeSlackChannelType(p.channelType, channelId);
     const isDirectMessage = channelType === "im";
+    if (!channelId && (!isDirectMessage || !senderId)) {
+      return params.mainKey;
+    }
     const isGroup = channelType === "mpim";
     const from = isDirectMessage
-      ? `slack:${channelId}`
+      ? `slack:${channelId || senderId}`
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-    const senderId = normalizeOptionalString(p.senderId) ?? "";
-
     // Resolve through shared channel/account bindings so system events route to
     // the same agent session as regular inbound messages.
     try {

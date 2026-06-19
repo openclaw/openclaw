@@ -1,3 +1,4 @@
+// Whatsapp tests cover approval handler plugin behavior.
 import { describe, expect, it } from "vitest";
 import { whatsappApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
@@ -23,14 +24,12 @@ describe("whatsappApprovalNativeRuntime", () => {
         commandText: "echo hi",
         actions: [
           {
-            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             command: "/approve exec-1 allow-once",
             style: "success",
           },
           {
-            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve exec-1 deny",
@@ -75,21 +74,18 @@ describe("whatsappApprovalNativeRuntime", () => {
         severity: "warning",
         actions: [
           {
-            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             command: "/approve plugin:abc allow-once",
             style: "success",
           },
           {
-            kind: "decision",
             decision: "allow-always",
             label: "Allow Always",
             command: "/approve plugin:abc allow-always",
             style: "primary",
           },
           {
-            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve plugin:abc deny",

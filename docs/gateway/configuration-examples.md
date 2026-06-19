@@ -82,12 +82,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
       "openai:default": { provider: "openai", mode: "api_key" },
-      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
+      "openai:personal": { provider: "openai", mode: "oauth" },
     },
     order: {
       anthropic: ["anthropic:default", "anthropic:work"],
-      openai: ["openai:default"],
-      "openai-codex": ["openai-codex:personal"],
+      openai: ["openai:personal", "openai:default"],
     },
   },
 
@@ -494,6 +493,8 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 - `extraDirs` scans the sibling repo as an explicit skill root.
 - `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
   real target root without allowing arbitrary symlink escapes.
+- To let Skill Workshop apply write through the same trusted symlink target,
+  set `skills.workshop.allowSymlinkTargetWrites: true`.
 
 ## Common patterns
 

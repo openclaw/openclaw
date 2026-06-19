@@ -1,5 +1,8 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+/**
+ * Session manager wrapper for tool-result transcript guards.
+ *
+ * Installs message-write hooks, input provenance handling, and pending tool-result flush behavior once per manager.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -10,8 +13,10 @@ import {
   mergePreparedUserTurnMessageForRuntime,
   type PersistedUserTurnMessage,
 } from "../sessions/user-turn-transcript.js";
-import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
+import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import type { SessionManager } from "./sessions/index.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type GuardedSessionManager = SessionManager & {
@@ -44,6 +49,10 @@ export function guardSessionManager(
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    withCompactionPersistence?: (
+      append: () => string,
+      validateAppend: (entryId: string, appendedText: string) => boolean,
+    ) => string;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -55,9 +64,7 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
-  const beforeMessageWrite = (event: {
-    message: import("@earendil-works/pi-agent-core").AgentMessage;
-  }) => {
+  const beforeMessageWrite = (event: { message: AgentMessage }) => {
     let message = event.message;
     let changed = false;
     if (hookRunner?.hasHooks("before_message_write")) {
@@ -106,6 +113,7 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
+    agentId: opts?.agentId,
     transformMessageForPersistence: (message) => {
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const prepared = pendingPreparedUserTurnMessage;
@@ -136,6 +144,7 @@ export function guardSessionManager(
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
+    withCompactionPersistence: opts?.withCompactionPersistence,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
     onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });

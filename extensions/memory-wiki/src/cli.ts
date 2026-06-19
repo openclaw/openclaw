@@ -1,6 +1,8 @@
+// Memory Wiki plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeStringEntries,
@@ -31,6 +33,7 @@ import {
   runObsidianOpen,
   runObsidianSearch,
 } from "./obsidian.js";
+import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import {
   getMemoryWikiPage,
   searchMemoryWiki,
@@ -84,6 +87,10 @@ type WikiLintCommandOptions = {
 type WikiIngestCommandOptions = {
   json?: boolean;
   title?: string;
+};
+
+type WikiOkfImportCommandOptions = {
+  json?: boolean;
 };
 
 type WikiSearchCommandOptions = {
@@ -441,11 +448,20 @@ function invalidCliArgument(message: string): Error & { code: string; exitCode: 
 }
 
 function parseWikiConfidenceOption(value: string): number {
-  const confidence = Number(value);
+  const trimmed = value.trim();
+  const confidence = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
     throw invalidCliArgument("--confidence must be a number between 0 and 1.");
   }
   return confidence;
+}
+
+function parseWikiPositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 function addWikiApplyMutationOptions<T extends Command>(command: T): T {
@@ -576,6 +592,24 @@ export async function runWikiIngest(params: {
       }),
     render: (value) =>
       `Ingested ${value.sourcePath} into ${value.pagePath}. Refreshed ${value.indexUpdatedFiles.length} index file${value.indexUpdatedFiles.length === 1 ? "" : "s"}.`,
+  });
+}
+
+export async function runWikiOkfImport(params: {
+  config: ResolvedMemoryWikiConfig;
+  bundlePath: string;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      importMemoryWikiOkfBundle({
+        config: params.config,
+        bundlePath: params.bundlePath,
+      }),
+    render: formatOkfImportSummary,
   });
 }
 
@@ -954,12 +988,24 @@ export function registerWikiCli(
       await runWikiIngest({ config, inputPath, title: opts.title, json: opts.json });
     });
 
+  const okf = wiki.command("okf").description("Import Open Knowledge Format bundles");
+  okf
+    .command("import")
+    .description("Import an unpacked OKF bundle into wiki concept pages")
+    .argument("<path>", "OKF bundle directory")
+    .option("--json", "Print JSON")
+    .action(async (bundlePath: string, opts: WikiOkfImportCommandOptions) => {
+      await runWikiOkfImport({ config, bundlePath, json: opts.json });
+    });
+
   addWikiSearchConfigOptions(
     wiki
       .command("search")
       .description("Search wiki pages and, when configured, the active memory corpus")
       .argument("<query>", "Search query")
-      .option("--max-results <n>", "Maximum results", (value: string) => Number(value))
+      .option("--max-results <n>", "Maximum results", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--max-results"),
+      )
       .option("--mode <mode>", `Search mode (${WIKI_SEARCH_MODES.join(", ")})`),
   )
     .option("--json", "Print JSON")
@@ -981,8 +1027,12 @@ export function registerWikiCli(
       .command("get")
       .description("Read a wiki page by id or relative path, with optional active-memory fallback")
       .argument("<lookup>", "Relative path or page id")
-      .option("--from <n>", "Start line", (value: string) => Number(value))
-      .option("--lines <n>", "Number of lines", (value: string) => Number(value)),
+      .option("--from <n>", "Start line", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--from"),
+      )
+      .option("--lines <n>", "Number of lines", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--lines"),
+      ),
   )
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiGetCommandOptions) => {

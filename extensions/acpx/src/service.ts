@@ -1,11 +1,19 @@
+/**
+ * ACPX plugin service lifecycle. It resolves config, prepares isolated adapter
+ * wrappers, registers the ACP backend, and manages startup/cleanup probes.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   AcpRuntime,
-  AcpRuntimeEvent,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
@@ -18,12 +26,24 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
-import { createAcpxProcessLeaseStore, type AcpxProcessLeaseStore } from "./process-lease.js";
+import {
+  createAcpxProcessLeaseStore,
+  openAcpxProcessLeaseStateStore,
+  type AcpxProcessLeaseStore,
+} from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
+import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
+import {
+  ACPX_GATEWAY_INSTANCE_KEY,
+  ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  ACPX_GATEWAY_INSTANCE_NAMESPACE,
+  normalizeAcpxGatewayInstanceRecord,
+  type AcpxGatewayInstanceRecord,
+} from "./state.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -34,10 +54,6 @@ type AcpxRuntimeLike = AcpRuntime & {
     details?: string[];
   }>;
 };
-type AcpRuntimeTurnInput = Parameters<AcpRuntime["runTurn"]>[0];
-type AcpRuntimeTurn = ReturnType<NonNullable<AcpRuntime["startTurn"]>>;
-type AcpRuntimeTurnResult = Awaited<AcpRuntimeTurn["result"]>;
-
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
@@ -55,6 +71,7 @@ type AcpxRuntimeFactoryParams = {
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
+  openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
   processCleanupDeps?: AcpxProcessCleanupDeps;
 };
@@ -64,155 +81,12 @@ function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
   return runtimeModulePromise;
 }
 
-function createDeferredResult<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-class LegacyRunTurnEventQueue {
-  private readonly items: AcpRuntimeEvent[] = [];
-  private readonly waits: Array<{
-    resolve: (value: AcpRuntimeEvent | null) => void;
-    reject: (error: unknown) => void;
-  }> = [];
-  private closed = false;
-  private error: unknown;
-
-  push(item: AcpRuntimeEvent): void {
-    if (this.closed) {
-      return;
-    }
-    const waiter = this.waits.shift();
-    if (waiter) {
-      waiter.resolve(item);
-      return;
-    }
-    this.items.push(item);
+/** Convert ACPX timeout seconds into timer-safe milliseconds. */
+export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
   }
-
-  clear(): void {
-    this.items.length = 0;
-  }
-
-  close(): void {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    for (const waiter of this.waits.splice(0)) {
-      waiter.resolve(null);
-    }
-  }
-
-  fail(error: unknown): void {
-    if (this.closed) {
-      return;
-    }
-    this.error = error;
-    this.closed = true;
-    for (const waiter of this.waits.splice(0)) {
-      waiter.reject(error);
-    }
-  }
-
-  private async next(): Promise<AcpRuntimeEvent | null> {
-    const item = this.items.shift();
-    if (item) {
-      return item;
-    }
-    if (this.error) {
-      throw this.error;
-    }
-    if (this.closed) {
-      return null;
-    }
-    return await new Promise<AcpRuntimeEvent | null>((resolve, reject) => {
-      this.waits.push({ resolve, reject });
-    });
-  }
-
-  async *iterate(): AsyncIterable<AcpRuntimeEvent> {
-    for (;;) {
-      const item = await this.next();
-      if (!item) {
-        return;
-      }
-      yield item;
-    }
-  }
-}
-
-function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
-  const result = createDeferredResult<AcpRuntimeTurnResult>();
-  result.promise.catch(() => {});
-  const queue = new LegacyRunTurnEventQueue();
-  let resultSettled = false;
-  const settleResult = (next: AcpRuntimeTurnResult) => {
-    if (resultSettled) {
-      return;
-    }
-    resultSettled = true;
-    result.resolve(next);
-  };
-  void (async () => {
-    try {
-      for await (const event of runtime.runTurn(input)) {
-        if (event.type === "done") {
-          settleResult({
-            status: "completed",
-            ...(event.stopReason ? { stopReason: event.stopReason } : {}),
-          });
-          continue;
-        }
-        if (event.type === "error") {
-          settleResult({
-            status: "failed",
-            error: {
-              message: event.message,
-              ...(event.code ? { code: event.code } : {}),
-              ...(event.detailCode ? { detailCode: event.detailCode } : {}),
-              ...(event.retryable === undefined ? {} : { retryable: event.retryable }),
-            },
-          });
-          continue;
-        }
-        queue.push(event);
-      }
-      settleResult({
-        status: "failed",
-        error: {
-          code: "ACP_TURN_FAILED",
-          message: "ACP turn ended without a terminal done event.",
-        },
-      });
-    } catch (error) {
-      result.reject(error);
-      queue.fail(error);
-      return;
-    }
-    queue.close();
-  })();
-  return {
-    requestId: input.requestId,
-    events: queue.iterate(),
-    result: result.promise,
-    async cancel(inputArgs) {
-      await runtime.cancel({ handle: input.handle, reason: inputArgs?.reason });
-    },
-    async closeStream() {
-      queue.clear();
-      queue.close();
-    },
-  };
-}
-
-function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
-  return runtime.startTurn?.(input) ?? legacyRunTurnAsStartTurn(runtime, input);
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
 }
 
 function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
@@ -239,10 +113,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
         permissionMode: params.pluginConfig.permissionMode,
         nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-        timeoutMs:
-          params.pluginConfig.timeoutSeconds != null
-            ? params.pluginConfig.timeoutSeconds * 1_000
-            : undefined,
+        timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
       }) as AcpxRuntimeLike;
       return runtime;
     });
@@ -250,54 +121,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
   }
 
   return {
-    async ensureSession(input) {
-      return await (await resolveRuntime()).ensureSession(input);
-    },
-    startTurn(input) {
-      const turnPromise = resolveRuntime().then((resolved) => startRuntimeTurn(resolved, input));
-      return {
-        requestId: input.requestId,
-        events: {
-          async *[Symbol.asyncIterator]() {
-            yield* (await turnPromise).events;
-          },
-        },
-        result: turnPromise.then((turn) => turn.result),
-        cancel(inputArgs) {
-          return turnPromise.then((turn) => turn.cancel(inputArgs));
-        },
-        closeStream(inputArgs) {
-          return turnPromise.then((turn) => turn.closeStream(inputArgs));
-        },
-      };
-    },
-    async *runTurn(input) {
-      yield* (await resolveRuntime()).runTurn(input);
-    },
-    async getCapabilities(input) {
-      return (await (await resolveRuntime()).getCapabilities?.(input)) ?? { controls: [] };
-    },
-    async getStatus(input) {
-      return (await (await resolveRuntime()).getStatus?.(input)) ?? {};
-    },
-    async setMode(input) {
-      await (await resolveRuntime()).setMode?.(input);
-    },
-    async setConfigOption(input) {
-      await (await resolveRuntime()).setConfigOption?.(input);
-    },
-    async doctor() {
-      return (await (await resolveRuntime()).doctor?.()) ?? { ok: true, message: "ok" };
-    },
-    async prepareFreshSession(input) {
-      await (await resolveRuntime()).prepareFreshSession?.(input);
-    },
-    async cancel(input) {
-      await (await resolveRuntime()).cancel(input);
-    },
-    async close(input) {
-      await (await resolveRuntime()).close(input);
-    },
+    ...createLazyAcpRuntimeProxy(resolveRuntime),
     async probeAvailability() {
       await (await resolveRuntime()).probeAvailability();
     },
@@ -403,7 +227,7 @@ async function withStartupProbeTimeout<T>(params: {
   timeoutSeconds: number;
 }): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = Math.max(1, params.timeoutSeconds * 1_000);
+  const timeoutMs = resolveAcpxTimerTimeoutMs(params.timeoutSeconds) ?? 1;
   try {
     return await Promise.race([
       params.promise,
@@ -425,21 +249,30 @@ async function withStartupProbeTimeout<T>(params: {
   }
 }
 
-async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
-  const filePath = path.join(stateDir, "gateway-instance-id");
-  try {
-    const existing = (await fs.readFile(filePath, "utf8")).trim();
-    if (existing) {
-      return existing;
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+function openGatewayInstanceStateStore(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): PluginStateKeyedStore<AcpxGatewayInstanceRecord> {
+  return openKeyedStore<AcpxGatewayInstanceRecord>({
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  });
+}
+
+async function resolveGatewayInstanceId(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): Promise<string> {
+  const store = openGatewayInstanceStateStore(openKeyedStore);
+  const existing = normalizeAcpxGatewayInstanceRecord(
+    await store.lookup(ACPX_GATEWAY_INSTANCE_KEY),
+  );
+  if (existing) {
+    return existing.instanceId;
   }
   const next = randomUUID();
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(filePath, `${next}\n`, { mode: 0o600 });
+  await store.register(ACPX_GATEWAY_INSTANCE_KEY, {
+    instanceId: next,
+    createdAt: Date.now(),
+  });
   return next;
 }
 
@@ -492,6 +325,7 @@ async function reapOpenAcpxProcessLeases(params: {
   return { inspectedPids, terminatedPids };
 }
 
+/** Create the ACPX plugin service that owns runtime registration and cleanup. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -504,6 +338,10 @@ export function createAcpxRuntimeService(
       if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME === "1") {
         ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
         return;
+      }
+      const openKeyedStore = params.openKeyedStore;
+      if (!openKeyedStore) {
+        throw new Error("ACPX runtime service requires plugin keyed state");
       }
 
       const basePluginConfig = await measureAcpxStartup(ctx, "config.resolve", () =>
@@ -529,9 +367,11 @@ export function createAcpxRuntimeService(
         await fs.mkdir(wrapperRoot, { recursive: true });
       });
       const gatewayInstanceId = await measureAcpxStartup(ctx, "gateway-instance-id", () =>
-        resolveGatewayInstanceId(ctx.stateDir),
+        resolveGatewayInstanceId(openKeyedStore),
       );
-      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: wrapperRoot });
+      const processLeaseStore = createAcpxProcessLeaseStore({
+        store: openAcpxProcessLeaseStateStore(openKeyedStore),
+      });
       const startupReap = await measureAcpxStartup(ctx, "process-leases.reap", () =>
         reapOpenAcpxProcessLeases({
           gatewayInstanceId,

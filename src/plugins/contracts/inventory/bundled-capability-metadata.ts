@@ -1,3 +1,4 @@
+// Bundled capability metadata inventory lists capability metadata used by plugin contracts.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,7 @@ export type BundledPluginContractSnapshot = {
   pluginId: string;
   cliBackendIds: string[];
   providerIds: string[];
-  providerAuthEnvVars: Record<string, string[]>;
+  providerEnvVars: Record<string, string[]>;
   embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -57,8 +58,8 @@ export type BundledCapabilityManifest = Pick<
   | "cliBackends"
   | "contracts"
   | "legacyPluginIds"
-  | "providerAuthEnvVars"
   | "providers"
+  | "setup"
 >;
 
 function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
@@ -102,17 +103,14 @@ function listBundledCapabilityManifests(): readonly BundledCapabilityManifest[] 
 
 const BUNDLED_CAPABILITY_MANIFESTS = listBundledCapabilityManifests();
 
-function normalizeStringListRecord(record: unknown): Record<string, string[]> {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return {};
-  }
+function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<string, string[]> {
   return Object.fromEntries(
-    Object.entries(record)
+    (setup?.providers ?? [])
       .map(
-        ([key, values]) =>
+        (provider) =>
           [
-            key.trim(),
-            uniqueStrings(Array.isArray(values) ? values : [], (value) =>
+            provider.id.trim(),
+            uniqueStrings(provider.envVars ?? [], (value) =>
               typeof value === "string" ? value.trim() : "",
             ),
           ] as const,
@@ -129,7 +127,7 @@ export function buildBundledPluginContractSnapshot(
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
-    providerAuthEnvVars: normalizeStringListRecord(manifest.providerAuthEnvVars),
+    providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
     embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
       value.trim(),
     ),
@@ -228,7 +226,7 @@ export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
 
 type BundledContractIdSnapshotKey = Exclude<
   keyof Omit<BundledPluginContractSnapshot, "pluginId">,
-  "providerAuthEnvVars"
+  "providerEnvVars"
 >;
 
 export function resolveBundledContractSnapshotPluginIds(

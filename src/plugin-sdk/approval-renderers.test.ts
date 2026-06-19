@@ -1,3 +1,6 @@
+/**
+ * Tests approval renderer payload and text formatting.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildApprovalPendingReplyPayload,
@@ -23,16 +26,28 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 allow-once",
+                },
                 value: "/approve plugin:approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 allow-always",
+                },
                 value: "/approve plugin:approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 deny",
+                },
                 value: "/approve plugin:approval-123 deny",
                 style: "danger",
               },
@@ -70,16 +85,28 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-once",
+                },
                 value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-always",
+                },
                 value: "/approve plugin-approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
                 value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
@@ -94,10 +121,8 @@ describe("plugin-sdk/approval-renderers", () => {
           approvalKind: "plugin",
           approvalSlug: "custom-slug",
           allowedDecisions: ["allow-once", "allow-always", "deny"],
-          description: "Needs approval",
           sessionKey: undefined,
           state: "pending",
-          title: "Sensitive action",
         },
         telegram: {
           quoteText: "quoted",
@@ -120,7 +145,7 @@ describe("plugin-sdk/approval-renderers", () => {
         nowMs: 1_000,
       }),
       textExpected: (text: string) =>
-        expect(text).toContain("Reply with: /approve <id> allow-once|deny"),
+        expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once|deny"),
       presentationExpected: {
         blocks: [
           {
@@ -128,11 +153,19 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-once",
+                },
                 value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
                 value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
@@ -147,90 +180,8 @@ describe("plugin-sdk/approval-renderers", () => {
           approvalKind: "plugin",
           approvalSlug: "plugin-a",
           allowedDecisions: ["allow-once", "deny"],
-          description: "Needs approval",
           sessionKey: undefined,
           state: "pending",
-          title: "Sensitive action",
-        },
-      },
-    },
-    {
-      name: "builds pending payloads with plugin-provided actions",
-      payload: buildApprovalPendingReplyPayload({
-        approvalKind: "plugin",
-        approvalId: "plugin:approval-123",
-        approvalSlug: "plugin:a",
-        text: "AgentKit approval required",
-        title: "World ID approval",
-        description: "Approve in World app",
-        severity: "critical",
-        toolName: "protected-request",
-        pluginId: "agentkit",
-        actions: [
-          {
-            kind: "command",
-            label: "Open AgentKit",
-            style: "primary",
-            command: "/agentkit approve plugin:approval-123",
-          },
-          {
-            kind: "decision",
-            label: "Deny",
-            style: "danger",
-            decision: "deny",
-            command: "/agentkit deny plugin:approval-123",
-          },
-        ],
-      }),
-      textExpected: (text: string) => expect(text).toBe("AgentKit approval required"),
-      presentationExpected: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Open AgentKit",
-                value: "/agentkit approve plugin:approval-123",
-                style: "primary",
-              },
-              {
-                label: "Deny",
-                value: "/agentkit deny plugin:approval-123",
-                style: "danger",
-              },
-            ],
-          },
-        ],
-      },
-      channelDataExpected: {
-        execApproval: {
-          agentId: undefined,
-          approvalId: "plugin:approval-123",
-          approvalKind: "plugin",
-          approvalSlug: "plugin:a",
-          allowedDecisions: ["allow-once", "allow-always", "deny"],
-          actions: [
-            {
-              kind: "command",
-              label: "Open AgentKit",
-              style: "primary",
-              command: "/agentkit approve plugin:approval-123",
-            },
-            {
-              kind: "decision",
-              label: "Deny",
-              style: "danger",
-              decision: "deny",
-              command: "/agentkit deny plugin:approval-123",
-            },
-          ],
-          description: "Approve in World app",
-          pluginId: "agentkit",
-          sessionKey: undefined,
-          severity: "critical",
-          state: "pending",
-          title: "World ID approval",
-          toolName: "protected-request",
         },
       },
     },

@@ -1,8 +1,20 @@
+// Memory Host SDK tests cover qmd process behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -22,13 +34,15 @@ import {
   type QmdBinaryAvailability,
 } from "./qmd-process.js";
 
-function createMockChild() {
+function createMockChild(params: { pid?: number } = {}) {
   const child = new EventEmitter() as EventEmitter & {
+    pid?: number;
     stdout: EventEmitter;
     stderr: EventEmitter;
     kill: ReturnType<typeof vi.fn>;
     closeWith: (code?: number | null, signal?: NodeJS.Signals | null) => void;
   };
+  child.pid = params.pid;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
@@ -40,7 +54,7 @@ function createMockChild() {
 
 let fixtureRoot = "";
 let tempDir = "";
-let platformSpy: { mockRestore(): void } | null = null;
+let platformSpy: MockInstance<() => NodeJS.Platform> | null = null;
 let fixtureId = 0;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
@@ -64,8 +78,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   process.env.PATH = originalPath;
   process.env.PATHEXT = originalPathExt;
+  platformSpy?.mockReturnValue("win32");
   spawnMock.mockReset();
   tempDir = "";
 });
@@ -199,6 +215,50 @@ describe("checkQmdBinaryAvailability", () => {
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
     ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
   });
+
+  it("caps oversized availability probe timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    spawnMock.mockReturnValueOnce(child);
+
+    void checkQmdBinaryAvailability({
+      command: "qmd",
+      env: process.env,
+      cwd: tempDir,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("kills timed-out availability probes by process group on POSIX", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 4321 });
+    spawnMock.mockReturnValueOnce(child);
+
+    try {
+      await expect(
+        checkQmdBinaryAvailability({
+          command: "qmd",
+          env: process.env,
+          cwd: tempDir,
+          timeoutMs: 1,
+        }),
+      ).resolves.toEqual({
+        available: false,
+        reason: "binary",
+        error: "spawn qmd timed out after 1ms",
+      });
+
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-4321, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
+  });
 });
 
 describe("runCliCommand", () => {
@@ -282,5 +342,73 @@ describe("runCliCommand", () => {
         maxOutputChars: 4,
       }),
     ).rejects.toThrow(/produced too much output/);
+  });
+
+  it("counts surrogate pairs as one character when capping failed command output", async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stderr.emit("data", "a🙂");
+        child.closeWith(1);
+      });
+      return child;
+    });
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 2,
+      }),
+    ).rejects.toThrow(/🙂/);
+  });
+
+  it("caps oversized command timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    spawnMock.mockReturnValueOnce(child);
+
+    void runCliCommand({
+      commandSummary: "qmd query test",
+      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+      env: process.env,
+      cwd: tempDir,
+      maxOutputChars: 10_000,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    }).catch(() => undefined);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("kills timed-out cli command process groups on POSIX", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 8765 });
+    spawnMock.mockReturnValueOnce(child);
+
+    try {
+      const pending = runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+        timeoutMs: 1,
+      });
+      const timeoutAssertion = expect(pending).rejects.toThrow(
+        "qmd query test timed out after 1ms",
+      );
+
+      await timeoutAssertion;
+
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-8765, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
   });
 });

@@ -1,8 +1,8 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Slack plugin module implements action runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
@@ -11,13 +11,13 @@ import {
   createActionGate,
   imageResultFromFile,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
+import { resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
 
 const messagingActions = new Set([
   "sendMessage",
@@ -30,19 +30,6 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-
-function sameSlackChannelTarget(targetChannel: string, currentChannelId: string): boolean {
-  const parsedTarget = parseSlackTarget(targetChannel, {
-    defaultKind: "channel",
-  });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return false;
-  }
-  return (
-    normalizeLowercaseStringOrEmpty(parsedTarget.id) ===
-    normalizeLowercaseStringOrEmpty(currentChannelId)
-  );
-}
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
@@ -91,6 +78,8 @@ export const slackActionRuntime = {
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the channel ID. */
+  currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading. */
   currentThreadTs?: string;
   /** Reply-to mode for auto-threading. */
@@ -123,12 +112,12 @@ function resolveThreadTsFromContext(
   if (opts?.suppressImplicitThread) {
     return undefined;
   }
-  if (!context?.currentChannelId) {
+  if (!context?.currentChannelId && !context?.currentMessagingTarget) {
     return undefined;
   }
 
   // Different channel - don't inject
-  if (!sameSlackChannelTarget(targetChannel, context.currentChannelId)) {
+  if (!slackContextTargetsMatch(targetChannel, context)) {
     return undefined;
   }
   if (!context.currentThreadTs) {
@@ -339,10 +328,8 @@ export async function handleSlackAction(
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
-        if (context?.hasRepliedRef && context.currentChannelId) {
-          if (sameSlackChannelTarget(to, context.currentChannelId)) {
-            context.hasRepliedRef.value = true;
-          }
+        if (context?.hasRepliedRef && slackContextTargetsMatch(to, context)) {
+          context.hasRepliedRef.value = true;
         }
 
         return jsonResult({ ok: true, result });
@@ -382,10 +369,8 @@ export async function handleSlackAction(
           ...(title ? { uploadTitle: title } : {}),
         });
 
-        if (context?.hasRepliedRef && context.currentChannelId) {
-          if (sameSlackChannelTarget(to, context.currentChannelId)) {
-            context.hasRepliedRef.value = true;
-          }
+        if (context?.hasRepliedRef && slackContextTargetsMatch(to, context)) {
+          context.hasRepliedRef.value = true;
         }
 
         return jsonResult({ ok: true, result });
@@ -429,9 +414,9 @@ export async function handleSlackAction(
       case "readMessages": {
         const channelId = resolveChannelId();
         assertSlackReadTargetAllowed({ account, cfg, channelId });
-        const limitRaw = params.limit;
-        const limit =
-          typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+        const limit = readPositiveIntegerParam(params, "limit", {
+          message: "limit must be a positive integer.",
+        });
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
@@ -572,10 +557,12 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
+    const limit = readPositiveIntegerParam(params, "limit", {
+      message: "limit must be a positive integer.",
+    });
     const result = readOpts
       ? await slackActionRuntime.listSlackEmojis(readOpts)
       : await slackActionRuntime.listSlackEmojis();
-    const limit = readNumberParam(params, "limit", { integer: true });
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
       if (entries.length > limit) {

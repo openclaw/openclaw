@@ -1,3 +1,5 @@
+// Tool image logging tests cover diagnostic context emitted while sanitizing
+// oversized or transformed image payloads.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 
@@ -38,16 +40,6 @@ describe("tool-images log context", () => {
   beforeEach(() => {
     infoMock.mockClear();
     warnMock.mockClear();
-  });
-
-  it("includes filename from MEDIA text", async () => {
-    const blocks = [
-      { type: "text" as const, text: "MEDIA:/tmp/snapshots/camera-front.png" },
-      { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
-    ];
-    await sanitizeContentBlocksImages(blocks, "nodes:camera_snap");
-    const messages = infoMock.mock.calls.map((call) => String(call[0] ?? ""));
-    expect(messages.join("\n")).toContain("camera-front.png");
   });
 
   it("includes filename from read label", async () => {

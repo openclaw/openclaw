@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot.media harness behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -127,6 +128,10 @@ const apiStub: ApiStub = {
 };
 
 const throttlerSpy = vi.fn(() => "throttler");
+const defaultRuntimeConfig = (() =>
+  ({
+    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+  }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
 type TopicNameStoreFactory = NonNullable<
   Parameters<typeof setTelegramTopicNameStoreFactoryForTest>[0]
@@ -192,10 +197,7 @@ const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
 );
 
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  getRuntimeConfig: (() =>
-    ({
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-    }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"],
+  getRuntimeConfig: defaultRuntimeConfig,
   resolveStorePath: vi.fn(
     (storePath?: string) => storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
   ) as TelegramBotDeps["resolveStorePath"],
@@ -219,6 +221,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 beforeEach(() => {
   cleanupMediaHarnessStoreRoot();
   ensureMediaHarnessStoreRoot();
+  telegramBotDepsForTest.getRuntimeConfig = defaultRuntimeConfig;
   resetInboundDedupe();
   topicNameStoresForTest.clear();
   resetTopicNameCacheForTest();

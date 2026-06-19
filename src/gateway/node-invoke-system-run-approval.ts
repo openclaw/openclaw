@@ -1,7 +1,13 @@
+// system.run approval sanitizer.
+// Verifies forwarded node exec approvals against stored operator decisions.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   systemRunApprovalGuardError,
@@ -11,7 +17,6 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;

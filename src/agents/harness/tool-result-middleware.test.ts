@@ -1,9 +1,12 @@
+// Verifies tool-result middleware validation, sanitization, and fail-closed behavior.
 import { describe, expect, it } from "vitest";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 describe("createAgentToolResultMiddlewareRunner", () => {
   it("fails closed when middleware throws", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
+    // Middleware errors may contain sensitive tool data. The public result must
+    // collapse to a generic error instead of returning the thrown message.
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       () => {
         throw new Error("raw secret should not be logged or returned");
       },
@@ -47,7 +50,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("fails closed when middleware mutates the current result into an invalid shape", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       (event) => {
         event.result.content = "not an array" as never;
         return undefined;
@@ -65,6 +68,8 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("rejects oversized middleware details", async () => {
+    // Details are serialized into harness/tool payloads; cap them before a
+    // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
@@ -122,7 +127,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       content: [{ type: "text" as const, text: "delivered" }],
       details: cyclicDetails,
     };
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, []);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, []);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -147,7 +152,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       client,
     };
     client.message = payload;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -165,6 +172,54 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       messageId: "1501757759073419394",
       client: { type: "fake-channel-client" },
     });
+  });
+
+  it("truncates oversized incoming text before a no-op middleware", async () => {
+    let observedText = "";
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (event) => {
+        const content = event.result.content[0];
+        observedText = content?.type === "text" ? content.text : "";
+        return undefined;
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "gateway",
+      args: { action: "config.get" },
+      result: {
+        content: [{ type: "text", text: "x".repeat(100_001) }],
+        details: { ok: true },
+      },
+    });
+
+    expect(observedText).toHaveLength(100_000);
+    expect(result.details).toEqual({ ok: true });
+    expect(result.content).toEqual([{ type: "text", text: "x".repeat(100_000) }]);
+  });
+
+  it("fails closed when middleware returns oversized top-level text", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "x".repeat(100_001) }],
+          details: { ok: true },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "gateway",
+      args: { action: "config.get" },
+      result: {
+        content: [{ type: "text", text: "raw" }],
+        details: { ok: true },
+      },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
   it("sanitizes incoming details before failing closed on uncoercible content", async () => {
@@ -476,7 +531,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("collapses oversized incoming details to a truncation marker", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",

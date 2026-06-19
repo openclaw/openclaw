@@ -1,3 +1,4 @@
+// Package manifest contract tests cover plugin package manifest requirements.
 import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
@@ -48,13 +49,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   {
     pluginId: "msteams",
-    pluginLocalRuntimeDeps: [
-      "@azure/identity",
-      "@microsoft/teams.api",
-      "@microsoft/teams.apps",
-      "jsonwebtoken",
-      "jwks-rsa",
-    ],
+    pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },

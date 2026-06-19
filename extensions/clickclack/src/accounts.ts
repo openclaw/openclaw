@@ -1,9 +1,14 @@
+/**
+ * Resolves ClickClack account configuration from root channel config, named
+ * account overrides, and secret-provider references.
+ */
 import {
   createAccountListHelpers,
   hasConfiguredAccountValue,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import {
   normalizeSecretInputString,
@@ -14,6 +19,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const DEFAULT_RECONNECT_MS = 1_500;
+const MIN_RECONNECT_MS = 100;
+const MAX_RECONNECT_MS = 60_000;
 
 const {
   listAccountIds: listClickClackAccountIds,
@@ -94,6 +101,10 @@ function resolveClickClackToken(params: {
   );
 }
 
+/**
+ * Builds the normalized account snapshot used by gateway, outbound delivery,
+ * status reporting, and channel routing.
+ */
 export function resolveClickClackAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -128,7 +139,10 @@ export function resolveClickClackAccount(params: {
     toolsAllow: merged.toolsAllow,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],
-    reconnectMs: merged.reconnectMs ?? DEFAULT_RECONNECT_MS,
+    reconnectMs: resolveIntegerOption(merged.reconnectMs, DEFAULT_RECONNECT_MS, {
+      min: MIN_RECONNECT_MS,
+      max: MAX_RECONNECT_MS,
+    }),
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],
@@ -136,6 +150,10 @@ export function resolveClickClackAccount(params: {
   };
 }
 
+/**
+ * Returns all enabled accounts, including the implicit default account when
+ * legacy top-level ClickClack config is present.
+ */
 export function listEnabledClickClackAccounts(cfg: CoreConfig): ResolvedClickClackAccount[] {
   return listClickClackAccountIds(cfg)
     .map((accountId) => resolveClickClackAccount({ cfg, accountId }))

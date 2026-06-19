@@ -1,3 +1,4 @@
+// Verifies bundled capability metadata emitted by plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -85,7 +86,7 @@ describe("bundled capability metadata", () => {
       pluginId: "migrate-hermes",
       cliBackendIds: [],
       providerIds: [],
-      providerAuthEnvVars: {},
+      providerEnvVars: {},
       embeddingProviderIds: [],
       speechProviderIds: [],
       realtimeTranscriptionProviderIds: [],

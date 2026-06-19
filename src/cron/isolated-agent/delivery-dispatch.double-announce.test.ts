@@ -76,7 +76,7 @@ vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
@@ -137,7 +137,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
@@ -1175,6 +1175,79 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
+  it("cleans up the direct cron session when delivery target resolution is refused (deleteAfterRun)", async () => {
+    // A keyless implicit cron whose inherited shared-bucket target is refused
+    // (resolvedDelivery.ok=false, issue #91613 fail-closed path) must still
+    // retire its session/transcript when deleteAfterRun is enabled — otherwise
+    // the one-shot session leaks.
+    const params = makeBaseParams({ synthesizedText: "refused report" });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("refusing inherited shared-bucket delivery target"),
+    };
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "error",
+      errorKind: "delivery-target",
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("cleans up the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
+    // Same fail-closed refusal, best-effort variant: dispatch returns status:ok
+    // (warn-logs instead of failing the run) but the deleteAfterRun session must
+    // still be retired.
+    const params = makeBaseParams({
+      synthesizedText: "refused report",
+      deliveryBestEffort: true,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("refusing inherited shared-bucket delivery target"),
+    };
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "ok",
+    });
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:cron:test-job",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("text delivery fires exactly once (no double-deliver)", async () => {
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
@@ -1391,36 +1464,55 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     }
   });
 
-  it("suppresses NO_REPLY payload in direct delivery so sentinel never leaks to external channels", async () => {
-    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
-    // Force the useDirectDelivery path (structured content) to exercise
-    // deliverViaDirect without going through finalizeTextDelivery.
-    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
-    const state = await dispatchCronDelivery(params);
+  it.each([SILENT_REPLY_TOKEN, "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "suppresses %s payload in direct delivery so control tokens never leak to external channels",
+    async (controlToken) => {
+      const params = makeBaseParams({ synthesizedText: controlToken });
+      // Force the useDirectDelivery path (structured content) to exercise
+      // deliverViaDirect without going through finalizeTextDelivery.
+      (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+      const state = await dispatchCronDelivery(params);
 
-    // NO_REPLY must be filtered out before reaching the outbound adapter.
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expectResultFields(state.result, {
-      status: "ok",
-      delivered: false,
-      deliveryAttempted: true,
-    });
-    // deliveryAttempted must be true so the heartbeat timer does not fire
-    // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
-    expect(state.deliveryAttempted).toBe(true);
+      // Control tokens must be filtered out before reaching the outbound adapter.
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expectResultFields(state.result, {
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      // deliveryAttempted must be true so the heartbeat timer does not fire
+      // a fallback enqueueSystemEvent with the control-token text.
+      expect(state.deliveryAttempted).toBe(true);
 
-    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "NO_REPLY",
-        deliveryRequested: true,
-        delivered: state.result?.delivered,
-        deliveryAttempted: state.result?.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-  });
+      // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
+      expect(
+        shouldEnqueueCronMainSummary({
+          summaryText: controlToken,
+          deliveryRequested: true,
+          delivered: state.result?.delivered,
+          deliveryAttempted: state.result?.deliveryAttempted,
+          suppressMainSummary: false,
+          isCronSystemEvent: () => true,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP"])(
+    "suppresses %s payload in text delivery so control tokens never leak to external channels",
+    async (controlToken) => {
+      const params = makeBaseParams({ synthesizedText: controlToken });
+      const state = await dispatchCronDelivery(params);
+
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expectResultFields(state.result, {
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      expect(state.deliveryAttempted).toBe(true);
+    },
+  );
 
   it("delivers explicit targets with direct text through the outbound adapter", async () => {
     const params = makeBaseParams({ synthesizedText: "hello from cron" });

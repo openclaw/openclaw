@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 19;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
+const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
+const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const parseNodeVersion = (rawVersion) => {
   const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
@@ -23,6 +25,15 @@ const parseNodeVersion = (rawVersion) => {
 const isSupportedNodeVersion = (version) =>
   version.major > MIN_NODE_MAJOR ||
   (version.major === MIN_NODE_MAJOR && version.minor >= MIN_NODE_MINOR);
+
+const isNodeVersionAffectedByCompileCacheDeadlock = (rawVersion) => {
+  const version = parseNodeVersion(rawVersion);
+  return version.major === 24 && version.minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
+};
+
+const shouldSkipCompileCacheForWindowsNode24 = () =>
+  process.platform === "win32" &&
+  isNodeVersionAffectedByCompileCacheDeadlock(process.versions.node);
 
 const ensureSupportedNodeVersion = () => {
   if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
@@ -40,6 +51,10 @@ const ensureSupportedNodeVersion = () => {
 };
 
 ensureSupportedNodeVersion();
+
+if (tryOutputLauncherVersion(process.argv)) {
+  process.exit(0);
+}
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
@@ -90,6 +105,7 @@ const respawnSignals =
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
 const respawnSignalForceKillGraceMs = 1_000;
+const respawnSignalHardExitGraceMs = 1_000;
 
 const runRespawnedChild = (command, args, env) => {
   const child = spawn(command, args, {
@@ -103,6 +119,7 @@ const runRespawnedChild = (command, args, env) => {
   // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
+  let signalHardExitTimer = null;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -115,6 +132,10 @@ const runRespawnedChild = (command, args, env) => {
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = null;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = null;
     }
   };
   const forceKillChild = () => {
@@ -132,7 +153,10 @@ const runRespawnedChild = (command, args, env) => {
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      process.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        process.exit(1);
+      }, respawnSignalHardExitGraceMs);
+      signalHardExitTimer.unref?.();
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
@@ -181,10 +205,12 @@ const runRespawnedChild = (command, args, env) => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  if (!isSourceCheckoutLauncher()) {
+  const needsDisabledCompileCacheRespawn =
+    isSourceCheckoutLauncher() || shouldSkipCompileCacheForWindowsNode24();
+  if (!needsDisabledCompileCacheRespawn) {
     return false;
   }
-  if (process.env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+  if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
     return false;
   }
   if (!module.getCompileCacheDir?.() && !isNodeCompileCacheRequested()) {
@@ -193,7 +219,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   const env = {
     ...process.env,
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
   };
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
@@ -204,7 +230,11 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+  if (
+    isSourceCheckoutLauncher() ||
+    isNodeCompileCacheDisabled() ||
+    shouldSkipCompileCacheForWindowsNode24()
+  ) {
     return false;
   }
   if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
@@ -238,7 +268,8 @@ if (
   !waitingForCompileCacheRespawn &&
   module.enableCompileCache &&
   !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
+  !isSourceCheckoutLauncher() &&
+  !shouldSkipCompileCacheForWindowsNode24()
 ) {
   try {
     module.enableCompileCache(resolvePackagedCompileCacheDirectory());
@@ -435,6 +466,155 @@ const loadPrecomputedHelpText = (key) => {
     return null;
   }
 };
+
+function tryOutputLauncherVersion(argv) {
+  try {
+    if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+      return false;
+    }
+    if (!isLauncherVersionFastPathArgv(argv)) {
+      return false;
+    }
+    const version = resolveLauncherVersion();
+    const commit = resolveLauncherCommit();
+    process.stdout.write(commit ? `OpenClaw ${version} (${commit})\n` : `OpenClaw ${version}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLauncherVersionFastPathArgv(argv) {
+  return argv.length === 3 && (argv[2] === "--version" || argv[2] === "-V" || argv[2] === "-v");
+}
+
+function normalizeLauncherMetadataValue(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+}
+
+function readLauncherJson(relativePath) {
+  try {
+    return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherVersion() {
+  const packageJson = readLauncherJson("./package.json");
+  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
+  if (packageVersion) {
+    return packageVersion;
+  }
+  const buildInfo = readLauncherJson("./dist/build-info.json");
+  const buildVersion = normalizeLauncherMetadataValue(buildInfo?.version);
+  if (buildVersion) {
+    return buildVersion;
+  }
+  return normalizeLauncherMetadataValue(process.env.OPENCLAW_BUNDLED_VERSION) ?? "0.0.0";
+}
+
+function resolveLauncherCommit() {
+  const envCommit = formatLauncherCommit(process.env.GIT_COMMIT ?? process.env.GIT_SHA);
+  if (envCommit) {
+    return envCommit;
+  }
+  return (
+    readLauncherGitCommit() ??
+    formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.githead)
+  );
+}
+
+function formatLauncherCommit(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.trim().match(/[0-9a-fA-F]{7,40}/);
+  return match ? match[0].slice(0, 7).toLowerCase() : null;
+}
+
+function readLauncherGitCommit() {
+  try {
+    const gitPath = fileURLToPath(new URL("./.git", import.meta.url));
+    const headPath = resolveLauncherGitHeadPath(gitPath);
+    if (!headPath) {
+      return null;
+    }
+    const head = readFileSync(headPath, "utf8").trim();
+    if (!head) {
+      return null;
+    }
+    if (!head.startsWith("ref:")) {
+      return formatLauncherCommit(head);
+    }
+    const ref = head.replace(/^ref:\s*/i, "").trim();
+    if (!ref.startsWith("refs/") || path.isAbsolute(ref) || ref.split("/").includes("..")) {
+      return null;
+    }
+    const refsBase = resolveLauncherGitRefsBase(headPath);
+    const refPath = path.resolve(refsBase, ref);
+    const rel = path.relative(refsBase, refPath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return null;
+    }
+    try {
+      return formatLauncherCommit(readFileSync(refPath, "utf8"));
+    } catch {
+      return readLauncherPackedRef(refsBase, ref);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitHeadPath(gitPath) {
+  try {
+    if (statSync(gitPath).isDirectory()) {
+      return path.join(gitPath, "HEAD");
+    }
+    const raw = readFileSync(gitPath, "utf8").trim();
+    if (!raw.startsWith("gitdir:")) {
+      return null;
+    }
+    return path.join(
+      path.resolve(path.dirname(gitPath), raw.slice("gitdir:".length).trim()),
+      "HEAD",
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitRefsBase(headPath) {
+  const gitDir = path.dirname(headPath);
+  try {
+    const commonDir = readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    return commonDir ? path.resolve(gitDir, commonDir) : gitDir;
+  } catch {
+    return gitDir;
+  }
+}
+
+function readLauncherPackedRef(refsBase, ref) {
+  try {
+    const packedRefs = readFileSync(path.join(refsBase, "packed-refs"), "utf8");
+    for (const line of packedRefs.split("\n")) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const [commit, packedRef] = line.trim().split(/\s+/, 2);
+      if (packedRef === ref) {
+        return formatLauncherCommit(commit);
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
 
 const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {

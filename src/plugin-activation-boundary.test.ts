@@ -1,3 +1,4 @@
+// Tests plugin activation boundaries during root package startup.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeModelRef } from "./agents/model-selection-normalize.js";
 import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
@@ -139,7 +140,7 @@ describe("plugin activation boundary", () => {
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
     const staticNormalize = {
       allowPluginNormalization: false,
-      manifestPlugins: loadPluginManifestRegistryForPluginRegistry().plugins,
+      manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
     };
     expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
       provider: "google",

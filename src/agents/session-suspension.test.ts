@@ -1,12 +1,12 @@
+// Verifies quota suspension persists lane state and auto-resumes safely.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CommandLane } from "../process/lanes.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const sessionStoreMocks = vi.hoisted(() => ({
-  updateSessionStoreEntry: vi.fn(async (params: { update: (entry: unknown) => unknown }) => {
-    await params.update({ sessionId: "session-1" });
-  }),
+  applySessionStoreEntryPatch: vi.fn(),
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
@@ -25,6 +25,7 @@ vi.mock("./command/session.js", () => ({
 }));
 
 async function suspendLane(ttlMs: number, cfg: OpenClawConfig, laneId: CommandLane) {
+  // All cases exercise the public suspendSession path with fixed failure metadata.
   const { suspendSession } = await import("./session-suspension.js");
   await suspendSession({
     cfg,
@@ -39,12 +40,12 @@ async function suspendLane(ttlMs: number, cfg: OpenClawConfig, laneId: CommandLa
 
 describe("session suspension", () => {
   afterEach(async () => {
-    const { cancelLaneAutoResume } = await import("./session-suspension.js");
-    cancelLaneAutoResume(CommandLane.Main);
-    cancelLaneAutoResume(CommandLane.Cron);
-    cancelLaneAutoResume(CommandLane.CronNested);
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+      vi.clearAllTimers();
+    }
     vi.useRealTimers();
-    sessionStoreMocks.updateSessionStoreEntry.mockClear();
+    sessionStoreMocks.applySessionStoreEntryPatch.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
   });
 
@@ -102,6 +103,47 @@ describe("session suspension", () => {
       CommandLane.Cron,
       1,
     );
+  });
+
+  it("clamps oversized suspension TTLs for timers and persisted resume time", async () => {
+    // Persisted expectedResumeBy must match the clamped timer, not MAX_SAFE_INTEGER.
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await suspendLane(Number.MAX_SAFE_INTEGER, {} as OpenClawConfig, CommandLane.Main);
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    const patch = sessionStoreMocks.applySessionStoreEntryPatch.mock.calls[0]?.[0].patch as {
+      quotaSuspension?: { expectedResumeBy?: number };
+    };
+    expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("defers session suspension only for the outer fallback candidate run", async () => {
+    const { resolveSessionSuspensionTarget, runWithDeferredSessionSuspension } =
+      await import("./session-suspension.js");
+    const onDeferred = vi.fn();
+
+    expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+    await runWithDeferredSessionSuspension(async () => {
+      const target = resolveSessionSuspensionTarget();
+      expect(target.mode).toBe("defer");
+      if (target.mode === "defer") {
+        target.defer({
+          cfg: {},
+          sessionId: "session-1",
+          laneId: CommandLane.Main,
+          reason: "quota_exhausted",
+          failedProvider: "openai",
+          failedModel: "gpt-5.5",
+        });
+      }
+      expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+    }, onDeferred);
+    expect(onDeferred).toHaveBeenCalledOnce();
+    expect(onDeferred).toHaveBeenCalledWith(expect.objectContaining({ laneId: CommandLane.Main }));
+    expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
   });
 
   it("maps failover reasons to persisted suspension reasons", async () => {

@@ -1,3 +1,5 @@
+// Macos Discord script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";
@@ -41,12 +43,23 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.dis
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.groupPolicy allowlist
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.guilds ${shellQuote(guilds)} --strict-json
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} doctor --fix --yes --non-interactive
+${this.input.guestNode} - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+config.plugins = config.plugins && typeof config.plugins === "object" ? config.plugins : {};
+const allow = Array.isArray(config.plugins.allow) ? config.plugins.allow : [];
+config.plugins.allow = Array.from(new Set([...allow, "discord"]));
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
+${this.input.guestNode} ${this.input.guestOpenClawEntry} plugins enable discord
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} gateway restart
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe --json`);
   }
 
   async runRoundtrip(phase: DiscordSmokePhase): Promise<void> {
-    const nonce = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const nonce = randomUUID();
     const outboundNonce = `${phase}-out-${nonce}`;
     const inboundNonce = `${phase}-in-${nonce}`;
     const outboundLog = path.join(this.input.runDir, `${phase}.discord-send.json`);

@@ -1,3 +1,4 @@
+// Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -19,6 +20,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
+import { inferBasePathFromPathname, normalizeBasePath, tabFromPath } from "./navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
@@ -86,8 +88,238 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
+const DOCS_ORIGIN = "https://docs.openclaw.ai";
+const DOCS_ROOT_SEGMENTS = new Set([
+  "agent-runtime-architecture",
+  "announcements",
+  "auth-credential-semantics",
+  "automation",
+  "brave-search",
+  "channels",
+  "ci",
+  "clawhub",
+  "cli",
+  "concepts",
+  "date-time",
+  "debug",
+  "diagnostics",
+  "gateway",
+  "help",
+  "index",
+  "install",
+  "logging",
+  "maturity-scorecard",
+  "network",
+  "nodes",
+  "openclaw-agent-runtime",
+  "perplexity",
+  "plan",
+  "platforms",
+  "plugins",
+  "prose",
+  "providers",
+  "refactor",
+  "reference",
+  "security",
+  "specs",
+  "start",
+  "tools",
+  "tts",
+  "vps",
+  "web",
+]);
+const DOCS_SHORTLINK_PATHS = new Set([
+  "/AGENTS.default",
+  "/RELEASING",
+  "/agent",
+  "/agent-loop",
+  "/agent-send",
+  "/agent-workspace",
+  "/android",
+  "/anthropic",
+  "/architecture",
+  "/audio",
+  "/auth-monitoring",
+  "/azure",
+  "/background-process",
+  "/bash",
+  "/bonjour",
+  "/browser",
+  "/browser-linux-troubleshooting",
+  "/bun",
+  "/camera",
+  "/clawd",
+  "/clawdhub",
+  "/compaction",
+  "/configuration",
+  "/context",
+  "/context-engine",
+  "/control-ui",
+  "/cron",
+  "/cron-jobs",
+  "/cron-vs-heartbeat",
+  "/dashboard",
+  "/device-models",
+  "/discord",
+  "/discovery",
+  "/docker",
+  "/doctor",
+  "/duckduckgo-search",
+  "/elevated",
+  "/exa-search",
+  "/experiments/plans/cron-add-hardening",
+  "/experiments/plans/group-policy-hardening",
+  "/faq",
+  "/gateway-lock",
+  "/gcp",
+  "/gemini-search",
+  "/getting-started",
+  "/glm",
+  "/gmail-pubsub",
+  "/grammy",
+  "/grok-search",
+  "/group-messages",
+  "/groups",
+  "/health",
+  "/heartbeat",
+  "/hubs",
+  "/images",
+  "/imessage",
+  "/ios",
+  "/kimi-search",
+  "/line",
+  "/linux",
+  "/location",
+  "/location-command",
+  "/lore",
+  "/mac/bun",
+  "/mac/canvas",
+  "/mac/child-process",
+  "/mac/dev-setup",
+  "/mac/health",
+  "/mac/icon",
+  "/mac/logging",
+  "/mac/menu-bar",
+  "/mac/peekaboo",
+  "/mac/permissions",
+  "/mac/release",
+  "/mac/remote",
+  "/mac/signing",
+  "/mac/skills",
+  "/mac/voice-overlay",
+  "/mac/voicewake",
+  "/mac/webchat",
+  "/mac/xpc",
+  "/macos",
+  "/mattermost",
+  "/mcp",
+  "/message",
+  "/messages",
+  "/minimax",
+  "/mistral",
+  "/model",
+  "/model-failover",
+  "/models",
+  "/moonshot",
+  "/multi-agent",
+  "/nix",
+  "/northflank",
+  "/oauth",
+  "/onboarding",
+  "/openai",
+  "/opencode",
+  "/opencode-go",
+  "/openrouter",
+  "/pairing",
+  "/pi",
+  "/pi-dev",
+  "/plugin",
+  "/podman",
+  "/poll",
+  "/presence",
+  "/provider-routing",
+  "/qianfan",
+  "/queue",
+  "/quickstart",
+  "/railway",
+  "/remote",
+  "/remote-gateway-readme",
+  "/render",
+  "/rpc",
+  "/sandbox",
+  "/sandboxing",
+  "/session",
+  "/session-tool",
+  "/sessions",
+  "/setup",
+  "/showcase",
+  "/signal",
+  "/skill-workshop",
+  "/skills",
+  "/skills-config",
+  "/slack",
+  "/slash-commands",
+  "/subagents",
+  "/tailscale",
+  "/talk",
+  "/telegram",
+  "/templates/AGENTS",
+  "/templates/BOOT",
+  "/templates/BOOTSTRAP",
+  "/templates/HEARTBEAT",
+  "/templates/IDENTITY",
+  "/templates/SOUL",
+  "/templates/TOOLS",
+  "/templates/USER",
+  "/test",
+  "/thinking",
+  "/timezone",
+  "/troubleshooting",
+  "/tui",
+  "/typebox",
+  "/updating",
+  "/voicewake",
+  "/web-fetch",
+  "/webchat",
+  "/webhook",
+  "/whatsapp",
+  "/windows",
+  "/wizard",
+  "/xiaomi",
+  "/zai",
+]);
+const APP_RESOURCE_ROOT_SEGMENTS = new Set([
+  "__openclaw",
+  "__openclaw__",
+  "_next",
+  "api",
+  "apple-touch-icon.png",
+  "assets",
+  "avatar",
+  "favicon-32.png",
+  "favicon.ico",
+  "favicon.svg",
+  "manifest.json",
+  "manifest.webmanifest",
+  "media",
+  "res",
+  "socket.io",
+  "sw.js",
+  "static",
+  "ws",
+]);
+const APP_RESOURCE_PATH_PREFIXES = [
+  ["plugins", "diffs"],
+  ["plugins", "diffs-language-pack"],
+];
+type WindowWithControlUiBasePath = Window &
+  typeof globalThis & {
+    [key: string]: unknown;
+  };
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
 export type MarkdownCodeBlockChrome = "copy" | "none";
 
@@ -102,9 +334,9 @@ type MarkdownRenderEnv = {
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
-// biome-ignore lint: readability — regex charset is inherently dense
-const CJK_RE =
-  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
+const CJK_RE = new RegExp(
+  "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
+);
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -141,6 +373,98 @@ function isHostLocalFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
 }
 
+function isControlUiRoutePath(pathname: string): boolean {
+  if (tabFromPath(pathname) !== null) {
+    return true;
+  }
+  const basePath = currentControlUiBasePath();
+  if (!basePath) {
+    return false;
+  }
+  if (pathname !== basePath && !pathname.startsWith(`${basePath}/`)) {
+    return false;
+  }
+  return tabFromPath(pathname, basePath) !== null;
+}
+
+function currentControlUiBasePath(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const configured = (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  if (typeof configured === "string") {
+    return normalizeBasePath(configured);
+  }
+  return inferBasePathFromPathname(window.location.pathname);
+}
+
+function pathSegments(pathname: string): string[] {
+  return pathname.split("/").filter(Boolean);
+}
+
+function stripCurrentControlUiBasePath(pathname: string): string[] {
+  const segments = pathSegments(pathname);
+  const baseSegments = pathSegments(currentControlUiBasePath());
+  if (
+    baseSegments.length === 0 ||
+    baseSegments.some((segment, index) => segments[index] !== segment)
+  ) {
+    return segments;
+  }
+  return segments.slice(baseSegments.length);
+}
+
+function segmentsStartWith(segments: string[], prefix: string[]): boolean {
+  return prefix.every((segment, index) => segments[index] === segment);
+}
+
+function isControlUiResourcePath(segments: string[]): boolean {
+  if (segments.includes("__openclaw__") || segments.includes("__openclaw")) {
+    return true;
+  }
+  const segment = segments[0];
+  if (!segment || APP_RESOURCE_ROOT_SEGMENTS.has(segment)) {
+    return true;
+  }
+  return APP_RESOURCE_PATH_PREFIXES.some((prefix) => segmentsStartWith(segments, prefix));
+}
+
+function isDocsRootPath(normalizedPath: string, segments: string[]): boolean {
+  if (DOCS_SHORTLINK_PATHS.has(normalizedPath)) {
+    return true;
+  }
+  const segment = segments[0];
+  return segment ? DOCS_ROOT_SEGMENTS.has(segment) : false;
+}
+
+function normalizeDocsRootHref(href: string): string {
+  const trimmed = href.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return href;
+  }
+  try {
+    const url = new URL(trimmed, DOCS_ORIGIN);
+    if (url.origin !== DOCS_ORIGIN) {
+      return href;
+    }
+    const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
+    if (isControlUiRoutePath(normalizedPath)) {
+      return href;
+    }
+    const segments = pathSegments(normalizedPath);
+    const resourceSegments = stripCurrentControlUiBasePath(normalizedPath);
+    if (isControlUiResourcePath(resourceSegments)) {
+      return href;
+    }
+    if (isDocsRootPath(normalizedPath, segments)) {
+      return url.href;
+    }
+    return href;
+  } catch {
+    return href;
+  }
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -161,9 +485,14 @@ function installHooks() {
       return;
     }
 
+    const normalizedHref = normalizeDocsRootHref(href);
+    if (normalizedHref !== href) {
+      node.setAttribute("href", normalizedHref);
+    }
+
     // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
     try {
-      const url = new URL(href, window.location.href);
+      const url = new URL(normalizedHref, window.location.href);
       if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
         node.removeAttribute("href");
         return;
@@ -196,6 +525,88 @@ function escapeHtml(value: string): string {
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
+}
+
+function normalizeMarkdownInput(markdownLocal: string): string {
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  if (!input) {
+    return "";
+  }
+  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+  const suffix = truncated.truncated
+    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    : "";
+  return `${truncated.text}${suffix}`.replace(/\r\n?/g, "\n");
+}
+
+function getFenceMarker(line: string): { marker: "`" | "~"; length: number } | null {
+  const match = FENCE_OPEN_RE.exec(stripFenceContainerPrefixes(line));
+  if (!match) {
+    return null;
+  }
+  const fence = match[1];
+  const marker = fence[0] as "`" | "~";
+  return { marker, length: fence.length };
+}
+
+function stripFenceContainerPrefixes(line: string): string {
+  let current = line;
+  for (let index = 0; index < 8; index += 1) {
+    const next = current.replace(FENCE_CONTAINER_PREFIX_RE, "");
+    if (next === current) {
+      return current;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function isFenceClose(line: string, fence: { marker: "`" | "~"; length: number }): boolean {
+  const trimmed = stripFenceContainerPrefixes(line).trimEnd();
+  const match = FENCE_OPEN_RE.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const marker = match[1][0];
+  if (marker !== fence.marker || match[1].length < fence.length) {
+    return false;
+  }
+  return trimmed.slice(match[0].length).trim() === "";
+}
+
+function findStableStreamingMarkdownBoundary(markdownLocal: string): number {
+  let boundary = 0;
+  let index = 0;
+  let openFence: { marker: "`" | "~"; length: number } | null = null;
+
+  while (index < markdownLocal.length) {
+    const nextLineBreak = markdownLocal.indexOf("\n", index);
+    const lineEnd = nextLineBreak === -1 ? markdownLocal.length : nextLineBreak + 1;
+    const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
+
+    if (openFence) {
+      if (isFenceClose(line, openFence)) {
+        openFence = null;
+        boundary = lineEnd;
+      }
+      index = lineEnd;
+      continue;
+    }
+
+    const openingFence = getFenceMarker(line);
+    if (openingFence) {
+      openFence = openingFence;
+      index = lineEnd;
+      continue;
+    }
+
+    if (line.trim() === "") {
+      boundary = lineEnd;
+    }
+    index = lineEnd;
+  }
+
+  return boundary;
 }
 
 for (const [language, definition, aliases] of [
@@ -349,13 +760,11 @@ md.linkify.add("www", {
           if (c === open) {
             balance[close] = balance[close] === 0 ? 1 : 0;
           }
-        } else {
+        } else if (c === open) {
           // Distinct open/close (e.g., ())
-          if (c === open) {
-            balance[close]++;
-          } else if (c === close) {
-            balance[close]--;
-          }
+          balance[close]++;
+        } else if (c === close) {
+          balance[close]--;
         }
       }
     }
@@ -394,13 +803,11 @@ md.linkify.add("www", {
             len--;
             continue;
           }
-        } else {
+        } else if (balance[ch] < 0) {
           // Distinct pair: strip if more closes than opens
-          if (balance[ch] < 0) {
-            balance[ch]++;
-            len--;
-            continue;
-          }
+          balance[ch]++;
+          len--;
+          continue;
         }
       }
       break;
@@ -614,11 +1021,11 @@ md.renderer.rules.code_block = (tokens, idx, _options, env) => {
 };
 
 export function toSanitizedMarkdownHtml(
-  markdown: string,
+  markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
   if (!input) {
     return "";
   }
@@ -638,7 +1045,7 @@ export function toSanitizedMarkdownHtml(
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    const html = toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, sanitized);
@@ -661,6 +1068,37 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
-function renderEscapedPlainTextHtml(value: string): string {
+export function toEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+export function toStreamingPlainTextHtml(markdownLocal: string): string {
+  const input = normalizeMarkdownInput(markdownLocal);
+  if (!input) {
+    return "";
+  }
+  return toEscapedPlainTextHtml(input);
+}
+
+export function toStreamingMarkdownHtml(
+  markdownLocal: string,
+  options: MarkdownRenderOptions = {},
+): string {
+  const input = normalizeMarkdownInput(markdownLocal);
+  if (!input) {
+    return "";
+  }
+
+  const boundary = findStableStreamingMarkdownBoundary(input);
+  if (boundary <= 0) {
+    return toEscapedPlainTextHtml(input);
+  }
+
+  const stableMarkdown = input.slice(0, boundary);
+  const streamingTail = input.slice(boundary);
+  const stableHtml = toSanitizedMarkdownHtml(stableMarkdown, options);
+  if (!streamingTail.trim()) {
+    return stableHtml;
+  }
+  return `${stableHtml}${toEscapedPlainTextHtml(streamingTail)}`;
 }

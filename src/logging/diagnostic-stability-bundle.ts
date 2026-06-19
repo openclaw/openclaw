@@ -1,3 +1,4 @@
+// Diagnostic stability bundle helpers collect stable diagnostic data for comparison.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -8,6 +9,7 @@ import type {
   DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -69,7 +71,7 @@ type DiagnosticSessionFileSummary = {
   mtimeMs: number;
 };
 
-export type DiagnosticMemoryPressureBundleEvidence = {
+type DiagnosticMemoryPressureBundleEvidence = {
   level: DiagnosticMemoryPressureEvent["level"];
   reason: DiagnosticMemoryPressureEvent["reason"];
   memory: DiagnosticMemoryUsage;
@@ -83,7 +85,7 @@ export type DiagnosticMemoryPressureBundleEvidence = {
   topSessionFiles?: DiagnosticSessionFileSummary[];
 };
 
-export type DiagnosticStabilityBundleEvidence = {
+type DiagnosticStabilityBundleEvidence = {
   memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
 };
 
@@ -110,12 +112,12 @@ export type DiagnosticStabilityBundle = {
   snapshot: DiagnosticStabilitySnapshot;
 };
 
-export type WriteDiagnosticStabilityBundleResult =
+type WriteDiagnosticStabilityBundleResult =
   | { status: "written"; path: string; bundle: DiagnosticStabilityBundle }
   | { status: "skipped"; reason: "empty" }
   | { status: "failed"; error: unknown };
 
-export type WriteDiagnosticStabilityBundleOptions = {
+type WriteDiagnosticStabilityBundleOptions = {
   reason: string;
   error?: unknown;
   includeEmpty?: boolean;
@@ -127,12 +129,12 @@ export type WriteDiagnosticStabilityBundleOptions = {
   evidence?: DiagnosticStabilityBundleEvidence;
 };
 
-export type DiagnosticStabilityBundleLocationOptions = {
+type DiagnosticStabilityBundleLocationOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
 };
 
-export type DiagnosticStabilityBundleFile = {
+type DiagnosticStabilityBundleFile = {
   path: string;
   mtimeMs: number;
 };
@@ -142,17 +144,17 @@ export type ReadDiagnosticStabilityBundleResult =
   | { status: "missing"; dir: string }
   | { status: "failed"; path?: string; error: unknown };
 
-export type DiagnosticStabilityBundleFailureWriteOutcome =
+type DiagnosticStabilityBundleFailureWriteOutcome =
   | { status: "written"; message: string; path: string }
   | { status: "failed"; message: string; error: unknown }
   | { status: "skipped"; reason: "empty" };
 
-export type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
+type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
   WriteDiagnosticStabilityBundleOptions,
   "error" | "includeEmpty" | "reason"
 >;
 
-export type WriteDiagnosticMemoryPressureBundleOptions = Omit<
+type WriteDiagnosticMemoryPressureBundleOptions = Omit<
   WriteDiagnosticStabilityBundleOptions,
   "reason" | "error" | "evidence" | "includeEmpty"
 > & {
@@ -896,8 +898,7 @@ function readPositiveMemoryFile(file: string): number | "max" | undefined {
     if (raw === "max") {
       return "max";
     }
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+    return parseStrictNonNegativeInteger(raw);
   } catch {
     return undefined;
   }
@@ -911,8 +912,8 @@ function readCgroupEventFile(file: string): Record<string, number> {
       if (!key || !SAFE_REASON_CODE.test(key)) {
         continue;
       }
-      const value = Number.parseInt(raw ?? "", 10);
-      if (Number.isFinite(value) && value >= 0) {
+      const value = parseStrictNonNegativeInteger(raw ?? "");
+      if (value !== undefined) {
         events[key] = value;
       }
     }

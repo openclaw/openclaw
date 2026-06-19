@@ -1,5 +1,6 @@
+// Control UI module implements control ui performance behavior.
 import type { EventLogEntry } from "./app-events.ts";
-import type { GatewayRequestTiming } from "./gateway.ts";
+import type { GatewayConnectTiming, GatewayRequestTiming } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 
 type ControlUiPerformanceHost = {
@@ -21,6 +22,7 @@ export type ControlUiRefreshRun = {
 
 const EVENT_LOG_LIMIT = 250;
 const SLOW_RPC_MS = 1_000;
+const SLOW_CONNECT_MS = 1_000;
 const SLOW_RENDER_MS = 16;
 const VERY_SLOW_RENDER_MS = 50;
 const RESPONSIVENESS_ENTRY_MS = 50;
@@ -159,6 +161,15 @@ export function scheduleControlUiTabVisibleTiming(
     .then(() => runAfterPaint(record));
 }
 
+export function scheduleControlUiAfterPaint(
+  host: Pick<ControlUiPerformanceHost, "updateComplete">,
+  callback: () => void,
+) {
+  void Promise.resolve(host.updateComplete)
+    .catch(() => undefined)
+    .then(() => runAfterPaint(callback));
+}
+
 export function beginControlUiRefresh(
   host: ControlUiPerformanceHost,
   tab: Tab,
@@ -221,6 +232,36 @@ export function recordControlUiRpcTiming(
       errorCode: timing.errorCode,
     },
     { warn },
+  );
+}
+
+export function recordControlUiConnectTiming(
+  host: ControlUiPerformanceHost,
+  timing: GatewayConnectTiming,
+) {
+  const durationMs = roundedControlUiDurationMs(timing.durationMs);
+  const phaseDurationMs = roundedControlUiDurationMs(timing.phaseDurationMs);
+  const slow = durationMs >= SLOW_CONNECT_MS;
+  recordControlUiPerformanceEvent(
+    host,
+    "control-ui.connect",
+    {
+      generation: timing.generation,
+      phase: timing.phase,
+      durationMs,
+      phaseDurationMs,
+      slow,
+      hasChallenge: timing.hasChallenge,
+      usedFallback: timing.usedFallback,
+      secureContext: timing.secureContext,
+      hasDeviceIdentity: timing.hasDeviceIdentity,
+      hasDevice: timing.hasDevice,
+      hasAuthToken: timing.hasAuthToken,
+      hasDeviceToken: timing.hasDeviceToken,
+      hasPassword: timing.hasPassword,
+      errorCode: timing.errorCode,
+    },
+    { warn: timing.phase === "failed" || slow, maxBufferedEventsForType: 40 },
   );
 }
 

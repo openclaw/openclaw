@@ -1,28 +1,30 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+// Live tool replay repair tests validate repaired historical transcripts across
+// selected real model providers.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
   completeSimpleWithTimeout,
-  type CompleteSimpleContent,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
   requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
+  type CompleteSimpleContent,
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const DEFAULT_TARGET_MODEL_REFS = "openai-codex/gpt-5.5,google/gemini-3-flash-preview";
+const DEFAULT_TARGET_MODEL_REFS = "openai/gpt-5.5,google/gemini-3-flash-preview";
 const TARGET_MODEL_REFS = parseTargetModelRefs(
   process.env.OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS ?? DEFAULT_TARGET_MODEL_REFS,
 );
@@ -33,6 +35,34 @@ type TargetModelRef = {
   provider: string;
   modelId: string;
 };
+
+function createDirectTargetModel(target: TargetModelRef): Model | null {
+  const common = {
+    id: target.modelId,
+    name: target.modelId,
+    provider: target.provider,
+    reasoning: true,
+    input: ["text"] as Model["input"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  };
+  if (target.provider === "openai") {
+    return {
+      ...common,
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+  }
+  if (target.provider === "anthropic") {
+    return {
+      ...common,
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    };
+  }
+  return null;
+}
 
 function parseTargetModelRefs(raw: string | undefined): TargetModelRef[] {
   const refs: TargetModelRef[] = [];
@@ -58,7 +88,7 @@ const logProgress = logLiveProgress;
 function isOpenAIResponsesFamily(api: string): boolean {
   return (
     api === "openai-responses" ||
-    api === "openai-codex-responses" ||
+    api === "openai-chatgpt-responses" ||
     api === "azure-openai-responses"
   );
 }
@@ -73,14 +103,14 @@ function createNoopTools() {
   ];
 }
 
-function replayValidationTools(model: Model<Api>) {
+function replayValidationTools(model: Model) {
   // Responses-family providers may force or reject fresh tool-choice policy
   // when tools are present. These probes validate repaired historical transcript
   // shape, not new tool invocation.
   return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
 }
 
-function buildReplayMessages(model: Model<Api>): AgentMessage[] {
+function buildReplayMessages(model: Model): AgentMessage[] {
   const now = Date.now();
   // Gemini source metadata deliberately simulates a model switch from a
   // provider-owned transcript. That forces the same id sanitization and replay
@@ -100,6 +130,21 @@ function buildReplayMessages(model: Model<Api>): AgentMessage[] {
         };
 
   return [
+    {
+      role: "assistant",
+      provider: source.provider,
+      api: source.api,
+      model: source.model,
+      stopReason: "length",
+      timestamp: now - 1,
+      content: [
+        {
+          type: "thinking",
+          thinking: "partial hidden reasoning",
+          thinkingSignature: "partial-signature",
+        },
+      ],
+    },
     {
       role: "user",
       content: "Use noop.",
@@ -134,7 +179,7 @@ function buildReplayMessages(model: Model<Api>): AgentMessage[] {
   ] as unknown as AgentMessage[];
 }
 
-function buildAbortedTransportMessages(model: Model<Api>): Context["messages"] {
+function buildAbortedTransportMessages(model: Model): Context["messages"] {
   const now = Date.now();
   return [
     {
@@ -203,7 +248,9 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model =
+          (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
+          createDirectTargetModel(target);
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -314,7 +361,9 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model =
+          (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
+          createDirectTargetModel(target);
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);

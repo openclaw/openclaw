@@ -1,9 +1,11 @@
+// Covers maintenance reconciliation for managed task-flow records.
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
-  createFlowRecord,
-  createManagedTaskFlow,
+  createFlowRecord as createFlowRecordOrNull,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
@@ -14,12 +16,42 @@ import {
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createFlowRecord(params: Parameters<typeof createFlowRecordOrNull>[0]): TaskFlowRecord {
+  const flow = createFlowRecordOrNull(params);
+  if (!flow) {
+    throw new Error("expected TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
 
 async function withTaskFlowMaintenanceStateDir(
   run: (root: string) => Promise<void>,
@@ -46,11 +78,7 @@ async function withTaskFlowMaintenanceStateDir(
 
 describe("task-flow-registry maintenance", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();

@@ -1,3 +1,5 @@
+// Chat error broadcast tests ensure chat.send failures still respond and emit
+// error-state broadcasts for connected UI clients.
 import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -6,6 +8,7 @@ function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const chatAbortControllers = new Map();
+  const chatAbortedRuns = new Map();
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
 
@@ -13,8 +16,10 @@ function createMockContext() {
     broadcast,
     nodeSendToSession,
     chatAbortControllers,
+    chatAbortedRuns,
     agentRunSeq,
     dedupe,
+    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -59,6 +64,73 @@ describe("chat.send error broadcast", () => {
         runId: "test-run-1",
         state: "error",
         errorMessage: expect.stringContaining("LLM timeout"),
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("LLM timeout"),
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("scopes selected-agent global errors to the linked agent", async () => {
+    const ctx = createMockContext();
+    const respond = vi.fn();
+
+    ctx.addChatRun.mockImplementation(() => {
+      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "global",
+        agentId: "main",
+        message: "hello",
+        idempotencyKey: "test-run-global",
+      },
+      respond: respond as never,
+      context: ctx as unknown as GatewayRequestContext,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(ctx.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        runId: "test-run-global",
+        sessionKey: "global",
+        agentId: "main",
+        state: "error",
+      }),
+    );
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:global",
+      "chat",
+      expect.objectContaining({
+        agentId: "main",
+        state: "error",
+      }),
+    );
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
+      "global",
+      "chat",
+      expect.objectContaining({
+        agentId: "main",
+        state: "error",
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("LLM timeout"),
+            }),
+          ],
+        }),
       }),
     );
   });
