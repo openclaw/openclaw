@@ -2108,4 +2108,129 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("skips reply anchor for ordinary DM with streaming enabled (fixes #94922)", async () => {
+    // Arrange: Ordinary DM session (not group, not thread reply)
+    // skipReplyToInMessages=true simulates what bot.ts calculates for P2P DMs
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_dm_chat",
+      replyToMessageId: "om_parent",
+      skipReplyToInMessages: true, // Key fix: DM should skip reply anchor
+      replyInThread: false,
+      threadReply: false,
+    });
+
+    const options = firstTypingDispatcherOptions();
+
+    // Act: Send a streaming reply
+    await options.deliver({ text: "DM reply without reply anchor" }, { kind: "final" });
+    await options.onIdle?.();
+
+    // Assert: streaming.start should be called with replyToMessageId: undefined
+    expect(streamingInstances).toHaveLength(1);
+    const startOptions = firstMockArg(streamingInstances[0].start, "streaming start", 2) as Record<
+      string,
+      unknown
+    >;
+    expect(startOptions.replyToMessageId).toBeUndefined();
+    expect(startOptions.replyInThread).toBe(false);
+  });
+
+  it("preserves reply anchor for group topic with streaming enabled", async () => {
+    // Arrange: Group topic session
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_group_chat",
+      replyToMessageId: "om_topic_root",
+      rootId: "om_topic_root",
+      isGroup: true,
+      directThreadReply: false,
+      replyInThread: true,
+    });
+
+    const options = firstTypingDispatcherOptions();
+
+    // Act: Send a streaming reply to group topic
+    await options.deliver({ text: "Group topic reply" }, { kind: "final" });
+    await options.onIdle?.();
+
+    // Assert: streaming.start should preserve replyToMessageId for group topics
+    expect(streamingInstances).toHaveLength(1);
+    const startOptions = firstMockArg(streamingInstances[0].start, "streaming start", 2) as Record<
+      string,
+      unknown
+    >;
+    expect(startOptions.replyToMessageId).toBe("om_topic_root");
+    expect(startOptions.rootId).toBe("om_topic_root");
+    expect(startOptions.replyInThread).toBe(true);
+  });
+
+  it("preserves reply anchor for P2P thread reply with streaming enabled", async () => {
+    // Arrange: P2P thread reply session
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_dm_thread",
+      replyToMessageId: "om_dm_thread_root",
+      rootId: "om_dm_thread_root",
+      isGroup: false,
+      directThreadReply: true,
+      threadReply: true,
+    });
+
+    const options = firstTypingDispatcherOptions();
+
+    // Act: Send a streaming reply in P2P thread
+    await options.deliver({ text: "P2P thread reply" }, { kind: "final" });
+    await options.onIdle?.();
+
+    // Assert: streaming.start should preserve replyToMessageId for P2P threads
+    expect(streamingInstances).toHaveLength(1);
+    const startOptions = firstMockArg(streamingInstances[0].start, "streaming start", 2) as Record<
+      string,
+      unknown
+    >;
+    expect(startOptions.replyToMessageId).toBe("om_dm_thread_root");
+    expect(startOptions.rootId).toBe("om_dm_thread_root");
+    expect(startOptions.replyInThread).toBe(true);
+  });
 });
