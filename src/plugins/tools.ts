@@ -17,6 +17,7 @@ import {
 } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
+import { evaluateToolAvailability } from "../tools/availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
@@ -1401,6 +1402,21 @@ export function resolvePluginTools(params: {
         }),
         descriptors,
       });
+    }
+  }
+
+  // Emit availability diagnostics for descriptors that would be hidden at
+  // plan time so authors can catch malformed availability expressions early —
+  // empty allOf/anyOf groups, unsupported signals — without waiting for a
+  // runtime agent session to expose them.
+  for (const [pluginId, descriptors] of capturedDescriptorsByPluginId) {
+    for (const descriptor of descriptors) {
+      const diags = evaluateToolAvailability({ descriptor });
+      if (diags.length > 0) {
+        log.warn(
+          `Plugin "${pluginId}" tool "${descriptor.name}" will be hidden by availability: ${diags.map((d) => d.message).join("; ")}`,
+        );
+      }
     }
   }
 
