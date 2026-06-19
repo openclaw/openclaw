@@ -1,6 +1,6 @@
 // Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { note as clackNote } from "@clack/prompts";
+import { styleText } from "node:util";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 import { normalizeLowercaseStringOrEmpty } from "./string.js";
@@ -186,17 +186,50 @@ export function resolveNoteColumns(columns: number | undefined): number {
   return columns;
 }
 
-function createNoteOutput(columns: number): NodeJS.WriteStream {
-  if (process.stdout.columns === columns) {
-    return process.stdout;
+function renderBoxContent(message: string, title: string | undefined): void {
+  const columns = resolveNoteColumns(process.stdout.columns);
+  const contentWidth = Math.max(40, Math.min(88, columns - 10));
+
+  const titleStr = title ?? "";
+  const titleLen = visibleWidth(titleStr);
+  const V = "│";
+  const H = "─";
+
+  // Guide prefix — matches @clack/prompts note withGuide default
+  process.stdout.write(`${styleText("gray", V)}\n`);
+
+  // ── top border: ◇  title ────────────╮
+  const topDashes = Math.max(1, contentWidth - titleLen - 4);
+  process.stdout.write(
+    `${styleText("green", "◇")}  ${styleText("reset", titleStr)} ${styleText("gray", H.repeat(topDashes) + "╮")}\n`,
+  );
+
+  // Empty separator line
+  const emptyLine = `${styleText("gray", V)}${" ".repeat(contentWidth + 2)}${styleText("gray", V)}`;
+  process.stdout.write(emptyLine + "\n");
+
+  // Content lines
+  const lines = message.split("\n");
+  for (const line of lines) {
+    const lineWidth = visibleWidth(line);
+    if (lineWidth <= contentWidth) {
+      const padRight = contentWidth - lineWidth;
+      process.stdout.write(
+        `${styleText("gray", V)}  ${line}${" ".repeat(padRight)}  ${styleText("gray", V)}\n`,
+      );
+    } else {
+      // Copy-sensitive overflow — let path overflow right edge
+      process.stdout.write(`${styleText("gray", V)}  ${line}\n`);
+    }
   }
-  const output = Object.create(process.stdout) as NodeJS.WriteStream;
-  Object.defineProperty(output, "columns", {
-    value: columns,
-    configurable: true,
-  });
-  output.write = process.stdout.write.bind(process.stdout);
-  return output;
+
+  // Empty separator line
+  process.stdout.write(emptyLine + "\n");
+
+  // ── bottom border: ├──────────────────╯
+  process.stdout.write(
+    `${styleText("gray", "├")}${styleText("gray", H.repeat(contentWidth + 2))}${styleText("gray", "╯")}\n`,
+  );
 }
 
 export function note(message: unknown, title?: string) {
@@ -207,10 +240,8 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
-    output: createNoteOutput(columns),
-    format: (line) => line,
-  });
+  const wrapped = wrapNoteMessage(message, { columns });
+  renderBoxContent(wrapped, stylePromptTitle(title));
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {
