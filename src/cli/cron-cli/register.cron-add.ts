@@ -124,6 +124,7 @@ export function registerCronAddCommand(cron: Command) {
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
+      .option("--fallbacks <models>", "Comma-separated fallback models for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
@@ -250,6 +251,10 @@ export function registerCronAddCommand(cron: Command) {
                     outputMaxBytes && Number.isFinite(outputMaxBytes) ? outputMaxBytes : undefined,
                 };
               }
+              const fallbacks = normalizeOptionalString(opts.fallbacks)
+                ?.split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
               return {
                 kind: "agentTurn" as const,
                 message,
@@ -259,6 +264,7 @@ export function registerCronAddCommand(cron: Command) {
                   timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
                 lightContext: opts.lightContext === true ? true : undefined,
                 toolsAllow: parseCronToolsAllow(opts.tools),
+                fallbacks: fallbacks?.length ? fallbacks : undefined,
               };
             })();
 

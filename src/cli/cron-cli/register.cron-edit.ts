@@ -117,6 +117,8 @@ export function registerCronEditCommand(cron: Command) {
         "Remove the per-job model override (restore normal cron model precedence)",
         false,
       )
+      .option("--fallbacks <models>", "Comma-separated fallback models for agent jobs")
+      .option("--clear-fallbacks", "Remove the per-job fallback models", false)
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
@@ -373,6 +375,8 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(opts.clearModel) ||
+            Boolean(opts.fallbacks) ||
+            Boolean(opts.clearFallbacks) ||
             Boolean(thinking) ||
             (hasTimeoutSeconds &&
               !hasCommandSpecificPayloadField &&
@@ -406,6 +410,15 @@ export function registerCronEditCommand(cron: Command) {
               assignIf(payload, "model", model, Boolean(model));
             }
             assignIf(payload, "thinking", thinking, Boolean(thinking));
+            if (opts.clearFallbacks) {
+              payload.fallbacks = null;
+            } else {
+              const fallbacks = normalizeOptionalString(opts.fallbacks)
+                ?.split(",")
+                .map((s: string) => s.trim())
+                .filter(Boolean);
+              assignIf(payload, "fallbacks", fallbacks, Boolean(fallbacks?.length));
+            }
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(
               payload,
