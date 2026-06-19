@@ -14,6 +14,7 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 
 | Job                                | Purpose                                                                                                   | When it runs                       |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `ci_scope`                         | Detect Markdown/docs-only changes early on a GitHub-hosted runner so trivial PRs avoid Blacksmith queues  | Always on non-draft pushes and PRs |
 | `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs |
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs |
 | `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes              |
@@ -36,10 +37,11 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 
 ## Fail-fast order
 
-1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs.
-2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
-3. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
-4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
+1. `ci_scope` runs first on a GitHub-hosted runner to detect Markdown/docs-only changes, letting trivial PRs skip Blacksmith-backed queues. The `docs-scope` logic is a step inside this job.
+2. `preflight` decides which lanes exist at all. The `changed-scope` logic is a step inside this job, not a standalone job.
+3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
+4. `build-artifacts` overlaps with the fast Linux lanes so downstream consumers can start as soon as the shared build is ready.
+5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-core-*`, `checks-windows`, `macos-node`, `macos-swift`, and `android`.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 

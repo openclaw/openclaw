@@ -486,4 +486,39 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain("Network runtime boundary-sensitive added lines");
     expect(workflow).toContain("if: ${{ github.event_name != 'pull_request' }}");
   });
+
+  it("routes Markdown-only PR jobs away from Blacksmith runners", () => {
+    const workflow = readCiWorkflow();
+
+    // ci_scope must exist and run on ubuntu-24.04
+    const ciScope = workflow.jobs.ci_scope;
+    expect(ciScope).toBeDefined();
+    expect(ciScope["runs-on"]).toBe("ubuntu-24.04");
+    expect(ciScope.outputs.docs_only).toBeDefined();
+    expect(ciScope.outputs.docs_changed).toBeDefined();
+
+    // preflight must depend on ci_scope and conditionally use ubuntu-24.04
+    const preflight = workflow.jobs.preflight;
+    expect(preflight.needs).toContain("ci_scope");
+    expect(preflight["runs-on"]).toContain("needs.ci_scope.outputs.docs_only == 'true'");
+    expect(preflight["runs-on"]).toContain("ubuntu-24.04");
+    expect(preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+
+    // security-fast must depend on ci_scope and conditionally use ubuntu-24.04
+    const securityFast = workflow.jobs["security-fast"];
+    expect(securityFast.needs).toContain("ci_scope");
+    expect(securityFast["runs-on"]).toContain("needs.ci_scope.outputs.docs_only == 'true'");
+    expect(securityFast["runs-on"]).toContain("ubuntu-24.04");
+    expect(securityFast["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+
+    // pnpm-store-warmup must conditionally use ubuntu-24.04 via preflight output
+    const pnpmWarmup = workflow.jobs["pnpm-store-warmup"];
+    expect(pnpmWarmup["runs-on"]).toContain("needs.preflight.outputs.docs_only == 'true'");
+    expect(pnpmWarmup["runs-on"]).toContain("ubuntu-24.04");
+
+    // check-docs must conditionally use ubuntu-24.04 via preflight output
+    const checkDocs = workflow.jobs["check-docs"];
+    expect(checkDocs["runs-on"]).toContain("needs.preflight.outputs.docs_only == 'true'");
+    expect(checkDocs["runs-on"]).toContain("ubuntu-24.04");
+  });
 });
