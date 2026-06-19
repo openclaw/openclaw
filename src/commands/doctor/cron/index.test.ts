@@ -636,13 +636,15 @@ describe("maybeRepairLegacyCronStore", () => {
     // No churn: the advisory does not rewrite the still-working job.
     const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
     expect(job).toEqual(shellPromptJob);
-    const configJob = requirePersistedJob(
-      (await loadCronJobsStoreWithConfigJobs(storePath)).configJobs,
-      0,
-    );
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const configJob = requirePersistedJob(reloaded.configJobs, 0);
     expect(configJob).toEqual(
       Object.fromEntries(Object.entries(shellPromptJob).filter(([key]) => key !== "updatedAtMs")),
     );
+    expect(reloaded.configJobRuntimeEntries[0]).toMatchObject({
+      updatedAtMs: shellPromptJob.updatedAtMs,
+      state: {},
+    });
     const payload = requireRecord(job.payload, "cron payload");
     expect(payload.kind).toBe("agentTurn");
     expect(payload.message).toContain("python3 scripts/check_mail.py");
