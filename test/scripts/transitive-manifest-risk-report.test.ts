@@ -264,6 +264,34 @@ describe("transitive-manifest-risk-report", () => {
     );
   });
 
+  it("streams non-decimal npm registry content-length values through the body cap", async () => {
+    const encoder = new TextEncoder();
+    let readStarted = false;
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull(controller) {
+          readStarted = true;
+          controller.enqueue(encoder.encode("123456789"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        headers: {
+          "content-length": "1e3",
+        },
+      },
+    );
+
+    await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
+      "npm registry response exceeded 8 bytes",
+    );
+    expect(readStarted).toBe(true);
+    expect(canceled).toBe(true);
+  });
+
   it("rejects npm registry bodies that grow past the stream cap", async () => {
     const encoder = new TextEncoder();
     const response = new Response(

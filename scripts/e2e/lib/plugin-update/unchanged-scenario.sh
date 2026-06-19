@@ -31,7 +31,7 @@ before_config_hash=""
 if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
   before_config_hash="$(sha256sum "$OPENCLAW_CONFIG_PATH" | awk '{print $1}')"
 fi
-plugin_update_timeout_seconds="${OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS:-180}"
+plugin_update_timeout_seconds="$(openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180)"
 
 node "$probe" snapshot > /tmp/plugin-update-before.json
 

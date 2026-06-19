@@ -174,6 +174,54 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
+  it("truncates oversized incoming text before a no-op middleware", async () => {
+    let observedText = "";
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (event) => {
+        const content = event.result.content[0];
+        observedText = content?.type === "text" ? content.text : "";
+        return undefined;
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "gateway",
+      args: { action: "config.get" },
+      result: {
+        content: [{ type: "text", text: "x".repeat(100_001) }],
+        details: { ok: true },
+      },
+    });
+
+    expect(observedText).toHaveLength(100_000);
+    expect(result.details).toEqual({ ok: true });
+    expect(result.content).toEqual([{ type: "text", text: "x".repeat(100_000) }]);
+  });
+
+  it("fails closed when middleware returns oversized top-level text", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "x".repeat(100_001) }],
+          details: { ok: true },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "gateway",
+      args: { action: "config.get" },
+      result: {
+        content: [{ type: "text", text: "raw" }],
+        details: { ok: true },
+      },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
   it("sanitizes incoming details before failing closed on uncoercible content", async () => {
     const details: Record<string, unknown> = {
       ok: true,

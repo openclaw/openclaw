@@ -217,13 +217,6 @@ function resolveSessionStoreTranscriptPath(
   return null;
 }
 
-export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
-  sessionsDir: string,
-): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForSessionsDir(sessionsDir)
-    .dreamingNarrativeTranscriptPaths;
-}
-
 export function loadSessionTranscriptClassificationForSessionsDir(
   sessionsDir: string,
 ): SessionTranscriptClassification {
@@ -491,17 +484,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   return normalized;
-}
-
-export function extractSessionText(
-  content: unknown,
-  role: "user" | "assistant" = "assistant",
-): string | null {
-  const rawText = collectRawSessionText(content);
-  if (rawText === null) {
-    return null;
-  }
-  return sanitizeSessionText(rawText, role);
 }
 
 function parseSessionTimestampMs(

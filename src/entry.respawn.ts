@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
+  isTerminalInteractiveRespawnArgv,
   shouldSkipRespawnForArgv,
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
@@ -23,6 +24,7 @@ type CliRespawnPlan = {
   command: string;
   argv: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
@@ -113,6 +115,7 @@ export function buildCliRespawnPlan(
       command: resolveCliRespawnCommand({ execPath, platform }),
       argv: [...childExecArgv, ...normalizedArgv.slice(1)],
       env: childEnv,
+      detachForProcessTree: false,
     };
   }
 
@@ -151,6 +154,7 @@ export function buildCliRespawnPlan(
     command: resolveCliRespawnCommand({ execPath, platform }),
     argv: [...childExecArgv, ...argv.slice(1)],
     env: childEnv,
+    detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 
@@ -167,6 +171,7 @@ export function runCliRespawnPlan(
     command: plan.command,
     args: plan.argv,
     env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
       runtime.writeError(

@@ -473,11 +473,11 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.features?.fulfilled).toBe(1);
+      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "agent-runtime-and-provider-execution.agent-turn-execution",
         features: {
-          fulfilled: 1,
+          fulfilled: 0,
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");

@@ -3,7 +3,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
-import { createCronToolSchema, CronToolSchema } from "./cron-tool.js";
+import { createCronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -28,7 +28,7 @@ function propertyAt(
   return cursor;
 }
 
-describe("CronToolSchema", () => {
+describe("createCronToolSchema", () => {
   const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
   const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
@@ -208,7 +208,7 @@ describe("CronToolSchema", () => {
 
   it("accepts nullable cron patch clears in the runtime schema", () => {
     expect(
-      Value.Check(CronToolSchema, {
+      Value.Check(createCronToolSchema(), {
         action: "update",
         jobId: "job-1",
         patch: {

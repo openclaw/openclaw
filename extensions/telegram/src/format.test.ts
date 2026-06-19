@@ -206,6 +206,28 @@ describe("markdownToTelegramHtml", () => {
     ).toBe('<a href="https://example.com">docs</a>');
   });
 
+  it("keeps unsupported markdown link hrefs as visible text in rich HTML", () => {
+    expect(
+      markdownToTelegramRichHtml(
+        "[scripts/yougile.py](/home/dankar/.openclaw/workspace-yougile/scripts/yougile.py#L41)",
+      ),
+    ).toBe("<code>scripts/yougile.py</code>");
+    expect(markdownToTelegramRichHtml("[config](./openclaw.json)")).toBe("config");
+    expect(markdownToTelegramRichHtml("[docs](https://example.com/docs)")).toBe(
+      '<a href="https://example.com/docs">docs</a>',
+    );
+    expect(markdownToTelegramRichHtml("[user](tg://user?id=123)")).toBe(
+      '<a href="tg://user?id=123">user</a>',
+    );
+    expect(markdownToTelegramRichHtml("[support](mailto:user@example.com)")).toBe(
+      '<a href="mailto:user@example.com">support</a>',
+    );
+    expect(markdownToTelegramRichHtml("[call](tel:+123456789)")).toBe(
+      '<a href="tel:+123456789">call</a>',
+    );
+    expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
+  });
+
   it("preserves Markdown heading levels in rich HTML", () => {
     expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
       "<h1>Title</h1>\n\n<h3>Detail</h3>",

@@ -6,7 +6,7 @@ import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
   shouldRunOpenAIOAuthTlsPrerequisites,
-} from "./oauth-tls-preflight.js";
+} from "../plugins/provider-openai-chatgpt-oauth-tls.js";
 
 describe("runOpenAIOAuthTlsPreflight", () => {
   beforeEach(() => {

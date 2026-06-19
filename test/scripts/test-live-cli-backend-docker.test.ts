@@ -1,4 +1,5 @@
 // Test Live Cli Backend Docker tests cover test live cli backend docker script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,5 +30,22 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS");
     expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS");
     expect(forwardedVars).toContain("OPENCLAW_TEST_CONSOLE");
+  });
+
+  it("rejects invalid setup timeout values before metadata or Docker setup", () => {
+    const result = spawnSync("bash", [SCRIPT_PATH], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS: "180s",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      "invalid OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS: 180s",
+    );
+    expect(result.stderr).not.toContain("Cannot find package 'tsx'");
+    expect(result.stderr).not.toContain("docker");
   });
 });

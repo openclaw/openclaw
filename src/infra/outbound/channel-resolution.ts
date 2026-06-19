@@ -269,33 +269,3 @@ export function resolveOutboundChannelMessageAdapter(params: {
     resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
   );
 }
-
-/** Resolves a channel plugin for read-only metadata paths. */
-export function resolveOutboundChannelPluginForRead(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-}): ChannelPlugin | undefined {
-  const normalized = normalizeMessageChannel(params.channel) ?? params.channel.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const channelId = normalized as Parameters<typeof getLoadedChannelPlugin>[0];
-  const current = getLoadedChannelPlugin(channelId);
-  if (current) {
-    return current;
-  }
-  const directCurrent = resolveDirectFromRuntimeRegistries(normalized);
-  if (directCurrent) {
-    return directCurrent;
-  }
-  const deliverable = normalizeDeliverableOutboundChannel(normalized);
-  if (deliverable) {
-    maybeBootstrapChannelPlugin({ channel: deliverable, cfg: params.cfg });
-    return (
-      getLoadedChannelPlugin(deliverable) ??
-      resolveDirectFromRuntimeRegistries(deliverable) ??
-      getChannelPlugin(deliverable)
-    );
-  }
-  return getChannelPlugin(channelId);
-}

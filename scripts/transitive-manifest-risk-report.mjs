@@ -66,9 +66,9 @@ export async function readBoundedNpmRegistryText(
   maxBytes = NPM_PACKUMENT_RESPONSE_MAX_BYTES,
 ) {
   const contentLength = response.headers?.get?.("content-length");
-  if (contentLength) {
+  if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isFinite(parsedContentLength) && parsedContentLength > maxBytes) {
+    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > maxBytes) {
       await response.body?.cancel().catch(() => {});
       throw new Error(
         `npm registry response exceeded ${maxBytes} bytes (content-length ${contentLength})`,

@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
-  resolveFallbackXaiApiKey,
   resolveXaiToolApiKey,
   resolveXaiToolApiKeyWithAuth,
 } from "./tool-auth-shared.js";
@@ -16,7 +15,7 @@ describe("xai tool auth helpers", () => {
 
   it("prefers plugin web search keys over legacy grok keys", () => {
     expect(
-      resolveFallbackXaiApiKey({
+      resolveFallbackXaiAuth({
         plugins: {
           entries: {
             xai: {
@@ -38,7 +37,10 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
-    ).toBe("plugin-key");
+    ).toEqual({
+      apiKey: "plugin-key",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+    });
   });
 
   it("returns source metadata and managed markers for fallback auth", () => {

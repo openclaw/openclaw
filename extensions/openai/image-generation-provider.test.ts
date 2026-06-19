@@ -1189,6 +1189,31 @@ describe("openai image generation provider", () => {
     expect(result.model).toBe("gpt-image-1.5");
   });
 
+  it("forwards OpenAI moderation into Codex Responses image-generation tool requests", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-moderated-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw a low-moderation Codex preview",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+      providerOptions: {
+        openai: {
+          moderation: "low",
+        },
+      },
+    });
+
+    const request = jsonRequestCall();
+    const body = request.body as { tools?: Array<Record<string, unknown>> };
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(body.tools?.[0]?.type).toBe("image_generation");
+    expect(body.tools?.[0]?.moderation).toBe("low");
+  });
+
   it("omits output compression for PNG Codex image requests", async () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-png-image" });
