@@ -778,7 +778,6 @@ export async function runCopilotAttempt(
   } finally {
     settled = true;
     if (bridge?.hasObservedCompaction() && session && handle) {
-      timedOutDuringCompaction ||= timedOut;
       const cleanupAbort = new AbortController();
       const abortCleanup = () => cleanupAbort.abort();
       if (params.abortSignal?.aborted) {

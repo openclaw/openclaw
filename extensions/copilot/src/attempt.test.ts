@@ -1814,6 +1814,23 @@ describe("runCopilotAttempt", () => {
     );
   });
 
+  it("does not mark a timeout after SDK compaction has completed as active compaction", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          session.emit("session.compaction_complete", { success: true });
+          return undefined;
+        });
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.timedOutDuringCompaction).toBe(false);
+  });
+
   it("bounds deferred cleanup when SDK compaction never completes", async () => {
     vi.useFakeTimers();
     const sdk = makeFakeSdk({
