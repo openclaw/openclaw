@@ -130,9 +130,16 @@ async function loadSkillsStatusReport(
     return gatewayReport;
   }
   const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+  const { getRemoteSkillEligibility } = await import("../skills/runtime/remote.js");
+  const { canExecRequestNode } = await import("../agents/exec-defaults.js");
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
     config: resolved.config,
     agentId: resolved.agentId,
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({ cfg: resolved.config, agentId: resolved.agentId }),
+      }),
+    },
   });
 }
 

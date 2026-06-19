@@ -233,6 +233,14 @@ vi.mock("../skills/discovery/status.js", async (importOriginal) => ({
     mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
 }));
 
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: () => undefined,
+}));
+
+vi.mock("../agents/exec-defaults.js", () => ({
+  canExecRequestNode: () => false,
+}));
+
 describe("skills cli commands", () => {
   const createProgram = () => {
     const program = new Command();
