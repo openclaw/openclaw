@@ -56,4 +56,25 @@ describe("TranscriptsStore metadata persistence", () => {
       expect(session?.sessionId).toBe(baseSession.sessionId);
     });
   });
+
+  it("preserves tightened file and directory modes across an atomic rewrite", async () => {
+    await withTempDir({ prefix: "openclaw-transcripts-store-modes-" }, async (root) => {
+      const store = new TranscriptsStore(root);
+      await store.writeSession(baseSession);
+
+      const dir = store.sessionDir(baseSession);
+      const metadataPath = path.join(dir, "metadata.json");
+      await fs.chmod(metadataPath, 0o600);
+      await fs.chmod(dir, 0o700);
+
+      await store.updateStopped(baseSession.sessionId, "2026-06-17T11:00:00.000Z");
+
+      // The atomic rewrite must not broaden user-tightened permissions.
+      expect((await fs.stat(metadataPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(dir)).mode & 0o777).toBe(0o700);
+      // ...and the rewrite still landed.
+      const reread = await store.readSession(baseSession.sessionId);
+      expect(reread?.sessionId).toBe(baseSession.sessionId);
+    });
+  });
 });

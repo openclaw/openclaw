@@ -9,8 +9,32 @@ import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provide
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 
-// Match a plain fs.writeFile's umask-derived mode so atomic writes keep permissions unchanged.
-const TRANSCRIPT_FILE_MODE = 0o666 & ~process.umask();
+// A new transcript artifact gets the umask-derived mode a plain fs.writeFile would use;
+// an existing artifact (and its parent directory) keeps the mode it already has, so an
+// atomic rewrite never broadens user-tightened permissions on private transcript data.
+const NEW_FILE_MODE = 0o666 & ~process.umask();
+const NEW_DIR_MODE = 0o777 & ~process.umask();
+
+async function existingMode(targetPath: string, fallback: number): Promise<number> {
+  try {
+    return (await fs.stat(targetPath)).mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return fallback;
+    }
+    throw error;
+  }
+}
+
+// Atomic replace that preserves the existing file and parent-directory modes, falling
+// back to the umask default only for new artifacts (matching the old in-place writeFile).
+async function persistTranscriptArtifact(filePath: string, content: string): Promise<void> {
+  const [mode, dirMode] = await Promise.all([
+    existingMode(filePath, NEW_FILE_MODE),
+    existingMode(path.dirname(filePath), NEW_DIR_MODE),
+  ]);
+  await writeTextAtomic(filePath, content, { mode, dirMode });
+}
 
 /**
  * File-backed transcript session store.
@@ -134,12 +158,9 @@ export class TranscriptsStore {
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
-    await writeTextAtomic(
+    await persistTranscriptArtifact(
       path.join(dir, "metadata.json"),
       `${JSON.stringify(session, null, 2)}\n`,
-      {
-        mode: TRANSCRIPT_FILE_MODE,
-      },
     );
   }
 
@@ -255,10 +276,9 @@ export class TranscriptsStore {
     if (!session) {
       return;
     }
-    await writeTextAtomic(
+    await persistTranscriptArtifact(
       path.join(dir, "metadata.json"),
       `${JSON.stringify({ ...session, stoppedAt }, null, 2)}\n`,
-      { mode: TRANSCRIPT_FILE_MODE },
     );
   }
 
@@ -278,12 +298,13 @@ export class TranscriptsStore {
   /** Write summary JSON and markdown to a known directory. */
   async writeSummaryToDir(summary: TranscriptsSummary, dir: string): Promise<string> {
     await fs.mkdir(dir, { recursive: true });
-    await writeTextAtomic(path.join(dir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, {
-      mode: TRANSCRIPT_FILE_MODE,
-    });
+    await persistTranscriptArtifact(
+      path.join(dir, "summary.json"),
+      `${JSON.stringify(summary, null, 2)}\n`,
+    );
     const markdown = renderTranscriptsMarkdown(summary);
     const markdownPath = path.join(dir, "summary.md");
-    await writeTextAtomic(markdownPath, `${markdown}\n`, { mode: TRANSCRIPT_FILE_MODE });
+    await persistTranscriptArtifact(markdownPath, `${markdown}\n`);
     return markdownPath;
   }
 }
