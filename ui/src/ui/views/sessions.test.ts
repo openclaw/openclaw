@@ -454,7 +454,9 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
-    expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
+    expect(keyCell?.getAttribute("title")).toBe(
+      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+    );
   });
 
   it("keeps raw keys when identity data is unavailable", async () => {
@@ -828,7 +830,7 @@ describe("sessions view", () => {
       "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
-      "agent:main:main",
+      "Main Session",
     );
     expect(
       Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
