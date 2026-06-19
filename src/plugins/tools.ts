@@ -135,6 +135,7 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
     ? (args: unknown) =>
         runWithPluginToolScope(entry, () => Reflect.apply(prepareArguments, tool, [args]))
     : undefined;
+  const normalizeToolArgs = entry.normalizeArgs;
   const scopedExecute = (
     toolCallId: string,
     params: unknown,
@@ -143,10 +144,18 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
   ) =>
     runWithPluginToolScope(
       entry,
-      () =>
-        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
-          AnyAgentTool["execute"]
-        >,
+      () => {
+        const normalizedParams =
+          normalizeToolArgs && params && typeof params === "object" && !Array.isArray(params)
+            ? normalizeToolArgs(params as Record<string, unknown>)
+            : params;
+        return Reflect.apply(tool.execute, tool, [
+          toolCallId,
+          normalizedParams,
+          signal,
+          onUpdate,
+        ]) as ReturnType<AnyAgentTool["execute"]>;
+      },
     );
   const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {

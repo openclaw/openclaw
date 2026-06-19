@@ -83,6 +83,8 @@ export type PluginToolRegistration = {
   optional: boolean;
   source: string;
   rootDir?: string;
+  /** Optional callback to normalize/repair tool arguments before execute(). */
+  normalizeArgs?: (args: Record<string, unknown>) => Record<string, unknown>;
 };
 
 export type PluginCliRegistration = {

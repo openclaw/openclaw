@@ -62,6 +62,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** Optional callback to normalize/repair tool arguments before execute(). */
+  normalizeArgs?: (args: Record<string, unknown>) => Record<string, unknown>;
 };
 
 export type OpenClawPluginHookOptions = {
