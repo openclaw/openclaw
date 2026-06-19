@@ -38,6 +38,8 @@ openclaw plugins list --json
 openclaw plugins search <query>
 openclaw plugins search <query> --limit 20
 openclaw plugins search <query> --json
+openclaw plugins search <query> --catalog-feeds
+openclaw plugins search <query> --catalog-feeds --feed-source approved
 openclaw plugins install <path-or-spec>
 openclaw plugins inspect <id>
 openclaw plugins inspect <id> --runtime
@@ -103,6 +105,7 @@ rewriting files.
 
 ```bash
 openclaw plugins search "calendar"                   # search ClawHub plugins
+openclaw plugins search "calendar" --catalog-feeds   # search configured feed plugins
 openclaw plugins install <package>                      # source auto-detection
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install npm:<package>                  # npm only
@@ -126,9 +129,13 @@ sources with guarded environment variables. See
 Bare package names install from npm by default during the launch cutover, unless they match an official plugin id. Raw `@openclaw/*` package specs that match bundled plugins use the bundled copy that shipped with the current OpenClaw build. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
 
-`plugins search` queries ClawHub for installable plugin packages and prints
-install-ready package names. It searches code-plugin and bundle-plugin packages,
-not skills. Use `openclaw skills search` for ClawHub skills.
+`plugins search` queries ClawHub for installable plugin packages by default,
+or configured catalog feeds when you pass `--catalog-feeds`, pass
+`--feed-source <id>`, or enable the Feeds plugin search default in config.
+ClawHub search prints install-ready package names and searches code-plugin and
+bundle-plugin packages, not skills. Feed search prints matching feed plugin
+entries with source/feed provenance and install hints when the feed advertises
+install metadata. Use `openclaw skills search` for skills.
 
 <Note>
 ClawHub is the primary distribution and discovery surface for most plugins. Npm
@@ -305,10 +312,12 @@ does not import plugin runtime code, run a package manager, or repair missing
 dependencies.
 </Note>
 
-`plugins search` is a remote ClawHub catalog lookup. It does not inspect local
-state, mutate config, install packages, or load plugin runtime code. Search
-results include the ClawHub package name, family, channel, version, summary, and
-an install hint such as `openclaw plugins install clawhub:<package>`.
+`plugins search` is a remote ClawHub catalog lookup unless catalog-feed search
+is explicitly requested or enabled as the Feeds plugin search default. It does not
+mutate config, install packages, or load plugin runtime code. ClawHub results
+include the package name, family, channel, version, summary, and an install hint
+such as `openclaw plugins install clawhub:<package>`. Feed results include the
+feed source id, feed id, entry metadata, and an install hint when advertised.
 
 For bundled plugin work inside a packaged Docker image, bind-mount the plugin
 source directory over the matching packaged source path, such as

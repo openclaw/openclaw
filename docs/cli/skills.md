@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
-  - You want to search ClawHub or install skills from ClawHub, Git, or local directories
+  - You want to search ClawHub or configured catalog feeds, or install skills from ClawHub, Git, or local directories
   - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
 title: "Skills"
@@ -10,8 +10,9 @@ title: "Skills"
 
 # `openclaw skills`
 
-Inspect local skills, search ClawHub, install skills from ClawHub/Git/local
-directories, verify ClawHub skills, and update ClawHub-tracked installs.
+Inspect local skills, search ClawHub or configured catalog feeds, install skills
+from ClawHub/Git/local directories, verify ClawHub skills, and update
+ClawHub-tracked installs.
 
 Related:
 
@@ -25,6 +26,8 @@ Related:
 ```bash
 openclaw skills search "calendar"
 openclaw skills search --limit 20 --json
+openclaw skills search "calendar" --catalog-feeds
+openclaw skills search "calendar" --catalog-feeds --feed-source approved
 openclaw skills install <slug>
 openclaw skills install <slug> --version <version>
 openclaw skills install git:owner/repo
@@ -64,12 +67,14 @@ openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
-`search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
-a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill, and
-`install ./path` copies a local skill directory. By default, `install`, `update`,
-and `verify` target the active workspace `skills/` directory; with `--global`,
-they target the shared managed skills directory. `list`/`info`/`check` still
-inspect the local skills visible to the current workspace and config.
+`search` uses ClawHub by default, or configured catalog feeds when you pass
+`--catalog-feeds`, pass `--feed-source <id>`, or enable the Feeds plugin search
+default in config. `update` and `verify` use ClawHub directly. `install <slug>`
+installs a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill,
+and `install ./path` copies a local skill directory. By default, `install`,
+`update`, and `verify` target the active workspace `skills/` directory; with
+`--global`, they target the shared managed skills directory. `list`/`info`/`check`
+still inspect the local skills visible to the current workspace and config.
 Workspace-backed commands resolve the target workspace from `--agent <id>`, then
 the current working directory when it is inside a configured agent workspace,
 then the default agent.
@@ -86,8 +91,11 @@ settings use the separate `skills.install` request path instead.
 Notes:
 
 - `search [query...]` accepts an optional query; omit it to browse the default
-  ClawHub search feed.
+  ClawHub search feed, or the configured feed default when Feeds search is enabled.
 - `search --limit <n>` caps returned results.
+- `search --catalog-feeds` searches configured feed entries instead of ClawHub.
+- `search --feed-source <id>` searches one configured feed source id; repeat it or
+  pass comma-separated ids to search multiple sources.
 - `install git:owner/repo[@ref]` installs a Git skill. Branch refs may contain
   slashes, such as `git:owner/repo@feature/foo`.
 - `install ./path/to/skill` installs a local directory whose root contains

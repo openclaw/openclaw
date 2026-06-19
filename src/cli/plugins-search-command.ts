@@ -8,11 +8,18 @@ import {
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import {
+  formatFeedSearchEntry,
+  searchCatalogFeedEntriesForCli,
+  shouldSearchCatalogFeeds,
+} from "./feed-search-options.js";
 
 /** Options accepted by `openclaw plugins search`. */
 export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
+  catalogFeeds?: boolean;
+  feedSource?: string[];
 };
 
 const INSTALLABLE_PLUGIN_FAMILIES: ClawHubPackageFamily[] = ["code-plugin", "bundle-plugin"];
@@ -84,6 +91,25 @@ export async function runPluginsSearchCommand(
 
   const limit = clampSearchLimit(opts.limit);
   try {
+    if (await shouldSearchCatalogFeeds(opts)) {
+      const results = await searchCatalogFeedEntriesForCli({
+        queryParts,
+        type: "plugin",
+        limit,
+        opts,
+      });
+      if (opts.json) {
+        writeRuntimeJson(runtime, { results });
+        return;
+      }
+      if (results.length === 0) {
+        runtime.log("No catalog feed plugins found.");
+        return;
+      }
+      runtime.log(`${theme.heading("Catalog feed plugins")} ${theme.muted(`(${results.length})`)}`);
+      runtime.log(results.map(formatFeedSearchEntry).join("\n"));
+      return;
+    }
     const groups = await Promise.all(
       INSTALLABLE_PLUGIN_FAMILIES.map((family) =>
         searchClawHubPackages({

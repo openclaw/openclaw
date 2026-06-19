@@ -15,6 +15,8 @@ import {
   feedsHashCommand,
   feedsSearchCommand,
   feedsSourcesCommand,
+  readConfiguredFeedSearchConfig,
+  searchConfiguredFeedEntries,
   feedsUpdatesCommand,
   feedsValidateCommand,
   type FeedsCommandRuntime,
@@ -152,6 +154,59 @@ describe("Feeds CLI", () => {
         " bytes.",
     );
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("searches configured feed entries for native search", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [
+        { type: "skill", id: "excel-review", tags: ["m365"] },
+        { type: "plugin", id: "calendar-helper", tags: ["outlook"] },
+      ],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const entries = await searchConfiguredFeedEntries(
+      { query: "outlook", type: "plugin", sourceIds: ["approved"] },
+      runtime,
+    );
+
+    expect(entries).toEqual([expect.objectContaining({ id: "calendar-helper" })]);
+  });
+
+  it("does not widen native search when source ids are explicitly empty", async () => {
+    const feed = JSON.stringify({
+      schemaVersion: 1,
+      id: "company-approved",
+      entries: [{ type: "plugin", id: "calendar-helper", tags: ["outlook"] }],
+    });
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      files: { "/feeds/company.json": feed },
+    });
+
+    const entries = await searchConfiguredFeedEntries(
+      { query: "outlook", type: "plugin", sourceIds: [] },
+      runtime,
+    );
+
+    expect(entries).toEqual([]);
+  });
+
+  it("reads configured native search defaults", async () => {
+    const runtime = createRuntime({
+      sources: [{ id: "approved", url: "file:///feeds/company.json" }],
+      search: { default: true, sources: ["approved"] },
+    });
+
+    await expect(readConfiguredFeedSearchConfig(runtime)).resolves.toEqual({
+      default: true,
+      sources: ["approved"],
+    });
   });
 
   it("checks pinned feed integrity while loading entries", async () => {
@@ -928,6 +983,7 @@ function createRuntime(params: {
   readonly files?: Readonly<Record<string, string>>;
   readonly fetch?: FeedsCommandRuntime["fetch"];
   readonly installPolicy?: Record<string, unknown>;
+  readonly search?: Record<string, unknown>;
 }): FeedsCommandRuntime & {
   stdout: string;
   stderr: string;
@@ -968,7 +1024,11 @@ function createRuntime(params: {
             entries: {
               feeds: {
                 enabled: true,
-                config: { sources: params.sources, installPolicy: params.installPolicy },
+                config: {
+                  sources: params.sources,
+                  installPolicy: params.installPolicy,
+                  search: params.search,
+                },
               },
             },
           },

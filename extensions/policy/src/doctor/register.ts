@@ -21,6 +21,7 @@ import {
   type PolicyEvidence,
   type PolicyExecApprovalEvidence,
   type PolicyFeedSourceEvidence,
+  type PolicyFeedSearchEvidence,
   type PolicyIngressEvidence,
   type PolicySandboxPostureEvidence,
   type PolicyToolPostureEvidence,
@@ -60,6 +61,8 @@ const CHECK_IDS = {
   policyFeedsRequiredSourceMissing: "policy/feeds-required-source-missing",
   policyFeedsSourceUnpinned: "policy/feeds-source-unpinned",
   policyFeedsSourceUnsigned: "policy/feeds-source-unsigned",
+  policyFeedsSearchDefaultMissing: "policy/feeds-search-default-missing",
+  policyFeedsSearchSourceMissing: "policy/feeds-search-source-missing",
   policyAgentsWorkspaceAccessDenied: "policy/agents-workspace-access-denied",
   policyAgentsToolNotDenied: "policy/agents-tool-not-denied",
   policyToolsElevatedEnabled: "policy/tools-elevated-enabled",
@@ -131,6 +134,8 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyFeedsRequiredSourceMissing,
   CHECK_IDS.policyFeedsSourceUnpinned,
   CHECK_IDS.policyFeedsSourceUnsigned,
+  CHECK_IDS.policyFeedsSearchDefaultMissing,
+  CHECK_IDS.policyFeedsSearchSourceMissing,
   CHECK_IDS.policyAgentsWorkspaceAccessDenied,
   CHECK_IDS.policyAgentsToolNotDenied,
   CHECK_IDS.policyToolsProfileUnapproved,
@@ -684,6 +689,8 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyFeedsRequiredSourceMissingCheck);
   registerHealthCheck(policyFeedsSourceUnpinnedCheck);
   registerHealthCheck(policyFeedsSourceUnsignedCheck);
+  registerHealthCheck(policyFeedsSearchDefaultMissingCheck);
+  registerHealthCheck(policyFeedsSearchSourceMissingCheck);
   registerHealthCheck(policyAgentsWorkspaceAccessDeniedCheck);
   registerHealthCheck(policyAgentsToolNotDeniedCheck);
   registerHealthCheck(policyToolsProfileUnapprovedCheck);
@@ -1017,6 +1024,26 @@ const policyFeedsSourceUnsignedCheck: HealthCheck = {
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyFeedsSourceUnsigned);
+  },
+};
+
+const policyFeedsSearchDefaultMissingCheck: HealthCheck = {
+  id: CHECK_IDS.policyFeedsSearchDefaultMissing,
+  kind: "plugin",
+  description: "Native skills/plugins search uses feeds by default when policy requires it.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyFeedsSearchDefaultMissing);
+  },
+};
+
+const policyFeedsSearchSourceMissingCheck: HealthCheck = {
+  id: CHECK_IDS.policyFeedsSearchSourceMissing,
+  kind: "plugin",
+  description: "Native skills/plugins search includes required feed sources.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyFeedsSearchSourceMissing);
   },
 };
 
@@ -2207,6 +2234,33 @@ function feedsPolicyShapeFinding(
       `${params.policyPath} feeds must be an object.`,
       `Fix ${params.policyPath} so feeds is an object.`,
     );
+  }
+  if (value.search !== undefined && !isRecord(value.search)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/feeds/search`,
+      `${params.policyPath} feeds.search must be an object.`,
+      `Fix ${params.policyPath} so feeds.search is an object.`,
+    );
+  }
+  const search = isRecord(value.search) ? value.search : {};
+  if (search.requireDefault !== undefined && typeof search.requireDefault !== "boolean") {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/feeds/search/requireDefault`,
+      `${params.policyPath} feeds.search.requireDefault must be a boolean.`,
+      `Set feeds.search.requireDefault to true or false.`,
+    );
+  }
+  const requireSourcesFinding = policyStringArrayPropertyShapeFinding(search.requireSources, {
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: "feeds.search.requireSources",
+    target: "feeds/search/requireSources",
+    valueName: "feed source id",
+  });
+  if (requireSourcesFinding !== undefined) {
+    return requireSourcesFinding;
   }
   if (value.sources !== undefined && !isRecord(value.sources)) {
     return policyShapeFinding(
@@ -4322,13 +4376,31 @@ function feedSourceFindings(
   const required = readStringList(policy, ["feeds", "sources", "require"], { lowercase: false });
   const requirePinned = readPolicyBoolean(policy, ["feeds", "sources", "requirePinned"]) === true;
   const allowUnsigned = readPolicyBoolean(policy, ["feeds", "sources", "allowUnsigned"]) !== false;
-  if (required.length === 0 && !requirePinned && allowUnsigned) {
+  const requireSearchDefault =
+    readPolicyBoolean(policy, ["feeds", "search", "requireDefault"]) === true;
+  const requiredSearchSources = readStringList(policy, ["feeds", "search", "requireSources"]);
+  if (
+    required.length === 0 &&
+    !requirePinned &&
+    allowUnsigned &&
+    !requireSearchDefault &&
+    requiredSearchSources.length === 0
+  ) {
     return [];
   }
 
   const enabledSources = (evidence.feeds ?? []).filter((source) => source.enabled !== false);
   const enabledById = new Map(enabledSources.map((source) => [source.id, source]));
   const findings: HealthFinding[] = [];
+  findings.push(
+    ...feedSearchFindings({
+      policyDocName,
+      requireDefault: requireSearchDefault,
+      requireSources: requiredSearchSources,
+      evidence: evidence.feedSearch,
+      enabledSourceIds: [...enabledById.keys()],
+    }),
+  );
 
   for (const sourceId of required) {
     const source = enabledById.get(sourceId);
@@ -4370,6 +4442,54 @@ function feedSourceFindings(
         }),
       );
     }
+  }
+  return findings;
+}
+
+function feedSearchFindings(params: {
+  readonly policyDocName: string;
+  readonly requireDefault: boolean;
+  readonly requireSources: readonly string[];
+  readonly evidence?: PolicyFeedSearchEvidence;
+  readonly enabledSourceIds: readonly string[];
+}): readonly HealthFinding[] {
+  const findings: HealthFinding[] = [];
+  if (params.requireDefault && params.evidence?.default !== true) {
+    findings.push({
+      checkId: CHECK_IDS.policyFeedsSearchDefaultMissing,
+      severity: "error",
+      message: "Native skills/plugins search is not configured to use feeds by default.",
+      source: "policy",
+      path: "openclaw config",
+      target: "oc://openclaw.config/plugins/entries/feeds/config/search/default",
+      requirement: `oc://${params.policyDocName}/feeds/search/requireDefault`,
+      fixHint:
+        "Set plugins.entries.feeds.config.search.default to true or update policy after review.",
+    });
+  }
+  const enabled = new Set(params.enabledSourceIds);
+  const configured = new Set(
+    params.evidence?.default !== true
+      ? []
+      : params.evidence.sourceIds === undefined
+        ? params.enabledSourceIds
+        : params.evidence.sourceIds.filter((sourceId) => enabled.has(sourceId)),
+  );
+  for (const sourceId of params.requireSources) {
+    if (configured.has(sourceId)) {
+      continue;
+    }
+    findings.push({
+      checkId: CHECK_IDS.policyFeedsSearchSourceMissing,
+      severity: "error",
+      message: `Native feed search does not require source '${sourceId}'.`,
+      source: "policy",
+      path: "openclaw config",
+      target: "oc://openclaw.config/plugins/entries/feeds/config/search/sources",
+      requirement: `oc://${params.policyDocName}/feeds/search/requireSources`,
+      fixHint:
+        "Add the source id to plugins.entries.feeds.config.search.sources or update policy after review.",
+    });
   }
   return findings;
 }
@@ -6381,13 +6501,18 @@ function policyHasGatewayRules(policy: unknown): boolean {
 }
 
 function policyHasFeedRules(policy: unknown): boolean {
+  if (!isRecord(policy) || !isRecord(policy.feeds)) {
+    return false;
+  }
+
   return (
-    isRecord(policy) &&
-    isRecord(policy.feeds) &&
-    isRecord(policy.feeds.sources) &&
-    (policy.feeds.sources.require !== undefined ||
-      policy.feeds.sources.requirePinned !== undefined ||
-      policy.feeds.sources.allowUnsigned !== undefined)
+    (isRecord(policy.feeds.sources) &&
+      (policy.feeds.sources.require !== undefined ||
+        policy.feeds.sources.requirePinned !== undefined ||
+        policy.feeds.sources.allowUnsigned !== undefined)) ||
+    (isRecord(policy.feeds.search) &&
+      (policy.feeds.search.requireDefault !== undefined ||
+        policy.feeds.search.requireSources !== undefined))
   );
 }
 
