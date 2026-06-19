@@ -135,6 +135,14 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    /**
+     * Detached task run id for the current cron run (see #92460). Plumbed
+     * through to the delivery-target resolver so it can consult the
+     * task-route lease store when the originating session entry is gone
+     * or the shared main session bucket was retargeted by another
+     * conversation.
+     */
+    runId?: string;
   }) => Promise<
     {
       summary?: string;

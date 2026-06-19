@@ -377,6 +377,16 @@ export async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
+  /**
+   * Detached task run id (see #92460). When provided, the resolver
+   * consults the task-route lease store so a cron whose originating
+   * session entry has been evicted (or whose shared main session
+   * bucket was retargeted by another conversation) can still recover
+   * the original outbound origin captured at job start. Optional —
+   * missing runId leaves the resolver to use the standard session-key
+   * lookup chain.
+   */
+  runId?: string;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   if (deliveryPlan.mode === "webhook") {
@@ -426,6 +436,11 @@ export async function resolveCronDeliveryContext(params: {
     // path, and the delivery preview all honor it uniformly (the dispatch gate refuses the send and
     // never enqueues, so a restart has nothing to replay; the agent turn still runs before that).
     sessionKey: resolveCronDeliverySessionKey(params.job),
+    // #92460: when the cron run has an attached task-route lease, the
+    // resolver consults it as a fallback for the outbound origin (see
+    // delivery-target.ts). Missing runId → resolver falls back to the
+    // standard session-key lookup chain.
+    runId: params.runId,
   });
   return {
     deliveryPlan,
@@ -480,6 +495,12 @@ type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  /**
+   * Detached task run id for the current cron run (see #92460). When
+   * provided, the delivery-target resolver consults the task-route
+   * lease store as a fallback for the outbound origin.
+   */
+  runId?: string;
 };
 
 function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
@@ -805,6 +826,7 @@ async function prepareCronRunContext(params: {
       cfg: cfgWithAgentDefaults,
       job: input.job,
       agentId,
+      runId: input.runId,
     });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
@@ -1368,6 +1390,14 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  /**
+   * Detached task run id for the current cron run (see #92460). When
+   * provided, the delivery-target resolver consults the task-route
+   * lease store as a fallback for the outbound origin. Best-effort:
+   * missing runId leaves the resolver to use the standard session-key
+   * lookup chain.
+   */
+  runId?: string;
 }): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const abortSignal = params.abortSignal ?? params.signal;

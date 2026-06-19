@@ -10,6 +10,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { acquireTaskRouteLease, settleTaskRouteLease } from "../../tasks/task-route-lease.js";
 import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronRunStatus } from "../types.js";
@@ -89,6 +90,20 @@ export function tryCreateCronTaskRun(params: {
       );
       return undefined;
     }
+    // #92460: acquire a task-route lease keyed by the detached run id so
+    // the delivery-target resolver can recover the original outbound
+    // origin later, even if the originating session entry has been
+    // evicted or the shared main session bucket was retargeted by
+    // another conversation before completion fires. The auto-hook in
+    // createRunningTaskRun skips acquire when deliveryStatus is
+    // 'not_applicable' (the task itself is not the delivery owner), so
+    // we acquire it explicitly here using the cron job's own delivery
+    // config as the captured origin. Best-effort: never throws.
+    acquireTaskRouteLease({
+      runId,
+      taskId: task.taskId,
+      requesterOrigin: resolveCronLeaseRequesterOrigin(params.job),
+    });
     return runId;
   } catch (error) {
     params.state.deps.log.warn(
@@ -122,6 +137,12 @@ export function tryFinishCronTaskRun(
         lastEventAt: result.endedAt,
         terminalSummary: result.summary ?? undefined,
       });
+      // #92460: settle the task-route lease on terminal run status. The
+      // task ledger finalize path (completeTaskRunByRunId) does not call
+      // setDetachedTaskDeliveryStatusByRunId, so the auto-settle hook
+      // there does not fire. We settle explicitly here so the lease
+      // can be GC'd instead of waiting for TTL expiry. Idempotent.
+      settleTaskRouteLease(result.taskRunId, "settled");
       return;
     }
     failTaskRunByRunId({
@@ -134,10 +155,60 @@ export function tryFinishCronTaskRun(
       error: result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined,
       terminalSummary: result.summary ?? undefined,
     });
+    // Failed cron runs retire the lease (the run did not successfully
+    // land delivery on the captured origin). Idempotent.
+    settleTaskRouteLease(result.taskRunId, "retired");
   } catch (error) {
     state.deps.log.warn(
       { runId: result.taskRunId, jobStatus: result.status, error },
       "cron: failed to update task ledger record",
     );
   }
+}
+
+/**
+ * #92460: build a `DeliveryContext` from a cron job's own delivery config.
+ * Used as the `requesterOrigin` for the task-route lease acquired at
+ * cron run start. When the originating session entry is gone or the
+ * shared main session bucket was retargeted by another conversation
+ * before completion fires, the delivery-target resolver falls back to
+ * this captured origin (see `delivery-target.ts`).
+ *
+ * Returns `undefined` when the job has no usable delivery config
+ * (e.g. mode === "none" or mode === "webhook" with no chat target).
+ * The lease is still acquired in that case so the row exists; the
+ * origin will be empty and the resolver will fall through to the
+ * standard session-key lookup chain.
+ */
+function resolveCronLeaseRequesterOrigin(job: CronJob) {
+  const delivery = job.delivery;
+  if (!delivery) {
+    return undefined;
+  }
+  // mode "none" / "webhook" with no chat target → no usable origin.
+  if (delivery.mode === "none") {
+    return undefined;
+  }
+  if (delivery.mode === "webhook" && !delivery.channel && !delivery.to) {
+    return undefined;
+  }
+  const origin: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  } = {};
+  if (delivery.channel) {
+    origin.channel = delivery.channel;
+  }
+  if (delivery.to) {
+    origin.to = delivery.to;
+  }
+  if (delivery.accountId) {
+    origin.accountId = delivery.accountId;
+  }
+  if (delivery.threadId !== undefined && delivery.threadId !== null) {
+    origin.threadId = delivery.threadId;
+  }
+  return Object.keys(origin).length > 0 ? origin : undefined;
 }
