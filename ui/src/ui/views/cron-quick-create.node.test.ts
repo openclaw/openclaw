@@ -39,11 +39,10 @@ describe("cron quick create", () => {
     expect(patch.wakeMode).toBe("now");
   });
 
-  it("targets main session with systemEvent payload for silent preset (#95073)", () => {
+  it("sets silent preset to isolated session with no delivery (#95073)", () => {
     const patch = draftToCronFormPatch(createDraft({ deliveryPreset: "silent" }));
 
-    expect(patch.sessionTarget).toBe("main");
-    expect(patch.payloadKind).toBe("systemEvent");
+    expect(patch.sessionTarget).toBe("isolated");
     expect(patch.deliveryMode).toBe("none");
     expect(patch.wakeMode).toBe("now");
   });
