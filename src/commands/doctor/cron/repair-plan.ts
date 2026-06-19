@@ -60,7 +60,7 @@ export function formatLegacyIssuePreview(
   }
   if (issues.unresolvedAgentTurnShellToolPrompt) {
     lines.push(
-      `- ${pluralize(issues.unresolvedAgentTurnShellToolPrompt, "job")} asks an isolated agent for shell/process tools and needs manual command conversion${formatJobNameList(details.unresolvedAgentTurnShellToolPrompt)}`,
+      `- ${pluralize(issues.unresolvedAgentTurnShellToolPrompt, "job")} asks an isolated agent for shell/process tools and needs manual command conversion${formatJobNameList(details.unresolvedAgentTurnShellToolPrompt)} (convert payload kind from "agentTurn" to "command" and provide an explicit "argv" array, e.g., via 'openclaw cron edit <id>')`,
     );
   }
   if (issues.legacyPayloadProvider) {

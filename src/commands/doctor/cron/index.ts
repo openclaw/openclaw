@@ -370,16 +370,25 @@ export async function maybeRepairLegacyCronStore(params: {
 
   const noteHeading = legacyStoreDetected
     ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
-    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+    : "Cron store issues detected in SQLite store.";
 
-  note(
-    [
-      noteHeading,
-      ...previewLines,
-      `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`,
-    ].join("\n"),
-    "Cron",
-  );
+  const hasAutoFixable =
+    legacyStoreDetected ||
+    legacyRunLogDetected ||
+    sqliteProjectionBackfillCount > 0 ||
+    normalized.mutated ||
+    notifyCount > 0 ||
+    dreamingStaleCount > 0;
+
+  const fixPrompt = hasAutoFixable
+    ? `\nRepair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`
+    : "";
+
+  note([noteHeading, ...previewLines].join("\n") + fixPrompt, "Cron");
+
+  if (!hasAutoFixable) {
+    return;
+  }
 
   const shouldRepair = await params.prompter.confirm({
     message: "Repair legacy cron jobs now?",
