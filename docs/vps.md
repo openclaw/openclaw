@@ -26,6 +26,7 @@ tuning that applies everywhere.
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
   <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
+  <Card title="NVIDIA Jetson" href="/install/jetson">Edge AI hardware self-hosted</Card>
 </CardGroup>
 
 **AWS (EC2 / Lightsail / free tier)** also works well.

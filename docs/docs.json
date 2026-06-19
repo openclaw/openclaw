@@ -113,6 +113,10 @@
       "destination": "/install/digitalocean"
     },
     {
+      "source": "/platforms/jetson",
+      "destination": "/install/jetson"
+    },
+    {
       "source": "/platforms/raspberry-pi",
       "destination": "/install/raspberry-pi"
     },
@@ -1075,6 +1079,7 @@
                   "install/northflank",
                   "install/oracle",
                   "install/railway",
+                  "install/jetson",
                   "install/raspberry-pi",
                   "install/render",
                   "install/upstash"
