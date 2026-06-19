@@ -466,6 +466,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
 function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
+  richMessages: boolean,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   const [heading] = trimmed.split(/\r?\n/u, 1);
@@ -473,9 +474,13 @@ function renderTelegramProgressDraftPreview(
   const htmlParts = heading?.trim()
     ? [`<b>${escapeTelegramProgressHtml(heading.trim())}</b>`, ...renderedLines]
     : renderedLines;
+  const html = htmlParts.join("<br>");
+  if (!richMessages) {
+    return { text: html, parseMode: "HTML" };
+  }
   return {
     text: trimmed,
-    richMessage: buildTelegramRichHtml(htmlParts.join("<br>"), { skipEntityDetection: true }),
+    richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
   };
 }
 
@@ -1074,7 +1079,11 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream?.updatePreview(
-        renderTelegramProgressDraftPreview(streamText, options?.lines ?? []),
+        renderTelegramProgressDraftPreview(
+          streamText,
+          options?.lines ?? [],
+          telegramCfg.richMessages === true,
+        ),
       );
       if (options?.flush) {
         await answerLane.stream?.flush();
