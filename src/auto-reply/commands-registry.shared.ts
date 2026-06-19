@@ -658,6 +658,7 @@ export function buildBuiltinChatCommands(
     }),
     defineChatCommand({
       key: "usage",
+      nativeName: "usage",
       description: "Usage footer or cost summary.",
       textAlias: "/usage",
       category: "options",
@@ -670,7 +671,6 @@ export function buildBuiltinChatCommands(
           choices: ["off", "tokens", "full", "cost"],
         },
       ],
-      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "stop",
