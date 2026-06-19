@@ -1,13 +1,6 @@
 // Control UI module implements push subscription behavior.
 import type { GatewayBrowserClient } from "./gateway.ts";
 
-export type WebPushState = {
-  supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-};
-
 /** Timeout (ms) for service-worker readiness. */
 const SW_READY_TIMEOUT = 10_000;
 

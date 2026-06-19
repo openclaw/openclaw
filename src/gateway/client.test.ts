@@ -748,6 +748,22 @@ describe("GatewayClient close handling", () => {
     client.stop();
   });
 
+  it("keeps close callback errors inside websocket dispatch", () => {
+    const onClose = vi.fn(() => {
+      throw new Error("close callback failed");
+    });
+    const client = createClientWithIdentity("dev-4", onClose);
+
+    client.start();
+    expect(() => getLatestWs().emitClose(1008, "unauthorized: signature invalid")).not.toThrow();
+
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway client close handler error: Error: close callback failed",
+    );
+    client.stop();
+  });
+
   it("keeps a managed reconnect timer after gateway restart closes", async () => {
     vi.useFakeTimers();
     try {
@@ -1218,6 +1234,35 @@ describe("GatewayClient connect auth payload", () => {
       });
       expect(logDebugMock).toHaveBeenCalledWith(
         "gateway client connect error handler error: Error: connect callback failed",
+      );
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("keeps hello callback errors inside connect dispatch", async () => {
+    const onHelloOk = vi.fn(() => {
+      throw new Error("hello callback failed");
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onHelloOk,
+      onConnectError,
+    });
+
+    try {
+      const { ws, connect } = startClientAndConnect({ client });
+
+      expect(() => emitHelloOk(ws, connect.id)).not.toThrow();
+      await vi.waitFor(() => {
+        expect(onHelloOk).toHaveBeenCalledOnce();
+      });
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(ws.lastClose).toBeNull();
+      expect(logDebugMock).toHaveBeenCalledWith(
+        "gateway client hello-ok handler error: Error: hello callback failed",
       );
     } finally {
       client.stop();
@@ -1726,6 +1771,37 @@ describe("GatewayClient connect auth payload", () => {
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
     });
+  });
+
+  it("keeps reconnect paused callback errors inside close dispatch", async () => {
+    const onReconnectPaused = vi.fn(() => {
+      throw new Error("paused callback failed");
+    });
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onReconnectPaused,
+      onClose,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISSING",
+    });
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway client reconnect paused handler error: Error: paused callback failed",
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "connect failed");
   });
 
   it("does not auto-reconnect on CLIENT_VERSION_MISMATCH connect failures", async () => {

@@ -31,6 +31,7 @@ const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
@@ -181,7 +182,13 @@ export async function findAvailableLoopbackPort(options = {}) {
 export async function resolveKitchenSinkRpcPort(env = process.env, options = {}) {
   const rawPort = (env.OPENCLAW_KITCHEN_SINK_RPC_PORT || "").trim();
   if (rawPort) {
-    return readPositiveInt(rawPort, 0, "OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    const port = readPositiveInt(rawPort, 0, "OPENCLAW_KITCHEN_SINK_RPC_PORT");
+    if (port > 65535) {
+      throw new Error(
+        `OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: ${JSON.stringify(rawPort)}`,
+      );
+    }
+    return port;
   }
   return await (options.findAvailablePort ?? findAvailableLoopbackPort)();
 }
@@ -380,47 +387,92 @@ export function runCommand(command, args, options = {}) {
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
-      clearTimeout(forceKillTimer);
-      void stopResourceSampling().then((resourceSampleFailure) => {
-        if (!timedOut && status === 0) {
-          if (resourceSampleFailure) {
-            reject(resourceSampleFailure);
+      const finish = () => {
+        clearTimeout(forceKillTimer);
+        void stopResourceSampling().then((resourceSampleFailure) => {
+          if (!timedOut && status === 0) {
+            if (resourceSampleFailure) {
+              reject(resourceSampleFailure);
+              return;
+            }
+            resolve({
+              stdout: stdout.text,
+              stderr: stderr.text,
+              stdoutTruncatedChars: stdout.truncatedChars,
+              stderrTruncatedChars: stderr.truncatedChars,
+            });
             return;
           }
-          resolve({
-            stdout: stdout.text,
-            stderr: stderr.text,
-            stdoutTruncatedChars: stdout.truncatedChars,
-            stderrTruncatedChars: stderr.truncatedChars,
-          });
-          return;
-        }
-        const detail = [
-          formatCapturedOutput("stdout", stdout),
-          formatCapturedOutput("stderr", stderr),
-        ]
-          .filter(Boolean)
-          .join("\n")
-          .trim();
-        const failure = timedOut
-          ? `timed out after ${timeoutMs}ms`
-          : `failed with ${signal || status}`;
-        reject(
-          Object.assign(
-            new Error(
-              `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          const detail = [
+            formatCapturedOutput("stdout", stdout),
+            formatCapturedOutput("stderr", stderr),
+          ]
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+          const failure = timedOut
+            ? `timed out after ${timeoutMs}ms`
+            : `failed with ${signal || status}`;
+          reject(
+            Object.assign(
+              new Error(
+                `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+              ),
+              {
+                signal,
+                status,
+                stderr: stderr.text,
+                stdout: stdout.text,
+              },
             ),
-            {
-              signal,
-              status,
-              stderr: stderr.text,
-              stdout: stdout.text,
-            },
-          ),
-        );
-      });
+          );
+        });
+      };
+
+      if (timedOut) {
+        void finishTimedOutCommandProcessTree(child, timeoutKillGraceMs).then(finish, finish);
+        return;
+      }
+
+      finish();
     });
   });
+}
+
+async function finishTimedOutCommandProcessTree(child, timeoutKillGraceMs) {
+  if (!commandProcessTreeIsAlive(child)) {
+    return;
+  }
+  signalProcessGroup(child, "SIGKILL");
+  await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+async function waitForCommandProcessTreeExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!commandProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, COMMAND_PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !commandProcessTreeIsAlive(child);
+}
+
+function commandProcessTreeIsAlive(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return !hasChildExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
 }
 
 function signalProcessGroup(child, signal) {
@@ -840,14 +892,10 @@ export async function fetchJson(url, options = {}) {
     let removeExternalAbort = () => {};
     const abortPromise = externalSignal
       ? new Promise((_, reject) => {
-          const abortError = () =>
-            externalSignal.reason instanceof Error
-              ? externalSignal.reason
-              : new Error("fetch aborted");
           const onAbort = () => {
-            const error = abortError();
+            const error = getExternalAbortReason(externalSignal);
             controller.abort(error);
-            reject(new Error(error.message, { cause: error }));
+            reject(createExternalAbortError(externalSignal));
           };
           if (externalSignal.aborted) {
             onAbort();
@@ -871,7 +919,7 @@ export async function fetchJson(url, options = {}) {
         ...(abortPromise ? [abortPromise] : []),
       ]);
       const text = await Promise.race([
-        readBoundedResponseText(response, maxBodyBytes),
+        readBoundedResponseText(response, maxBodyBytes, timeoutPromise),
         timeoutPromise,
         ...(abortPromise ? [abortPromise] : []),
       ]);
@@ -887,7 +935,7 @@ export async function fetchJson(url, options = {}) {
       if (attempt >= attempts || !isRetryableTransientNetworkError(error)) {
         throw error;
       }
-      await delay(options.retryDelayMs ?? 250);
+      await delayWithAbort(options.retryDelayMs ?? 250, externalSignal);
     } finally {
       removeExternalAbort();
       if (timeout) {
@@ -898,39 +946,71 @@ export async function fetchJson(url, options = {}) {
   throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
-export async function readBoundedResponseText(
-  response,
-  byteLimit = resolveKitchenSinkRpcConfig().fetchBodyMaxBytes,
-) {
+function getExternalAbortReason(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new Error("fetch aborted");
+}
+
+function createExternalAbortError(signal) {
+  const reason = getExternalAbortReason(signal);
+  return new Error(reason.message, { cause: reason });
+}
+
+async function delayWithAbort(delayMs, signal) {
+  if (!signal) {
+    await delay(delayMs);
+    return;
+  }
+  if (signal.aborted) {
+    throw createExternalAbortError(signal);
+  }
+  try {
+    await delay(delayMs, undefined, { signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw createExternalAbortError(signal);
+    }
+    throw error;
+  }
+}
+
+export async function readBoundedResponseText(response, byteLimit, timeoutPromise) {
+  const resolvedByteLimit = byteLimit ?? resolveKitchenSinkRpcConfig().fetchBodyMaxBytes;
   const contentLength = response.headers?.get?.("content-length");
-  if (contentLength) {
+  if (contentLength && /^\d+$/u.test(contentLength)) {
     const parsedContentLength = Number(contentLength);
-    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > resolvedByteLimit) {
       await response.body?.cancel?.().catch(() => undefined);
-      throw createFetchBodyTooLargeError(byteLimit);
+      throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
   }
 
   const reader = response.body?.getReader?.();
   if (!reader) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > byteLimit) {
-      throw createFetchBodyTooLargeError(byteLimit);
+    const text = await withOptionalTimeout(response.text(), timeoutPromise);
+    if (Buffer.byteLength(text, "utf8") > resolvedByteLimit) {
+      throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
     return text;
   }
   const chunks = [];
   let totalBytes = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    const read = reader.read();
+    const { done, value } = await withOptionalTimeout(
+      read,
+      timeoutPromise?.catch((error) => {
+        cancelReaderSoon(reader);
+        throw error;
+      }),
+    );
     if (done) {
       break;
     }
     const chunk = Buffer.from(value);
     totalBytes += chunk.byteLength;
-    if (totalBytes > byteLimit) {
+    if (totalBytes > resolvedByteLimit) {
       await reader.cancel().catch(() => undefined);
-      throw createFetchBodyTooLargeError(byteLimit);
+      throw createFetchBodyTooLargeError(resolvedByteLimit);
     }
     chunks.push(chunk);
   }
@@ -941,6 +1021,19 @@ function createFetchBodyTooLargeError(byteLimit) {
   return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
     code: "ETOOBIG",
   });
+}
+
+async function withOptionalTimeout(promise, timeoutPromise) {
+  if (!timeoutPromise) {
+    return await promise;
+  }
+  return await Promise.race([promise, timeoutPromise]);
+}
+
+function cancelReaderSoon(reader) {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
 }
 
 function configureKitchenSink(env, port) {

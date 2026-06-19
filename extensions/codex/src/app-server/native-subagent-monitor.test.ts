@@ -314,6 +314,102 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
+  it("delivers child agent-message completion when a native subagent becomes idle", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+      codexHome: "/tmp/codex-home",
+    });
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "child-thread",
+        item: {
+          type: "agentMessage",
+          id: "msg-child-final",
+          phase: "final_answer",
+          text: "child final result",
+        },
+      },
+    });
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        status: "succeeded",
+        terminalSummary: "child final result",
+      }),
+    );
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        status: "succeeded",
+        statusLabel: "agent_message",
+        result: "child final result",
+      }),
+    );
+
+    client.close();
+  });
+
+  it("does not deliver commentary-only child messages as native subagent completion", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+      codexHome: "/tmp/codex-home",
+    });
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "child-thread",
+        item: {
+          type: "agentMessage",
+          id: "msg-child-commentary",
+          phase: "commentary",
+          text: "checking now",
+        },
+      },
+    });
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+
+    client.close();
+  });
+
   it("keeps late idle lifecycle updates from overwriting native completion results", async () => {
     const client = createClient();
     const runtime = createRuntime();

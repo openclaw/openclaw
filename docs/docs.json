@@ -1387,10 +1387,7 @@
                   "clawhub/http-api",
                   "clawhub/acceptable-usage",
                   "clawhub/moderation",
-                  "clawhub/security",
-                  "clawhub/security-audits",
-                  "clawhub/content-rights",
-                  "clawhub/plugin-validation-fixes"
+                  "clawhub/security-audits"
                 ]
               }
             ]

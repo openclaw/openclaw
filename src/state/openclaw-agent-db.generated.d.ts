@@ -31,6 +31,47 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface MemoryEmbeddingCache {
+  dims: number | null;
+  embedding: string;
+  hash: string;
+  model: string;
+  provider: string;
+  provider_key: string;
+  updated_at: number;
+}
+
+export interface MemoryIndexChunks {
+  embedding: string;
+  end_line: number;
+  hash: string;
+  id: string | null;
+  model: string;
+  path: string;
+  source: Generated<string>;
+  start_line: number;
+  text: string;
+  updated_at: number;
+}
+
+export interface MemoryIndexMeta {
+  key: string | null;
+  value: string;
+}
+
+export interface MemoryIndexSources {
+  hash: string;
+  mtime: number;
+  path: string;
+  size: number;
+  source: Generated<string>;
+}
+
+export interface MemoryIndexState {
+  id: Generated<number>;
+  revision: number;
+}
+
 export interface QmdSessionExportCache {
   content_fingerprint: string;
   export_dir: string;
@@ -58,6 +99,11 @@ export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;
+  memory_embedding_cache: MemoryEmbeddingCache;
+  memory_index_chunks: MemoryIndexChunks;
+  memory_index_meta: MemoryIndexMeta;
+  memory_index_sources: MemoryIndexSources;
+  memory_index_state: MemoryIndexState;
   qmd_session_export_cache: QmdSessionExportCache;
   schema_meta: SchemaMeta;
 }

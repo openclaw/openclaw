@@ -107,14 +107,6 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
   laneResumeTimers.set(laneId, timer);
 }
 
-export function cancelLaneAutoResume(laneId: string) {
-  const existing = laneResumeTimers.get(laneId);
-  if (existing) {
-    clearTimeout(existing);
-    laneResumeTimers.delete(laneId);
-  }
-}
-
 export async function suspendSession(params: SessionSuspensionParams) {
   if (!params.cfg) {
     return;

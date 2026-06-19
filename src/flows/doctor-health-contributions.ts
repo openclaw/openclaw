@@ -510,7 +510,7 @@ async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
-    await import("../commands/doctor-cron.js");
+    await import("../commands/doctor/cron/index.js");
   await noteLegacyWhatsAppCrontabHealthCheck();
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
@@ -572,7 +572,9 @@ async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteOpenAIOAuthTlsPrerequisites } = await import("../commands/oauth-tls-preflight.js");
+  const { noteOpenAIOAuthTlsPrerequisites } = await import(
+    "../plugins/provider-openai-chatgpt-oauth-tls.js"
+  );
   await noteOpenAIOAuthTlsPrerequisites({
     cfg: ctx.cfg,
     deep: ctx.options.deep === true,

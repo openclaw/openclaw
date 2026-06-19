@@ -352,15 +352,6 @@ export async function listNodePairing(baseDir?: string): Promise<NodePairingList
   return { pending, paired };
 }
 
-/** Return one paired node by normalized node id. */
-export async function getPairedNode(
-  nodeId: string,
-  baseDir?: string,
-): Promise<NodePairingPairedNode | null> {
-  const state = await loadState(baseDir);
-  return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
-}
-
 /** Snapshot pairing state and claim current pending revisions for one paired reconnect. */
 export async function beginNodePairingConnect(
   nodeId: string,

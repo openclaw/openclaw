@@ -152,14 +152,17 @@
             ]
           },
           "url": { "type": "string" },
-          "authToken": { "type": "string" },
+          "authToken": { "type": ["string", "object"] },
           "headers": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": { "type": ["string", "object"] }
           },
           "clearEnv": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "remoteWorkspaceRoot": {
+            "type": "string"
           },
           "codeModeOnly": {
             "type": "boolean",
@@ -249,6 +252,14 @@
           }
         }
       }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "appServer.authToken", "expected": "string" },
+        { "path": "appServer.headers.*", "expected": "string" }
+      ]
     }
   },
   "uiHints": {
@@ -379,11 +390,17 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "sensitive": true,
       "advanced": true
     },
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.remoteWorkspaceRoot": {
+      "label": "Remote Workspace Root",
+      "help": "Remote Codex app-server workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
       "advanced": true
     },
     "appServer.codeModeOnly": {

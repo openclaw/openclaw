@@ -65,8 +65,13 @@ pnpm android:release:archive
 Generate deterministic Google Play screenshots:
 
 ```bash
-pnpm android:screenshots
+ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
 ```
+
+If exactly one ADB device is already connected, `pnpm android:screenshots`
+uses it. With `ANDROID_SCREENSHOT_AVD` or `--avd <name>`, the script can boot a
+headless emulator, wait for boot completion, stabilize animation settings,
+capture screenshots, and shut down only the emulator it started.
 
 Upload metadata, release notes, and the Play AAB to the internal testing track:
 

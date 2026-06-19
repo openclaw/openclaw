@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { formatFastModeLabel } from "./status-labels.js";
 import { buildStatusMessage } from "./status-message.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
@@ -19,16 +18,6 @@ function statusTestModel(id: string, name: string, contextWindow: number): Model
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
-});
-
-describe("formatFastModeLabel", () => {
-  it("shows fast mode when enabled", () => {
-    expect(formatFastModeLabel(true)).toBe("Fast: on");
-  });
-
-  it("shows fast mode when disabled", () => {
-    expect(formatFastModeLabel(false)).toBe("Fast: off");
-  });
 });
 
 describe("buildStatusMessage context window", () => {
