@@ -114,7 +114,6 @@ export const DEFAULT_PROGRESS_DRAFT_LABELS = [
   "Nautiling",
   "Krilling",
   "Barnacling",
-  "Lobstering",
   "Tidepooling",
   "Pearling",
   "Snapping",

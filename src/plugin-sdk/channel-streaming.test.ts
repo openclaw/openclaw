@@ -249,6 +249,10 @@ describe("channel-streaming", () => {
     ).toBe(DEFAULT_PROGRESS_DRAFT_LABELS[0]);
   });
 
+  it("does not include mascot-branded labels in the default auto label pool", () => {
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS).not.toContain("Lobstering");
+  });
+
   it("separates progress labels from detail lines with a blank line", () => {
     const entry = { streaming: { progress: { label: "Working" } } };
 
