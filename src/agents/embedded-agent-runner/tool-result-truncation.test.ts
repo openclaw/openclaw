@@ -17,7 +17,6 @@ let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.
 let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
-let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
@@ -36,7 +35,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
     resolveAutoLiveToolResultMaxChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
-    truncateOversizedToolResultsInRuntimeTranscript,
     truncateOversizedToolResultsInSession,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
@@ -442,25 +440,6 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
-  it("does not create session metadata for missing runtime transcripts", async () => {
-    const dir = await createTmpDir();
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}\n", "utf8");
-
-    const result = await truncateOversizedToolResultsInRuntimeTranscript({
-      scope: {
-        agentId: "main",
-        sessionId: "missing-session",
-        sessionKey: "agent:main:missing",
-        storePath,
-      },
-      contextWindowTokens: 100,
-    });
-
-    expect(result.truncated).toBe(false);
-    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
-  });
-
   it("readably truncates aggregate medium tool results in a session file", async () => {
     // Persisted truncation rewrites JSONL directly and emits the transcript
     // update event instead of reopening through SessionManager internals.

@@ -105,6 +105,15 @@ function matchesDegradedReadyExpectation(body) {
 }
 
 async function readBoundedResponseText(response, byteLimit) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength && /^\d+$/u.test(contentLength)) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedContentLength) && parsedContentLength > byteLimit) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`${url} probe body exceeded ${byteLimit} bytes`);
+    }
+  }
+
   const reader = response.body?.getReader();
   if (!reader) {
     return "";

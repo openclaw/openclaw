@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildParseArgv,
   getFlagValue,
-  getCommandPath,
   getCommandPositionalsWithRootOptions,
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -442,7 +441,7 @@ describe("argv helpers", () => {
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
-    expect(getCommandPath(argv, 2)).toEqual(expected);
+    expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
   });
 
   it("extracts command path while skipping known root option values", () => {

@@ -218,6 +218,31 @@ describe("applyPluginAutoEnable core", () => {
     ).toBe("google auth configured");
   });
 
+  it("auto-enables external speech providers selected by TTS config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        messages: { tts: { provider: "gradium" } },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "gradium",
+          channels: [],
+          contracts: { speechProviders: ["gradium"] },
+          origin: "global",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "gradium"]);
+    expect(result.config.plugins?.entries?.gradium).toEqual({ enabled: true });
+    expect(result.autoEnabledReasons).toEqual({
+      gradium: ["gradium speech provider selected"],
+    });
+    expect(result.changes).toContain("gradium speech provider selected, enabled automatically.");
+  });
+
   it("treats an undefined config as empty", () => {
     const result = applyPluginAutoEnable({
       config: undefined,

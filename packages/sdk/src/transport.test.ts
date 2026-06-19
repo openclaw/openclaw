@@ -50,4 +50,13 @@ describe("GatewayClientTransport", () => {
     await connectExpectation;
     expect(client?.stopAndWait).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects reconnect attempts after close", async () => {
+    const transport = new GatewayClientTransport();
+
+    await transport.close();
+
+    await expect(transport.connect()).rejects.toThrow("gateway transport is closed");
+    expect(gatewayClientMocks.instances).toHaveLength(0);
+  });
 });

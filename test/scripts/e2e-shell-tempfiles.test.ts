@@ -177,6 +177,47 @@ test ! -e "$ONBOARD_TMP_DIR"
     }
   });
 
+  it("rejects invalid onboarding gateway wait attempts before probing", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-onboard-gateway-attempts-"));
+    const fixturePath = path.join(tempRoot, "gateway-attempts.sh");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+export OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS=2x
+OPENCLAW_ENTRY=node
+source scripts/e2e/lib/onboard/scenario.sh
+
+openclaw_e2e_probe_tcp() {
+  echo "probe should not run" >&2
+  return 1
+}
+set +e
+wait_for_gateway
+status="$?"
+set -e
+cleanup_onboard_artifacts
+exit "$status"
+`,
+    );
+
+    try {
+      const result = spawnSync("bash", [fixturePath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS: 2x");
+      expect(result.stderr).not.toContain("probe should not run");
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("removes fallback ClawHub skill install HOME on failure", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-home-test-"));
     const fakeBin = path.join(tempRoot, "bin");
