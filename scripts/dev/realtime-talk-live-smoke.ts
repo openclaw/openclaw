@@ -44,7 +44,7 @@ type OpenAIHttpOptions = {
 };
 
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
-  __openclawRequestOpenAIRealtimeSdpAnswer?: (offerSdp: string) => Promise<string>;
+  openclawRequestOpenAIRealtimeSdpAnswer?: (offerSdp: string) => Promise<string>;
 };
 
 function getEnv(name: string): string | undefined {
@@ -257,7 +257,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
       const page = await context.newPage();
       await page.evaluate("globalThis.__name = (fn) => fn");
       await page.exposeFunction(
-        "__openclawRequestOpenAIRealtimeSdpAnswer",
+        "openclawRequestOpenAIRealtimeSdpAnswer",
         async (offerSdp: string) => {
           return await requestOpenAIRealtimeSdpAnswer(clientSecret, offerSdp, {
             timeoutMs: openAIHttpTimeoutMs,
@@ -266,7 +266,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
       );
       const result = await page.evaluate(async () => {
         const requestSdpAnswer = (globalThis as OpenAIWebRtcSmokeGlobal)
-          .__openclawRequestOpenAIRealtimeSdpAnswer;
+          .openclawRequestOpenAIRealtimeSdpAnswer;
         if (!requestSdpAnswer) {
           throw new Error("OpenAI Realtime SDP answer bridge was not installed");
         }
