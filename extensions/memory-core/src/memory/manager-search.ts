@@ -380,7 +380,7 @@ export async function searchKeyword(params: {
       }
     }
     return Array.from(byId.values())
-      .sort((left, right) => left.rank - right.rank)
+      .toSorted((left, right) => left.rank - right.rank)
       .slice(0, params.limit);
   };
 

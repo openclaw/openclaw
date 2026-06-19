@@ -111,24 +111,58 @@ function migrateLegacyMemoryIndexTables(
   db: DatabaseSync,
   preservedEmbeddingCacheTable?: string,
 ): void {
+  const hasLegacyFilesWithSource = tableHasExactColumns(db, "files", [
+    "path",
+    "source",
+    "hash",
+    "mtime",
+    "size",
+  ]);
+  const hasLegacyFilesWithoutSource = tableHasExactColumns(db, "files", [
+    "path",
+    "hash",
+    "mtime",
+    "size",
+  ]);
+  const hasLegacyChunksWithSource = tableHasExactColumns(db, "chunks", [
+    "id",
+    "path",
+    "source",
+    "start_line",
+    "end_line",
+    "hash",
+    "model",
+    "text",
+    "embedding",
+    "updated_at",
+  ]);
+  const hasLegacyChunksWithoutSource = tableHasExactColumns(db, "chunks", [
+    "id",
+    "path",
+    "start_line",
+    "end_line",
+    "hash",
+    "model",
+    "text",
+    "embedding",
+    "updated_at",
+  ]);
   const hasLegacyCoreTables =
     tableHasExactColumns(db, "meta", ["key", "value"]) &&
-    tableHasExactColumns(db, "files", ["path", "source", "hash", "mtime", "size"]) &&
-    tableHasExactColumns(db, "chunks", [
-      "id",
-      "path",
-      "source",
-      "start_line",
-      "end_line",
-      "hash",
-      "model",
-      "text",
-      "embedding",
-      "updated_at",
-    ]);
+    (hasLegacyFilesWithSource || hasLegacyFilesWithoutSource) &&
+    (hasLegacyChunksWithSource || hasLegacyChunksWithoutSource);
   if (!hasLegacyCoreTables) {
     return;
   }
+
+  const legacyFilesSourceExpression = hasLegacyFilesWithSource ? "source" : "'memory'";
+  const legacyChunksSourceExpression = hasLegacyChunksWithSource ? "source" : "'memory'";
+  const legacyFilesSourceComparison = hasLegacyFilesWithSource
+    ? "canonical.source IS legacy.source"
+    : "canonical.source = 'memory'";
+  const legacyChunksSourceComparison = hasLegacyChunksWithSource
+    ? "canonical.source IS legacy.source"
+    : "canonical.source = 'memory'";
 
   db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
   try {
@@ -137,12 +171,12 @@ function migrateLegacyMemoryIndexTables(
       SELECT key, value FROM meta;
 
       INSERT OR IGNORE INTO ${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-      SELECT path, source, hash, mtime, size FROM files;
+      SELECT path, ${legacyFilesSourceExpression}, hash, mtime, size FROM files;
 
       INSERT OR IGNORE INTO ${MEMORY_INDEX_CHUNKS_TABLE} (
         id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
       )
-      SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      SELECT id, path, ${legacyChunksSourceExpression}, start_line, end_line, hash, model, text, embedding, updated_at
       FROM chunks;
     `);
     assertLegacyRowsCopied(
@@ -162,7 +196,7 @@ function migrateLegacyMemoryIndexTables(
        WHERE NOT EXISTS (
          SELECT 1 FROM ${MEMORY_INDEX_SOURCES_TABLE} AS canonical
          WHERE canonical.path = legacy.path
-           AND canonical.source IS legacy.source
+           AND ${legacyFilesSourceComparison}
            AND canonical.hash IS legacy.hash
            AND canonical.mtime IS legacy.mtime
            AND canonical.size IS legacy.size
@@ -177,7 +211,7 @@ function migrateLegacyMemoryIndexTables(
          SELECT 1 FROM ${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
          WHERE canonical.id = legacy.id
            AND canonical.path IS legacy.path
-           AND canonical.source IS legacy.source
+           AND ${legacyChunksSourceComparison}
            AND canonical.start_line IS legacy.start_line
            AND canonical.end_line IS legacy.end_line
            AND canonical.hash IS legacy.hash
@@ -453,9 +487,9 @@ function ensureFtsSchema(
   const pathRows = db.prepare(`SELECT COUNT(*) AS count FROM ${pathTableName}`).get() as
     | { count?: number | bigint }
     | undefined;
-  const chunkRows = db.prepare(`SELECT COUNT(*) AS count FROM chunks`).get() as
-    | { count?: number | bigint }
-    | undefined;
+  const chunkRows = db
+    .prepare(`SELECT COUNT(*) AS count FROM ${MEMORY_INDEX_CHUNKS_TABLE}`)
+    .get() as { count?: number | bigint } | undefined;
   const chunkCount = readCount(chunkRows);
   const shouldRebuildText = readCount(textRows) !== chunkCount;
   const shouldRebuildPath = readCount(pathRows) !== chunkCount;

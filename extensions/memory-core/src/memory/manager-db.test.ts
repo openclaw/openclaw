@@ -116,6 +116,84 @@ describe("memory manager database publication", () => {
     }
   });
 
+  it("publishes the shadow path FTS table", async () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = new DatabaseSync(targetPath);
+    const sourceDb = new DatabaseSync(sourcePath);
+    try {
+      ensureMemoryIndexSchema({ db: targetDb, cacheEnabled: false, ftsEnabled: true });
+      ensureMemoryIndexSchema({ db: sourceDb, cacheEnabled: false, ftsEnabled: true });
+      sourceDb
+        .prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("memory/2026-06-17-1649.md", "memory", "hash", 1, 1);
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_index_chunks (
+             id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "chunk-1",
+          "memory/2026-06-17-1649.md",
+          "memory",
+          1,
+          2,
+          "chunk-hash",
+          "mock-embed",
+          "OAuth token notes",
+          JSON.stringify([0]),
+          1,
+        );
+      sourceDb
+        .prepare(
+          "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "OAuth token notes",
+          "chunk-1",
+          "memory/2026-06-17-1649.md",
+          "memory",
+          "mock-embed",
+          1,
+          2,
+        );
+      sourceDb
+        .prepare(
+          "INSERT INTO memory_index_chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "memory/2026-06-17-1649.md",
+          "OAuth token notes",
+          "chunk-1",
+          "memory/2026-06-17-1649.md",
+          "memory",
+          "mock-embed",
+          1,
+          2,
+        );
+      sourceDb.close();
+
+      await publishMemoryDatabaseTables({
+        targetDb,
+        sourcePath,
+        metaKey: "memory_index_meta",
+        expectedRevision: readMemoryDatabaseRevision(targetDb),
+      });
+
+      expect(
+        targetDb.prepare("SELECT path_text, id FROM memory_index_chunks_fts_path").all(),
+      ).toEqual([{ path_text: "memory/2026-06-17-1649.md", id: "chunk-1" }]);
+    } finally {
+      try {
+        sourceDb.close();
+      } catch {}
+      targetDb.close();
+    }
+  });
+
   it("rejects a stale shadow publish after a concurrent live memory update", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");

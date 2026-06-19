@@ -91,7 +91,7 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
 
 function replaceVirtualTable(params: {
   db: DatabaseSync;
-  tableName: "memory_index_chunks_fts" | "memory_index_chunks_vec";
+  tableName: "memory_index_chunks_fts" | "memory_index_chunks_fts_path" | "memory_index_chunks_vec";
   columns: string;
   ignoreDropErrorWhenSourceMissing?: boolean;
 }): void {
@@ -187,6 +187,11 @@ export async function publishMemoryDatabaseTables(params: {
         db: params.targetDb,
         tableName: "memory_index_chunks_fts",
         columns: "text, id, path, source, model, start_line, end_line",
+      });
+      replaceVirtualTable({
+        db: params.targetDb,
+        tableName: "memory_index_chunks_fts_path",
+        columns: "path_text, text, id, path, source, model, start_line, end_line",
       });
       replaceVirtualTable({
         db: params.targetDb,

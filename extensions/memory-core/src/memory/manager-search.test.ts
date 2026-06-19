@@ -52,7 +52,7 @@ function insertKeywordFixture(
     params.endLine,
   );
   db.prepare(
-    "INSERT INTO chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO memory_index_chunks_fts_path (path_text, text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     params.pathText ?? params.path,
     params.text,
@@ -378,7 +378,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         query: "alpha",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -422,7 +422,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         query: "2026-06-17-1649",
         ftsTokenizer: "unicode61",
         limit: 3,
@@ -472,7 +472,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         query: "project alpha",
         ftsTokenizer: "unicode61",
         limit: 2,
