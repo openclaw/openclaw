@@ -312,8 +312,14 @@ export function resolveCronPayloadOutcome(params: {
   // cron announce output to the final assistant-visible answer.
   // A final assistant answer can replace textual warning payloads, but never
   // structured/media payloads that carry the actual delivery content.
+  // When a recovered tool warning is non-fatal and final assistant text exists,
+  // prefer the final text over the warning payload even without the channel
+  // preference flag set.
+  const hasRecoveredNonFatalWithFinalText =
+    hasNonTerminalToolErrorWarning && normalizedFinalAssistantVisibleText !== undefined;
   const shouldUseFinalAssistantVisibleText =
-    params.preferFinalAssistantVisibleText === true &&
+    (params.preferFinalAssistantVisibleText === true ||
+      hasRecoveredNonFatalWithFinalText) &&
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasFatalStructuredErrorPayload &&
     !hasStructuredDeliveryPayloads;
