@@ -826,9 +826,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   });
   const displayName = normalizeOptionalString(row.displayName) ?? null;
   const trimmedLabel = normalizeOptionalString(row.label) ?? "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== row.key && displayName !== trimmedLabel,
-  );
   const keyParts = parseSessionKeyParts(row.key);
   const agentIdentity = keyParts
     ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
@@ -841,6 +838,12 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       : null;
   const hoverTitle = row.key;
   const keyCellTitle = friendlyKeyLabel ?? resolveSessionDisplayName(row.key, row);
+  const showDisplayName = Boolean(
+    displayName &&
+    displayName !== row.key &&
+    displayName !== trimmedLabel &&
+    displayName !== keyCellTitle,
+  );
   const canLink = row.kind !== "global";
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
