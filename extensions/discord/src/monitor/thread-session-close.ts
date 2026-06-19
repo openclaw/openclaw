@@ -2,19 +2,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   listSessionEntries,
-  patchSessionEntry,
   resolveStorePath,
+  updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}
- * as "reset" by setting `updatedAt` to 0.
+ * as closed by removing the store row.
  *
- * This mirrors how the daily / idle session reset works: zeroing `updatedAt`
- * makes `evaluateSessionFreshness` treat the session as stale on the next
- * inbound message, so the bot starts a fresh conversation without deleting
- * any on-disk transcript history.
+ * Removing the row forces the next inbound message in that archived Discord
+ * thread to start a fresh conversation without deleting on-disk transcript
+ * history. Timestamp-only invalidation is not enough for idle/no-expiry
+ * thread sessions because such entries can still evaluate fresh.
  */
 export async function closeDiscordThreadSessions(params: {
   cfg: OpenClawConfig;
@@ -49,28 +49,27 @@ export async function closeDiscordThreadSessions(params: {
   let resetCount = 0;
 
   for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
-    if (!sessionKeyContainsThreadId(sessionKey) || entry.updatedAt === 0) {
+    if (!sessionKeyContainsThreadId(sessionKey)) {
       continue;
     }
-    // Setting updatedAt to 0 signals that this session is stale.
-    // evaluateSessionFreshness will create a new session on the next message.
-    let resetEntry = false;
-    await patchSessionEntry({
+    const removed = await updateSessionStore(
       storePath,
-      sessionKey,
-      replaceEntry: true,
-      update: (current) => {
-        if (current.updatedAt === 0) {
-          return null;
+      (store) => {
+        const current = store[sessionKey];
+        if (!current) {
+          return false;
         }
         if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
-          return null;
+          return false;
         }
-        resetEntry = true;
-        return { ...current, updatedAt: 0 };
+        delete store[sessionKey];
+        return true;
       },
-    });
-    if (resetEntry) {
+      {
+        skipSaveWhenResult: (result) => result !== true,
+      },
+    );
+    if (removed) {
       resetCount += 1;
     }
   }

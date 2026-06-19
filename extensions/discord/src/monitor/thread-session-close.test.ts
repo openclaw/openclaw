@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const listSessionEntries = vi.fn();
-  const patchSessionEntry = vi.fn();
   const resolveStorePath = vi.fn(() => "/tmp/openclaw-sessions.json");
-  return { listSessionEntries, patchSessionEntry, resolveStorePath };
+  const updateSessionStore = vi.fn();
+  return { listSessionEntries, resolveStorePath, updateSessionStore };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -15,35 +15,36 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     listSessionEntries: hoisted.listSessionEntries,
-    patchSessionEntry: hoisted.patchSessionEntry,
     resolveStorePath: hoisted.resolveStorePath,
+    updateSessionStore: hoisted.updateSessionStore,
   };
 });
 
 let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
 
-function setupStore(store: Record<string, { sessionId?: string; updatedAt: number }>) {
+type TestSessionEntry = {
+  sessionId: string;
+  updatedAt: number;
+  lastInteractionAt?: number;
+};
+
+function entry(sessionId: string, updatedAt: number, extra: Partial<TestSessionEntry> = {}) {
+  return { sessionId, updatedAt, ...extra };
+}
+
+function setupStore(store: Record<string, TestSessionEntry>) {
   hoisted.listSessionEntries.mockImplementation(() =>
-    Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry: { ...entry } })),
   );
-  hoisted.patchSessionEntry.mockImplementation(
-    async (params: {
-      sessionKey: string;
-      update: (entry: {
-        sessionId?: string;
-        updatedAt: number;
-      }) => { sessionId?: string; updatedAt: number } | null;
-    }) => {
-      const entry = store[params.sessionKey];
-      if (!entry) {
-        return null;
-      }
-      const next = params.update({ ...entry });
-      if (!next) {
-        return entry;
-      }
-      store[params.sessionKey] = next;
-      return next;
+  hoisted.updateSessionStore.mockImplementation(
+    async (
+      _storePath: string,
+      mutator: (s: typeof store) => unknown,
+      options?: { skipSaveWhenResult?: (result: unknown) => boolean },
+    ) => {
+      const result = mutator(store);
+      options?.skipSaveWhenResult?.(result);
+      return result;
     },
   );
 }
@@ -61,15 +62,15 @@ describe("closeDiscordThreadSessions", () => {
 
   beforeEach(() => {
     hoisted.listSessionEntries.mockReset();
-    hoisted.patchSessionEntry.mockReset();
+    hoisted.updateSessionStore.mockReset();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
   });
 
-  it("resets updatedAt to 0 for sessions whose key contains the threadId", async () => {
+  it("removes sessions whose key contains the threadId", async () => {
     const store = {
-      [MATCHED_KEY]: { updatedAt: 1_700_000_000_000 },
-      [UNMATCHED_KEY]: { updatedAt: 1_700_000_000_001 },
+      [MATCHED_KEY]: entry("matched-session", 1_700_000_000_000),
+      [UNMATCHED_KEY]: entry("unmatched-session", 1_700_000_000_001),
     };
     setupStore(store);
 
@@ -80,13 +81,13 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(1);
-    expect(store[MATCHED_KEY].updatedAt).toBe(0);
+    expect(store[MATCHED_KEY]).toBeUndefined();
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
   it("returns 0 and leaves store unchanged when no session matches", async () => {
     const store = {
-      [UNMATCHED_KEY]: { updatedAt: 1_700_000_000_001 },
+      [UNMATCHED_KEY]: entry("unmatched-session", 1_700_000_000_001),
     };
     setupStore(store);
 
@@ -100,14 +101,14 @@ describe("closeDiscordThreadSessions", () => {
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
-  it("resets all matching sessions when multiple keys contain the threadId", async () => {
+  it("removes all matching sessions when multiple keys contain the threadId", async () => {
     const keyA = `agent:main:discord:channel:${THREAD_ID}`;
     const keyB = `agent:work:discord:channel:${THREAD_ID}`;
     const keyC = `agent:main:discord:channel:${OTHER_ID}`;
     const store = {
-      [keyA]: { updatedAt: 1_000 },
-      [keyB]: { updatedAt: 2_000 },
-      [keyC]: { updatedAt: 3_000 },
+      [keyA]: entry("session-a", 1_000),
+      [keyB]: entry("session-b", 2_000),
+      [keyC]: entry("session-c", 3_000),
     };
     setupStore(store);
 
@@ -118,8 +119,8 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(2);
-    expect(store[keyA].updatedAt).toBe(0);
-    expect(store[keyB].updatedAt).toBe(0);
+    expect(store[keyA]).toBeUndefined();
+    expect(store[keyB]).toBeUndefined();
     expect(store[keyC].updatedAt).toBe(3_000);
   });
 
@@ -127,7 +128,7 @@ describe("closeDiscordThreadSessions", () => {
     const longerSnowflake = `${THREAD_ID}00`;
     const noMatchKey = `agent:main:discord:channel:${longerSnowflake}`;
     const store = {
-      [noMatchKey]: { updatedAt: 9_999 },
+      [noMatchKey]: entry("no-match-session", 9_999),
     };
     setupStore(store);
 
@@ -144,7 +145,7 @@ describe("closeDiscordThreadSessions", () => {
   it("matching is case-insensitive for the session key", async () => {
     const uppercaseKey = `agent:main:discord:channel:${THREAD_ID.toUpperCase()}`;
     const store = {
-      [uppercaseKey]: { updatedAt: 5_000 },
+      [uppercaseKey]: entry("uppercase-session", 5_000),
     };
     setupStore(store);
 
@@ -155,7 +156,7 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(1);
-    expect(store[uppercaseKey].updatedAt).toBe(0);
+    expect(store[uppercaseKey]).toBeUndefined();
   });
 
   it("returns 0 immediately when threadId is empty without touching the store", async () => {
@@ -167,13 +168,15 @@ describe("closeDiscordThreadSessions", () => {
 
     expect(count).toBe(0);
     expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
-    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
   });
 
-  it("does not recount sessions that were already reset", async () => {
+  it("removes idle/no-expiry thread sessions instead of relying on timestamp freshness", async () => {
     const store = {
-      [MATCHED_KEY]: { updatedAt: 0 },
-      [UNMATCHED_KEY]: { updatedAt: 1_700_000_000_001 },
+      [MATCHED_KEY]: entry("matched-session", 1_700_000_000_000, {
+        lastInteractionAt: 1_700_000_000_000,
+      }),
+      [UNMATCHED_KEY]: entry("unmatched-session", 1_700_000_000_001),
     };
     setupStore(store);
 
@@ -183,12 +186,12 @@ describe("closeDiscordThreadSessions", () => {
       threadId: THREAD_ID,
     });
 
-    expect(count).toBe(0);
-    expect(store[MATCHED_KEY].updatedAt).toBe(0);
+    expect(count).toBe(1);
+    expect(store[MATCHED_KEY]).toBeUndefined();
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
-  it("does not reset a matching session that changed after the list snapshot", async () => {
+  it("does not remove a matching session that changed after the list snapshot", async () => {
     const store = {
       [MATCHED_KEY]: {
         sessionId: "fresh-session",
