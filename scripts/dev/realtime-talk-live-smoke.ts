@@ -129,8 +129,8 @@ async function readOpenAIRealtimeBrowserResponseText(
   label: string,
   maxBytes: number,
 ): Promise<string> {
-  const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
-    new Error(`${label} response body exceeded ${maxBytes} bytes`);
+  const responseBodyTooLargeError = (errorLabel: string, errorMaxBytes: number): Error =>
+    new Error(`${errorLabel} response body exceeded ${errorMaxBytes} bytes`);
   const rawContentLength = response.headers.get("content-length");
   if (rawContentLength && /^\d+$/u.test(rawContentLength)) {
     const contentLength = Number(rawContentLength);
