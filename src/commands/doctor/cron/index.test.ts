@@ -600,6 +600,47 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("1 job still uses legacy", "Cron");
   });
 
+  it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "shell-prompt-job",
+        name: "Shell prompt job",
+        schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
+          toolsAllow: ["*"],
+        },
+        delivery: { mode: "announce" },
+      }),
+    ]);
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    // The advisory is informational only: doctor --fix cannot rewrite a working
+    // isolated agentTurn job, so the misleading repair note must stay absent.
+    expectNoNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("drives shell/process tools from the agent prompt", "Cron");
+    expectNoteContaining("Shell prompt job", "Cron");
+    expectNoNoteContaining("openclaw doctor --fix", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
+    expect(prompter.confirm).not.toHaveBeenCalled();
+
+    // No churn: the advisory does not rewrite the still-working job.
+    const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain("python3 scripts/check_mail.py");
+  });
+
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

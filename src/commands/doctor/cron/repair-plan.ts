@@ -5,28 +5,35 @@ import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
-type CronLegacyIssueDetails = {
-  unresolvedAgentTurnShellToolPrompt?: string[];
-};
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function formatJobNameList(names: string[] | undefined): string {
-  if (!names || names.length === 0) {
-    return "";
-  }
+function formatJobNameList(names: string[]): string {
   const preview = names.slice(0, 5).map((name) => `\`${name}\``);
   const remaining = names.length - preview.length;
   return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
 }
 
+/**
+ * Advisory for isolated agentTurn cron jobs that drive shell/process tools from the prompt.
+ * These keep running and are not a legacy store row, so `doctor --fix` cannot rewrite them;
+ * routing this through the auto-repair preview made the finding persist after every --fix.
+ */
+export function formatUnresolvedShellPromptAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  return [
+    `${pluralize(names.length, "isolated cron job")} drives shell/process tools from the agent prompt and keeps running as-is${formatJobNameList(names)}.`,
+    "- This is a supported shape, not a legacy store row, so the doctor fix path cannot convert it and the finding is informational only.",
+    '- For a deterministic run, recreate the job as a command cron job (`openclaw cron add ... --command "<shell>"`).',
+  ].join("\n");
+}
+
 /** Convert legacy cron issue counts into doctor preview lines. */
-export function formatLegacyIssuePreview(
-  issues: CronLegacyIssueCounts,
-  details: CronLegacyIssueDetails = {},
-): string[] {
+export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
@@ -56,11 +63,6 @@ export function formatLegacyIssuePreview(
   if (issues.legacyAgentTurnCommandPayload) {
     lines.push(
       `- ${pluralize(issues.legacyAgentTurnCommandPayload, "job")} uses an agent prompt to run a shell command`,
-    );
-  }
-  if (issues.unresolvedAgentTurnShellToolPrompt) {
-    lines.push(
-      `- ${pluralize(issues.unresolvedAgentTurnShellToolPrompt, "job")} asks an isolated agent for shell/process tools and needs manual command conversion${formatJobNameList(details.unresolvedAgentTurnShellToolPrompt)}`,
     );
   }
   if (issues.legacyPayloadProvider) {
