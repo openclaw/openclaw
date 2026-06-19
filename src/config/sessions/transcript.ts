@@ -429,9 +429,16 @@ async function findLatestEquivalentAssistantMessageId(
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     try {
       const parsed = JSON.parse(line) as {
+        type?: unknown;
         id?: unknown;
         message?: SessionTranscriptAssistantMessage;
       };
+      // Skip non-message entries (e.g. `openclaw.cache-ttl` custom events)
+      // so the dedup scan reaches the canonical assistant turn even when
+      // metadata nodes trail it.
+      if (parsed.type !== "message") {
+        continue;
+      }
       const candidate = parsed.message;
       if (!candidate || candidate.role !== "assistant") {
         continue;
