@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   cleanupPackageSourceWorktreeForTest,
+  cleanPackedOpenClawTarballsForTest,
   downloadUrl,
   findSingleTarballForTest,
   loadTrustedPackageSource,
@@ -261,6 +262,25 @@ describe("resolve-openclaw-package-candidate", () => {
         ),
       ).rejects.toThrow("npm pack reported unsafe OpenClaw tarball filename");
     }
+  });
+
+  it("cleans stale package tarballs before npm fallback scanning", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-stale-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-9999.1.1.tgz"), "stale");
+    await writeFile(path.join(dir, "openclaw-C:evil.tgz"), "unsafe");
+
+    await cleanPackedOpenClawTarballsForTest(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "current");
+
+    await expect(
+      moveNewestPackedTarballForTest(dir, "npm notice\n", "openclaw-current.tgz"),
+    ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
+    await expect(missing(path.join(dir, "openclaw-9999.1.1.tgz"))).resolves.toBe(true);
+    await expect(readFile(path.join(dir, "openclaw-C:evil.tgz"), "utf8")).resolves.toBe("unsafe");
+    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe(
+      "current",
+    );
   });
 
   it("bounds captured command stderr tails on failures", async () => {
