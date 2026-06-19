@@ -315,9 +315,15 @@ The same section also includes the OpenClaw source location. Git checkouts expos
 source root so the agent can inspect code directly. Package installs include the GitHub
 source URL and tell the agent to review source there whenever the docs are incomplete or
 stale. The prompt also notes the public docs mirror, community Discord, and ClawHub
-([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
-consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
-run `openclaw status` itself when possible (asking the user only when it lacks access).
+([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It frames docs as the
+authority for OpenClaw self-knowledge before the model understands how OpenClaw works,
+including memory/daily notes, sessions, tools, Gateway, config, commands, or project
+context. The prompt tells the model to use local docs (or the docs mirror when local docs
+are unavailable) first, and to treat AGENTS.md, project context, workspace/profile/memory
+notes, and `memory_search` as instruction context or user memory rather than OpenClaw
+design or implementation knowledge. If docs are silent or stale, the model should say so
+and inspect source. The prompt also tells the model to run `openclaw status` itself when
+possible, asking the user only when it lacks access.
 For configuration specifically, it points agents to the `gateway` tool action
 `config.schema.lookup` for exact field-level docs and constraints, then to
 `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`

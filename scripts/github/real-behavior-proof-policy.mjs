@@ -134,6 +134,10 @@ export async function readBoundedGitHubApiJson(
   return JSON.parse(text);
 }
 
+async function cancelGitHubApiResponseBody(response) {
+  await response.body?.cancel?.().catch(() => undefined);
+}
+
 function normalizeLineEndings(text = "") {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -193,21 +197,30 @@ export async function isMaintainerTeamMember({
         signal,
       }),
   );
-  if (response.status === 404) {
-    return false;
+  try {
+    if (response.status === 404) {
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(`Team membership lookup failed: ${response.status}`);
+    }
+    const body = await withGitHubApiTimeout(
+      `maintainer membership response for ${login}`,
+      timeoutMs,
+      (signal) =>
+        readBoundedGitHubApiJson(
+          response,
+          `maintainer membership response for ${login}`,
+          undefined,
+          {
+            signal,
+          },
+        ),
+    );
+    return body?.state === "active";
+  } finally {
+    await cancelGitHubApiResponseBody(response);
   }
-  if (!response.ok) {
-    throw new Error(`Team membership lookup failed: ${response.status}`);
-  }
-  const body = await withGitHubApiTimeout(
-    `maintainer membership response for ${login}`,
-    timeoutMs,
-    (signal) =>
-      readBoundedGitHubApiJson(response, `maintainer membership response for ${login}`, undefined, {
-        signal,
-      }),
-  );
-  return body?.state === "active";
 }
 
 function nextFenceMarker(line, fenceMarker) {

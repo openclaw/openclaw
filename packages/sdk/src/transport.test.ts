@@ -59,4 +59,40 @@ describe("GatewayClientTransport", () => {
     await expect(transport.connect()).rejects.toThrow("gateway transport is closed");
     expect(gatewayClientMocks.instances).toHaveLength(0);
   });
+
+  it("resolves connect when a hello observer throws", async () => {
+    const onHelloOk = vi.fn(() => {
+      throw new Error("hello observer failed");
+    });
+    const transport = new GatewayClientTransport({ onHelloOk });
+
+    const connect = transport.connect();
+    const client = gatewayClientMocks.instances[0];
+
+    expect(() => client?.opts.onHelloOk?.({ sessionId: "session-1" })).toThrow(
+      "hello observer failed",
+    );
+
+    await expect(connect).resolves.toBeUndefined();
+    expect(onHelloOk).toHaveBeenCalledWith({ sessionId: "session-1" });
+  });
+
+  it("rejects connect when a connect-error observer throws", async () => {
+    const onConnectError = vi.fn(() => {
+      throw new Error("connect observer failed");
+    });
+    const transport = new GatewayClientTransport({ onConnectError });
+
+    const connect = transport.connect();
+    const connectExpectation = expect(connect).rejects.toThrow("gateway rejected");
+    const client = gatewayClientMocks.instances[0];
+
+    expect(() => client?.opts.onConnectError?.(new Error("gateway rejected"))).toThrow(
+      "connect observer failed",
+    );
+
+    await connectExpectation;
+    expect(onConnectError).toHaveBeenCalledOnce();
+    expect(client?.stopAndWait).toHaveBeenCalledTimes(1);
+  });
 });

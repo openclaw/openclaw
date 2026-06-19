@@ -275,6 +275,12 @@ type WhatsAppCredentialLease = Awaited<
   ReturnType<typeof acquireQaCredentialLease<WhatsAppQaRuntimeEnv>>
 >;
 type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
+type WhatsAppQaPreScenarioPhase =
+  | "auth archive unpack"
+  | "credential heartbeat start"
+  | "credential lease acquisition"
+  | "driver session start"
+  | "scenario execution";
 
 const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
@@ -2890,6 +2896,12 @@ function redactWhatsAppQaScenarioResults(
 
 const SAFE_WHATSAPP_DRIVER_DIAGNOSTICS_PATTERN =
   /observed \d+ WhatsApp driver message\(s\) after (?:(?:pending|resolved) approval )?wait lower bound(?:: [-A-Za-z0-9_#:=()., +;/]+)?/u;
+const SAFE_WHATSAPP_PRE_SCENARIO_FAILURE_PATTERN =
+  /^WhatsApp QA failed during (?:auth archive unpack|credential heartbeat start|credential lease acquisition|driver session start|scenario execution)$/u;
+
+function formatWhatsAppPreScenarioFailureLabel(phase: WhatsAppQaPreScenarioPhase) {
+  return `WhatsApp QA failed during ${phase}`;
+}
 
 function isRedactionSafeWhatsAppScenarioDetailSegment(segment: string) {
   return (
@@ -2901,6 +2913,13 @@ function isRedactionSafeWhatsAppScenarioDetailSegment(segment: string) {
 
 function redactWhatsAppQaScenarioDetails(details: string) {
   const normalized = details.trim();
+  const firstLine = normalized.split(/\r?\n/u, 1)[0] ?? "";
+  const separatorIndex = firstLine.indexOf(":");
+  const preScenarioFailureLabel =
+    separatorIndex < 0 ? firstLine.trim() : firstLine.slice(0, separatorIndex).trim();
+  if (SAFE_WHATSAPP_PRE_SCENARIO_FAILURE_PATTERN.test(preScenarioFailureLabel)) {
+    return preScenarioFailureLabel;
+  }
   const safeDriverDiagnostics = normalized.match(SAFE_WHATSAPP_DRIVER_DIAGNOSTICS_PATTERN);
   if (safeDriverDiagnostics) {
     return safeDriverDiagnostics[0];
@@ -3051,6 +3070,7 @@ export async function runWhatsAppQaLive(params: {
   let runtimeEnv: WhatsAppQaRuntimeEnv | undefined;
   let tempAuthRoot: string | undefined;
   let closeDriverSession: (() => Promise<void>) | undefined;
+  let preScenarioPhase: WhatsAppQaPreScenarioPhase = "credential lease acquisition";
 
   try {
     credentialLease = await acquireQaCredentialLease({
@@ -3060,6 +3080,7 @@ export async function runWhatsAppQaLive(params: {
       resolveEnvPayload: () => resolveWhatsAppQaRuntimeEnv(),
       parsePayload: parseWhatsAppQaCredentialPayload,
     });
+    preScenarioPhase = "credential heartbeat start";
     leaseHeartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
     const assertLeaseHealthy = () => {
       leaseHeartbeat?.throwIfFailed();
@@ -3068,6 +3089,7 @@ export async function runWhatsAppQaLive(params: {
     tempAuthRoot = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-qa-"),
     );
+    preScenarioPhase = "auth archive unpack";
     const [driverAuthDir, sutAuthDir] = await Promise.all([
       unpackWhatsAppAuthArchive({
         archiveBase64: runtimeEnv.driverAuthArchiveBase64,
@@ -3080,8 +3102,10 @@ export async function runWhatsAppQaLive(params: {
         parentDir: tempAuthRoot,
       }),
     ]);
+    preScenarioPhase = "driver session start";
     let activeDriver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
     closeDriverSession = () => activeDriver.close();
+    preScenarioPhase = "scenario execution";
 
     for (const [scenarioIndex, scenario] of scenarios.entries()) {
       const progressIndex = scenarioIndex + 1;
@@ -3207,9 +3231,10 @@ export async function runWhatsAppQaLive(params: {
       }
     }
   } catch (error) {
-    appendLiveLaneIssue(cleanupIssues, "WhatsApp QA failed before scenario completion", error);
+    const failureLabel = formatWhatsAppPreScenarioFailureLabel(preScenarioPhase);
+    appendLiveLaneIssue(cleanupIssues, failureLabel, error);
     appendPreScenarioFailureResults({
-      details: formatErrorMessage(error),
+      details: `${failureLabel}: ${formatErrorMessage(error)}`,
       scenarioResults,
       scenarios,
     });
@@ -3320,6 +3345,7 @@ export const testing = {
   findUnexpectedWhatsAppNoReplyMessage,
   formatWhatsAppApprovalWaitDiagnostics,
   formatWhatsAppBatchMessageDiagnostics,
+  formatWhatsAppPreScenarioFailureLabel,
   formatWhatsAppScenarioProgressDetails,
   formatWhatsAppScenarioProgressLine,
   fingerprintWhatsAppCredentialId: fingerprintQaCredentialId,

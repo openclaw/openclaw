@@ -46,7 +46,7 @@ async function withTimeout(label, timeoutMs, run) {
     timeout.unref?.();
   });
   try {
-    return await Promise.race([run(controller.signal), timeoutPromise]);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -863,11 +863,12 @@ async function assertClawHubPreflight() {
     const body = await withTimeout(
       `ClawHub package preflight response for ${packageName}`,
       limits.timeoutMs,
-      () =>
+      (_signal, timeoutPromise) =>
         readBoundedResponseText(
           response,
           `ClawHub package preflight response for ${packageName}`,
           limits.bodyMaxBytes,
+          timeoutPromise,
         ),
     );
     throw new Error(
@@ -877,11 +878,12 @@ async function assertClawHubPreflight() {
   const rawDetail = await withTimeout(
     `ClawHub package preflight response for ${packageName}`,
     limits.timeoutMs,
-    () =>
+    (_signal, timeoutPromise) =>
       readBoundedResponseText(
         response,
         `ClawHub package preflight response for ${packageName}`,
         limits.bodyMaxBytes,
+        timeoutPromise,
       ),
   );
   const detail = await withTimeout(

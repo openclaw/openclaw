@@ -164,7 +164,9 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
-    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. `loadSessionStore(...)` remains as a deprecated compatibility escape hatch for callers that intentionally need a mutable whole-store clone.
+    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
+
+    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionFilePath(...)` are kept only during the transition before SQLite migration for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers must migrate to entry helpers before the SQLite storage flip.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

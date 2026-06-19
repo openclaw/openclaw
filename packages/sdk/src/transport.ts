@@ -103,21 +103,27 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           this.options.onEvent?.(normalized);
         },
         onHelloOk: (_hello: unknown) => {
-          this.options.onHelloOk?.(_hello);
-          this.rejectPendingConnect = null;
-          resolve();
+          try {
+            this.options.onHelloOk?.(_hello);
+          } finally {
+            this.rejectPendingConnect = null;
+            resolve();
+          }
         },
         onConnectError: (error: Error) => {
-          this.options.onConnectError?.(error);
-          if (this.client === client) {
-            this.client = null;
+          try {
+            this.options.onConnectError?.(error);
+          } finally {
+            if (this.client === client) {
+              this.client = null;
+            }
+            if (this.connectPromise) {
+              this.connectPromise = null;
+            }
+            void client.stopAndWait().catch(() => {});
+            this.rejectPendingConnect = null;
+            reject(error);
           }
-          if (this.connectPromise) {
-            this.connectPromise = null;
-          }
-          void client.stopAndWait().catch(() => {});
-          this.rejectPendingConnect = null;
-          reject(error);
         },
         onReconnectPaused: this.options.onReconnectPaused,
         onClose: this.options.onClose,
