@@ -113,6 +113,21 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function isFailedItemProgress(payload: { phase?: string; status?: string }): boolean {
+  return payload.phase === "error" || payload.status === "failed" || payload.status === "error";
+}
+
+function isFailedCommandOutputProgress(payload: {
+  status?: string;
+  exitCode?: number | null;
+}): boolean {
+  return (
+    payload.status === "failed" ||
+    payload.status === "error" ||
+    (typeof payload.exitCode === "number" && payload.exitCode !== 0)
+  );
+}
+
 type DiscordReplySkipReason =
   | "aborted before delivery"
   | "reasoning payload"
@@ -1051,6 +1066,9 @@ async function processDiscordMessageInner(
           );
         },
         onItemEvent: async (payload) => {
+          if (isFailedItemProgress(payload)) {
+            return;
+          }
           if (payload.kind === "preamble") {
             if (verboseProgressActive()) {
               return;
@@ -1109,6 +1127,9 @@ async function processDiscordMessageInner(
         },
         onCommandOutput: async (payload) => {
           if (payload.phase !== "end") {
+            return;
+          }
+          if (isFailedCommandOutputProgress(payload)) {
             return;
           }
           await draftPreview.pushToolProgress(
