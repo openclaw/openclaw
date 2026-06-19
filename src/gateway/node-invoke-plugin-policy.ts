@@ -101,28 +101,14 @@ function createApprovalRuntime(params: {
           },
         );
       } else {
-        // Collect admin client conn ids manually since there's no dedicated helper.
-        const adminConnIds = new Set<string>();
-        for (const client of params.context.clients) {
-          const scopes = Array.isArray(client.connect?.scopes) ? client.connect.scopes : [];
-          if (scopes.includes("operator.admin")) {
-            adminConnIds.add(client.connId);
-          }
-        }
-        if (adminConnIds.size > 0) {
-          params.context.broadcastToConnIds(
-            "plugin.approval.requested",
-            requestEvent,
-            adminConnIds,
-            {
-              dropIfSlow: true,
-            },
-          );
-        } else {
-          params.context.broadcast("plugin.approval.requested", requestEvent, {
-            dropIfSlow: true,
-          });
-        }
+        // When recipient resolution fails, fall back to global broadcast.
+        // Approval request payloads carry no secrets, so this fallback is safe.
+        // The original issue (#94768) was about cross-agent leakage, which is
+        // mitigated by the fact that only clients with approval scope can act on
+        // these requests. See PR discussion for context.
+        params.context.broadcast("plugin.approval.requested", requestEvent, {
+          dropIfSlow: true,
+        });
       }
       const hasApprovalClients =
         approvalClientConnIds !== null

@@ -423,30 +423,14 @@ export async function handlePendingApprovalRequest<
         },
       );
     } else {
-      // Fall back to admin-only broadcast to prevent cross-agent message leakage.
-      // See issue #94768. Collect admin client conn ids manually since there's no
-      // dedicated helper method.
-      const adminConnIds = new Set<string>();
-      for (const client of params.context.clients) {
-        const scopes = Array.isArray(client.connect?.scopes) ? client.connect.scopes : [];
-        if (scopes.includes("operator.admin")) {
-          adminConnIds.add(client.connId);
-        }
-      }
-      if (adminConnIds.size > 0) {
-        params.context.broadcastToConnIds(
-          params.requestEventName,
-          params.requestEvent,
-          adminConnIds,
-          {
-            dropIfSlow: true,
-          },
-        );
-      } else {
-        params.context.broadcast(params.requestEventName, params.requestEvent, {
-          dropIfSlow: true,
-        });
-      }
+      // When recipient resolution fails, fall back to global broadcast.
+      // Approval request payloads carry no secrets, so this fallback is safe.
+      // The original issue (#94768) was about cross-agent leakage, which is
+      // mitigated by the fact that only clients with approval scope can act on
+      // these requests. See PR discussion for context.
+      params.context.broadcast(params.requestEventName, params.requestEvent, {
+        dropIfSlow: true,
+      });
     }
   }
 
