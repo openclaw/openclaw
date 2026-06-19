@@ -131,7 +131,29 @@ export function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
+  validateOutputName(options.outputName);
   return options;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
+}
+
+function resolvePackedOpenClawTarballFilename(value) {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    throw new Error(
+      `npm pack reported unsafe OpenClaw tarball filename: ${JSON.stringify(filename)}`,
+    );
+  }
+  return filename;
 }
 
 export function validateOpenClawPackageSpec(spec) {
@@ -495,24 +517,41 @@ async function installPackageSourceDeps(sourceDir) {
 
 async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   let filename = "";
+  let parsed;
   try {
-    const parsed = JSON.parse(packOutput);
-    if (Array.isArray(parsed)) {
-      filename = parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
-    }
+    parsed = JSON.parse(packOutput);
   } catch {}
+  if (Array.isArray(parsed)) {
+    const packedFilename =
+      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+    if (packedFilename) {
+      filename = resolvePackedOpenClawTarballFilename(packedFilename);
+    }
+  }
   if (!filename) {
     for (const line of packOutput.split(/\r?\n/u)) {
       const trimmed = line.trim();
-      if (/^openclaw-.*\.tgz$/u.test(trimmed)) {
-        filename = trimmed;
+      if (
+        trimmed.endsWith(".tgz") &&
+        (trimmed.startsWith("openclaw-") ||
+          trimmed.includes(":") ||
+          trimmed.includes("/") ||
+          trimmed.includes("\\"))
+      ) {
+        filename = resolvePackedOpenClawTarballFilename(trimmed);
       }
     }
   }
   if (!filename) {
     const entries = await fs.readdir(outputDir);
     filename = entries
-      .filter((entry) => /^openclaw-.*\.tgz$/u.test(entry))
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawTarballFilename(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
       .toSorted((a, b) => a.localeCompare(b))
       .at(-1);
   }
@@ -527,6 +566,8 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   }
   return target;
 }
+
+export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
 
 function normalizeUrlHostname(hostname) {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
@@ -714,11 +755,21 @@ function toTrustedPorts(value, sourceId) {
   if (!Array.isArray(ports) || ports.length === 0) {
     throw new Error(`trusted package source ${sourceId} must define non-empty ports`);
   }
-  const normalized = ports.map((port) => Number(port));
+  const normalized = ports.map((port) => parseTrustedPort(port));
   if (normalized.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
     throw new Error(`trusted package source ${sourceId} has invalid ports`);
   }
   return [...new Set(normalized)].toSorted((a, b) => a - b);
+}
+
+function parseTrustedPort(value) {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && /^[0-9]+$/u.test(value)) {
+    return Number(value);
+  }
+  return Number.NaN;
 }
 
 function toPathPrefixes(value, sourceId) {
@@ -936,6 +987,15 @@ function responseHeader(response, name) {
   return response.headers?.get?.(name) ?? null;
 }
 
+function createPackageDownloadTimeoutError(parsed, timeoutMs) {
+  return Object.assign(
+    new Error(`package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`),
+    {
+      code: "ETIMEDOUT",
+    },
+  );
+}
+
 async function closeResponseBody(body) {
   if (!body) {
     return;
@@ -951,8 +1011,16 @@ async function closeResponseBody(body) {
 
 async function openFetchPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const response = await options
     .fetchImpl(parsed, {
       headers: options.headers,
@@ -962,12 +1030,7 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     .catch((error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     });
@@ -975,14 +1038,23 @@ async function openFetchPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
 
 async function openHttpsPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  timeout.unref?.();
+  const timeoutError = createPackageDownloadTimeoutError(parsed, options.timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, options.timeoutMs);
+    timeout.unref?.();
+  });
+  timeoutPromise.catch(() => {});
   const lookup = createPinnedLookup(parsed.hostname, options.addresses);
   const response = await new Promise((resolve, reject) => {
     const request = httpsRequest(
@@ -1014,12 +1086,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     /** @param {unknown} error */ (error) => {
       clearTimeout(timeout);
       if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
+        throw Object.assign(timeoutError, { cause: error });
       }
       throw error;
     },
@@ -1028,6 +1095,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     close: async () => closeResponseBody(response.body),
     response,
     timeout,
+    timeoutPromise,
     timeoutMs: options.timeoutMs,
   };
 }
@@ -1073,7 +1141,46 @@ async function openPackageDownloadResponse(url, options) {
   throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
 }
 
-async function* limitResponseBody(body, maxBytes) {
+async function* limitWebResponseBody(body, maxBytes, timeoutPromise) {
+  let downloaded = 0;
+  const reader = body.getReader();
+  let timedOut = false;
+  let timeoutFailure;
+  const timeoutRead = timeoutPromise?.catch((error) => {
+    timedOut = true;
+    timeoutFailure = error;
+    void reader.cancel().catch(() => {});
+    throw error;
+  });
+  try {
+    for (;;) {
+      const next = reader.read();
+      const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
+      if (timedOut) {
+        throw toLintErrorObject(timeoutFailure, "package_url download timed out");
+      }
+      if (done) {
+        return;
+      }
+      const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
+      downloaded += size;
+      if (downloaded > maxBytes) {
+        throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
+      }
+      yield value;
+    }
+  } finally {
+    if (!timedOut) {
+      reader.releaseLock();
+    }
+  }
+}
+
+async function* limitResponseBody(body, maxBytes, timeoutPromise) {
+  if (typeof body.getReader === "function") {
+    yield* limitWebResponseBody(body, maxBytes, timeoutPromise);
+    return;
+  }
   let downloaded = 0;
   for await (const chunk of body) {
     const size = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
@@ -1087,20 +1194,31 @@ async function* limitResponseBody(body, maxBytes) {
 
 export async function downloadUrl(url, target, options = {}) {
   const maxBytes = options.maxBytes ?? PACKAGE_URL_MAX_BYTES;
-  const { close, response, timeout, timeoutMs } = await openPackageDownloadResponse(url, options);
+  const { close, response, timeout, timeoutMs, timeoutPromise } = await openPackageDownloadResponse(
+    url,
+    options,
+  );
   const tempTarget = `${target}.tmp`;
   try {
     if (!responseOk(response) || !response.body) {
       throw new Error(`failed to download package_url: HTTP ${responseStatus(response)}`);
     }
-    const contentLength = Number(responseHeader(response, "content-length") ?? "");
-    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    const rawContentLength = responseHeader(response, "content-length");
+    const contentLength =
+      rawContentLength && /^\d+$/u.test(rawContentLength) ? Number(rawContentLength) : undefined;
+    if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
       throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
     }
     await fs.rm(tempTarget, { force: true });
-    await pipeline(limitResponseBody(response.body, maxBytes), createWriteStream(tempTarget));
+    await pipeline(
+      limitResponseBody(response.body, maxBytes, timeoutPromise),
+      createWriteStream(tempTarget),
+    );
     await fs.rename(tempTarget, target);
   } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      throw error;
+    }
     if (error?.name === "AbortError") {
       throw new Error(`package_url download timed out after ${timeoutMs}ms: ${url}`, {
         cause: error,

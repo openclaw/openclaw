@@ -14,10 +14,6 @@ import {
   TranscriptFileState,
   writeTranscriptFileAtomic,
 } from "./transcript-file-state.js";
-import {
-  resolveRuntimeTranscriptReadTarget,
-  type RuntimeTranscriptScope,
-} from "./transcript-runtime-state.js";
 
 type ReadonlySessionManagerForRotation = Pick<
   TranscriptFileState,
@@ -103,33 +99,6 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   });
 }
 
-/**
- * Rotates a runtime transcript after compaction using agent/session identity.
- */
-export async function rotateRuntimeTranscriptAfterCompaction(params: {
-  sessionManager?: ReadonlySessionManagerForRotation;
-  scope: RuntimeTranscriptScope;
-  now?: () => Date;
-}): Promise<CompactionTranscriptRotation> {
-  const target = await resolveRuntimeTranscriptReadTarget(params.scope);
-  let sessionManager = params.sessionManager;
-  if (!sessionManager) {
-    try {
-      sessionManager = await readTranscriptFileState(target.sessionFile);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return { rotated: false, reason: "missing session file" };
-      }
-      throw err;
-    }
-  }
-  return await rotateTranscriptAfterCompaction({
-    sessionManager,
-    sessionFile: target.sessionFile,
-    ...(params.now ? { now: params.now } : {}),
-  });
-}
-
 function findLatestCompactionIndex(entries: SessionEntry[]): number {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     if (entries[index]?.type === "compaction") {
@@ -174,7 +143,9 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
-  const duplicateUserMessageIds = collectDuplicateUserMessageEntryIdsForCompaction(branch);
+  const keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));
+  const duplicateUserMessageIds =
+    collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);
   for (const entry of allEntries) {
     if (
       (summarizedBranchIds.has(entry.id) && entry.type === "message") ||

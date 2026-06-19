@@ -13,7 +13,7 @@ import { providerSupportsNativePdfDocument } from "../../media-understanding/def
 import { extractAssistantText } from "../embedded-agent-utils.js";
 
 /** Normalized PDF model preference used by tool registration and execution. */
-export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
 /** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {

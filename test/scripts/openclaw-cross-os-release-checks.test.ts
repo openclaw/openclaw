@@ -20,6 +20,8 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-m
 import {
   agentOutputHasExpectedOkMarker,
   agentTurnUsedEmbeddedFallback,
+  buildCrossOsDiscordRoundtripNonces,
+  buildCrossOsReleaseAgentSessionId,
   buildCrossOsReleaseSmokePluginAllowlist,
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildDiscordFetchInit,
@@ -48,6 +50,7 @@ import {
   CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
+  deleteDiscordMessage,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -70,6 +73,7 @@ import {
   resolveExplicitBaselineVersion,
   resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
+  resolveNpmPackTarballFileName,
   resolveProviderConfig,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
@@ -161,6 +165,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(text).toContain("[truncated]");
     expect(text).not.toContain(tail);
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
+  });
+
+  it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
+    let canceled = false;
+    const abortController = new AbortController();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("partial"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+    );
+
+    const text = readBoundedCrossOsResponseText(response, 1024, {
+      signal: abortController.signal,
+    });
+
+    await delay(0);
+    abortController.abort(new Error("cross-os body timed out"));
+
+    await expect(text).rejects.toThrow("cross-os body timed out");
+    expect(canceled).toBe(true);
   });
 
   it("requires dashboard root markers and same-origin asset URLs", () => {
@@ -570,6 +599,26 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
+  it("rejects unsafe npm pack tarball filenames before staging release artifacts", () => {
+    expect(resolveNpmPackTarballFileName("openclaw-2026.6.17.tgz")).toBe("openclaw-2026.6.17.tgz");
+
+    const unsafeFilenames = [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      "/tmp/openclaw.tgz",
+      "C:\\temp\\openclaw.tgz",
+      "openclaw\u0000.tgz",
+      "openclaw.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      expect(() => resolveNpmPackTarballFileName(filename)).toThrow(
+        "npm pack did not report a safe .tgz filename.",
+      );
+    }
+  });
+
   it("keeps the Windows packaged-upgrade fallback install out of npm lifecycle scripts", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
     const fallbackInstallSource = source.slice(
@@ -611,6 +660,21 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     const agentTurnArgCalls = source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g) ?? [];
     expect(agentTurnArgCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("uses collision-resistant IDs for cross-OS live release probes", () => {
+    expect(buildCrossOsReleaseAgentSessionId("installer-fresh", 2)).toMatch(
+      /^cross-os-release-check-installer-fresh-[0-9a-f-]{36}-2$/u,
+    );
+
+    const nonces = buildCrossOsDiscordRoundtripNonces();
+    expect(nonces.outboundNonce).toMatch(/^native-cross-os-outbound-[0-9a-f-]{36}$/u);
+    expect(nonces.inboundNonce).toMatch(/^native-cross-os-inbound-[0-9a-f-]{36}$/u);
+
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    expect(source).not.toContain("Math.random()");
+    expect(source).not.toContain("cross-os-release-check-${params.label}-${Date.now()}");
+    expect(source).not.toContain("native-cross-os-outbound-${Date.now()}");
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {
@@ -1349,6 +1413,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
+    expect(await canConnectToLoopbackPort(0)).toBe(false);
+    expect(await canConnectToLoopbackPort(65536)).toBe(false);
+    expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
+
     const server = createNetServer();
     await new Promise((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
@@ -1401,6 +1469,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       },
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("cancels Discord delete response bodies", async () => {
+    let canceled = false;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+    try {
+      await deleteDiscordMessage({
+        channelId: "channel-123",
+        messageId: "message-456",
+        token: "discord-token",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(canceled).toBe(true);
   });
 
   it("keeps the dev-update lane for main only", () => {

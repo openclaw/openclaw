@@ -94,7 +94,7 @@ async function stopHostServerChild(
   terminateTimeoutMs = 2_000,
   killTimeoutMs = 1_500,
 ): Promise<boolean> {
-  if (child.exitCode != null) {
+  if (hasHostServerChildExited(child)) {
     return true;
   }
   child.kill("SIGTERM");
@@ -109,13 +109,13 @@ async function waitForChildExit(
   child: ChildProcessWithoutNullStreams,
   timeoutMs: number,
 ): Promise<boolean> {
-  if (child.exitCode != null) {
+  if (hasHostServerChildExited(child)) {
     return true;
   }
   return await new Promise<boolean>((resolve) => {
     let settled = false;
     const onExit = () => settle(true);
-    const timeout = setTimeout(() => settle(child.exitCode != null), timeoutMs);
+    const timeout = setTimeout(() => settle(hasHostServerChildExited(child)), timeoutMs);
     timeout.unref();
     function settle(exited: boolean): void {
       if (settled) {
@@ -128,6 +128,10 @@ async function waitForChildExit(
     }
     child.once("exit", onExit);
   });
+}
+
+function hasHostServerChildExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForHostServer(

@@ -15,7 +15,6 @@ import {
   isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
-  markTaskLostById,
   markTaskRunningByRunId,
   finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
   recordTaskProgressByRunId,
@@ -207,16 +206,6 @@ export function failTaskRunByRunId(params: {
   });
 }
 
-export function markTaskRunLostById(params: {
-  taskId: string;
-  endedAt: number;
-  lastEventAt?: number;
-  error?: string;
-  cleanupAfter?: number;
-}) {
-  return markTaskLostById(params);
-}
-
 export function setDetachedTaskDeliveryStatusByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
@@ -359,15 +348,6 @@ export function retryBlockedFlowAsQueuedTaskRun(
   return retryBlockedFlowTask({
     ...params,
     status: "queued",
-  });
-}
-
-export function retryBlockedFlowAsRunningTaskRun(
-  params: Omit<RetryBlockedFlowParams, "status">,
-): RetryBlockedFlowResult {
-  return retryBlockedFlowTask({
-    ...params,
-    status: "running",
   });
 }
 

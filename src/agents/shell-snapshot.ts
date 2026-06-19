@@ -63,7 +63,7 @@ type ShellSnapshot = {
   path: string;
 };
 
-export type ShellSnapshotWrapOptions = {
+type ShellSnapshotWrapOptions = {
   command: string;
   shell: string;
   shellArgs: string[];

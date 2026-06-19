@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs OpenClaw from a prepared package tarball, installs @openclaw/codex
 # from a registry/git/tarball spec, and verifies a live Codex app-server turn.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TRUSTED_HARNESS_DIR="${OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR:-$SCRIPT_ROOT_DIR}"
@@ -20,6 +20,24 @@ PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFI
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
+ASSERT_MAX_TEXT_FILE_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES 1048576
+)"
+ASSERT_MAX_ERROR_TAIL_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES 65536
+)"
+ASSERT_MAX_TRANSCRIPT_FILES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES 64
+)"
+ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES 4096
+)"
+ASSERT_MAX_TRANSCRIPT_SCAN_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES 2097152
+)"
+AGENT_TURN_TIMEOUT_SECONDS="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420
+)"
 run_log=""
 
 cleanup() {
@@ -110,6 +128,10 @@ if [ -f "$PROFILE_FILE" ] && [ -r "$PROFILE_FILE" ]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/appuser/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
 fi
+AGENT_TURN_TIMEOUT_SECONDS="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS"
+)"
+COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-$((10#$AGENT_TURN_TIMEOUT_SECONDS + 60))s}"
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log codex-npm-plugin-live)"
@@ -124,6 +146,13 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-codex/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES=$ASSERT_MAX_ERROR_TAIL_BYTES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES=$ASSERT_MAX_TRANSCRIPT_FILES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES=$ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES=$ASSERT_MAX_TRANSCRIPT_SCAN_BYTES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS" \
+  -e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT" \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
@@ -131,7 +160,7 @@ if ! docker_e2e_run_with_harness \
   "${CODEX_PLUGIN_MOUNT[@]}" \
   "${PROFILE_MOUNT[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
-set -euo pipefail
+set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -147,7 +176,7 @@ for profile_path in "$HOME/.profile" /home/appuser/.profile; do
   if [ -f "$profile_path" ] && [ -r "$profile_path" ]; then
     set +e +u
     source "$profile_path"
-    set -euo pipefail
+    set -Eeuo pipefail
     break
   fi
 done
@@ -165,6 +194,7 @@ MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_
 POST_UNINSTALL_MODEL_REF="codex/${MODEL_REF#*/}"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
+AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS:-420}"
 PLUGIN_INSTALL_FLAGS=(--force)
 if [ "${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-0}" = "1" ]; then
   PLUGIN_INSTALL_FLAGS+=(--dangerously-force-unsafe-install)
@@ -242,17 +272,30 @@ run_agent_turn() {
   local message="$3"
   local out="$4"
   local err="$5"
+  local status
 
   echo "${label}_prompt: $message"
-  openclaw agent --local \
+  if openclaw agent --local \
     --agent main \
     --session-id "$SESSION_ID" \
     --model "$MODEL_REF" \
     --message "$message" \
     --thinking low \
-    --timeout 420 \
-    --json >"$out" 2>"$err" </dev/null
-  print_agent_reply "$out" "$marker" "${label}_reply"
+    --timeout "$AGENT_TURN_TIMEOUT_SECONDS" \
+    --json >"$out" 2>"$err" </dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  echo "${label}_agent_status: $status stdout_bytes=$(wc -c <"$out" 2>/dev/null || printf 0) stderr_bytes=$(wc -c <"$err" 2>/dev/null || printf 0)"
+  if [ "$status" -ne 0 ]; then
+    dump_debug_logs "$status"
+    exit "$status"
+  fi
+  if ! print_agent_reply "$out" "$marker" "${label}_reply"; then
+    dump_debug_logs 1
+    exit 1
+  fi
 }
 
 echo "TRANSCRIPT_BEGIN"

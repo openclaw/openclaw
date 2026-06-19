@@ -1573,7 +1573,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       gatewayHeapSnapshots,
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
-    if (scenarios.some((scenario) => scenario.status === "fail")) {
+    if (
+      scenarios.some((scenario) => scenario.status === "fail") ||
+      gatewayRuntimeOptions?.preserveDebugArtifacts === true
+    ) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
     lab.setScenarioRun({

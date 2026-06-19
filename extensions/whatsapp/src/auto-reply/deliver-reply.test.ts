@@ -9,7 +9,7 @@ import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { WhatsAppSocketOperationTimeoutError } from "../socket-timing.js";
@@ -69,7 +69,7 @@ function unacceptedSendResult(kind: "media" | "text") {
   };
 }
 
-function makeMsg(): WebInboundMessage {
+function makeMsg(): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
     event: { id: "msg-1" },
     payload: { body: "latest batch body" },
@@ -80,10 +80,19 @@ function makeMsg(): WebInboundMessage {
       reply: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "reply-sent-1")),
       sendMedia: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "media-sent-1")),
     },
-    from: "+10000000000",
-    accountId: "work",
-    chatType: "group",
-    conversationId: "+10000000000",
+    admission: {
+      accountId: "work",
+      conversation: {
+        kind: "group",
+        id: "+10000000000",
+      },
+      sender: {
+        id: "222@s.whatsapp.net",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
   });
 }
 
@@ -97,19 +106,19 @@ function mockLoadedImageMedia() {
   });
 }
 
-function mockFirstSendMediaFailure(msg: WebInboundMessage, message: string) {
+function mockFirstSendMediaFailure(msg: AdmittedWebInboundMessage, message: string) {
   (
     msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
   ).mockRejectedValueOnce(new Error(message));
 }
 
-function mockFirstReplyFailure(msg: WebInboundMessage, message: string) {
+function mockFirstReplyFailure(msg: AdmittedWebInboundMessage, message: string) {
   (
     msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
   ).mockRejectedValueOnce(new Error(message));
 }
 
-function mockFirstReplyFailureWithWrappedError(msg: WebInboundMessage, message: string) {
+function mockFirstReplyFailureWithWrappedError(msg: AdmittedWebInboundMessage, message: string) {
   (
     msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
   ).mockRejectedValueOnce({
@@ -117,7 +126,7 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMessage, message: 
   });
 }
 
-function expectFirstSendMediaPayload(msg: WebInboundMessage) {
+function expectFirstSendMediaPayload(msg: AdmittedWebInboundMessage) {
   const payload = mockCallArg(msg.platform.sendMedia, 0, 0, "sendMedia");
   if (!payload) {
     throw new Error("expected first WhatsApp sendMedia payload");
@@ -144,7 +153,7 @@ function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: 
   return call[argIndex];
 }
 
-function replyText(msg: WebInboundMessage, callIndex = 0): string {
+function replyText(msg: AdmittedWebInboundMessage, callIndex = 0): string {
   return String(mockCallArg(msg.platform.reply, callIndex, 0, "reply"));
 }
 
@@ -176,7 +185,7 @@ function expectQuotedOptions(
   expect(quoted.message).toEqual({ conversation: expected.body });
 }
 
-function mockSecondReplySuccess(msg: WebInboundMessage) {
+function mockSecondReplySuccess(msg: AdmittedWebInboundMessage) {
   (
     msg.platform.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }
   ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
@@ -615,6 +624,32 @@ describe("deliverWebReply", () => {
     expect(warnContext.mediaUrl).toBe("http://example.com/img.jpg");
   });
 
+  it("delivers the opening text chunk when the first media fails on a multi-chunk reply", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "boom");
+
+    await deliverWebReply({
+      replyResult: { text: "ALPHALINEBRAVOLINE", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 9,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(replyText(msg, 0)).toContain("ALPHALINE");
+    expect(replyText(msg, 0)).toContain("⚠️ Media failed");
+    const allReplies = (
+      msg.platform.reply as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls
+      .map((call) => String(call[0]))
+      .join("\n");
+    expect(allReplies).toContain("ALPHALINE");
+    expect(allReplies).toContain("BRAVOLINE");
+    expect(allReplies).not.toContain("boom");
+  });
+
   it("still attempts later media after the first media fails", async () => {
     vi.clearAllMocks();
     const msg = makeMsg();
@@ -677,23 +712,27 @@ describe("deliverWebReply", () => {
     vi.clearAllMocks();
     const msg = makeMsg();
     // Two media items: first load succeeds and sends, second load succeeds but send fails.
-    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce({
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
       buffer: Buffer.from("img1"),
       contentType: "image/jpeg",
       kind: "image",
     });
-    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce({
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
       buffer: Buffer.from("img2"),
       contentType: "image/jpeg",
       kind: "image",
     });
     // First sendMedia resolves; second sendMedia rejects.
-    (msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
-      createAcceptedWhatsAppSendResult("media", "media-first-ok"),
-    );
-    (msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
-      new Error("upload failed"),
-    );
+    (
+      msg.platform.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "media-first-ok"));
+    (
+      msg.platform.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(new Error("upload failed"));
 
     await deliverWebReply({
       replyResult: {

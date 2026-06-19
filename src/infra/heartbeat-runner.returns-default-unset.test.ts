@@ -14,7 +14,11 @@ import {
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type HeartbeatDeps,
@@ -292,9 +296,7 @@ beforeAll(async () => {
 
   const discordPlugin = createOutboundTestPlugin({
     id: "discord",
-    outbound: {
-      deliveryMode: "direct",
-    },
+    outbound: createDirectOutboundTestAdapter({ channel: "discord" }),
   });
 
   testRegistry = createTestRegistry([

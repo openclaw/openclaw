@@ -12,7 +12,12 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import {
+  extractMediaUserText,
+  formatAudioTranscripts,
+  formatMediaUnderstandingBody,
+} from "../../packages/media-understanding-common/src/format.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -20,11 +25,6 @@ import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
 } from "./file-extraction-limits.js";
-import {
-  extractMediaUserText,
-  formatAudioTranscripts,
-  formatMediaUnderstandingBody,
-} from "./format.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,
@@ -40,7 +40,7 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-export type ApplyMediaUnderstandingResult = {
+type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
   decisions: MediaUnderstandingDecision[];
   appliedImage: boolean;

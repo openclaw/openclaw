@@ -1,7 +1,6 @@
 // Whatsapp plugin module implements approval reactions behavior.
 import type { WAMessage } from "baileys";
 import {
-  buildApprovalReactionHint,
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
   resolveApprovalReactionTarget,
@@ -92,12 +91,6 @@ export function listWhatsAppApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): WhatsAppApprovalReactionBinding[] {
   return listApprovalReactionBindings({ allowedDecisions });
-}
-
-export function buildWhatsAppApprovalReactionHint(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): string | null {
-  return buildApprovalReactionHint({ allowedDecisions });
 }
 
 function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {

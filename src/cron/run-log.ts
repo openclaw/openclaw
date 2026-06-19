@@ -80,9 +80,9 @@ export function isInvalidCronRunLogJobIdError(err: unknown): boolean {
 const writesByTarget = new Map<string, Promise<void>>();
 
 /** Legacy byte cap kept for config parsing compatibility with older file-backed run logs. */
-export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
+const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
 /** Default SQLite row retention per cron job when no explicit keepLines value is configured. */
-export const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
+const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
 
 /** Resolves configured run-log pruning limits while preserving legacy maxBytes parsing. */
 export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {

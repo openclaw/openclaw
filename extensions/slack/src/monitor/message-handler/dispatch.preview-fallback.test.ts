@@ -1829,6 +1829,31 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(updates.join("\n")).not.toContain("Checking Reading");
   });
 
+  it("extracts mm:think reasoning snapshots for Slack progress draft previews", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "reasoning",
+        text: "<mm:think>Reading\nChecking</mm:think>",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• Reading Checking"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).toContain("Reading Checking");
+  });
+
   it("keeps plain Slack reasoning content that starts with Thinking", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);

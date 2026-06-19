@@ -85,6 +85,7 @@ const mocks = vi.hoisted(() => {
     installSkillFromSourceMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
     readTrackedClawHubSkillSlugsMock: vi.fn(),
+    readVerifiedClawHubSkillSourceUrlMock: vi.fn(),
     resolveClawHubSkillVerificationTargetMock: vi.fn(),
     readClawHubSkillsLockfileStatusSyncMock: vi.fn((..._args: unknown[]) => ({ kind: "missing" })),
     resolveClawHubSkillStatusLinkSyncMock: vi.fn(),
@@ -110,6 +111,7 @@ const {
   installSkillFromSourceMock,
   updateSkillsFromClawHubMock,
   readTrackedClawHubSkillSlugsMock,
+  readVerifiedClawHubSkillSourceUrlMock,
   resolveClawHubSkillVerificationTargetMock,
   readClawHubSkillsLockfileStatusSyncMock,
   resolveClawHubSkillStatusLinkSyncMock,
@@ -191,6 +193,8 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
   updateSkillsFromClawHub: (...args: unknown[]) => mocks.updateSkillsFromClawHubMock(...args),
   readTrackedClawHubSkillSlugs: (...args: unknown[]) =>
     mocks.readTrackedClawHubSkillSlugsMock(...args),
+  readVerifiedClawHubSkillSourceUrl: (...args: unknown[]) =>
+    mocks.readVerifiedClawHubSkillSourceUrlMock(...args),
   resolveClawHubSkillVerificationTarget: (...args: unknown[]) =>
     mocks.resolveClawHubSkillVerificationTargetMock(...args),
   readClawHubSkillsLockfileStatusSync: (...args: unknown[]) =>
@@ -255,6 +259,7 @@ describe("skills cli commands", () => {
     installSkillFromSourceMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
     readTrackedClawHubSkillSlugsMock.mockReset();
+    readVerifiedClawHubSkillSourceUrlMock.mockReset();
     resolveClawHubSkillVerificationTargetMock.mockReset();
     readClawHubSkillsLockfileStatusSyncMock.mockReset();
     resolveClawHubSkillStatusLinkSyncMock.mockReset();
@@ -278,6 +283,7 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+    readVerifiedClawHubSkillSourceUrlMock.mockReturnValue(undefined);
     readClawHubSkillsLockfileStatusSyncMock.mockReturnValue({ kind: "missing" });
     resolveClawHubSkillStatusLinkSyncMock.mockReturnValue(undefined);
     resolveLocalSkillCardStatusSyncMock.mockReturnValue(undefined);
@@ -391,6 +397,48 @@ describe("skills cli commands", () => {
         line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
       ),
     ).toBe(true);
+  });
+
+  it("passes owner-qualified ClawHub skill refs through to the installer", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "@demo-owner/calendar"]);
+
+    const installArgs = mockFirstObjectArg(installSkillFromClawHubMock);
+    expectObjectFields(installArgs, {
+      workspaceDir: "/tmp/workspace",
+      slug: "@demo-owner/calendar",
+      force: false,
+    });
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) =>
+        line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
+      ),
+    ).toBe(true);
+  });
+
+  it("documents owner-qualified ClawHub install refs in command help", () => {
+    const skillsCommand = createProgram().commands.find((command) => command.name() === "skills");
+    const installCommand = skillsCommand?.commands.find((command) => command.name() === "install");
+    const output: string[] = [];
+
+    installCommand?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    installCommand?.outputHelp();
+    const help = output.join("");
+
+    expect(help).toContain("<skill-ref>");
+    expect(help).toContain("@owner/slug");
+    expect(help).toContain("openclaw skills install @owner/weather");
+    expect(help).not.toContain("openclaw skills install weather");
   });
 
   it("installs a skill from a git source into the active workspace", async () => {
@@ -830,6 +878,34 @@ describe("skills cli commands", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("passes owner-qualified installed verification targets to ClawHub verification", async () => {
+    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://private.example.com/clawhub",
+      version: "1.2.3",
+      tag: undefined,
+      resolution: {
+        source: "installed",
+        selector: "installed-version",
+        registry: "https://private.example.com/clawhub",
+        skillDir: "/tmp/workspace/skills/weather",
+        installedVersion: "1.2.3",
+      },
+    });
+
+    await runCommand(["skills", "verify", "weather"]);
+
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "1.2.3",
+      tag: undefined,
+      baseUrl: "https://private.example.com/clawhub",
+    });
+  });
+
   it("passes explicit verify selectors and shared workspace options to the resolver", async () => {
     await runCommand(["skills", "verify", "agentreceipt", "--version", "2.0.0", "--global"]);
 
@@ -842,6 +918,47 @@ describe("skills cli commands", () => {
       version: "2.0.0",
       tag: undefined,
     });
+  });
+
+  it("includes verified ClawHub source URLs in verify JSON output", async () => {
+    const provenance = {
+      source: "server-resolved-github-import",
+      repo: "openclaw/skills",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      path: "agentreceipt",
+    };
+    const verifiedSourceUrl =
+      "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
+    readVerifiedClawHubSkillSourceUrlMock.mockReturnValueOnce(verifiedSourceUrl);
+    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
+      publisher: { handle: "openclaw" },
+      version: { version: "1.2.3" },
+      card: {
+        available: true,
+        url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
+      },
+      artifact: {
+        sourceFingerprint: "source-fingerprint",
+        bundleFingerprints: ["generated-bundle-fingerprint"],
+      },
+      provenance,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    });
+
+    await runCommand(["skills", "verify", "agentreceipt"]);
+
+    expect(readVerifiedClawHubSkillSourceUrlMock).toHaveBeenCalledWith(provenance);
+    const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as {
+      openclaw?: { verifiedSourceUrl?: string };
+    };
+    expect(payload.openclaw?.verifiedSourceUrl).toBe(verifiedSourceUrl);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("fetches generated Skill Card markdown for --card", async () => {

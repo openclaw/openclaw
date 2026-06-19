@@ -52,14 +52,17 @@ import {
   runSessionsCleanup,
   serializeSessionCleanupResult,
   resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   listConfiguredSessionStoreAgentIds,
+  deleteSessionEntryLifecycle,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import {
+  applySessionPatchProjection,
+  createSessionEntryWithTranscript,
+  trimSessionTranscriptForManualCompact,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -96,12 +99,10 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
 import {
-  archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
@@ -118,7 +119,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import { applySessionsPatchToStore } from "../sessions-patch.js";
+import { applySessionsPatchToStore, projectSessionsPatchEntry } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
@@ -495,44 +496,6 @@ async function createAgentMainSessionForSend(params: {
     canonicalKey: loaded.canonicalKey,
     storePath: loaded.storePath,
   };
-}
-
-function ensureSessionTranscriptFile(params: {
-  sessionId: string;
-  storePath: string;
-  sessionFile?: string;
-  agentId: string;
-}): { ok: true; transcriptPath: string } | { ok: false; error: string } {
-  try {
-    const transcriptPath = resolveSessionFilePath(
-      params.sessionId,
-      params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath: params.storePath,
-        agentId: params.agentId,
-      }),
-    );
-    if (!fs.existsSync(transcriptPath)) {
-      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
-      const header = {
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: params.sessionId,
-        timestamp: new Date().toISOString(),
-        cwd: process.cwd(),
-      };
-      fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-    }
-    return { ok: true, transcriptPath };
-  } catch (err) {
-    return {
-      ok: false,
-      error: formatErrorMessage(err),
-    };
-  }
 }
 
 function resolveAbortSessionKey(params: {
@@ -1511,76 +1474,56 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId });
     const targetAgentId = target.agentId;
-    const created = await updateSessionStore(target.storePath, async (store) => {
-      const patched = await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: target.canonicalKey,
+    const created = await createSessionEntryWithTranscript(
+      {
         agentId: targetAgentId,
-        patch: {
-          key: target.canonicalKey,
-          label: normalizeOptionalString(p.label),
-          model: normalizeOptionalString(p.model),
-        },
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
-      if (!patched.ok || !canonicalParentSessionKey) {
-        return patched;
-      }
-      const inheritedSelection = normalizeOptionalString(p.model)
-        ? {}
-        : inheritSessionRuntimeSelection(parentSessionEntry);
-      const nextEntry: SessionEntry = {
-        ...patched.entry,
-        ...inheritedSelection,
-        parentSessionKey: canonicalParentSessionKey,
-      };
-      store[target.canonicalKey] = nextEntry;
-      return {
-        ...patched,
-        entry: nextEntry,
-      };
-    });
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      },
+      async ({ sessionEntries }) => {
+        const patched = await applySessionsPatchToStore({
+          cfg,
+          store: sessionEntries,
+          storeKey: target.canonicalKey,
+          agentId: targetAgentId,
+          patch: {
+            key: target.canonicalKey,
+            label: normalizeOptionalString(p.label),
+            model: normalizeOptionalString(p.model),
+          },
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        });
+        if (!patched.ok || !canonicalParentSessionKey) {
+          return patched;
+        }
+        const inheritedSelection = normalizeOptionalString(p.model)
+          ? {}
+          : inheritSessionRuntimeSelection(parentSessionEntry);
+        const nextEntry: SessionEntry = {
+          ...patched.entry,
+          ...inheritedSelection,
+          parentSessionKey: canonicalParentSessionKey,
+        };
+        return {
+          ...patched,
+          entry: nextEntry,
+        };
+      },
+    );
     if (!created.ok) {
-      respond(false, undefined, created.error);
-      return;
-    }
-    const ensured = ensureSessionTranscriptFile({
-      sessionId: created.entry.sessionId,
-      storePath: target.storePath,
-      sessionFile: created.entry.sessionFile,
-      agentId: targetAgentId,
-    });
-    if (!ensured.ok) {
-      await updateSessionStore(target.storePath, (store) => {
-        delete store[target.canonicalKey];
-      });
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `failed to create session transcript: ${ensured.error}`),
+        created.phase === "transcript"
+          ? errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `failed to create session transcript: ${created.error}`,
+            )
+          : created.error,
       );
       return;
     }
-
-    const createdEntry =
-      created.entry.sessionFile === ensured.transcriptPath
-        ? created.entry
-        : {
-            ...created.entry,
-            sessionFile: ensured.transcriptPath,
-          };
-    if (createdEntry !== created.entry) {
-      await updateSessionStore(target.storePath, (store) => {
-        const existing = store[target.canonicalKey];
-        if (existing) {
-          store[target.canonicalKey] = {
-            ...existing,
-            sessionFile: ensured.transcriptPath,
-          };
-        }
-      });
-    }
+    const createdEntry = created.entry;
 
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
@@ -2126,21 +2069,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
-    const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: requestedAgentId,
-        patch: p,
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
+    const applied = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: ({ entries }) => {
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store,
+          agentId: requestedAgentId,
+        });
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      project: async ({ primaryKey, existingEntry, entries }) =>
+        await projectSessionsPatchEntry({
+          cfg,
+          entries,
+          existingEntry,
+          storeKey: primaryKey,
+          agentId: requestedAgentId,
+          patch: p,
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        }),
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);
@@ -2340,7 +2292,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
     const {
-      archiveSessionTranscriptsForSessionDetailed,
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
@@ -2365,31 +2316,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, mutationCleanupError);
       return;
     }
-    const sessionId = entry?.sessionId;
-    const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      const hadEntry = Boolean(store[primaryKey]);
-      if (hadEntry) {
-        delete store[primaryKey];
-      }
-      return hadEntry;
+    const deletion = await deleteSessionEntryLifecycle({
+      agentId: target.agentId,
+      archiveTranscript: deleteTranscript,
+      storePath,
+      target: {
+        canonicalKey: target.canonicalKey,
+        storeKeys: target.storeKeys,
+      },
     });
-
-    const archivedTranscripts =
-      deleted && deleteTranscript
-        ? archiveSessionTranscriptsForSessionDetailed({
-            sessionId,
-            storePath,
-            sessionFile: entry?.sessionFile,
-            agentId: target.agentId,
-            reason: "deleted",
-          })
-        : [];
+    const deleted = deletion.deleted;
+    const sessionId = deletion.deletedSessionId;
+    const sessionFile = deletion.deletedSessionFile;
+    const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
     if (deleted) {
       emitGatewaySessionEndPluginHook({
@@ -2397,7 +2336,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionKey: target.canonicalKey ?? key,
         sessionId,
         storePath,
-        sessionFile: entry?.sessionFile,
+        sessionFile,
         agentId: target.agentId,
         reason: "deleted",
         archivedTranscripts,
@@ -2525,27 +2464,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const filePath = resolveSessionTranscriptCandidates(
-      sessionId,
-      storePath,
-      entry?.sessionFile,
-      target.agentId,
-    ).find((candidate) => fs.existsSync(candidate));
-    if (!filePath) {
-      respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          reason: "no transcript",
-        },
-        undefined,
-      );
-      return;
-    }
-
     if (maxLines === undefined) {
+      const filePath = resolveSessionTranscriptCandidates(
+        sessionId,
+        storePath,
+        entry?.sessionFile,
+        target.agentId,
+      ).find((candidate) => fs.existsSync(candidate));
+      if (!filePath) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+        return;
+      }
+
       const interruptResult = await interruptSessionRunIfActive({
         req,
         context,
@@ -2677,45 +2616,44 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const tail = readRecentSessionTranscriptLines({
-      sessionId,
-      storePath,
-      sessionFile: entry?.sessionFile,
-      agentId: target.agentId,
-      maxLines,
-    });
-    const lines = tail?.lines ?? [];
-    const totalLines = tail?.totalLines ?? 0;
-    if (totalLines <= maxLines) {
-      respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          kept: totalLines,
-        },
-        undefined,
-      );
+    const trimResult = await trimSessionTranscriptForManualCompact(
+      {
+        sessionId,
+        storePath,
+        sessionKey: compactTarget.primaryKey,
+        agentId: target.agentId,
+      },
+      {
+        maxLines,
+        sessionFile: entry?.sessionFile,
+      },
+    );
+    if (!trimResult.compacted) {
+      if ("kept" in trimResult) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimResult.kept,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+      }
       return;
     }
-
-    const archived = archiveFileOnDisk(filePath, "bak");
-    fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
-
-    await updateSessionStore(storePath, (store) => {
-      const entryKey = compactTarget.primaryKey;
-      const entryToUpdate = store[entryKey];
-      if (!entryToUpdate) {
-        return;
-      }
-      delete entryToUpdate.inputTokens;
-      delete entryToUpdate.outputTokens;
-      delete entryToUpdate.totalTokens;
-      delete entryToUpdate.totalTokensFresh;
-      delete entryToUpdate.contextBudgetStatus;
-      entryToUpdate.updatedAt = Date.now();
-    });
 
     respond(
       true,
@@ -2723,8 +2661,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ok: true,
         key: target.canonicalKey,
         compacted: true,
-        archived,
-        kept: lines.length,
+        archived: trimResult.archived,
+        kept: trimResult.kept,
       },
       undefined,
     );

@@ -34,6 +34,12 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../cha
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
+import {
+  REALTIME_TALK_FALLBACK_PROVIDERS,
+  listSelectableRealtimeTalkProviders,
+  resolveControlUiRealtimeTalkProviderTransports,
+  type RealtimeTalkCatalogProvider,
+} from "../chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -122,6 +128,7 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: {
     provider: string;
     model: string;
@@ -237,10 +244,13 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
   { label: "Medium", value: "0.5" },
   { label: "High", value: "0.35" },
 ];
-const TALK_PROVIDER_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Google", value: "google" },
+const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
+const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
+  TALK_PROVIDER_AUTO_OPTION,
+  ...REALTIME_TALK_FALLBACK_PROVIDERS.map((provider) => ({
+    label: provider.label,
+    value: provider.id,
+  })),
 ];
 const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
   { label: "Auto", value: "" },
@@ -320,6 +330,28 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
+  const catalogProviders = props.realtimeTalkCatalogProviders;
+  const selectableProviders = listSelectableRealtimeTalkProviders(catalogProviders ?? []);
+  const providerOptions: TalkSelectOption[] = catalogProviders
+    ? [
+        TALK_PROVIDER_AUTO_OPTION,
+        ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
+      ]
+    : TALK_PROVIDER_FALLBACK_OPTIONS;
+  const selectedCatalogProvider = options.provider
+    ? selectableProviders.find((provider) => provider.id === options.provider)
+    : null;
+  const selectedProviderTransports = selectedCatalogProvider
+    ? resolveControlUiRealtimeTalkProviderTransports(selectedCatalogProvider)
+    : undefined;
+  const transportOptions: TalkSelectOption[] = selectedProviderTransports
+    ? [
+        { label: "Auto", value: "" },
+        ...TALK_TRANSPORT_OPTIONS.filter(
+          (opt) => opt.value !== "" && selectedProviderTransports.includes(opt.value),
+        ),
+      ]
+    : TALK_TRANSPORT_OPTIONS;
   const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
     const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
     onChange({ [key]: value });
@@ -374,13 +406,24 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           ${renderNativeTalkSelect({
             label: "Provider",
             value: options.provider,
-            options: TALK_PROVIDER_OPTIONS,
-            onSelect: (provider) => onChange({ provider }),
+            options: providerOptions,
+            onSelect: (provider) => {
+              const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
+              const transports = selectedProvider
+                ? resolveControlUiRealtimeTalkProviderTransports(selectedProvider)
+                : null;
+              const transport = options.transport;
+              onChange(
+                transports && transport && !transports.includes(transport)
+                  ? { provider, transport: "" }
+                  : { provider },
+              );
+            },
           })}
           ${renderNativeTalkSelect({
             label: "Transport",
             value: options.transport,
-            options: TALK_TRANSPORT_OPTIONS,
+            options: transportOptions,
             onSelect: (transport) => onChange({ transport }),
           })}
           ${renderNativeTalkSelect({
@@ -625,8 +668,6 @@ export function resetChatViewState() {
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
 }
-
-export const cleanupChatModuleState = resetChatViewState;
 
 function resolveChatHistoryRenderCap(messageCount: number): number {
   return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
@@ -2379,7 +2420,10 @@ export function renderChat(props: ChatProps) {
   const handleInput = (e: InputEvent) => {
     const target = e.target as HTMLTextAreaElement;
     if (vs.composerComposing || e.isComposing) {
-      adjustTextareaHeight(target);
+      // Skip adjustTextareaHeight during IME composition — each pinyin
+      // keystroke fires `input` and the height read/write forces a
+      // synchronous reflow that blocks the composition thread.
+      // Resize runs once in handleCompositionEnd → syncComposerValue.
       draftMirror.value = target.value;
       return;
     }

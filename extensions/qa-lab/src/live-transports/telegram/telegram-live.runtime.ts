@@ -126,6 +126,7 @@ type TelegramObservedMessage = {
 };
 
 const DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS = 30_000;
+const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 
 type TelegramQaScenarioResult = LiveTransportCheckResult;
 
@@ -155,6 +156,15 @@ type TelegramQaRunResult = {
   summaryPath: string;
   gatewayDebugDirPath?: string;
   scenarios: TelegramQaScenarioResult[];
+};
+
+type TelegramChannelStatus = {
+  connected?: boolean;
+  lastConnectedAt?: number;
+  lastDisconnect?: unknown;
+  lastError?: string | null;
+  restartPending?: boolean;
+  running?: boolean;
 };
 
 class TelegramQaCanaryError extends Error {
@@ -264,7 +274,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       telegramQaStepRun({
         expectReply: true,
         input: `/commands@${sutUsername}`,
-        expectedTextIncludes: ["Commands (1/", "/session", "/verbose"],
+        expectedTextIncludes: ["Commands (1/", "/session", "/stop"],
       }),
   },
   {
@@ -332,7 +342,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         {
           expectReply: true,
           input: `/commands@${sutUsername}`,
-          expectedTextIncludes: ["Commands (1/", "/session", "/verbose"],
+          expectedTextIncludes: ["Commands (1/", "/session", "/stop"],
         },
       ] satisfies TelegramQaScenarioStep[];
       return { steps };
@@ -615,6 +625,14 @@ function resolveTelegramQaScenarioTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   return parsePositiveTelegramQaEnvMs(env, "OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", fallbackMs);
+}
+
+function resolveTelegramQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+  const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
+  if (!raw) {
+    return TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS;
+  }
+  return parseStrictPositiveInteger(raw) ?? TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS;
 }
 
 function normalizeTelegramQaRttOptions(params: {
@@ -1229,9 +1247,18 @@ function assertTelegramScenarioMessageSet(params: {
 async function waitForTelegramChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    pollMs?: number;
+    timeoutMs?: number;
+  },
 ) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 45_000) {
+  const timeoutMs = options?.timeoutMs ?? resolveTelegramQaReadyTimeoutMs(options?.env);
+  const pollMs = options?.pollMs ?? 500;
+  let lastProbeError: string | undefined;
+  let lastStatus: TelegramChannelStatus | undefined;
+  while (Date.now() - startedAt < timeoutMs) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -1240,26 +1267,52 @@ async function waitForTelegramChannelRunning(
       )) as {
         channelAccounts?: Record<
           string,
-          Array<{ accountId?: string; running?: boolean; restartPending?: boolean }>
+          Array<{
+            accountId?: string;
+            connected?: boolean;
+            lastConnectedAt?: number;
+            lastDisconnect?: unknown;
+            lastError?: string | null;
+            running?: boolean;
+            restartPending?: boolean;
+          }>
         >;
       };
       const accounts = payload.channelAccounts?.telegram ?? [];
       const match = accounts.find((entry) => entry.accountId === accountId);
-      if (match?.running && match.restartPending !== true) {
+      lastProbeError = undefined;
+      lastStatus = match
+        ? {
+            connected: match.connected,
+            lastConnectedAt: match.lastConnectedAt,
+            lastDisconnect: match.lastDisconnect,
+            lastError: match.lastError,
+            restartPending: match.restartPending,
+            running: match.running,
+          }
+        : undefined;
+      if (match?.running && match.connected === true && match.restartPending !== true) {
         return;
       }
-    } catch {
+    } catch (error) {
+      lastProbeError = formatErrorMessage(error);
       // retry
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 500);
+      setTimeout(resolve, pollMs);
     });
   }
-  throw new Error(`telegram account "${accountId}" did not become ready`);
+  const details = lastStatus
+    ? `; last status: ${JSON.stringify(lastStatus)}`
+    : lastProbeError
+      ? `; last probe error: ${lastProbeError}`
+      : "";
+  throw new Error(`telegram account "${accountId}" did not become ready${details}`);
 }
 
 async function setTelegramQaDriverGroupAuthorization(params: {
   driverBotId: number;
+  env: NodeJS.ProcessEnv;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
   groupId: string;
   sutAccountId: string;
@@ -1282,7 +1335,7 @@ async function setTelegramQaDriverGroupAuthorization(params: {
       mode: 0o600,
     });
   });
-  await waitForTelegramChannelRunning(params.gateway, params.sutAccountId);
+  await waitForTelegramChannelRunning(params.gateway, params.sutAccountId, { env: params.env });
 }
 
 function renderTelegramQaMarkdown(params: {
@@ -1892,7 +1945,7 @@ export async function runTelegramQaLive(params: {
         }),
     });
     try {
-      await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);
+      await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId, { env });
       assertLeaseHealthy();
       let latestSutMessageId: number | undefined;
       try {
@@ -1971,6 +2024,7 @@ export async function runTelegramQaLive(params: {
               if (step.driverGroupAuthorization) {
                 await setTelegramQaDriverGroupAuthorization({
                   driverBotId: driverIdentity.id,
+                  env,
                   gateway: gatewayHarness.gateway,
                   groupId: runtimeEnv.groupId,
                   sutAccountId,
@@ -2248,12 +2302,14 @@ export const testing = {
   parseTelegramQaCredentialPayload,
   normalizeTelegramQaRttOptions,
   resolveTelegramQaCanaryTimeoutMs,
+  resolveTelegramQaReadyTimeoutMs,
   resolveTelegramQaScenarioTimeoutMs,
   resolveTelegramQaRuntimeEnv,
   sanitizeTelegramQaProgressValue,
   shouldLogTelegramQaLiveProgress,
   formatTelegramQaProgressDetails,
   renderTelegramQaMarkdown,
+  waitForTelegramChannelRunning,
   waitForObservedMessage,
 };
 export { testing as __testing };

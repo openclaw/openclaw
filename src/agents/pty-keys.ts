@@ -12,9 +12,9 @@ const TAB = "\t";
 const BACKSPACE = "\x7f";
 
 /** Bracketed-paste prefix emitted before pasted text. */
-export const BRACKETED_PASTE_START = `${ESC}[200~`;
+const BRACKETED_PASTE_START = `${ESC}[200~`;
 /** Bracketed-paste suffix emitted after pasted text. */
-export const BRACKETED_PASTE_END = `${ESC}[201~`;
+const BRACKETED_PASTE_END = `${ESC}[201~`;
 
 type Modifiers = {
   ctrl: boolean;

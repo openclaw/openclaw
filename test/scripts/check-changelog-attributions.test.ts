@@ -247,6 +247,7 @@ prepare_gates 123
           OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
           OPENCLAW_PR_GATES_SH: gatesScriptPath,
           OPENCLAW_TEST_CALLS: callsPath,
+          OPENCLAW_TESTBOX: "0",
         },
       );
       const calls = readFileSync(callsPath, "utf8");

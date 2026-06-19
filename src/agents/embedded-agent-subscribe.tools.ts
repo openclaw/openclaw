@@ -461,7 +461,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
@@ -671,10 +671,6 @@ export function extractToolResultMediaArtifact(
   }
 
   return undefined;
-}
-
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {

@@ -2627,6 +2627,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastUpdate?.text).toContain("completed");
     expect(lastUpdate?.text).not.toContain("install dependencies");
+    expect(lastUpdate?.richMessage).toEqual({
+      html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>completed</code>",
+      skip_entity_detection: true,
+    });
   });
 
   it("sends trailing verbose status after a progress-mode final answer", async () => {
