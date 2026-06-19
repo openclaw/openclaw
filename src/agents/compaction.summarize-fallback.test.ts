@@ -111,4 +111,31 @@ describe("summarizeWithFallback", () => {
     // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
     expect(agentSessionMocks.generateSummary.mock.calls.length).toBe(2);
   });
+
+  it("propagates caller-classified fatal summarization errors instead of generic fallback", async () => {
+    const credentialError = new Error(
+      "CredentialsProviderError: Could not load credentials from any providers",
+    );
+    agentSessionMocks.generateSummary.mockRejectedValue(credentialError);
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1,
+      } satisfies UserMessage,
+    ];
+
+    await expect(
+      summarizeWithFallback({
+        messages,
+        model: testModel,
+        apiKey: "",
+        signal: new AbortController().signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 50_000,
+        contextWindow: 200_000,
+        shouldFallbackOnError: (error) => error !== credentialError,
+      }),
+    ).rejects.toThrow("Could not load credentials");
+  });
 });

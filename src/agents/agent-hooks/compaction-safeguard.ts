@@ -239,6 +239,7 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
+  shouldFallbackOnError?: (error: unknown) => boolean;
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
@@ -256,6 +257,7 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
+    shouldFallbackOnError: params.shouldFallbackOnError,
   });
 }
 
@@ -305,7 +307,8 @@ async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,
 ): Promise<
-  { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
+  | { ok: true; apiKey?: string; headers?: Record<string, string>; authMode?: "aws-sdk" }
+  | { ok: false; reason: string }
 > {
   let requestAuth: ResolvedRequestAuth;
   try {
@@ -342,7 +345,23 @@ async function resolveModelAuth(
       reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
     };
   }
-  return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
+  return {
+    ok: true,
+    apiKey: requestAuth.apiKey,
+    headers: requestAuth.headers,
+    authMode: requestAuth.authMode,
+  };
+}
+
+function isAwsSdkCredentialFailure(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return (
+    /\bCredentialsProviderError\b/i.test(message) ||
+    /\bCould not load credentials\b/i.test(message) ||
+    /\bNo credentials\b/i.test(message) ||
+    /\bcredential chain\b/i.test(message) ||
+    /\bAWS_PROFILE\b/i.test(message)
+  );
 }
 
 function buildCompactionSummaryHeaders(params: {
@@ -1046,6 +1065,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
     const apiKey = authResult.apiKey ?? "";
     const authHeaders = authResult.headers;
+    const shouldFallbackOnError =
+      authResult.authMode === "aws-sdk"
+        ? (error: unknown) => !isAwsSdkCredentialFailure(error)
+        : undefined;
 
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
@@ -1119,8 +1142,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: structuredInstructions,
                   summarizationInstructions,
                   previousSummary: preparation.previousSummary,
+                  shouldFallbackOnError,
                 });
               } catch (droppedError) {
+                if (shouldFallbackOnError?.(droppedError) === false) {
+                  throw droppedError;
+                }
                 log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${formatErrorMessage(
                     droppedError,
@@ -1195,6 +1222,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
+                  shouldFallbackOnError,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
@@ -1215,6 +1243,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
+              shouldFallbackOnError,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()

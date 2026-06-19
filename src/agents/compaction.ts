@@ -258,6 +258,7 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  shouldFallbackOnError?: (error: unknown) => boolean;
 }): Promise<string> {
   const { messages, contextWindow } = params;
 
@@ -270,6 +271,9 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
+    if (params.shouldFallbackOnError?.(fullError) === false) {
+      throw fullError;
+    }
     log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
     partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
   }
@@ -292,6 +296,9 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
+      if (params.shouldFallbackOnError?.(partialError) === false) {
+        throw partialError;
+      }
       log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
       // Prefer the oversized retry's partial summary over the full attempt's,
       // since it covers the non-oversized transcript. Append oversized notes
@@ -329,6 +336,7 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  shouldFallbackOnError?: (error: unknown) => boolean;
 }): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {
