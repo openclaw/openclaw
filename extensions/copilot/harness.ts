@@ -424,6 +424,7 @@ export function createCopilotAgentHarness(
   let disposed = false;
   let disposePromise: Promise<void> | undefined;
   const inFlight = new Set<Promise<unknown>>();
+  const timedOutCompactionCleanups = new Map<string, Map<Promise<void>, () => void>>();
   // Maps OpenClaw session id (from AgentHarnessAttemptParams.sessionId) to
   // the SDK session id + client that owns it. Populated by
   // runCopilotAttempt via the onSessionEstablished callback so that
@@ -443,6 +444,44 @@ export function createCopilotAgentHarness(
       })();
     }
     return poolPromise;
+  }
+
+  function trackTimedOutCompactionCleanup(params: {
+    abort: () => void;
+    cleanup: Promise<void>;
+    sessionId: string;
+  }): void {
+    const cleanups =
+      timedOutCompactionCleanups.get(params.sessionId) ?? new Map<Promise<void>, () => void>();
+    cleanups.set(params.cleanup, params.abort);
+    timedOutCompactionCleanups.set(params.sessionId, cleanups);
+    void params.cleanup.then(
+      () => removeTimedOutCompactionCleanup(params.sessionId, params.cleanup),
+      () => removeTimedOutCompactionCleanup(params.sessionId, params.cleanup),
+    );
+  }
+
+  function removeTimedOutCompactionCleanup(sessionId: string, cleanup: Promise<void>): void {
+    const cleanups = timedOutCompactionCleanups.get(sessionId);
+    if (!cleanups) {
+      return;
+    }
+    cleanups.delete(cleanup);
+    if (cleanups.size === 0) {
+      timedOutCompactionCleanups.delete(sessionId);
+    }
+  }
+
+  async function abortTimedOutCompactionCleanups(sessionId: string): Promise<void> {
+    const cleanups = timedOutCompactionCleanups.get(sessionId);
+    if (!cleanups) {
+      return;
+    }
+    const pending = [...cleanups.entries()];
+    for (const [, abort] of pending) {
+      abort();
+    }
+    await Promise.allSettled(pending.map(([cleanup]) => cleanup));
   }
 
   return {
@@ -562,6 +601,41 @@ export function createCopilotAgentHarness(
                 }
               }
             : undefined,
+          onTimedOutCompaction: openclawSessionId
+            ? ({
+                abort,
+                cleanup,
+                sdkSessionId,
+              }: {
+                abort: () => void;
+                cleanup: Promise<void>;
+                sdkSessionId: string;
+              }) => {
+                const tracked = trackedSessions.get(openclawSessionId);
+                const stored = resetBlockedStoredSessions.has(openclawSessionId)
+                  ? undefined
+                  : lookupStoredBinding(options?.sessionStore, openclawSessionId);
+                const ownsTrackedSession = tracked?.sdkSessionId === sdkSessionId;
+                const ownsStoredSession = stored?.sdkSessionId === sdkSessionId;
+                trackTimedOutCompactionCleanup({
+                  abort,
+                  cleanup,
+                  sessionId: openclawSessionId,
+                });
+                if (!ownsTrackedSession && !ownsStoredSession) {
+                  return;
+                }
+                // The timed-out attempt retains this SDK session until its
+                // background compaction resolves. Do not let a new turn resume it.
+                if (ownsTrackedSession) {
+                  trackedSessions.delete(openclawSessionId);
+                }
+                if (ownsStoredSession) {
+                  deleteStoredBinding(options?.sessionStore, openclawSessionId);
+                }
+                resetBlockedStoredSessions.add(openclawSessionId);
+              }
+            : undefined,
         });
       })();
       inFlight.add(attemptPromise);
@@ -577,6 +651,7 @@ export function createCopilotAgentHarness(
       if (!openclawSessionId) {
         return;
       }
+      await abortTimedOutCompactionCleanups(openclawSessionId);
       const tracked = trackedSessions.get(openclawSessionId);
       if (deleteStoredBinding(options?.sessionStore, openclawSessionId)) {
         resetBlockedStoredSessions.delete(openclawSessionId);
@@ -739,6 +814,12 @@ export function createCopilotAgentHarness(
       disposePromise = (async () => {
         if (inFlight.size > 0) {
           await Promise.allSettled(inFlight);
+        }
+        // Deferred compaction callbacks retain pooled clients after a timeout.
+        // Cancel them before pool disposal so they cannot outlive this harness.
+        const cleanupSessionIds = [...timedOutCompactionCleanups.keys()];
+        for (const sessionId of cleanupSessionIds) {
+          await abortTimedOutCompactionCleanups(sessionId);
         }
         trackedSessions.clear();
         resetBlockedStoredSessions.clear();

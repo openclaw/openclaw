@@ -30,6 +30,11 @@ export interface SessionLike {
     ): (() => void) | void;
     (eventType: string, handler: (event: SessionEvent) => void): (() => void) | void;
   };
+  rpc?: {
+    history?: {
+      cancelBackgroundCompaction?: () => Promise<unknown>;
+    };
+  };
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }
@@ -212,6 +217,7 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "abort", (event) => {
+    finishCompactionObservation();
     if (!options.isAborted()) {
       streamError = createPromptError(
         "session_aborted",
@@ -292,6 +298,12 @@ export function attachEventBridge(
     }
     const queued = compactionChain.then(callback, callback);
     compactionChain = queued.catch(() => undefined);
+  }
+
+  function finishCompactionObservation(): void {
+    activeCompactionCount = 0;
+    resolveCompactionIdle?.();
+    resolveCompactionIdle = undefined;
   }
 }
 

@@ -528,6 +528,54 @@ describe("createCopilotAgentHarness", () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
+  it("aborts deferred compaction cleanup before disposal", async () => {
+    const cleanup = createDeferred<void>();
+    const abort = vi.fn(() => cleanup.resolve());
+    mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+      deps.onSessionEstablished?.({
+        sdkSessionId: "sdk-sess-pending-cleanup",
+        pooledClient: { key: {} as any, client: {} as any },
+        sessionConfig: TEST_SESSION_CONFIG,
+      });
+      deps.onTimedOutCompaction?.({
+        abort,
+        cleanup: cleanup.promise,
+        sdkSessionId: "sdk-sess-pending-cleanup",
+      });
+      return ATTEMPT_RESULT;
+    });
+    const harness = createCopilotAgentHarness();
+
+    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-pending-cleanup" });
+    await harness.dispose?.();
+
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts deferred compaction cleanup when the OpenClaw session resets", async () => {
+    const cleanup = createDeferred<void>();
+    const abort = vi.fn(() => cleanup.resolve());
+    mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+      deps.onSessionEstablished?.({
+        sdkSessionId: "sdk-sess-reset-cleanup",
+        pooledClient: { key: {} as any, client: {} as any },
+        sessionConfig: TEST_SESSION_CONFIG,
+      });
+      deps.onTimedOutCompaction?.({
+        abort,
+        cleanup: cleanup.promise,
+        sdkSessionId: "sdk-sess-reset-cleanup",
+      });
+      return ATTEMPT_RESULT;
+    });
+    const harness = createCopilotAgentHarness();
+
+    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-reset-cleanup" });
+    await harness.reset?.({ sessionId: "oc-reset-cleanup" });
+
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
   describe("session reuse across turns (dogfood finding #4)", () => {
     // These tests pin the harness's session-reuse contract: subsequent
     // `runAttempt` calls within the same OpenClaw session should pass
@@ -573,6 +621,38 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-warm");
       // Must not synthesize a replayInvalid signal: undefined → resumable.
       expect(secondCallParams.initialReplayState?.replayInvalid).toBeUndefined();
+    });
+
+    it("starts fresh while timed-out compaction retains the prior SDK session", async () => {
+      const pool = makePoolMock();
+      const sessionStore = makeSessionStoreMock();
+      let attempt = 0;
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        attempt += 1;
+        if (attempt === 1) {
+          deps.onSessionEstablished?.({
+            sdkSessionId: "sdk-sess-compacting",
+            pooledClient: { key: {} as any, client: {} as any },
+            sessionConfig: TEST_SESSION_CONFIG,
+          });
+          deps.onTimedOutCompaction?.({
+            abort: () => undefined,
+            cleanup: Promise.resolve(),
+            sdkSessionId: "sdk-sess-compacting",
+          });
+        }
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool, sessionStore: sessionStore.store });
+
+      await harness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await harness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
+      expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-reuse");
     });
 
     it("does not seed sdkSessionId on the first turn (nothing tracked yet)", async () => {

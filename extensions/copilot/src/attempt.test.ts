@@ -69,6 +69,11 @@ type FakeSession = {
   id: string;
   off: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  rpc: {
+    history: {
+      cancelBackgroundCompaction: ReturnType<typeof vi.fn<() => Promise<{ cancelled: boolean }>>>;
+    };
+  };
   sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
   sessionId: string;
 };
@@ -158,6 +163,13 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
       handlers.push(handler);
       listeners.set(eventType, handlers);
     }),
+    rpc: {
+      history: {
+        cancelBackgroundCompaction: vi.fn<() => Promise<{ cancelled: boolean }>>(async () => ({
+          cancelled: true,
+        })),
+      },
+    },
     sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
     sessionId: id,
   };
@@ -205,6 +217,7 @@ function makeFakeSdk(
   return {
     client: {
       createSession,
+      deleteSession: vi.fn(async () => undefined),
       resumeSession,
       stop: vi.fn(async () => []),
     },
@@ -256,6 +269,7 @@ function makeParams(
 afterEach(() => {
   resetGlobalHookRunner();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("runCopilotAttempt", () => {
@@ -1700,6 +1714,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("marks a timeout during active SDK compaction", async () => {
+    const afterCompaction = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
@@ -1710,6 +1728,95 @@ describe("runCopilotAttempt", () => {
     });
 
     const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
+
+    sdk.sessions[0]?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
+    expect(afterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ compactedCount: 3, sessionFile: "session.json" }),
+      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+    );
+  });
+
+  it("bounds deferred cleanup when SDK compaction never completes", async () => {
+    vi.useFakeTimers();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+    const pool = makeFakePool(sdk);
+
+    const result = await runCopilotAttempt(makeParams(), { pool });
+
+    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+    expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
+    expect(pool.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels deferred cleanup when the timed-out caller aborts", async () => {
+    const controller = new AbortController();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams({ abortSignal: controller.signal }), {
+      pool: makeFakePool(sdk),
+    });
+
+    expect(result.timedOutDuringCompaction).toBe(true);
+    expect(sdk.sessions[0]?.disconnect).not.toHaveBeenCalled();
+
+    controller.abort();
+    await vi.waitFor(() => {
+      expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the compaction timeout classification after deferred completion", async () => {
+    const mirror = createDeferred<void>();
+    dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
+    dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockImplementationOnce(() => mirror.promise);
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+
+    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    await vi.waitFor(() => {
+      expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
+    });
+    sdk.sessions[0]?.emit("session.compaction_complete", { success: true });
+    mirror.resolve();
+
+    const result = await attempt;
 
     expect(result.timedOut).toBe(true);
     expect(result.timedOutDuringCompaction).toBe(true);

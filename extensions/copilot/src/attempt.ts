@@ -13,6 +13,7 @@ import {
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
+  resolveCompactionTimeoutMs,
   resolveSandboxContext as defaultResolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
@@ -138,6 +139,16 @@ export interface CopilotAttemptDeps {
     pooledClient: PooledClient;
     sessionConfig: CopilotSessionConfig;
   }) => void;
+  /**
+   * Called before a timed-out attempt retains its live SDK session to observe
+   * background compaction. The harness must prevent that session ID from being
+   * resumed until cleanup completes.
+   */
+  onTimedOutCompaction?: (info: {
+    abort: () => void;
+    cleanup: Promise<void>;
+    sdkSessionId: string;
+  }) => void;
 }
 
 async function runCopilotAgentEndHook(
@@ -177,23 +188,93 @@ async function finalizeCopilotAttempt(
 async function awaitCompactionCompletionOrAbort(
   bridge: ReturnType<typeof attachEventBridge>,
   abortSignal: AbortSignal | undefined,
-): Promise<void> {
+): Promise<"aborted" | "completed"> {
   if (!abortSignal) {
     await bridge.awaitCompactionCompletion();
-    return;
+    return "completed";
   }
   if (abortSignal.aborted) {
-    return;
+    return "aborted";
   }
   let resolveAbort: () => void = () => undefined;
-  const aborted = new Promise<void>((resolve) => {
-    resolveAbort = resolve;
+  const aborted = new Promise<"aborted">((resolve) => {
+    resolveAbort = () => resolve("aborted");
   });
   abortSignal.addEventListener("abort", resolveAbort, { once: true });
   try {
-    await Promise.race([bridge.awaitCompactionCompletion(), aborted]);
+    return await Promise.race([
+      bridge.awaitCompactionCompletion().then(() => "completed" as const),
+      aborted,
+    ]);
   } finally {
     abortSignal.removeEventListener("abort", resolveAbort);
+  }
+}
+
+function deferTimedOutCompactionCleanup(params: {
+  abortSignal: AbortSignal | undefined;
+  bridge: ReturnType<typeof attachEventBridge>;
+  handle: PooledClient;
+  pool: CopilotClientPool;
+  sdkSessionId?: string;
+  session: SessionLike;
+  timeoutMs: number;
+}): Promise<void> {
+  // sendAndWait can time out while the SDK continues background compaction.
+  // Keep its bridge attached so after_compaction uses the originating run context.
+  return (async () => {
+    try {
+      const outcome = await awaitCompactionCompletionBeforeDeadline({
+        abortSignal: params.abortSignal,
+        bridge: params.bridge,
+        timeoutMs: params.timeoutMs,
+      });
+      if (outcome !== "completed") {
+        void params.session.rpc?.history?.cancelBackgroundCompaction?.().catch(() => undefined);
+      }
+    } catch {
+      // Event callbacks are best-effort; cleanup still releases the retained session.
+    } finally {
+      params.bridge.detach();
+      try {
+        await params.session.disconnect();
+      } catch {
+        // The attempt has already returned its timeout result.
+      }
+      if (params.sdkSessionId) {
+        try {
+          await params.handle.client.deleteSession(params.sdkSessionId);
+        } catch {
+          // The timeout path intentionally discards this SDK session either way.
+        }
+      }
+      try {
+        await params.pool.release(params.handle);
+      } catch {
+        // The pool will dispose this client later if its release cannot complete.
+      }
+    }
+  })();
+}
+
+async function awaitCompactionCompletionBeforeDeadline(params: {
+  abortSignal: AbortSignal | undefined;
+  bridge: ReturnType<typeof attachEventBridge>;
+  timeoutMs: number;
+}): Promise<"aborted" | "completed" | "deadline"> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timeoutId = setTimeout(() => resolve("deadline"), params.timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      awaitCompactionCompletionOrAbort(params.bridge, params.abortSignal),
+      deadline,
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -283,6 +364,7 @@ export async function runCopilotAttempt(
   let settled = false;
   let sentTurnStarted = false;
   let waitForCompactionCompletion = false;
+  let timedOutDuringCompaction = false;
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
@@ -661,6 +743,7 @@ export async function runCopilotAttempt(
         // capability inventory. Do not call session.abort() here: OpenClaw may
         // resume the in-flight SDK session on the next attempt.
         timedOut = true;
+        timedOutDuringCompaction = bridge.isCompacting();
       }
       const snap = bridge.snapshot();
       if (!promptError && !timedOut && !aborted && snap.streamError) {
@@ -681,6 +764,7 @@ export async function runCopilotAttempt(
         // in-flight SDK session on the next attempt (the SDK keeps
         // the server-side session intact across this kind of timeout).
         timedOut = true;
+        timedOutDuringCompaction = bridge?.isCompacting() === true;
         // Flush any in-flight delta promise chain so the snapshot
         // built below in `finally` includes the deltas the SDK already
         // delivered before the timer fired.
@@ -695,37 +779,77 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    if (waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted) {
-      await awaitCompactionCompletionOrAbort(bridge!, params.abortSignal);
-    } else {
-      await bridge?.awaitCompactionChain();
-    }
-    bridge?.detach();
-    params.abortSignal?.removeEventListener("abort", onAbort);
-
-    if (session) {
-      try {
-        await session.disconnect();
-      } catch (error: unknown) {
-        disconnectError = toError(error);
-        // A timeout is a higher-fidelity signal than a cleanup-time
-        // disconnect failure; don't let a stale disconnect error
-        // mask the timeout classification the replay-shim depends on.
-        if (!promptError && !timedOut) {
-          promptError = disconnectError;
+    if (timedOut && bridge?.isCompacting() && session && handle) {
+      timedOutDuringCompaction = true;
+      const cleanupAbort = new AbortController();
+      const abortCleanup = () => cleanupAbort.abort();
+      if (params.abortSignal?.aborted) {
+        abortCleanup();
+      } else {
+        params.abortSignal?.addEventListener("abort", abortCleanup, { once: true });
+      }
+      const cleanup = deferTimedOutCompactionCleanup({
+        abortSignal: cleanupAbort.signal,
+        bridge,
+        handle,
+        pool: deps.pool,
+        sdkSessionId,
+        session,
+        timeoutMs: resolveCompactionTimeoutMs(input.config),
+      });
+      void cleanup
+        .finally(() => {
+          params.abortSignal?.removeEventListener("abort", abortCleanup);
+        })
+        .catch(() => undefined);
+      if (sdkSessionId) {
+        try {
+          deps.onTimedOutCompaction?.({
+            abort: () => cleanupAbort.abort(),
+            cleanup,
+            sdkSessionId,
+          });
+        } catch {
+          // Session tracking cannot interfere with timeout cleanup.
         }
       }
-    }
+      params.abortSignal?.removeEventListener("abort", onAbort);
+    } else {
+      if (waitForCompactionCompletion && !aborted && !params.abortSignal?.aborted) {
+        await awaitCompactionCompletionOrAbort(bridge!, params.abortSignal);
+      } else {
+        await bridge?.awaitCompactionChain();
+      }
+      bridge?.detach();
+      params.abortSignal?.removeEventListener("abort", onAbort);
 
-    if (handle) {
-      try {
-        await deps.pool.release(handle);
-      } catch (error: unknown) {
-        const releaseFailure = toError(error);
-        if (promptError) {
-          console.warn("[copilot-attempt] pool.release failed after primary error", releaseFailure);
-        } else {
-          releaseError = releaseFailure;
+      if (session) {
+        try {
+          await session.disconnect();
+        } catch (error: unknown) {
+          disconnectError = toError(error);
+          // A timeout is a higher-fidelity signal than a cleanup-time
+          // disconnect failure; don't let a stale disconnect error
+          // mask the timeout classification the replay-shim depends on.
+          if (!promptError && !timedOut) {
+            promptError = disconnectError;
+          }
+        }
+      }
+
+      if (handle) {
+        try {
+          await deps.pool.release(handle);
+        } catch (error: unknown) {
+          const releaseFailure = toError(error);
+          if (promptError) {
+            console.warn(
+              "[copilot-attempt] pool.release failed after primary error",
+              releaseFailure,
+            );
+          } else {
+            releaseError = releaseFailure;
+          }
         }
       }
     }
@@ -844,7 +968,7 @@ export async function runCopilotAttempt(
     sdkSessionId,
     sessionIdUsed,
     timedOut,
-    timedOutDuringCompaction: timedOut && bridge?.isCompacting() === true,
+    timedOutDuringCompaction,
     toolMetas: snap ? [...snap.toolMetas] : [],
     usage: snap?.usage,
     yieldDetected,
