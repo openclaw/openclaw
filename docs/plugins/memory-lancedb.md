@@ -227,6 +227,56 @@ for automatic capture. It does not cap recall query embeddings.
 regular expressions. The built-in triggers include common English, Czech,
 Chinese, Japanese, and Korean memory phrases.
 
+## Query embedding cache
+
+`memory-lancedb` embeds the recall query before every vector search. A single
+turn can embed the same query more than once (the `memory_recall` tool, the
+auto-recall hook, and capture deduplication), and each embed is a provider
+round-trip. Recall-query embeddings are therefore cached in a small
+per-instance LRU so identical embeds collapse to one provider call.
+
+| Setting                           | Default | Range     | Applies to                                           |
+| --------------------------------- | ------- | --------- | ---------------------------------------------------- |
+| `query.embeddingCache.enabled`    | `true`  | boolean   | whether recall-query embeddings are cached           |
+| `query.embeddingCache.maxEntries` | `512`   | 1-1000000 | maximum cached query vectors per embeddings instance |
+
+The cache is on by default. `(model, text)` to `embedding` is deterministic, so
+a cached vector never goes stale for a fixed embedding identity; eviction is
+purely by capacity (least-recently-used) with no TTL. Failed or degenerate
+embeds (empty, all-zero, or non-finite vectors) are never cached, so a transient
+provider failure is always retried.
+
+The cache is in-memory and per-instance. It is not persisted: it starts empty on
+Gateway restart, and any reconfiguration that rebuilds the embeddings instance
+(for example changing the model, provider, or dimensions) starts a fresh cache
+keyed to the new identity. It is separate from memory-core's persistent
+chunk-embedding cache, which stores index-time chunk vectors in SQLite; this
+cache only holds recall-query vectors at search time.
+
+To turn it off, set `query.embeddingCache.enabled` to `false`. Lower
+`maxEntries` to bound memory on a long-running instance that sees a very large
+variety of distinct recall queries.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-lancedb": {
+        enabled: true,
+        config: {
+          query: {
+            embeddingCache: {
+              enabled: true,
+              maxEntries: 512,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Commands
 
 When `memory-lancedb` is the active memory plugin, it registers the `ltm` CLI
