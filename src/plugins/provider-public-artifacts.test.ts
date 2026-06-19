@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ModelCatalogApi } from "@openclaw/model-catalog-core/model-catalog-types";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -348,7 +349,12 @@ describe("provider public artifacts", () => {
     const { resolveBundledProviderPolicySurfaces: resolvePolicySurfaces } = await importFreshModule<
       typeof import("./provider-public-artifacts.js")
     >(import.meta.url, "./provider-public-artifacts.js?scope=shared-provider-api-ref");
-    const plugin = (id: string, provider: string, api: string, modelApis: string[] = []) => ({
+    const plugin = (
+      id: string,
+      provider: string,
+      api: ModelCatalogApi,
+      modelApis: readonly ModelCatalogApi[] = [],
+    ) => ({
       id,
       channels: [],
       cliBackends: [],

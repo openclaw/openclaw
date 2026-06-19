@@ -32,6 +32,7 @@ type ResolveBundledProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
 type ResolveBundledProviderPolicySurfaces =
   typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurfaces;
+type ProviderConfigApi = NonNullable<ModelProviderConfig["api"]>;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
@@ -1542,7 +1543,11 @@ describe("provider-runtime", () => {
       provider: "custom-openai",
       modelId: "gpt-5.5",
     },
-  ])(
+  ] satisfies ReadonlyArray<{
+    api: ProviderConfigApi;
+    provider: string;
+    modelId: string;
+  }>)(
     "continues API-ref bundled thinking policy lookup across shared $api owners",
     ({ api, provider, modelId }) => {
       const firstOwnerResolveThinkingProfile = vi.fn(() => null);
