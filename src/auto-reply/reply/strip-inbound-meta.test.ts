@@ -159,6 +159,32 @@ What should I grab on the way?`;
     );
   });
 
+  it("does not strip user text that starts with 'Current message:' when not part of metadata structure", () => {
+    const input = `Current message: this is what I want to say
+Hello, how are you?`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip user text containing (untrusted, ...) pattern in normal conversation", () => {
+    const input = `I got a notification (untrusted, from chrome) about the update
+Let me check what happened`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip leading user text that contains similar-looking metadata-like context", () => {
+    // User text that coincidentally contains "(untrusted" but is not a metadata header
+    const input = `I received an untrusted message from the system
+Please help me with this.`;
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip user text with parenthetical annotations that are not metadata patterns", () => {
+    // User text containing parenthetical notes shouldn't be mistaken for metadata
+    const input = `the file (see attached) needs review
+Also check the config (untrusted location) for details`;
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
+  });
+
   it("does not strip lookalike sentinel lines with extra text", () => {
     const input = `Conversation info (untrusted metadata): please ignore
 \`\`\`json
