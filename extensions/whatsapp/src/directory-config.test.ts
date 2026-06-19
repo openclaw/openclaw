@@ -144,7 +144,38 @@ describe("whatsapp directory groups live", () => {
     ]);
   });
 
-  it("applies query filter to live results", async () => {
+  it("filters live results by group name/subject", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({
+        "120363111111111111@g.us": {
+          id: "120363111111111111@g.us",
+          subject: "Family Chat",
+        },
+        "120363222222222222@g.us": {
+          id: "120363222222222222@g.us",
+          subject: "Work Group",
+        },
+        "120363333333333333@g.us": {
+          id: "120363333333333333@g.us",
+          subject: "Football Fans",
+        },
+      }),
+    });
+
+    const cfg = { channels: { whatsapp: {} } } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: "Family",
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us", name: "Family Chat" }]);
+  });
+
+  it("applies query filter to live results by JID", async () => {
     mockController({
       groupFetchAllParticipating: vi.fn().mockResolvedValue({
         "120363111111111111@g.us": {

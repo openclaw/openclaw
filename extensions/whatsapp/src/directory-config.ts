@@ -1,6 +1,5 @@
 // Whatsapp helper module supports directory config behavior.
 import {
-  applyDirectoryQueryAndLimit,
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,
   type ChannelDirectoryEntry,
@@ -62,15 +61,27 @@ export async function listWhatsAppDirectoryGroupsLive(
     return listWhatsAppDirectoryGroupsFromConfig(params);
   }
 
-  const jids = Object.keys(groups);
-  const filtered = applyDirectoryQueryAndLimit(jids, params);
+  const query = params.query?.toLowerCase() ?? "";
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const entries: ChannelDirectoryEntry[] = [];
 
-  return filtered.map((jid) => {
-    const meta = groups[jid];
-    return {
-      kind: "group" as const,
-      id: jid,
-      name: meta?.subject,
-    };
-  });
+  for (const [jid, meta] of Object.entries(groups)) {
+    const name = meta?.subject?.trim() || undefined;
+    const lowerJid = jid.toLowerCase();
+
+    if (query) {
+      const lowerName = name?.toLowerCase() ?? "";
+      if (!lowerJid.includes(query) && !lowerName.includes(query)) {
+        continue;
+      }
+    }
+
+    entries.push({ kind: "group" as const, id: jid, name });
+
+    if (typeof limit === "number" && entries.length >= limit) {
+      break;
+    }
+  }
+
+  return entries;
 }
