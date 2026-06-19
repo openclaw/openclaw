@@ -185,11 +185,11 @@ plugin's **authenticated channel id**.
 
 ```ts
 // inside your channel plugin's gateway.startAccount(ctx):
-ctx.channelOutbound.registerMirrorDispatcher("telegram", accountId, dispatcher);
-ctx.channelOutbound.registerEchoAdmission("telegram", accountId, admission);
+ctx.channelOutbound.registerMirrorDispatcher(accountId, dispatcher);
+ctx.channelOutbound.registerEchoAdmission(accountId, admission);
 // on account stop:
-ctx.channelOutbound.unregisterMirrorDispatcher("telegram", accountId);
-ctx.channelOutbound.unregisterEchoAdmission("telegram", accountId);
+ctx.channelOutbound.unregisterMirrorDispatcher(accountId);
+ctx.channelOutbound.unregisterEchoAdmission(accountId);
 ```
 
 A channel registers **per account** (last-wins **for the same owner**,
