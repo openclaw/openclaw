@@ -22,6 +22,13 @@ export type PluginCommandEntrySpec = {
   nativeName?: string;
 };
 
+type ProviderPluginCommandSpec = {
+  name: string;
+  description: string;
+  descriptionLocalizations?: Record<string, string>;
+  acceptsArgs: boolean;
+};
+
 function resolvePluginNativeName(
   command: OpenClawPluginCommandDefinition,
   provider?: string,
@@ -66,12 +73,7 @@ function pluginNativeCommandsEnabled(
 export function getPluginCommandSpecs(
   provider?: string,
   options: PluginCommandSpecOptions = {},
-): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
+): ProviderPluginCommandSpec[] {
   const providerName = normalizeOptionalLowercaseString(provider);
   if (!pluginNativeCommandsEnabled(providerName, options)) {
     return [];
@@ -83,12 +85,7 @@ export function getPluginCommandSpecsFromRegistrations(
   commands: readonly PluginCommandRegistration[],
   provider?: string,
   options: PluginCommandSpecOptions = {},
-): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
+): ProviderPluginCommandSpec[] {
   const providerName = normalizeOptionalLowercaseString(provider);
   if (!pluginNativeCommandsEnabled(providerName, options)) {
     return [];
@@ -103,7 +100,7 @@ export function getPluginCommandEntrySpecs(
   const providerName = normalizeOptionalLowercaseString(provider);
   const nativeCommandsEnabled = pluginNativeCommandsEnabled(providerName, options);
   return Array.from(pluginCommands.values())
-    .map((cmd) => serializePluginCommandEntrySpec(cmd, providerName, nativeCommandsEnabled))
+    .map((cmd) => safeSerializePluginCommandEntrySpec(cmd, providerName, nativeCommandsEnabled))
     .filter((spec): spec is PluginCommandEntrySpec => spec !== null);
 }
 
@@ -116,53 +113,75 @@ export function getPluginCommandEntrySpecsFromRegistrations(
   const nativeCommandsEnabled = pluginNativeCommandsEnabled(providerName, options);
   return commands
     .map((entry) =>
-      serializePluginCommandEntrySpec(entry.command, providerName, nativeCommandsEnabled),
+      safeProjectPluginCommandRegistration(entry, (cmd) =>
+        serializePluginCommandEntrySpec(cmd, providerName, nativeCommandsEnabled),
+      ),
     )
     .filter((spec): spec is PluginCommandEntrySpec => spec !== null);
 }
 
 /** Resolve plugin command specs for a provider's native naming surface without support gating. */
-export function listProviderPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
+export function listProviderPluginCommandSpecs(provider?: string): ProviderPluginCommandSpec[] {
   return Array.from(pluginCommands.values())
-    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
-    .map((cmd) => serializePluginCommandSpec(cmd, provider));
+    .map((cmd) => safeSerializeProviderPluginCommandSpec(cmd, provider))
+    .filter((spec): spec is ProviderPluginCommandSpec => spec !== null);
 }
 
 export function listProviderPluginCommandSpecsFromRegistrations(
   commands: readonly PluginCommandRegistration[],
   provider?: string,
-): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
+): ProviderPluginCommandSpec[] {
   return commands
-    .map((entry) => entry.command)
-    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
-    .map((cmd) => serializePluginCommandSpec(cmd, provider));
+    .map((entry) =>
+      safeProjectPluginCommandRegistration(entry, (cmd) =>
+        safeSerializeProviderPluginCommandSpec(cmd, provider),
+      ),
+    )
+    .filter((spec): spec is ProviderPluginCommandSpec => spec !== null);
+}
+
+function safeProjectPluginCommandRegistration<T>(
+  entry: PluginCommandRegistration,
+  project: (cmd: OpenClawPluginCommandDefinition) => T | null,
+): T | null {
+  try {
+    return project(entry.command);
+  } catch {
+    return null;
+  }
+}
+
+function safeSerializeProviderPluginCommandSpec(
+  cmd: OpenClawPluginCommandDefinition,
+  provider?: string,
+): ProviderPluginCommandSpec | null {
+  try {
+    if (!pluginCommandSupportsChannel(cmd, provider)) {
+      return null;
+    }
+    return serializePluginCommandSpec(cmd, provider);
+  } catch {
+    return null;
+  }
+}
+
+function safeSerializePluginCommandEntrySpec(
+  cmd: OpenClawPluginCommandDefinition,
+  provider: string | undefined,
+  nativeCommandsEnabled: boolean,
+): PluginCommandEntrySpec | null {
+  try {
+    return serializePluginCommandEntrySpec(cmd, provider, nativeCommandsEnabled);
+  } catch {
+    return null;
+  }
 }
 
 function serializePluginCommandSpec(
   cmd: OpenClawPluginCommandDefinition,
   provider?: string,
-): {
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-} {
-  const spec: {
-    name: string;
-    description: string;
-    descriptionLocalizations?: Record<string, string>;
-    acceptsArgs: boolean;
-  } = {
+): ProviderPluginCommandSpec {
+  const spec: ProviderPluginCommandSpec = {
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description.trim(),
     acceptsArgs: cmd.acceptsArgs ?? false,

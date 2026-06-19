@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
+import { getPluginCommandEntrySpecsFromRegistrations } from "./command-specs.js";
 import {
   testing,
   clearPluginCommands,
@@ -516,6 +517,51 @@ describe("registerPluginCommand", () => {
       { provider: "discord", expectedNames: [] },
     ]);
     expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
+  });
+
+  it("skips malformed runtime command rows when projecting command entries", () => {
+    const throwingCommand = Object.defineProperty(
+      {
+        description: "Bad command",
+        acceptsArgs: false,
+        handler: async () => ({ text: "bad" }),
+      },
+      "name",
+      {
+        get() {
+          throw new Error("boom");
+        },
+      },
+    );
+    const healthyCommand = createVoiceCommand({
+      description: "Demo command",
+      nativeNames: { discord: "discordvoice" },
+    });
+
+    expect(
+      getPluginCommandEntrySpecsFromRegistrations(
+        [
+          {
+            pluginId: "broken-plugin",
+            source: "test",
+            command: throwingCommand as never,
+          },
+          {
+            pluginId: "demo-plugin",
+            source: "test",
+            command: healthyCommand,
+          },
+        ],
+        "discord",
+      ),
+    ).toEqual([
+      {
+        name: "voice",
+        description: "Demo command",
+        acceptsArgs: false,
+        nativeName: "discordvoice",
+      },
+    ]);
   });
 
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
