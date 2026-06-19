@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import {
-  flattenConfigDocBaselineEntries,
   renderConfigDocBaselineArtifacts,
   type ConfigDocBaselineEntry,
 } from "../src/config/doc-baseline.js";
@@ -24,6 +23,18 @@ type CoverageConfig = {
   readonly monitored: readonly string[];
   readonly classifications: readonly CoverageClassification[];
 };
+
+type ConfigDocBaseline = {
+  readonly coreEntries: readonly ConfigDocBaselineEntry[];
+  readonly channelEntries: readonly ConfigDocBaselineEntry[];
+  readonly pluginEntries: readonly ConfigDocBaselineEntry[];
+};
+
+function flattenConfigDocBaselineEntries(
+  baseline: ConfigDocBaseline,
+): readonly ConfigDocBaselineEntry[] {
+  return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
+}
 
 type ClassifiedEntry = {
   readonly path: string;
