@@ -1814,15 +1814,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: fullAnswer,
       messageId: 2001,
     });
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: fullAnswer }],
-    });
+    // Mirror is skipped because the primary reply already has the same text.
+    expect(appendSessionTranscriptMessage).not.toHaveBeenCalled();
   });
 
   it("emits the redacted appended message in transcript updates", async () => {
