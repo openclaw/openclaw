@@ -6,10 +6,10 @@ scenario:
   runtimeParityTier: live-only
   coverage:
     primary:
-      - openai-native-web-search
-      - web-search-and-fetch
+      - web-search.openai-native-web-search
+      - plugins.web-search-and-fetch
     secondary:
-      - model-and-filter-routing
+      - web-search.model-and-filter-routing
       - tools.web-search
   objective: Verify the OpenAI web_search Docker lane assertions require native Responses web_search evidence with bounded diagnostics.
   successCriteria:

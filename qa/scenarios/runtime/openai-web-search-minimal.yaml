@@ -6,9 +6,9 @@ scenario:
   runtimeParityTier: live-only
   coverage:
     primary:
-      - reasoning-and-cache-controls
+      - runtime.reasoning-and-cache-controls
     secondary:
-      - openai-native-web-search
+      - web-search.openai-native-web-search
       - tools.web-search
   objective: Verify the OpenAI web_search minimal-reasoning E2E client distinguishes successful grounded turns from provider schema rejection.
   successCriteria:
