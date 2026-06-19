@@ -2,7 +2,15 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
+import { isGatewayTransportError } from "../gateway/call.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
+
+export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
+  if (!isGatewayTransportError(err) || err.kind !== "closed") {
+    return undefined;
+  }
+  return `Gateway connect failed: ${err.message.split("\n", 1)[0]}`;
+}
 
 const formatKv = (line: string, rich: boolean) => {
   const idx = line.indexOf(": ");

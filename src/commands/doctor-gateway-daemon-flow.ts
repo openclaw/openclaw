@@ -18,7 +18,6 @@ import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import { isGatewayTransportError } from "../gateway/call.js";
 import {
   formatPortDiagnostics,
   inspectPortConnections,
@@ -49,7 +48,7 @@ import {
   SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
-import { formatHealthCheckFailure } from "./health-format.js";
+import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
@@ -485,13 +484,9 @@ export async function maybeRepairGatewayDaemon(params: {
       } catch (err) {
         const message = String(err);
         if (message.includes("gateway closed")) {
-          if (isGatewayTransportError(err) && err.kind === "closed") {
-            // WebSocket was connected and then closed — the gateway listener is
-            // alive. Show the specific close reason rather than "not running."
-            note(
-              `Gateway connect failed: gateway closed (${err.code}): ${err.reason ?? "no close reason"}`,
-              "Gateway",
-            );
+          const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+          if (closedDiagnostic) {
+            note(closedDiagnostic, "Gateway");
             note(params.gatewayDetailsMessage, "Gateway connection");
           } else {
             note("Gateway not running.", "Gateway");

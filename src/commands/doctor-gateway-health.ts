@@ -7,7 +7,6 @@ import {
   buildGatewayProbeConnectionDetails,
   callGateway,
   isGatewayCredentialsRequiredError,
-  isGatewayTransportError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
@@ -20,7 +19,7 @@ import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthCheckFailure } from "./health-format.js";
+import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
 type GatewayMemoryProbe = {
@@ -130,15 +129,9 @@ export async function checkGatewayHealth(params: {
     const message = String(err);
     if (message.includes("gateway closed")) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      if (isGatewayTransportError(err) && err.kind === "closed") {
-        // WebSocket was connected and then closed (protocol mismatch, auth
-        // rejection, etc.) — the gateway listener is alive even though the
-        // health RPC failed. Show the specific close reason instead of the
-        // misleading "Gateway not running." message.
-        note(
-          `Gateway connect failed: gateway closed (${err.code}): ${err.reason ?? "no close reason"}`,
-          "Gateway",
-        );
+      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+      if (closedDiagnostic) {
+        note(closedDiagnostic, "Gateway");
       } else {
         note("Gateway not running.", "Gateway");
       }

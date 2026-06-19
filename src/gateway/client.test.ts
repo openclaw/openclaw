@@ -822,6 +822,7 @@ describe("GatewayClient close handling", () => {
       );
       expect(onClose).toHaveBeenCalledWith(1000, "", {
         phase: "pre-hello",
+        socketOpened: true,
         transientPreHelloCleanClose: true,
       });
 
@@ -906,6 +907,7 @@ describe("GatewayClient close handling", () => {
 
       expect(onClose).toHaveBeenNthCalledWith(1, 1000, "", {
         phase: "pre-hello",
+        socketOpened: true,
         transientPreHelloCleanClose: true,
       });
       expect(onClose).toHaveBeenNthCalledWith(2, 1000, "");

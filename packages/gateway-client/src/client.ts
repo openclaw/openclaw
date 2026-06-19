@@ -363,6 +363,7 @@ export type GatewayReconnectPausedInfo = {
 
 export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
   transientPreHelloCleanClose: boolean;
 };
 
@@ -691,6 +692,7 @@ export class GatewayClient {
       const reasonText = rawDataToString(reason);
       const closeInfo: GatewayClientCloseInfo = {
         phase: this.helloOkReceived ? "post-hello" : "pre-hello",
+        socketOpened: this.socketOpened,
         transientPreHelloCleanClose: !this.helloOkReceived && code === 1000 && reasonText === "",
       };
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;

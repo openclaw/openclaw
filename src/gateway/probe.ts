@@ -377,18 +377,12 @@ export async function probeGateway(opts: {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info) => {
         close = { code, reason };
         if (connectLatencyMs == null) {
-          // Distinguish "WebSocket was connected but handshake failed" from
-          // "TCP/WS never connected". When onConnectError fired, the transport
-          // never reached the WebSocket layer and onClose (code 1006) is just
-          // teardown — leave connectLatencyMs null so downstream code treats
-          // this as unreachable. When onConnectError was absent, the WebSocket
-          // was accepted and the close is a server-side rejection (protocol
-          // mismatch, auth failure, etc.) — record the elapsed time so
-          // downstream code can treat this as reachable-but-errored.
-          if (connectError == null) {
+          // Preserve the transport boundary: request-level handshake failures
+          // still prove the listener was reachable once the socket opened.
+          if (info?.socketOpened === true) {
             connectLatencyMs = Date.now() - startedAt;
           }
           settleProbe({
