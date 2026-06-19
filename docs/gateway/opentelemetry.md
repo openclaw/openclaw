@@ -390,6 +390,9 @@ to them directly without OTLP export.
   - `costUsd`: estimated cost in USD (omitted when cost config is unavailable)
   - `durationMs`: total turn duration in milliseconds
   - `lastCallUsage`: per-call usage breakdown from the last individual API call (optional)
+  - `ts`: unix-ms timestamp when the event was dispatched (shared envelope)
+  - `seq`: monotonically increasing sequence number per diagnostic session (shared envelope)
+  - `trace`: optional distributed-trace context (shared envelope)
 
 **Message flow**
 
