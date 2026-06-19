@@ -116,15 +116,36 @@ function buildSuccessorEntries(params: {
   const { allEntries, branch, latestCompactionIndex } = params;
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
 
+  // Determine effective firstKeptEntryId.
+  // If the last message before firstKeptEntryId is an assistant reply,
+  // include it in the kept tail so the successor transcript preserves
+  // the conversational turn structure (fixes #76729).
+  let effectiveFirstKeptId = compaction.firstKeptEntryId;
+  if (effectiveFirstKeptId) {
+    let firstKeptIdx = -1;
+    for (let i = 0; i < latestCompactionIndex; i++) {
+      if (branch[i]?.id === effectiveFirstKeptId) { firstKeptIdx = i; break; }
+    }
+    if (firstKeptIdx > 0) {
+      for (let i = firstKeptIdx - 1; i >= 0; i--) {
+        const entry = branch[i];
+        if (!entry) continue;
+        if (isDedupedStateEntry(entry) || entry.type === "custom" || entry.type === "label") continue;
+        if (entry.type === "message" && entry.message.role === "assistant") {
+          effectiveFirstKeptId = entry.id;
+        }
+        break;
+      }
+    }
+  }
+
   const summarizedBranchIds = new Set<string>();
   const preCompactionKeptBranchIds = new Set<string>();
   let foundFirstKept = false;
   for (let index = 0; index < latestCompactionIndex; index += 1) {
     const entry = branch[index];
-    if (!entry) {
-      continue;
-    }
-    if (compaction.firstKeptEntryId && entry.id === compaction.firstKeptEntryId) {
+    if (!entry) continue;
+    if (effectiveFirstKeptId && entry.id === effectiveFirstKeptId) {
       foundFirstKept = true;
     }
     if (foundFirstKept) {
@@ -244,19 +265,23 @@ function buildSuccessorEntries(params: {
   for (const entry of branch) {
     activeBranchIds.add(entry.id);
   }
+  const effectiveCompaction = effectiveFirstKeptId !== compaction.firstKeptEntryId
+    ? ({ ...compaction, firstKeptEntryId: effectiveFirstKeptId } as CompactionEntry)
+    : compaction;
   const keptEntries: SessionEntry[] = [];
   for (const entry of allEntries) {
     if (removedIds.has(entry.id)) {
       continue;
     }
 
-    let parentId = entry.parentId;
+    const current = entry.type === "compaction" ? effectiveCompaction : entry;
+    let parentId = current.parentId;
     while (parentId !== null && removedIds.has(parentId)) {
       parentId = entryById.get(parentId)?.parentId ?? null;
     }
 
     const reparented =
-      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+      parentId === current.parentId ? current : ({ ...current, parentId } as SessionEntry);
     // Strip thinking signatures only from pre-compaction kept entries. Pre-compaction
     // signatures are bound to the original context prefix; the successor file has a different
     // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".

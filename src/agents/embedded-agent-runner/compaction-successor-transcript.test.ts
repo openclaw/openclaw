@@ -266,6 +266,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     const contextText = JSON.stringify(context.messages);
     expect(contextText).toContain("Summary of old user and old assistant.");
     expect(contextText).toContain("kept user");
+    expect(contextText).toContain("old assistant");
     expect(contextText).toContain("post assistant");
     expect(
       context.messages.some((message) => message.role === "user" && message.content === "old user"),
@@ -555,6 +556,53 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(activeContextText).toContain("Summary of active work.");
     expect(activeContextText).toContain("next active");
     expect(activeContextText).not.toContain("inactive branch");
+  });
+});
+
+
+describe("rotateTranscriptAfterCompaction — assistant boundary preservation", () => {
+  it("preserves the last assistant message before firstKeptEntryId", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    // Fixture: user-assistant pair, then non-context entries, then surviving user
+    // The assistant reply before firstKeptEntryId MUST survive in successor.
+    const oldUserId = manager.appendMessage({ role: "user", content: "summarized question", timestamp: 1 });
+    manager.appendMessage(makeAssistant("summarized answer", 2));
+    manager.appendModelChange("openai", "gpt-5.2");
+    manager.appendThinkingLevelChange("high");
+    manager.appendCustomEntry("test-extension", {});
+    const firstKeptId = manager.appendMessage({ role: "user", content: "surviving question", timestamp: 3 });
+    manager.appendMessage(makeAssistant("surviving answer", 4));
+    manager.appendCompaction("Summary of old work.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "post question", timestamp: 5 });
+    manager.appendMessage(makeAssistant("post answer", 6));
+
+    const sessionFile = requireString(manager.getSessionFile(), "source session file");
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-06-19T00:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
+
+    // The last assistant before firstKeptEntryId must be in the successor transcript
+    const contextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(contextText).toContain("summarized answer");
+    expect(contextText).toContain("surviving question");
+    expect(contextText).toContain("surviving answer");
+    expect(contextText).toContain("post answer");
+
+    // The summarized user message must NOT be present
+    expect(contextText).not.toContain("summarized question");
+
+    // Non-context entries before firstKeptEntryId should not block discovery
+    const modelEntries = successor.getEntries().filter(e => e.type === "model_change");
+    expect(modelEntries).toHaveLength(1);
   });
 });
 
