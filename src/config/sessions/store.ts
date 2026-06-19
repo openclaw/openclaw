@@ -1188,6 +1188,17 @@ export async function resetSessionEntryLifecycle(params: {
       agentId: params.agentId,
       reason: "reset",
     });
+    // Archive trajectory sidecar files alongside the transcript so forensic data
+    // (tool calls, tool results) survives the reset for post-incident investigation.
+    if (previousSessionId) {
+      const { archiveSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+      await archiveSessionTrajectoryArtifacts({
+        sessionId: previousSessionId,
+        sessionFile: previousSessionFile,
+        storePath: params.storePath,
+        reason: "reset",
+      });
+    }
     ensureLifecycleTranscriptHeader({
       sessionFile: nextSessionFile,
       sessionId: nextEntry.sessionId,
@@ -1233,6 +1244,16 @@ export async function deleteSessionEntryLifecycle(params: {
           reason: "deleted",
         })
       : [];
+    // Archive trajectory sidecar files alongside the transcript on session delete.
+    if (params.archiveTranscript && deletedSessionId) {
+      const { archiveSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+      await archiveSessionTrajectoryArtifacts({
+        sessionId: deletedSessionId,
+        sessionFile: deletedSessionFile,
+        storePath: params.storePath,
+        reason: "deleted",
+      });
+    }
     const result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts,
       deleted: true,

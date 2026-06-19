@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  archiveSessionTrajectoryArtifacts,
   removeRemovedSessionTrajectoryArtifacts,
   removeSessionTrajectoryArtifacts,
 } from "./cleanup.js";
@@ -43,6 +44,56 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("trajectory cleanup", () => {
+  it("archives trajectory sidecars on reset instead of deleting", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-archive-" }, async (dir) => {
+      const sessionId = "session-archive-1";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+
+      const archived = await archiveSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        reason: "reset",
+      });
+
+      expect(archived.map((entry) => entry.kind).toSorted()).toEqual(["pointer", "runtime"]);
+      // Original files should no longer exist.
+      await expectPathMissing(runtimeFile);
+      await expectPathMissing(pointerPath);
+      // Archived copies should exist with the .reset.<ts> suffix.
+      expect(archived.length).toBe(2);
+      for (const entry of archived) {
+        const stat = await fs.stat(entry.archivedPath);
+        expect(stat.isFile()).toBe(true);
+        expect(entry.archivedPath).toMatch(
+          /\.reset\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/,
+        );
+      }
+    });
+  });
+
+  it("skips archiving when trajectory files do not exist", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-archive-" }, async (dir) => {
+      const sessionId = "session-archive-none";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+
+      const archived = await archiveSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        reason: "reset",
+      });
+
+      expect(archived).toStrictEqual([]);
+    });
+  });
+
   it("removes adjacent trajectory sidecars for a deleted session", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-1";

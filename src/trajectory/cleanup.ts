@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  formatSessionArchiveTimestamp,
+  type SessionArchiveReason,
+} from "../config/sessions/artifacts.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -224,6 +228,77 @@ export async function removeSessionTrajectoryArtifacts(params: {
   }
 
   return removed;
+}
+
+export type ArchivedTrajectoryArtifact = {
+  kind: "pointer" | "runtime";
+  sourcePath: string;
+  archivedPath: string;
+};
+
+function archiveRegularFile(
+  filePath: string,
+  kind: ArchivedTrajectoryArtifact["kind"],
+  reason: SessionArchiveReason,
+): ArchivedTrajectoryArtifact | null {
+  if (!isRegularNonSymlinkFile(filePath)) {
+    return null;
+  }
+  const ts = formatSessionArchiveTimestamp();
+  const archivedPath = `${filePath}.${reason}.${ts}`;
+  try {
+    fs.renameSync(filePath, archivedPath);
+  } catch {
+    return null;
+  }
+  return { kind, sourcePath: path.resolve(filePath), archivedPath: path.resolve(archivedPath) };
+}
+
+/**
+ * Archives trajectory sidecar files for a session lifecycle event (reset or delete).
+ * Instead of deleting, renames runtime and pointer files with a timestamped archive
+ * suffix, preserving forensic data for post-incident investigations.
+ */
+export async function archiveSessionTrajectoryArtifacts(params: {
+  sessionId: string;
+  sessionFile?: string;
+  storePath: string;
+  reason?: SessionArchiveReason;
+  restrictToStoreDir?: boolean;
+}): Promise<ArchivedTrajectoryArtifact[]> {
+  const sessionFile = resolveRemovedSessionFile(params);
+  if (!sessionFile) {
+    return [];
+  }
+  const storeDir = path.dirname(path.resolve(params.storePath));
+  const restrictToStoreDir = params.restrictToStoreDir === true;
+  const reason = params.reason ?? "reset";
+  const archived: ArchivedTrajectoryArtifact[] = [];
+
+  const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+  const defaultRuntimePath = resolveTrajectoryFilePath({
+    env: {},
+    sessionFile,
+    sessionId: params.sessionId,
+  });
+
+  // Archive the runtime file if it's within scope.
+  if (!restrictToStoreDir || isPathWithinDir(storeDir, defaultRuntimePath)) {
+    const archivedRuntime = archiveRegularFile(defaultRuntimePath, "runtime", reason);
+    if (archivedRuntime) {
+      archived.push(archivedRuntime);
+    }
+  }
+
+  // Archive the pointer file if it's within scope.
+  if (!restrictToStoreDir || isPathWithinDir(storeDir, pointerPath)) {
+    const archivedPointer = archiveRegularFile(pointerPath, "pointer", reason);
+    if (archivedPointer) {
+      archived.push(archivedPointer);
+    }
+  }
+
+  return archived;
 }
 
 export async function removeRemovedSessionTrajectoryArtifacts(params: {
