@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -15,7 +17,95 @@ import {
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
+import { runAgentAttempt } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+
+const runCliAgentMock = vi.hoisted(() => vi.fn());
+const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../cli-runner.js", () => ({
+  runCliAgent: runCliAgentMock,
+}));
+
+vi.mock("../embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
+}));
+
+vi.mock("../model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({ provider }: { provider?: string }) => provider,
+}));
+
+vi.mock("../model-selection.js", () => ({
+  isCliProvider: (provider: string) =>
+    ["claude-cli", "codex-cli", "google-gemini-cli"].includes(provider.trim().toLowerCase()),
+}));
+
+describe("runAgentAttempt embedded session-family inputs", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-execution-"));
+    runCliAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("forwards direct attempt session store data to embedded runs", async () => {
+    const sessionKey = "agent:main:direct:store-forwarding";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-store-forwarding",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const storePath = path.join(tmpDir, "sessions.json");
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { durationMs: 1 },
+    });
+
+    await runAgentAttempt({
+      providerOverride: "fixture",
+      originalProvider: "fixture",
+      modelOverride: "fixture-model",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "use reset-family context",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-store-forwarding",
+      lifecycleGeneration: "test-generation",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "fixture",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionStorePath: storePath,
+      sessionStoreEntry: sessionEntry,
+    });
+  });
+});
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
