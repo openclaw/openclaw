@@ -874,6 +874,14 @@ function applyAssistantVisibleTextStagePipeline(
     }
     return value.trim();
   };
+  const stripStandalonePlainTextToolCallBlocks = (value: string) => {
+    const xmlishToolCallIndex = value.search(/<invoke\b|<function=/i);
+    const prefix = xmlishToolCallIndex >= 0 ? value.slice(0, xmlishToolCallIndex).trim() : "";
+    if (prefix && !/\bcall$/i.test(prefix)) {
+      return value;
+    }
+    return stripPlainTextToolCallBlocks(value);
+  };
   const stripNonReasoningStages = (value: string) => {
     let cleaned = value;
     if (!options.preserveMinimaxToolXml) {
@@ -889,7 +897,7 @@ function applyAssistantVisibleTextStagePipeline(
       cleaned = stripAssistantInternalTraceLines(cleaned);
     }
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
-    cleaned = stripPlainTextToolCallBlocks(cleaned);
+    cleaned = stripStandalonePlainTextToolCallBlocks(cleaned);
     if (!options.preserveDowngradedToolText) {
       cleaned = stripDowngradedToolCallText(cleaned);
     }

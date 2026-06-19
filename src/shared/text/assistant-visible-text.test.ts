@@ -819,6 +819,26 @@ describe("sanitizeAssistantVisibleText", () => {
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
+  it("preserves prose examples of invoke-style plain-text tool calls", () => {
+    const input = [
+      "Example:",
+      '<invoke name="Bash">',
+      '<parameter name="command">ls</parameter>',
+      "</invoke>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("strips standalone invoke-style plain-text tool calls", () => {
+    const input = [
+      '<invoke name="Bash">',
+      '<parameter name="command">ls</parameter>',
+      "</invoke>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("");
+  });
 
   it("strips relevant-memories blocks on the canonical user-visible path", () => {
     const input = [
