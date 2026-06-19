@@ -1822,6 +1822,38 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
+  it("still delivers a persisted CLI reply when post-turn compaction fails", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    expect(state.emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "end" }),
+      }),
+    );
+  });
+
   it("skips post-run persistence after the session is deleted", async () => {
     setupSingleAttemptFallback();
     setupSessionTouchStore();

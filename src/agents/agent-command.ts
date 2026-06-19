@@ -2212,28 +2212,34 @@ async function agentCommandInternal(
           );
         }
         if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
-          sessionEntry = await (
-            await loadCliCompactionRuntime()
-          ).runCliTurnCompactionLifecycle({
-            cfg,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            cwd: effectiveCwd,
-            agentDir,
-            provider: result.meta.agentMeta?.provider ?? provider,
-            model: result.meta.agentMeta?.model ?? model,
-            skillsSnapshot,
-            messageChannel,
-            agentAccountId: runContext.accountId,
-            senderIsOwner: opts.senderIsOwner,
-            thinkLevel: resolvedThinkLevel,
-            extraSystemPrompt: opts.extraSystemPrompt,
-          });
+          try {
+            sessionEntry = await (
+              await loadCliCompactionRuntime()
+            ).runCliTurnCompactionLifecycle({
+              cfg,
+              sessionId: effectiveSessionId,
+              sessionKey: sessionKey ?? effectiveSessionId,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              workspaceDir,
+              cwd: effectiveCwd,
+              agentDir,
+              provider: result.meta.agentMeta?.provider ?? provider,
+              model: result.meta.agentMeta?.model ?? model,
+              skillsSnapshot,
+              messageChannel,
+              agentAccountId: runContext.accountId,
+              senderIsOwner: opts.senderIsOwner,
+              thinkLevel: resolvedThinkLevel,
+              extraSystemPrompt: opts.extraSystemPrompt,
+            });
+          } catch (error) {
+            log.warn(
+              `Post-turn CLI transcript compaction failed after reply persistence for ${sessionKey ?? effectiveSessionId}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
       }
 
