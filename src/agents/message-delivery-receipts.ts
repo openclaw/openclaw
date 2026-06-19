@@ -86,7 +86,11 @@ function normalizeMessageToolSmsReceiptRecord(params: {
     normalizeStringifiedOptionalString(params.record.messageId) ??
     normalizeStringifiedOptionalString(params.record.platformMessageId);
   const rawStatus =
-    params.record.deliveryStatus ?? meta?.deliveryStatus ?? meta?.status ?? params.record.status;
+    params.record.deliveryStatus ??
+    meta?.deliveryStatus ??
+    meta?.status ??
+    params.record.status ??
+    (params.record.ok === true && providerId ? "ok" : undefined);
   const status = normalizeSuccessStatus(rawStatus);
   if (normalizeOptionalString(rawStatus) && !status) {
     return null;

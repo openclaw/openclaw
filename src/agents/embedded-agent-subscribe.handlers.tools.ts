@@ -371,6 +371,13 @@ function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unkno
   };
 }
 
+function readToolSendReceiptDeliveryResult(receiptResult: unknown): unknown {
+  if (receiptResult === undefined) {
+    return undefined;
+  }
+  return readToolResultDetailsRecord(receiptResult)?.toolSend ?? receiptResult;
+}
+
 function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
   return details?.async === true && details.status === "started";
@@ -1194,16 +1201,6 @@ export async function handleToolExecutionEnd(
     toolName === "message" &&
     executionStarted &&
     (isMessagingToolSendAction(toolName, startArgs) || actionName === "broadcast");
-  if (!isToolError) {
-    ctx.state.messageDeliveryEvidence.push(
-      ...(canRecordMessageDeliveryEvidence
-        ? normalizeMessageToolDeliveryEvidence({
-            toolName,
-            result: sanitizedResult,
-          })
-        : []),
-    );
-  }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
@@ -1253,15 +1250,30 @@ export async function handleToolExecutionEnd(
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
   const hasMessagingTargetEvidence =
     isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const privateReceiptResult = readToolSendReceiptDeliveryResult(toolSendReceiptResult);
   const didDeliverMessagingResult =
     isMessagingInvocation &&
     isDeliveredMessagingToolResult({
       toolName,
       args: startArgs,
       result,
-      hookResult: toolSendReceiptResult,
+      hookResult: privateReceiptResult,
       isError: isToolError,
     });
+  if (canRecordMessageDeliveryEvidence && didDeliverMessagingResult) {
+    const publicEvidence = normalizeMessageToolDeliveryEvidence({
+      toolName,
+      result: sanitizedResult,
+    });
+    const privateEvidence =
+      toolSendReceiptResult === undefined
+        ? []
+        : normalizeMessageToolDeliveryEvidence({
+            toolName,
+            result: privateReceiptResult,
+          });
+    ctx.state.messageDeliveryEvidence.push(...publicEvidence, ...privateEvidence);
+  }
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const messageTarget = hasMessagingTargetEvidence

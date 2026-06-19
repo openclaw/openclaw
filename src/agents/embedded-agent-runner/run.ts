@@ -247,6 +247,9 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type MessageDeliveryEvidenceForRunner = NonNullable<
+  EmbeddedRunAttemptForRunner["messageDeliveryEvidence"]
+>[number];
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -406,6 +409,28 @@ function normalizeEmbeddedRunAttemptResult(
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
   };
+}
+
+function mergeMessageDeliveryEvidence(
+  target: MessageDeliveryEvidenceForRunner[],
+  evidence: readonly MessageDeliveryEvidenceForRunner[],
+): void {
+  for (const item of evidence) {
+    if (
+      target.some(
+        (current) =>
+          current.channel === item.channel &&
+          current.toolName === item.toolName &&
+          current.providerId === item.providerId &&
+          current.status === item.status &&
+          current.sender === item.sender &&
+          current.recipient === item.recipient,
+      )
+    ) {
+      continue;
+    }
+    target.push(item);
+  }
 }
 
 function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForRunner): boolean {
@@ -2061,6 +2086,7 @@ async function runEmbeddedAgentInternal(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            initialMessageDeliveryEvidence: accumulatedMessageDeliveryEvidence,
             suppressNextUserMessagePersistence,
             beforeAgentFinalizeRevisionAttempts,
             maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
@@ -2086,7 +2112,10 @@ async function runEmbeddedAgentInternal(
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
           if (attempt.messageDeliveryEvidence?.length) {
-            accumulatedMessageDeliveryEvidence.push(...attempt.messageDeliveryEvidence);
+            mergeMessageDeliveryEvidence(
+              accumulatedMessageDeliveryEvidence,
+              attempt.messageDeliveryEvidence,
+            );
           }
 
           const {

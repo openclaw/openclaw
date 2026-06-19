@@ -49,8 +49,39 @@ Message ID: 6655442331193344`),
     });
   });
 
+  it("detects first-person SMS receipts with an article", () => {
+    expect(
+      detectMessageDeliveryReceiptClaim(
+        "I sent an SMS. Status: accepted/queued. Message ID: 4797682962735104",
+      ),
+    ).toMatchObject({
+      channel: "sms",
+      status: "accepted/queued",
+      providerId: "4797682962735104",
+    });
+  });
+
+  it("detects recipients in natural SMS-to-phone receipt wording", () => {
+    expect(
+      detectMessageDeliveryReceiptClaim(
+        "I sent the SMS to +15550009999. Status: accepted/queued. Message ID: SM1001",
+      ),
+    ).toMatchObject({
+      channel: "sms",
+      recipient: "+15550009999",
+      status: "accepted/queued",
+      providerId: "SM1001",
+    });
+  });
+
   it("detects first-person SMS sent assertions without receipt fields", () => {
     expect(detectMessageDeliveryReceiptClaim("I sent the SMS.")).toMatchObject({
+      channel: "sms",
+    });
+  });
+
+  it("detects SMS sent assertions even when later text mentions a draft", () => {
+    expect(detectMessageDeliveryReceiptClaim("I sent the SMS. Draft text: thanks.")).toMatchObject({
       channel: "sms",
     });
   });
@@ -79,6 +110,12 @@ Message ID: 6655442331193344`),
     expect(
       detectMessageDeliveryReceiptClaim("I do not see evidence that it was sent. Check Dialpad."),
     ).toBeNull();
+  });
+
+  it("ignores negated SMS sent statements before the delivery verb", () => {
+    expect(detectMessageDeliveryReceiptClaim("I have not sent the SMS yet.")).toBeNull();
+    expect(detectMessageDeliveryReceiptClaim("I haven't sent the SMS yet.")).toBeNull();
+    expect(detectMessageDeliveryReceiptClaim("I have not yet sent the SMS.")).toBeNull();
   });
 
   it("ignores quoted diagnostic receipt text", () => {

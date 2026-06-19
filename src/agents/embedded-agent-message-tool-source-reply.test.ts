@@ -73,9 +73,7 @@ describe("isDeliveredMessagingToolResult", () => {
         result: [{ type: "text", text: JSON.stringify({ result: { messageId: "msg-1" } }) }],
       }),
     ).toBe(true);
-    expect(isDeliveredMessagingToolResult({ result: { content: [{ text: "sent" }] } })).toBe(
-      true,
-    );
+    expect(isDeliveredMessagingToolResult({ result: { content: [{ text: "sent" }] } })).toBe(true);
     expect(isDeliveredMessagingToolResult({ result: { status: "sent" } })).toBe(true);
   });
 
@@ -203,6 +201,25 @@ describe("isDeliveredMessagingToolResult", () => {
       isDeliveredMessagingToolResult({
         args: { action: "broadcast" },
         result: {
+          details: {
+            payload: {
+              results: [
+                {
+                  channel: "sms",
+                  to: "+15551234567",
+                  ok: true,
+                  result: { messageId: "SM-broadcast", deliveryStatus: "sent" },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isDeliveredMessagingToolResult({
+        args: { action: "broadcast" },
+        result: {
           results: [
             {
               channel: "telegram",
@@ -258,6 +275,25 @@ describe("isDeliveredMessagingToolResult", () => {
         args: { action: "broadcast" },
         result: {
           results: [{ ok: true, payload: { ok: true, deliveryStatus: "suppressed" } }],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isDeliveredMessagingToolResult({
+        toolName: "message",
+        args: { action: "broadcast" },
+        result: {
+          details: {
+            payload: {
+              results: [
+                {
+                  channel: "sms",
+                  ok: true,
+                  result: { dryRun: true, messageId: "SM-dry-run", deliveryStatus: "sent" },
+                },
+              ],
+            },
+          },
         },
       }),
     ).toBe(false);

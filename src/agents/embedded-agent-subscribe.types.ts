@@ -18,6 +18,7 @@ import type {
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import type { MessageDeliveryEvidence } from "./message-delivery-receipts.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
 export type {
@@ -45,6 +46,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Attempt-owned delivery proof for message-tool-only source replies. */
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
+  /** Current-turn message delivery evidence inherited from earlier retry attempts. */
+  initialMessageDeliveryEvidence?: readonly MessageDeliveryEvidence[];
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   onReasoningStream?: (payload: {

@@ -56,6 +56,7 @@ import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subsc
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
+import { guardMessageDeliveryReceiptStreamData } from "./message-delivery-receipt-stream.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -170,7 +171,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const state: EmbeddedAgentSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
-    messageDeliveryEvidence: [],
+    messageDeliveryEvidence: [...(params.initialMessageDeliveryEvidence ?? [])],
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
@@ -274,22 +275,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
     options?: { enabled?: boolean },
   ): EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"] => {
-    if (options?.enabled !== true) {
-      return data;
-    }
-    const receiptGuard = guardMessageDeliveryReceiptText({
-      text: data.text,
+    return guardMessageDeliveryReceiptStreamData({
+      data,
+      enabled: options?.enabled,
       evidence: state.messageDeliveryEvidence,
     });
-    if (receiptGuard.allowed) {
-      return data;
-    }
-    return {
-      text: receiptGuard.replacementText,
-      delta: receiptGuard.replacementText,
-      replace: true,
-      phase: data.phase,
-    };
   };
   const emitAssistantStreamDataSafely = (
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
@@ -338,10 +328,19 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deferredAssistantEvents.length = 0;
   };
   const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
+  const deliveryReceiptGuardSkippedReplies = new WeakSet<BlockReplyPayload>();
   const hasBlockReplyMedia = (payload: BlockReplyPayload): boolean =>
     Boolean(payload.mediaUrls?.length);
   const hasPotentialSmsReceiptAssertion = (text: string): boolean =>
-    /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered)\b)/iu.test(text);
+    /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:sms|text message)\b)/iu.test(
+      text,
+    );
+  const hasPartialSmsReceiptAssertionPrefix = (text: string): boolean =>
+    /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
+      text,
+    );
+  const hasPotentialOrPartialSmsReceiptAssertion = (text: string): boolean =>
+    hasPotentialSmsReceiptAssertion(text) || hasPartialSmsReceiptAssertionPrefix(text);
   const guardBlockReplyPayload = (payload: BlockReplyPayload): BlockReplyPayload => {
     if (payload.isReasoning || !payload.text) {
       return payload;
@@ -360,9 +359,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
-    options?: { assistantMessageIndex?: number },
+    options?: { assistantMessageIndex?: number; skipMessageDeliveryReceiptGuard?: boolean },
   ): { emitted: boolean; payload: BlockReplyPayload } => {
-    const guardedPayload = guardBlockReplyPayload(payload);
+    const guardedPayload =
+      options?.skipMessageDeliveryReceiptGuard === true ? payload : guardBlockReplyPayload(payload);
     if (!params.onBlockReply) {
       return { emitted: false, payload: guardedPayload };
     }
@@ -392,7 +392,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
   const emitBlockReply = (
     payload: BlockReplyPayload,
-    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
+    options?: {
+      assistantMessageIndex?: number;
+      consumePendingToolMedia?: boolean;
+      skipMessageDeliveryReceiptGuard?: boolean;
+    },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
     const consumesPendingToolMedia =
@@ -410,6 +414,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           : withToolMedia;
       if (consumesPendingToolMedia) {
         deferredToolMediaReplies.add(deferredPayload);
+      }
+      if (options?.skipMessageDeliveryReceiptGuard === true) {
+        deliveryReceiptGuardSkippedReplies.add(deferredPayload);
       }
       state.deferredBlockReplies.push(deferredPayload);
       return;
@@ -432,7 +439,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
-      const delivery = emitBlockReplySafely(payload);
+      const delivery = emitBlockReplySafely(payload, {
+        skipMessageDeliveryReceiptGuard: deliveryReceiptGuardSkippedReplies.has(payload),
+      });
       if (
         delivery.emitted &&
         !delivery.payload.isReasoning &&
@@ -1045,7 +1054,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const emitBlockChunk = (
     text: string,
-    options?: { assistantMessageIndex?: number; final?: boolean; completeMarkdownChunk?: boolean },
+    options?: {
+      assistantMessageIndex?: number;
+      final?: boolean;
+      completeMarkdownChunk?: boolean;
+      skipMessageDeliveryReceiptGuard?: boolean;
+    },
   ) => {
     if (state.suppressBlockChunks || params.silentExpected) {
       return;
@@ -1163,6 +1177,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
         consumePendingToolMedia:
           options?.final === true || Boolean(mediaUrls?.length || audioAsVoice),
+        skipMessageDeliveryReceiptGuard: options?.skipMessageDeliveryReceiptGuard,
       },
     );
     markBlockReplyTextHandled();
@@ -1181,16 +1196,38 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     if (blockChunker?.hasBuffered()) {
-      const bufferedPayload = guardBlockReplyPayload({ text: blockChunker.bufferedText });
-      if (bufferedPayload.text !== blockChunker.bufferedText) {
+      const bufferedText = blockChunker.bufferedText;
+      if (!options?.final && hasPotentialOrPartialSmsReceiptAssertion(bufferedText)) {
+        return;
+      }
+      const rawBufferedGuard = guardBlockReplyPayload({ text: bufferedText });
+      if (rawBufferedGuard.text !== bufferedText) {
+        const directives = consumeReplyDirectives(bufferedText, { final: true });
+        const bufferedPayload = guardBlockReplyPayload(
+          directives
+            ? {
+                text: directives.text,
+                mediaUrls: directives.mediaUrls?.length ? directives.mediaUrls : undefined,
+                audioAsVoice: directives.audioAsVoice,
+                replyToId: directives.replyToId,
+                replyToTag: directives.replyToTag,
+                replyToCurrent: directives.replyToCurrent,
+              }
+            : { text: bufferedText },
+        );
         blockChunker.reset();
         state.suppressBlockChunks = true;
         emitBlockReply(bufferedPayload, {
           assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
         });
-      } else if (!options?.final && hasPotentialSmsReceiptAssertion(blockChunker.bufferedText)) {
+        if (bufferedPayload.text) {
+          state.lastBlockReplyText = bufferedPayload.text;
+          state.lastDeliveredBlockReplyText = bufferedPayload.text;
+          state.toolExecutionSinceLastBlockReply = false;
+        }
         return;
       }
+      const skipMessageDeliveryReceiptGuard = hasPotentialSmsReceiptAssertion(bufferedText);
       if (options?.final) {
         let pendingChunk: string | undefined;
         blockChunker.drain({
@@ -1200,6 +1237,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
               emitBlockChunk(pendingChunk, {
                 assistantMessageIndex: options.assistantMessageIndex,
                 completeMarkdownChunk: true,
+                skipMessageDeliveryReceiptGuard,
               });
             }
             pendingChunk = text;
@@ -1210,10 +1248,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
             assistantMessageIndex: options.assistantMessageIndex,
             completeMarkdownChunk: true,
             final: true,
+            skipMessageDeliveryReceiptGuard,
           });
         }
       } else {
-        blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
+        blockChunker.drain({
+          force: true,
+          emit: (text) => emitBlockChunk(text, { ...options, skipMessageDeliveryReceiptGuard }),
+        });
       }
       blockChunker.reset();
     } else if (state.blockBuffer.length > 0) {

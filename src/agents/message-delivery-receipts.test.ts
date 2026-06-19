@@ -200,6 +200,30 @@ describe("message delivery receipts", () => {
     ]);
   });
 
+  it("normalizes existing ok true message-id envelopes as sent evidence", () => {
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          details: {
+            channel: "sms",
+            messageId: "SM-ok-true",
+            chatId: "+15551234567",
+            ok: true,
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-ok-true",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
   it("normalizes SMS broadcast target results into delivery evidence", () => {
     expect(
       normalizeMessageToolDeliveryEvidence({

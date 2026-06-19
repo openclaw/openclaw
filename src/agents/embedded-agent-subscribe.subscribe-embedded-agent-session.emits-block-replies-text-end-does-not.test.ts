@@ -17,7 +17,12 @@ import {
 type TextEndBlockReplyHarness = ReturnType<typeof createTextEndBlockReplyHarness>;
 type OnBlockReplyMock = ReturnType<typeof vi.fn>;
 type BlockReplyPayload = { text?: string; replyToCurrent?: boolean; replyToTag?: boolean };
-type PartialReplyPayload = { text?: string; delta?: string; replace?: boolean };
+type PartialReplyPayload = {
+  text?: string;
+  delta?: string;
+  replace?: boolean;
+  mediaUrls?: string[];
+};
 
 function emitOpenAiResponsesTextEvent(params: {
   emit: TextEndBlockReplyHarness["emit"];
@@ -313,6 +318,82 @@ Message ID: 6655442331193344`,
     });
   });
 
+  it("does not replace verified SMS receipt claims that stream through chunked block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
+    });
+    const deliveryText = "I sent the SMS. Status: accepted/queued. Message ID: SM_split_proof";
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "redacted proof body",
+      },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "{}",
+          },
+        ],
+        details: {
+          channel: "sms",
+          to: "+15551234567",
+          result: {
+            channel: "sms",
+            messageId: "SM_split_proof",
+            toJid: "+15551234567",
+            status: "queued",
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+    expect(subscription.getMessageDeliveryEvidence()).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        providerId: "SM_split_proof",
+        status: "queued",
+      }),
+    ]);
+
+    emitAssistantTextDelta({
+      emit,
+      delta: "I sent the SMS.",
+    });
+    await Promise.resolve();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    emitAssistantTextEnd({
+      emit,
+      content: deliveryText,
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply.mock.calls.length).toBeGreaterThan(1);
+    const emittedText = onBlockReply.mock.calls
+      .map((call) => (call[0] as BlockReplyPayload | undefined)?.text ?? "")
+      .join("");
+    expect(emittedText).toContain("I sent the SMS. Status:");
+    expect(emittedText).toContain("accepted/queued");
+    expect(emittedText).toContain("Message ID:");
+    expect(emittedText).toContain("SM_split_proof");
+    expect(emittedText).not.toContain("cannot verify");
+  });
+
   it("replaces first-person SMS receipt claims when embedded-agent delivery has no evidence", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createTextEndBlockReplyHarness({ onBlockReply });
@@ -367,6 +448,111 @@ Message ID: 6655442331193344`;
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds partial SMS receipt prefixes before chunked block replies can leak them", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
+    });
+    const receiptText =
+      "Here is the update: I sent the SMS. Status: accepted/queued. Message ID: SM_unverified_split";
+
+    emitAssistantTextDelta({
+      emit,
+      delta: "Here is the update: I sent the ",
+    });
+    await Promise.resolve();
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emitAssistantTextDelta({
+      emit,
+      delta: "SMS. Status: accepted/queued. Message ID: SM_unverified_split",
+    });
+    await Promise.resolve();
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emitAssistantTextEnd({
+      emit,
+      content: receiptText,
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireBlockReplyPayload(onBlockReply);
+    expect(payload.text).toBe(
+      "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+    );
+    expect(payload.text).not.toContain("I sent the ");
+    expect(payload.text).not.toContain("SM_unverified_split");
+  });
+
+  it("holds phase-aware SMS receipt prefixes before partial or block delivery can leak them", async () => {
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onBlockReply,
+      onPartialReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
+    });
+    const receiptText =
+      "Here is the update: I sent the SMS. Status: accepted/queued. Message ID: SM_phase_split";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_delta",
+      text: "Here is the update: I sent the ",
+      delta: "Here is the update: I sent the ",
+      id: "item_final",
+      signaturePhase: "final_answer",
+      partialPhase: "final_answer",
+    });
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_delta",
+      text: receiptText,
+      delta: "SMS. Status: accepted/queued. Message ID: SM_phase_split",
+      id: "item_final",
+      signaturePhase: "final_answer",
+      partialPhase: "final_answer",
+    });
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: receiptText,
+      id: "item_final",
+      signaturePhase: "final_answer",
+      partialPhase: "final_answer",
+    });
+    await Promise.resolve();
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    const finalPayload = onPartialReply.mock.calls[0]?.[0] as PartialReplyPayload | undefined;
+    expect(finalPayload).toMatchObject({
+      text: "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+      delta:
+        "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+      replace: true,
+    });
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const blockPayload = requireBlockReplyPayload(onBlockReply);
+    expect(blockPayload.text).toBe(
+      "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+    );
+    expect(blockPayload.text).not.toContain("I sent the ");
+    expect(blockPayload.text).not.toContain("SM_phase_split");
   });
 
   it("emits block replies on text_end and does not duplicate on message_end", async () => {

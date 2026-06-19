@@ -78,6 +78,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
   onAttemptTimeout?: (reason: Error) => void;
+  /** Current-turn message delivery evidence inherited from earlier retry attempts. */
+  initialMessageDeliveryEvidence?: readonly MessageDeliveryEvidence[];
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */

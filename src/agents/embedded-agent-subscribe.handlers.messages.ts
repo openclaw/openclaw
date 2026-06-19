@@ -168,15 +168,28 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
 }
 
 function hasPotentialSmsReceiptAssertion(text: string): boolean {
-  return /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:the\s+)?(?:sms|text message)\b)/iu.test(
+  return /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:sms|text message)\b)/iu.test(
     text,
   );
+}
+
+function hasPartialSmsReceiptAssertionPrefix(text: string): boolean {
+  return /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
+    text,
+  );
+}
+
+function hasPotentialOrPartialSmsReceiptAssertion(text: string): boolean {
+  return hasPotentialSmsReceiptAssertion(text) || hasPartialSmsReceiptAssertionPrefix(text);
 }
 
 function guardChunkedBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext): boolean {
   const bufferedText = ctx.blockChunker?.bufferedText;
   if (!bufferedText) {
     return true;
+  }
+  if (hasPotentialOrPartialSmsReceiptAssertion(bufferedText)) {
+    return false;
   }
   const receiptGuard = guardMessageDeliveryReceiptText({
     text: bufferedText,
@@ -732,10 +745,17 @@ export function handleMessageUpdate(
   }
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
+  const shouldHoldPotentialReceiptChunk =
+    Boolean(chunk) &&
+    evtType !== "text_end" &&
+    hasPotentialOrPartialSmsReceiptAssertion(`${ctx.state.deltaBuffer}${chunk}`);
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!shouldUsePhaseAwareBlockReply) {
+    if (!shouldUsePhaseAwareBlockReply && !shouldHoldPotentialReceiptChunk) {
       appendBlockReplyChunk(ctx, chunk);
+    }
+    if (shouldHoldPotentialReceiptChunk) {
+      ctx.state.suppressedReceiptPartialText = ctx.state.deltaBuffer;
     }
   }
 
@@ -861,7 +881,11 @@ export function handleMessageUpdate(
         : Boolean(deltaText || hasMedia || hasAudio);
     }
     const hadSuppressedReceiptPartial = Boolean(ctx.state.suppressedReceiptPartialText);
-    if (evtType === "text_end" && hadSuppressedReceiptPartial && cleanedText) {
+    let suppressReceiptPartialDelivery = false;
+    if (shouldHoldPotentialReceiptChunk) {
+      shouldEmit = false;
+      suppressReceiptPartialDelivery = true;
+    } else if (evtType === "text_end" && hadSuppressedReceiptPartial && cleanedText) {
       replace = true;
       deltaText = cleanedText;
       shouldEmit = true;
@@ -873,14 +897,23 @@ export function handleMessageUpdate(
     ) {
       ctx.state.suppressedReceiptPartialText = cleanedText;
       shouldEmit = false;
+      suppressReceiptPartialDelivery = true;
     }
 
-    if (shouldUsePhaseAwareBlockReply) {
+    if (!shouldUsePhaseAwareBlockReply && evtType === "text_end" && hadSuppressedReceiptPartial) {
+      ctx.state.blockBuffer = "";
+      ctx.blockChunker?.reset();
+      appendBlockReplyChunk(ctx, cleanedText);
+    } else if (shouldUsePhaseAwareBlockReply) {
       if (replace) {
         ctx.state.blockBuffer = "";
         ctx.blockChunker?.reset();
       }
-      const blockReplyChunk = replace ? cleanedText : deltaText;
+      const blockReplyChunk = suppressReceiptPartialDelivery
+        ? ""
+        : replace
+          ? cleanedText
+          : deltaText;
       if (blockReplyChunk) {
         appendBlockReplyChunk(ctx, blockReplyChunk);
       }

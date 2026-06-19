@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
+import { guardMessageDeliveryReceiptStreamData } from "./message-delivery-receipt-stream.js";
 
 describe("message delivery receipt guard", () => {
   const receiptText = `Sent to Jiva. To: +13522815065
@@ -76,6 +77,22 @@ Message ID: 4797682962735104`;
           {
             channel: "sms",
             providerId: "4797682962735104",
+            status: "accepted/queued",
+            recipient: "+15550001111",
+          },
+        ],
+      }),
+    ).toMatchObject({ allowed: false });
+  });
+
+  it("blocks natural SMS-to-phone claims when the recipient mismatches evidence", () => {
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I sent the SMS to +15550009999. Message ID: SM1001",
+        evidence: [
+          {
+            channel: "sms",
+            providerId: "SM1001",
             status: "accepted/queued",
             recipient: "+15550001111",
           },
@@ -163,6 +180,19 @@ Message ID: 4797682962735104`,
     ).toEqual({ allowed: true });
   });
 
+  it("allows explicit non-delivery SMS statements", () => {
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I have not sent the SMS yet.",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I haven't sent the SMS yet.",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it("allows matching phone evidence with provider formatting punctuation", () => {
     expect(
       guardMessageDeliveryReceiptText({
@@ -206,5 +236,23 @@ Message ID: 4797682962735104`,
         text: "Draft: Thanks Jiva. You can book a demo here.",
       }),
     ).toEqual({ allowed: true });
+  });
+
+  it("preserves stream media when replacing unsupported receipt claims", () => {
+    expect(
+      guardMessageDeliveryReceiptStreamData({
+        enabled: true,
+        data: {
+          text: "I sent the SMS. Status: accepted/queued. Message ID: SM-unverified",
+          delta: "I sent the SMS. Status: accepted/queued. Message ID: SM-unverified",
+          mediaUrls: ["https://example.com/proof.png"],
+        },
+      }),
+    ).toMatchObject({
+      text: expect.stringContaining("cannot verify"),
+      delta: expect.stringContaining("cannot verify"),
+      replace: true,
+      mediaUrls: ["https://example.com/proof.png"],
+    });
   });
 });

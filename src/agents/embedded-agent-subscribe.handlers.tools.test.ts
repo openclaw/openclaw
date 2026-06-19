@@ -807,6 +807,88 @@ describe("handleToolExecutionEnd message delivery evidence", () => {
     ).toMatchObject({ allowed: false });
   });
 
+  it("does not record SMS receipt evidence for dry-run message sends", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-dry-run",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+        dryRun: true,
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-dry-run",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM-dry-run",
+        chatId: "+15551234567",
+        deliveryStatus: "sent",
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([]);
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I sent the SMS. Status: sent. Message ID: SM-dry-run",
+        evidence: ctx.state.messageDeliveryEvidence,
+      }),
+    ).toMatchObject({ allowed: false });
+  });
+
+  it("records SMS receipt evidence from private tool-send receipts", async () => {
+    const { ctx } = createTestContext();
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        toolSend: {
+          channel: "sms",
+          messageId: "SM-private-receipt",
+          toJid: "+15551234567",
+          status: "queued",
+        },
+      },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-private-receipt",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-private-receipt",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Sent." }],
+        details: { redacted: true },
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        providerId: "SM-private-receipt",
+        status: "queued",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
   it("records built-in message tool SMS broadcast receipt evidence", async () => {
     const { ctx } = createTestContext();
 
