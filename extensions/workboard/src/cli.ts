@@ -133,6 +133,10 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .option("--json", "Print JSON", false)
     .action(async (options: JsonOptions & { board?: string; status?: string }) => {
       let cards = await params.store.list({ boardId: options.board });
+      // FIX #94555: Match the MCP tool / API behavior — exclude soft-archived
+      // cards by default unless explicitly opted in. The workboard_list tool and
+      // agent command already filter out archived cards; the CLI was missing it.
+      cards = cards.filter((card) => !card.metadata?.archivedAt);
       if (options.status) {
         cards = cards.filter((card) => card.status === options.status);
       }
