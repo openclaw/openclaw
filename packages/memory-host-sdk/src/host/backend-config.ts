@@ -27,7 +27,7 @@ import {
 
 /** Checks if a path is a Windows absolute path (drive-letter like `C:\` or UNC like `\\server\`). */
 function isWindowsAbsolutePath(p: string): boolean {
-  return /^[A-Za-z]:\\/.test(p) || /^\\\\/.test(p);
+  return /^[A-Za-z]:\\/.test(p) || p.startsWith("\\\\");
 }
 
 function escapeQmdExactFilePattern(fileName: string): string {
