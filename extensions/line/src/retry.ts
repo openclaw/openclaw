@@ -26,9 +26,12 @@ export type IsRetryableFn = (error: unknown, attempt: number) => boolean;
  */
 export function isRetryableError(error: unknown, _attempt: number): boolean {
   if (error && typeof error === "object") {
-    const httpErr = error as { statusCode?: number; body?: { message?: string } };
-    const status = httpErr.statusCode;
-    const msg = httpErr.body?.message ?? "";
+    // @line/bot-sdk v11 HTTPFetchError: { status, statusText, body: string }
+    // Some internal callers may pass { statusCode, statusMessage, body: string }.
+    const httpErr = error as { status?: number; statusCode?: number; body?: string };
+    const status = httpErr.status ?? httpErr.statusCode;
+    const body = httpErr.body ?? "";
+    const msg = typeof body === "string" ? body : "";
 
     if (status && status >= 500 && status < 600) return true;
     if (status === 429) {

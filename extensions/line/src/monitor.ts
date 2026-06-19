@@ -261,56 +261,58 @@ export async function monitorLineProvider(
                         })
                       : null;
 
-                  const deliveryResult = await deliverLineAutoReply({
-                    payload,
-                    lineData,
-                    to: ctxPayload.From,
-                    replyToken,
-                    replyTokenUsed,
-                    accountId: ctx.accountId,
-                    cfg: config,
-                    textLimit,
-                    deps: {
-                      buildTemplateMessageFromPayload,
-                      processLineMessage,
-                      chunkMarkdownText,
-                      sendLineReplyChunks,
-                      replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
-                      createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
-                      pushMessagesLine,
-                      createFlexMessage,
-                      createImageMessage,
-                      createLocationMessage,
-                      onReplyError: (replyErr) => {
-                        logVerbose(
-                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                        );
+                  try {
+                    const deliveryResult = await deliverLineAutoReply({
+                      payload,
+                      lineData,
+                      to: ctxPayload.From,
+                      replyToken,
+                      replyTokenUsed,
+                      accountId: ctx.accountId,
+                      cfg: config,
+                      textLimit,
+                      deps: {
+                        buildTemplateMessageFromPayload,
+                        processLineMessage,
+                        chunkMarkdownText,
+                        sendLineReplyChunks,
+                        replyMessageLine,
+                        pushMessageLine,
+                        pushTextMessageWithQuickReplies,
+                        createQuickReplyItems,
+                        createTextMessageWithQuickReplies,
+                        pushMessagesLine,
+                        createFlexMessage,
+                        createImageMessage,
+                        createLocationMessage,
+                        onReplyError: (replyErr) => {
+                          logVerbose(
+                            `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                          );
+                        },
                       },
-                    },
-                  });
-                  replyTokenUsed = deliveryResult.replyTokenUsed;
+                    });
+                    replyTokenUsed = deliveryResult.replyTokenUsed;
 
-                  if (deliveryResult.status === "partial") {
-                    // Text reached the user but a rich/media bubble did not.
-                    // Surface the tagged partial failure after adopting the
-                    // consumed reply-token state so later blocks in this turn
-                    // route correctly; recordChannelRuntimeState is skipped
-                    // because this delivery was not a clean success.
-                    throw deliveryResult.error;
+                    if (deliveryResult.status === "partial") {
+                      // Text reached the user but a rich/media bubble did not.
+                      // Surface the tagged partial failure after adopting the
+                      // consumed reply-token state so later blocks in this turn
+                      // route correctly; recordChannelRuntimeState is skipped
+                      // because this delivery was not a clean success.
+                      throw deliveryResult.error;
+                    }
+
+                    recordChannelRuntimeState({
+                      channel: "line",
+                      accountId: resolvedAccountId,
+                      state: {
+                        lastOutboundAt: Date.now(),
+                      },
+                    });
+                  } finally {
+                    stopDeliveryLoading?.();
                   }
-
-                  recordChannelRuntimeState({
-                    channel: "line",
-                    accountId: resolvedAccountId,
-                    state: {
-                      lastOutboundAt: Date.now(),
-                    },
-                  });
-
-                  stopDeliveryLoading?.();
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
