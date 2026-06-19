@@ -4,7 +4,27 @@ import {
   canonicalizeEmbeddingIdentity,
   isCacheableEmbeddingVector,
   QueryEmbeddingCache,
+  queryCacheKey,
 } from "./query-embedding-cache.js";
+
+describe("queryCacheKey", () => {
+  test("hashes the text component and never retains plaintext", () => {
+    const secret = "super secret user recall query about salaries";
+    const key = queryCacheKey("provider=openai;model=text-embedding-3-small", secret);
+
+    // The raw user/memory text must not appear in the cache key.
+    expect(key).not.toContain(secret);
+    expect(key).not.toContain("salaries");
+    // A SHA-256 hex digest is present instead of the plaintext.
+    expect(key).toMatch(/[0-9a-f]{64}/);
+
+    // Equality is preserved: identical identity + text map to the same key.
+    expect(queryCacheKey("provider=openai;model=text-embedding-3-small", secret)).toBe(key);
+    // Distinct text and distinct identity both produce distinct keys.
+    expect(queryCacheKey("provider=openai;model=text-embedding-3-small", "other")).not.toBe(key);
+    expect(queryCacheKey("provider=ollama;model=nomic-embed-text", secret)).not.toBe(key);
+  });
+});
 
 describe("QueryEmbeddingCache", () => {
   test("collapses identical keys to one compute call", async () => {

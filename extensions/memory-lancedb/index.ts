@@ -42,7 +42,11 @@ import {
   vectorDimsForModel,
 } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
-import { canonicalizeEmbeddingIdentity, QueryEmbeddingCache } from "./query-embedding-cache.js";
+import {
+  canonicalizeEmbeddingIdentity,
+  QueryEmbeddingCache,
+  queryCacheKey,
+} from "./query-embedding-cache.js";
 
 // ============================================================================
 // Types
@@ -408,7 +412,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     // part of the settled key — a cache hit short-circuits the request entirely.
     // In-flight work is keyed by cancellation policy so an untimed store/capture
     // call never inherits a recall timeout for identical text.
-    const key = JSON.stringify([this.identity, text]);
+    const key = queryCacheKey(this.identity, text);
     const inFlightKey = JSON.stringify([
       key,
       options?.timeoutMs ? `timeout:${options.timeoutMs}` : "untimed",
@@ -518,7 +522,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     const provider = await this.getProvider();
     // identity is populated by createProvider() before getProvider() resolves.
-    const key = JSON.stringify([this.identity ?? "", text]);
+    const key = queryCacheKey(this.identity ?? "", text);
     const inFlightKey = JSON.stringify([
       key,
       options?.timeoutMs ? `timeout:${options.timeoutMs}` : "untimed",

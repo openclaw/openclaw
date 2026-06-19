@@ -17,7 +17,22 @@
 // fixed identity, and the cache is per-instance so a reconfigure (which builds a
 // fresh embeddings instance) starts with a clean cache keyed to the new model.
 
+import { createHash } from "node:crypto";
+
 export const QUERY_EMBED_CACHE_MAX_ENTRIES = 512;
+
+/**
+ * Build a cache key whose text component is hashed, so the in-memory cache never
+ * retains raw recall, store, or auto-capture text as a Map key. SHA-256
+ * preserves equality (identical identity + text map to the same key) while
+ * keeping only a fixed-length digest in process memory, not plaintext user or
+ * memory content. The identity is provider/model/dimension metadata, not user
+ * content, so it stays in clear text.
+ */
+export function queryCacheKey(identity: string, text: string): string {
+  const textDigest = createHash("sha256").update(text, "utf8").digest("hex");
+  return JSON.stringify([identity, textDigest]);
+}
 
 /**
  * Build the canonical identity portion of a cache key. The identity MUST encode

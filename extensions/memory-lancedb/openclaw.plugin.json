@@ -78,6 +78,17 @@
       "label": "Storage Options",
       "advanced": true,
       "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
+    },
+    "query.embeddingCache.enabled": {
+      "label": "Query Embedding Cache",
+      "help": "Cache recall-query embeddings in a per-instance in-memory LRU so identical embeds collapse to one provider call. Default on.",
+      "advanced": true
+    },
+    "query.embeddingCache.maxEntries": {
+      "label": "Query Embedding Cache Max Entries",
+      "help": "Maximum cached query vectors per embeddings instance (in-memory, not persisted). Default 512.",
+      "advanced": true,
+      "placeholder": "512"
     }
   },
   "configSchema": {
