@@ -38,4 +38,15 @@ describe("cron quick create", () => {
     expect(patch.deliveryMode).toBe("announce");
     expect(patch.wakeMode).toBe("now");
   });
+
+  it("silent preset sets payloadKind to systemEvent for main-session acceptance", () => {
+    // The backend rejects "main" + "agentTurn" combinations — silent cron
+    // jobs targeting the main session must emit systemEvent payload kind.
+    const patch = draftToCronFormPatch(createDraft({ deliveryPreset: "silent" }));
+
+    expect(patch.payloadKind).toBe("systemEvent");
+    expect(patch.sessionTarget).toBe("main");
+    expect(patch.deliveryMode).toBe("none");
+    expect(patch.wakeMode).toBe("now");
+  });
 });
