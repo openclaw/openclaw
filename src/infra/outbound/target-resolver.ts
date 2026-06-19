@@ -98,7 +98,7 @@ function normalizeQuery(value: string): string {
 
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
   const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
-    .map((prefix) => (prefix ? String(prefix).trim().toLowerCase() : ""))
+    .map((prefix) => prefix?.trim().toLowerCase() ?? "")
     .filter(Boolean);
   let target = value.trim();
   while (target) {
