@@ -517,6 +517,23 @@ export async function attachWebInboxToSocket(
       remoteJid,
       messageId,
     });
+    // Also cache sent message content for Baileys getMessage retry support.
+    // Baileys calls getMessage when a recipient asks this client to resend a
+    // message we sent; after reconnect the socket-local cache is gone, so we
+    // need this store to survive across socket lifetimes.
+    const sentMsg = result as
+      | { key?: { remoteJid?: string }; message?: proto.IMessage }
+      | undefined;
+    if (sentMsg?.message) {
+      const storeKey = `${remoteJid}:${messageId}`;
+      options.recentMessageKeys?.set(storeKey, sentMsg.message);
+      if (options.recentMessageKeys && options.recentMessageKeys.size > 500) {
+        const oldest = options.recentMessageKeys.keys().next();
+        if (!oldest.done) {
+          options.recentMessageKeys.delete(oldest.value);
+        }
+      }
+    }
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.
