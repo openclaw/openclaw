@@ -1738,7 +1738,7 @@ describe("runCopilotAttempt", () => {
       expect(sdk.sessions[0]?.disconnect).toHaveBeenCalledTimes(1);
     });
 
-    expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
+    expect(sdk.client.deleteSession).not.toHaveBeenCalled();
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({ compactedCount: 3, sessionFile: "session.json" }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
@@ -1794,6 +1794,7 @@ describe("runCopilotAttempt", () => {
     });
 
     expect(sdk.sessions[0]?.rpc.history.cancelBackgroundCompaction).toHaveBeenCalledTimes(1);
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith("sess-1");
   });
 
   it("keeps the compaction timeout classification after deferred completion", async () => {

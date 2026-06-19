@@ -94,6 +94,7 @@ type LegacyCopilotSessionBinding = {
 };
 
 type CopilotAttemptSessionBinding = Pick<CopilotSessionBinding, "compatKey" | "sdkSessionId">;
+type TimedOutCompactionCleanupOutcome = "aborted" | "completed" | "deadline";
 
 type CopilotSessionBindingStore = Pick<
   PluginStateSyncKeyedStore<CopilotSessionBinding>,
@@ -424,7 +425,10 @@ export function createCopilotAgentHarness(
   let disposed = false;
   let disposePromise: Promise<void> | undefined;
   const inFlight = new Set<Promise<unknown>>();
-  const timedOutCompactionCleanups = new Map<string, Map<Promise<void>, () => void>>();
+  const timedOutCompactionCleanups = new Map<
+    string,
+    Map<Promise<TimedOutCompactionCleanupOutcome>, () => void>
+  >();
   // Maps OpenClaw session id (from AgentHarnessAttemptParams.sessionId) to
   // the SDK session id + client that owns it. Populated by
   // runCopilotAttempt via the onSessionEstablished callback so that
@@ -448,11 +452,12 @@ export function createCopilotAgentHarness(
 
   function trackTimedOutCompactionCleanup(params: {
     abort: () => void;
-    cleanup: Promise<void>;
+    cleanup: Promise<TimedOutCompactionCleanupOutcome>;
     sessionId: string;
   }): void {
     const cleanups =
-      timedOutCompactionCleanups.get(params.sessionId) ?? new Map<Promise<void>, () => void>();
+      timedOutCompactionCleanups.get(params.sessionId) ??
+      new Map<Promise<TimedOutCompactionCleanupOutcome>, () => void>();
     cleanups.set(params.cleanup, params.abort);
     timedOutCompactionCleanups.set(params.sessionId, cleanups);
     void params.cleanup.then(
@@ -461,7 +466,10 @@ export function createCopilotAgentHarness(
     );
   }
 
-  function removeTimedOutCompactionCleanup(sessionId: string, cleanup: Promise<void>): void {
+  function removeTimedOutCompactionCleanup(
+    sessionId: string,
+    cleanup: Promise<TimedOutCompactionCleanupOutcome>,
+  ): void {
     const cleanups = timedOutCompactionCleanups.get(sessionId);
     if (!cleanups) {
       return;
@@ -544,9 +552,14 @@ export function createCopilotAgentHarness(
         //     surfaces as a prompt error.
         const currentCompatKey = computeSessionCompatKey(params);
         const currentCompactKey = computeSessionCompactKey(params);
-        const tracked = openclawSessionId ? trackedSessions.get(openclawSessionId) : undefined;
+        const compactionCleanupPending =
+          openclawSessionId !== undefined && timedOutCompactionCleanups.has(openclawSessionId);
+        const tracked =
+          openclawSessionId && !compactionCleanupPending
+            ? trackedSessions.get(openclawSessionId)
+            : undefined;
         const stored = openclawSessionId
-          ? resetBlockedStoredSessions.has(openclawSessionId)
+          ? compactionCleanupPending || resetBlockedStoredSessions.has(openclawSessionId)
             ? undefined
             : lookupStoredBinding(options?.sessionStore, openclawSessionId)
           : undefined;
@@ -608,13 +621,11 @@ export function createCopilotAgentHarness(
                 sdkSessionId,
               }: {
                 abort: () => void;
-                cleanup: Promise<void>;
+                cleanup: Promise<TimedOutCompactionCleanupOutcome>;
                 sdkSessionId: string;
               }) => {
                 const tracked = trackedSessions.get(openclawSessionId);
-                const stored = resetBlockedStoredSessions.has(openclawSessionId)
-                  ? undefined
-                  : lookupStoredBinding(options?.sessionStore, openclawSessionId);
+                const stored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
                 const ownsTrackedSession = tracked?.sdkSessionId === sdkSessionId;
                 const ownsStoredSession = stored?.sdkSessionId === sdkSessionId;
                 trackTimedOutCompactionCleanup({
@@ -626,14 +637,33 @@ export function createCopilotAgentHarness(
                   return;
                 }
                 // The timed-out attempt retains this SDK session until its
-                // background compaction resolves. Do not let a new turn resume it.
-                if (ownsTrackedSession) {
-                  trackedSessions.delete(openclawSessionId);
-                }
-                if (ownsStoredSession) {
-                  deleteStoredBinding(options?.sessionStore, openclawSessionId);
-                }
+                // background compaction resolves. Preserve its binding for a
+                // successful completion, but do not let a new turn resume it yet.
                 resetBlockedStoredSessions.add(openclawSessionId);
+                void cleanup.then((outcome) => {
+                  const currentTracked = trackedSessions.get(openclawSessionId);
+                  const currentStored = lookupStoredBinding(
+                    options?.sessionStore,
+                    openclawSessionId,
+                  );
+                  const stillOwnsTrackedSession = currentTracked?.sdkSessionId === sdkSessionId;
+                  const stillOwnsStoredSession = currentStored?.sdkSessionId === sdkSessionId;
+                  if (outcome === "completed") {
+                    if (stillOwnsTrackedSession || stillOwnsStoredSession) {
+                      resetBlockedStoredSessions.delete(openclawSessionId);
+                    }
+                    return;
+                  }
+                  if (stillOwnsTrackedSession) {
+                    trackedSessions.delete(openclawSessionId);
+                  }
+                  if (stillOwnsStoredSession) {
+                    deleteStoredBinding(options?.sessionStore, openclawSessionId);
+                  }
+                  if (stillOwnsTrackedSession || stillOwnsStoredSession) {
+                    resetBlockedStoredSessions.add(openclawSessionId);
+                  }
+                });
               }
             : undefined,
         });

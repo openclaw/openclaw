@@ -146,7 +146,7 @@ export interface CopilotAttemptDeps {
    */
   onTimedOutCompaction?: (info: {
     abort: () => void;
-    cleanup: Promise<void>;
+    cleanup: Promise<"aborted" | "completed" | "deadline">;
     sdkSessionId: string;
   }) => void;
 }
@@ -219,12 +219,13 @@ function deferTimedOutCompactionCleanup(params: {
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
-}): Promise<void> {
+}): Promise<"aborted" | "completed" | "deadline"> {
   // sendAndWait can time out while the SDK continues background compaction.
   // Keep its bridge attached so after_compaction uses the originating run context.
   return (async () => {
+    let outcome: "aborted" | "completed" | "deadline" = "deadline";
     try {
-      const outcome = await awaitCompactionCompletionBeforeDeadline({
+      outcome = await awaitCompactionCompletionBeforeDeadline({
         abortSignal: params.abortSignal,
         bridge: params.bridge,
         timeoutMs: params.timeoutMs,
@@ -241,7 +242,7 @@ function deferTimedOutCompactionCleanup(params: {
       } catch {
         // The attempt has already returned its timeout result.
       }
-      if (params.sdkSessionId) {
+      if (outcome !== "completed" && params.sdkSessionId) {
         try {
           await params.handle.client.deleteSession(params.sdkSessionId);
         } catch {
@@ -254,6 +255,7 @@ function deferTimedOutCompactionCleanup(params: {
         // The pool will dispose this client later if its release cannot complete.
       }
     }
+    return outcome;
   })();
 }
 
