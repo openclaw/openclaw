@@ -288,8 +288,10 @@ async function proxyPluginUiFrameRequest(params: {
 }): Promise<void> {
   const id = typeof params.message.id === "string" ? params.message.id : "";
   const reply = (payload: Record<string, unknown>) => {
+    const message = { type: "openclaw.pluginUi.response", id, ...payload };
     queueMicrotask(() => {
-      params.replyPort.postMessage({ type: "openclaw.pluginUi.response", id, ...payload });
+      params.replyPort.postMessage(message);
+      params.frame.contentWindow?.postMessage(message, "*");
     });
   };
   const path = resolvePluginUiRequestPath(params.entryPoint, params.message.path);

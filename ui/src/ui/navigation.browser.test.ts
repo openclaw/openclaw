@@ -234,6 +234,13 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     const frame = expectElement(app, "iframe.plugin-ui-entry-frame", HTMLIFrameElement);
+    const frameWindow = frame.contentWindow;
+    if (!frameWindow) {
+      throw new Error("Expected plugin iframe contentWindow");
+    }
+    const framePostMessage = vi
+      .spyOn(frameWindow, "postMessage")
+      .mockImplementation(() => undefined);
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups");
     frame.dispatchEvent(new Event("load"));
     const bridgePort = expectLatestPluginUiBridgePort(ports);
@@ -297,6 +304,16 @@ describe("control UI routing", () => {
           body: "pong",
         }),
       ),
+    );
+    expect(framePostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "openclaw.pluginUi.response",
+        id: "req-1",
+        ok: true,
+        status: 201,
+        body: "pong",
+      }),
+      "*",
     );
 
     fetchSpy.mockClear();
