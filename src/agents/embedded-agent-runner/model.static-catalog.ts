@@ -241,7 +241,7 @@ function hasConfiguredModelCatalogProviderModelRow(params: {
     return false;
   }
   const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
-  return Boolean(
+  return (
     Array.isArray(config?.models) &&
     config.models.some((model) =>
       staticModelIdMatches({
@@ -249,7 +249,7 @@ function hasConfiguredModelCatalogProviderModelRow(params: {
         provider,
         modelId,
       }),
-    ),
+    )
   );
 }
 
