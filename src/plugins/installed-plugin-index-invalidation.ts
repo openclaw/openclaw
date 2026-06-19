@@ -35,6 +35,16 @@ export function diffInstalledPluginIndexInvalidationReasons(
   for (const [pluginId, previousPlugin] of previousByPluginId) {
     const currentPlugin = currentByPluginId.get(pluginId);
     if (!currentPlugin) {
+      // A previously installed plugin is no longer in the discovery results.
+      // This can happen when a bundled plugin is externalized (e.g. Slack)
+      // or the plugin was uninstalled. Log a warning so users can diagnose
+      // the issue rather than discovering the plugin silently disappeared.
+      console.warn(
+        `plugin ${pluginId}: previously installed plugin not found in discovery ` +
+          `(previous path: ${previousPlugin.rootDir ?? "unknown"}). ` +
+          `If this was unexpected, check that the plugin is still installed and ` +
+          `configured in plugins.allow.`,
+      );
       reasons.add("source-changed");
       continue;
     }
