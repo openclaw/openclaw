@@ -3,7 +3,6 @@ title: OpenAI web_search minimal reasoning gate
 scenario:
   id: openai-web-search-minimal
   surface: model-provider
-  runtimeParityTier: live-only
   coverage:
     primary:
       - runtime.reasoning-and-cache-controls

@@ -3,7 +3,6 @@ title: OpenAI native web_search request assertions
 scenario:
   id: openai-web-search-native-assertions
   surface: model-provider
-  runtimeParityTier: live-only
   coverage:
     primary:
       - web-search.openai-native-web-search
