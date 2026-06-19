@@ -56,5 +56,9 @@ export function resolveThinkingProfile({
 }: {
   reasoning?: boolean;
 }): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  // Fix #93835: treat undefined reasoning (e.g. live-discovered models not yet in catalog)
+  // the same as true — only explicitly false models get the off-only profile.
+  return reasoning !== false
+    ? OLLAMA_REASONING_THINKING_PROFILE
+    : OLLAMA_NON_REASONING_THINKING_PROFILE;
 }
