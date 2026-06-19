@@ -9,20 +9,17 @@ import {
 
 const PROVIDER_ID = "huggingface";
 const HUGGINGFACE_INFERENCE_BASE_URL = "https://router.huggingface.co/hf-inference";
-const DEFAULT_MODEL = "black-forest-labs/FLUX.1-Krea-dev";
+const DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell";
 const DEFAULT_OUTPUT_MIME = "image/png";
 
-// Recommended text-to-image models on the HF Inference Providers `hf-inference`
+// Text-to-image models served by the HF Inference Providers `hf-inference`
 // route (https://huggingface.co/docs/inference-providers/tasks/text-to-image).
 // The router returns raw image bytes for any compatible repo id, so this list
 // is for discoverability/validation only — users can pass any supported repo.
-const HF_INFERENCE_IMAGE_MODELS = [
-  "black-forest-labs/FLUX.1-Krea-dev",
-  "black-forest-labs/FLUX.1-dev",
-  "black-forest-labs/FLUX.1-schnell",
-  "Qwen/Qwen-Image",
-  "ByteDance/Hyper-SD",
-] as const;
+// Kept to models the `hf-inference` provider actually serves (per HF provider
+// mapping); other popular FLUX/Qwen image repos are routed to fal-ai/replicate
+// and would 400 on this endpoint.
+const HF_INFERENCE_IMAGE_MODELS = ["black-forest-labs/FLUX.1-schnell"] as const;
 
 const HF_MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 

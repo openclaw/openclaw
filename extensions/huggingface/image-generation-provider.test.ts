@@ -50,7 +50,7 @@ describe("huggingface image-generation provider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`${HF_INFERENCE_BASE}/models/black-forest-labs/FLUX.1-Krea-dev`);
+    expect(url).toBe(`${HF_INFERENCE_BASE}/models/black-forest-labs/FLUX.1-schnell`);
     expect(init.method).toBe("POST");
     expect(init.body).toBe(JSON.stringify({ inputs: "draw a cat" }));
 
@@ -59,7 +59,7 @@ describe("huggingface image-generation provider", () => {
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("accept")).toBe("image/*");
 
-    expect(result.model).toBe("black-forest-labs/FLUX.1-Krea-dev");
+    expect(result.model).toBe("black-forest-labs/FLUX.1-schnell");
     expect(result.images).toHaveLength(1);
     expect(result.images[0]?.mimeType).toBe("image/png");
     expect(result.images[0]?.fileName).toBe("image-1.png");
@@ -233,7 +233,7 @@ describe("huggingface image-generation provider", () => {
   it("declares the hf-inference text-to-image capability surface", () => {
     const provider = buildHuggingfaceImageGenerationProvider();
     expect(provider.id).toBe("huggingface");
-    expect(provider.defaultModel).toBe("black-forest-labs/FLUX.1-Krea-dev");
+    expect(provider.defaultModel).toBe("black-forest-labs/FLUX.1-schnell");
     expect(provider.capabilities.generate.maxCount).toBe(1);
     expect(provider.capabilities.edit.enabled).toBe(false);
   });
