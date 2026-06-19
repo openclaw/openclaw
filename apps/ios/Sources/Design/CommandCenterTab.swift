@@ -16,6 +16,7 @@ struct CommandCenterTab: View {
     var showsHeaderMark: Bool = true
     var openChat: () -> Void
     var openSettings: () -> Void
+    var openSessions: (() -> Void)?
 
     enum WorkRoute {
         case chat(String?)
@@ -255,12 +256,19 @@ struct CommandCenterTab: View {
                         }
 
                         if self.hasMoreRecentSessions {
-                            NavigationLink {
-                                CommandSessionsScreen(openChat: self.openChat)
-                            } label: {
-                                CommandViewMoreRow()
+                            if let openSessions {
+                                Button(action: openSessions) {
+                                    CommandViewMoreRow()
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                NavigationLink {
+                                    CommandSessionsScreen(openChat: self.openChat)
+                                } label: {
+                                    CommandViewMoreRow()
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }

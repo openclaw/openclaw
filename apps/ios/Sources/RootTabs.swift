@@ -425,7 +425,8 @@ struct RootTabs: View {
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 showsHeaderMark: false,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                openSessions: { self.selectSidebarDestination(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,

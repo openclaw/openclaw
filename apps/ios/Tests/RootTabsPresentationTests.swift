@@ -257,9 +257,17 @@ import UIKit
             ownsNavigationStack: false,
             openChat: {},
             openSettings: {})
+        let shellRouted = CommandCenterTab(
+            ownsNavigationStack: false,
+            openChat: {},
+            openSettings: {},
+            openSessions: {})
 
         #expect(standalone.ownsNavigationStack)
+        #expect(standalone.openSessions == nil)
         #expect(!embedded.ownsNavigationStack)
+        #expect(embedded.openSessions == nil)
+        #expect(shellRouted.openSessions != nil)
     }
 
     @Test func chatSidebarDestinationCanUseRouteHeaderInsteadOfAgentBranding() {

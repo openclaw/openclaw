@@ -203,7 +203,8 @@ struct RootTabsPhoneControlHub: View {
                 headerLeadingAction: self.phoneDetailBackAction,
                 showsHeaderMark: false,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) },
+                openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.phoneDetailBackAction,

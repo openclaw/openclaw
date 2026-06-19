@@ -82,6 +82,29 @@ import Testing
         #expect(resetRange.lowerBound < destinationRange.lowerBound)
     }
 
+    @Test func embeddedOverviewRoutesViewMoreThroughOwningNavigationStack() throws {
+        let rootTabsSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let commandCenterSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
+        let phoneHubSource = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
+        let sidebarDetail = try Self.extract(
+            rootTabsSource,
+            from: "private var sidebarDetail: some View",
+            to: "private var sidebarDetailNavigationShell: some View")
+        let iPadOverview = try Self.extract(sidebarDetail, from: "case .overview:", to: "case .activity:")
+        let recentSessions = try Self.extract(
+            commandCenterSource,
+            from: "private var recentSessions: some View",
+            to: "private func cardHeader(")
+        let phoneOverview = try Self.extract(phoneHubSource, from: "case .overview:", to: "case .activity:")
+
+        #expect(commandCenterSource.contains("var openSessions: (() -> Void)?"))
+        #expect(recentSessions.contains("if let openSessions"))
+        #expect(recentSessions.contains("Button(action: openSessions)"))
+        #expect(recentSessions.contains("NavigationLink"))
+        #expect(iPadOverview.contains("openSessions: { self.selectSidebarDestination(.sessions) }"))
+        #expect(phoneOverview.contains("openSessions: { self.navigationPath.append(.sessions) }"))
+    }
+
     private static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -94,6 +117,20 @@ import Testing
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/RootTabsNavigation.swift")
+    }
+
+    private static func commandCenterSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/CommandCenterTab.swift")
+    }
+
+    private static func phoneHubSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/RootTabsPhoneControlHub.swift")
     }
 
     private static func extract(_ source: String, from start: String, to end: String) throws -> String {
