@@ -184,7 +184,8 @@ final class ShareViewController: UIViewController {
                 clientId: clientId,
                 clientMode: "node",
                 clientDisplayName: "OpenClaw Share",
-                includeDeviceIdentity: false)
+                deviceIdentityProfile: .shareExtension,
+                includeDeviceIdentity: true)
         }
 
         do {
